@@ -11,6 +11,8 @@ module Pkg.Parser.Stats (
   pSummarizeSection,
   pSortSection,
   pTakeSection,
+  pExtendSection,
+  pProjectSection,
   parseQuery,
   pSource,
   -- Aggregation parsers
@@ -27,6 +29,10 @@ module Pkg.Parser.Stats (
   pStrcat,
   pIff,
   pCase,
+  pRound,
+  pToFloat,
+  pToInt,
+  pToString,
   pPercentileSingle,
   pPercentilesMulti,
   pSubjectExpr,
@@ -37,7 +43,9 @@ module Pkg.Parser.Stats (
   subjectExprToSQL,
 ) where
 
+import Control.Lens (set, view)
 import Data.Aeson qualified as AE
+import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
@@ -82,6 +90,69 @@ subjectExprToSQL (SubjectExpr sub Nothing) = display sub
 subjectExprToSQL (SubjectExpr sub (Just (op, val))) = "(" <> display sub <> " " <> op <> " " <> show val <> ")"
 
 
+instance ToQueryText SubjectExpr where
+  toQText (SubjectExpr sub Nothing) = toQText sub
+  toQText (SubjectExpr sub (Just (op, val))) = toQText sub <> " " <> op <> " " <> show val
+
+
+-- | Scalar expression that can be either a simple value or a nested aggregation
+-- This enables patterns like round(countif(...), 2) where the first arg is an aggregation
+data ScalarExpr = SVal Values | SAgg AggFunction
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+instance Display ScalarExpr where
+  displayPrec p (SVal v) = displayPrec p v
+  displayPrec _ (SAgg agg) = displayBuilder $ aggToSqlNoAlias agg
+
+
+instance ToQueryText ScalarExpr where
+  toQText (SVal v) = toQText v
+  toQText (SAgg agg) = toQText agg
+
+
+-- | SQL pattern for simple aggregations: fn((subject)::float)
+simpleAggSQL :: Text -> Subject -> Text
+simpleAggSQL fn sub = fn <> "((" <> display sub <> ")::float)"
+
+
+-- | SQL pattern for percentiles: approx_percentile(pct, percentile_agg((subject)::float))::int
+percentileSQL :: Double -> Subject -> Text
+percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg((" <> display sub <> ")::float))::int"
+
+
+-- | Convert AggFunction to SQL without the AS alias (for use inside other expressions)
+aggToSqlNoAlias :: AggFunction -> Text
+aggToSqlNoAlias (Count sub _) = "count(" <> display sub <> ")::float"
+aggToSqlNoAlias (CountIf cond _) = "COUNT(*) FILTER (WHERE " <> display cond <> ")::float"
+aggToSqlNoAlias (DCount sub _ _) = "COUNT(DISTINCT " <> display sub <> ")::float"
+aggToSqlNoAlias (Sum sub _) = simpleAggSQL "sum" sub
+aggToSqlNoAlias (Avg sub _) = simpleAggSQL "avg" sub
+aggToSqlNoAlias (Min sub _) = simpleAggSQL "min" sub
+aggToSqlNoAlias (Max sub _) = simpleAggSQL "max" sub
+aggToSqlNoAlias (Median sub _) = simpleAggSQL "median" sub
+aggToSqlNoAlias (Stdev sub _) = simpleAggSQL "stdev" sub
+aggToSqlNoAlias (Range sub _) = simpleAggSQL "range" sub
+aggToSqlNoAlias (P50 sub _) = percentileSQL 0.50 sub
+aggToSqlNoAlias (P75 sub _) = percentileSQL 0.75 sub
+aggToSqlNoAlias (P90 sub _) = percentileSQL 0.90 sub
+aggToSqlNoAlias (P95 sub _) = percentileSQL 0.95 sub
+aggToSqlNoAlias (P99 sub _) = percentileSQL 0.99 sub
+aggToSqlNoAlias (P100 sub _) = percentileSQL 1 sub
+aggToSqlNoAlias (Percentile subExpr pct _) = "approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
+aggToSqlNoAlias (Percentiles subExpr pcts _) = let firstPct = fromMaybe 50.0 (listToMaybe pcts) in "approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float"
+aggToSqlNoAlias (Coalesce exprs _) = "COALESCE(" <> T.intercalate ", " (map display exprs) <> ")"
+aggToSqlNoAlias (Strcat exprs _) = "CONCAT(" <> T.intercalate ", " (map display exprs) <> ")"
+aggToSqlNoAlias (Iff cond thenVal elseVal _) = "CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END"
+aggToSqlNoAlias (Case pairs defaultVal _) = "CASE " <> foldMap (\(c, v) -> "WHEN " <> display c <> " THEN " <> display v <> " ") pairs <> "ELSE " <> display defaultVal <> " END"
+aggToSqlNoAlias (Round val decimals _) = "ROUND((" <> display val <> ")::numeric, " <> display decimals <> ")::float"
+aggToSqlNoAlias (ToFloat val _) = "(" <> display val <> ")::float"
+aggToSqlNoAlias (ToInt val _) = "(" <> display val <> ")::integer"
+aggToSqlNoAlias (ToString val _) = "(" <> display val <> ")::text"
+aggToSqlNoAlias (Plain sub _) = display sub
+
+
 -- Modify Aggregation Functions to include optional aliases
 data AggFunction
   = Count Subject (Maybe Text) -- Optional field and alias
@@ -108,6 +179,11 @@ data AggFunction
   | Strcat [Values] (Maybe Text) -- strcat(expr1, expr2, ...) - concatenate any scalar expressions
   | Iff Expr Values Values (Maybe Text) -- iff(condition, then_expr, else_expr)
   | Case [(Expr, Values)] Values (Maybe Text) -- case(pred1, val1, pred2, val2, ..., else)
+  | -- Type casting and formatting functions (Microsoft KQL compatible)
+    Round ScalarExpr Values (Maybe Text) -- round(value, decimals) - value can be nested agg
+  | ToFloat ScalarExpr (Maybe Text) -- tofloat(value) - convert to float
+  | ToInt ScalarExpr (Maybe Text) -- toint(value) - convert to integer
+  | ToString ScalarExpr (Maybe Text) -- tostring(value) - convert to text
   | Plain Subject (Maybe Text)
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -263,6 +339,41 @@ pScalarExpr :: Parser Values
 pScalarExpr = try pValues <|> (Field <$> pSubject)
 
 
+-- | Base aggregation parsers shared between aggFunctionParser and pScalarExprNested
+-- Excludes type-casting functions (round/tofloat/toint/tostring) to allow nesting
+baseAggParsers :: [Parser AggFunction]
+baseAggParsers =
+  [ pSimpleAgg "sum" Sum
+  , try pPercentilesMulti
+  , try pPercentileSingle
+  , pSimpleAgg "p50" P50
+  , pSimpleAgg "p75" P75
+  , pSimpleAgg "p90" P90
+  , pSimpleAgg "p95" P95
+  , pSimpleAgg "p99" P99
+  , pSimpleAgg "p100" P100
+  , try pCountIf -- countif must come before count
+  , pDCount -- dcount commits to enforce accuracy validation (0-4)
+  , try pCount
+  , pCoalesce -- coalesce commits to enforce minimum 2 arguments validation
+  , try pStrcat
+  , try pIff
+  , try pCase
+  , pSimpleAgg "avg" Avg
+  , pSimpleAgg "min" Min
+  , pSimpleAgg "max" Max
+  , pSimpleAgg "median" Median
+  , pSimpleAgg "stdev" Stdev
+  , pSimpleAgg "range" Range
+  ]
+
+
+-- | Parse a nested scalar expression that can be a value or an aggregation
+-- This enables patterns like round(countif(...), 2) or tofloat(sum(field))
+pScalarExprNested :: Parser ScalarExpr
+pScalarExprNested = (SAgg <$> try (choice baseAggParsers)) <|> (SVal <$> pScalarExpr)
+
+
 -- | Helper for variadic scalar functions like coalesce/strcat
 pVariadicAgg :: Text -> ([Values] -> Maybe Text -> AggFunction) -> Parser AggFunction
 pVariadicAgg name ctor =
@@ -319,6 +430,59 @@ pCase =
     <*> (pScalarExpr <* string ")")
 
 
+-- | Parse round(value, decimals) - round to N decimal places
+-- Microsoft KQL: round(value [, decimals])
+-- Supports nested aggregations: round(countif(...), 2)
+-- >>> parse pRound "" "round(3.14159, 2)"
+-- Right (Round (SVal (Num "3.14159")) (Num "2") Nothing)
+-- >>> parse pRound "" "round(countif(status_code == \"ERROR\"), 2)"
+-- Right (Round (SAgg (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) Nothing)) (Num "2") Nothing)
+pRound :: Parser AggFunction
+pRound = withoutAlias $ do
+  _ <- string "round("
+  val <- pScalarExprNested
+  _ <- comma
+  decimals <- pScalarExpr
+  case decimals of
+    Num n -> case readMaybe (toString n) :: Maybe Int of
+      Just d | d < 0 || d > 15 -> fail "round() decimals must be 0-15 per PostgreSQL limit"
+      _ -> pure ()
+    _ -> fail "round() decimals must be numeric"
+  _ <- string ")"
+  pure $ Round val decimals
+
+
+-- | Helper for type casting parsers with keyword aliases
+-- Supports nested aggregations: tofloat(count()), toint(sum(field))
+pTypeCast :: [Text] -> (ScalarExpr -> Maybe Text -> AggFunction) -> Parser AggFunction
+pTypeCast keywords ctor = withoutAlias $ ctor <$> (asum (map (\k -> string (k <> "(")) keywords) *> pScalarExprNested <* string ")")
+
+
+-- | Parse tofloat(value) / todouble(value) - convert to float
+-- Supports nested aggregations: tofloat(count())
+-- >>> parse pToFloat "" "tofloat(count_)"
+-- Right (ToFloat (SVal (Field (Subject "count_" "count_" []))) Nothing)
+-- >>> parse pToFloat "" "tofloat(count())"
+-- Right (ToFloat (SAgg (Count (Subject "*" "*" []) Nothing)) Nothing)
+pToFloat :: Parser AggFunction
+pToFloat = pTypeCast ["tofloat", "todouble"] ToFloat
+
+
+-- | Parse toint(value) / tolong(value) - convert to integer
+-- Supports nested aggregations: toint(sum(field))
+-- >>> parse pToInt "" "toint(duration)"
+-- Right (ToInt (SVal (Field (Subject "duration" "duration" []))) Nothing)
+pToInt :: Parser AggFunction
+pToInt = pTypeCast ["toint", "tolong"] ToInt
+
+
+-- | Parse tostring(value) - convert to text
+-- >>> parse pToString "" "tostring(status_code)"
+-- Right (ToString (SVal (Field (Subject "status_code" "status_code" []))) Nothing)
+pToString :: Parser AggFunction
+pToString = pTypeCast ["tostring"] ToString
+
+
 -- | Helper for simple function(subject) parsers
 pSimpleAgg :: Text -> (Subject -> Maybe Text -> AggFunction) -> Parser AggFunction
 pSimpleAgg name ctor = withoutAlias $ ctor <$> (string (name <> "(") *> pSubject <* string ")")
@@ -335,114 +499,98 @@ pCount =
 aggFunctionParser :: Parser AggFunction
 aggFunctionParser =
   choice @[]
-    [ pSimpleAgg "sum" Sum
-    , try pPercentilesMulti
-    , try pPercentileSingle
-    , pSimpleAgg "p50" P50
-    , pSimpleAgg "p75" P75
-    , pSimpleAgg "p90" P90
-    , pSimpleAgg "p95" P95
-    , pSimpleAgg "p99" P99
-    , pSimpleAgg "p100" P100
-    , try pCountIf -- countif must come before count
-    , pDCount -- dcount commits after matching "dcount(" to enforce accuracy validation (0-4)
-    , try pCount
-    , try pCoalesce
-    , try pStrcat
-    , try pIff
-    , try pCase
-    , pSimpleAgg "avg" Avg
-    , pSimpleAgg "min" Min
-    , pSimpleAgg "max" Max
-    , pSimpleAgg "median" Median
-    , pSimpleAgg "stdev" Stdev
-    , pSimpleAgg "range" Range
-    , withoutAlias $ Plain <$> pSubject
-    ]
+    $ baseAggParsers
+    ++ [ pRound -- round commits to enforce numeric decimals validation
+       , try pToFloat
+       , try pToInt
+       , try pToString
+       , withoutAlias $ Plain <$> pSubject
+       ]
 
 
+-- | Convert AggFunction to KQL syntax (NOT SQL - use Display for SQL)
 instance ToQueryText AggFunction where
-  toQText = display
+  toQText (Count (Subject "*" _ _) _) = "count()"
+  toQText (Count sub _) = "count(" <> toQText sub <> ")"
+  toQText (CountIf cond _) = "countif(" <> toQText cond <> ")"
+  toQText (DCount sub Nothing _) = "dcount(" <> toQText sub <> ")"
+  toQText (DCount sub (Just acc) _) = "dcount(" <> toQText sub <> ", " <> show acc <> ")"
+  toQText (P50 sub _) = "p50(" <> toQText sub <> ")"
+  toQText (P75 sub _) = "p75(" <> toQText sub <> ")"
+  toQText (P90 sub _) = "p90(" <> toQText sub <> ")"
+  toQText (P95 sub _) = "p95(" <> toQText sub <> ")"
+  toQText (P99 sub _) = "p99(" <> toQText sub <> ")"
+  toQText (P100 sub _) = "p100(" <> toQText sub <> ")"
+  toQText (Percentile subExpr pct _) = "percentile(" <> toQText subExpr <> ", " <> show pct <> ")"
+  toQText (Percentiles subExpr pcts _) = "percentiles(" <> toQText subExpr <> ", " <> T.intercalate ", " (map show pcts) <> ")"
+  toQText (Sum sub _) = "sum(" <> toQText sub <> ")"
+  toQText (Avg sub _) = "avg(" <> toQText sub <> ")"
+  toQText (Min sub _) = "min(" <> toQText sub <> ")"
+  toQText (Max sub _) = "max(" <> toQText sub <> ")"
+  toQText (Median sub _) = "median(" <> toQText sub <> ")"
+  toQText (Stdev sub _) = "stdev(" <> toQText sub <> ")"
+  toQText (Range sub _) = "range(" <> toQText sub <> ")"
+  toQText (Coalesce exprs _) = "coalesce(" <> T.intercalate ", " (map toQText exprs) <> ")"
+  toQText (Strcat exprs _) = "strcat(" <> T.intercalate ", " (map toQText exprs) <> ")"
+  toQText (Iff cond thenVal elseVal _) = "iff(" <> toQText cond <> ", " <> toQText thenVal <> ", " <> toQText elseVal <> ")"
+  toQText (Case pairs defVal _) = "case(" <> T.intercalate ", " (concatMap (\(c, v) -> [toQText c, toQText v]) pairs) <> ", " <> toQText defVal <> ")"
+  toQText (Round val decimals _) = "round(" <> toQText val <> ", " <> toQText decimals <> ")"
+  toQText (ToFloat val _) = "tofloat(" <> toQText val <> ")"
+  toQText (ToInt val _) = "toint(" <> toQText val <> ")"
+  toQText (ToString val _) = "tostring(" <> toQText val <> ")"
+  toQText (Plain sub _) = toQText sub
 
 
 instance ToQueryText [AggFunction] where
-  toQText xs = T.intercalate "," $ map toQText xs
+  toQText xs = T.intercalate ", " $ map toQText xs
 
 
--- | Get KQL default alias for aggregation (e.g., count_, sum_field)
+-- | Sanitize field name for use as SQL alias (replace dots with underscores)
+sanitizeAlias :: Text -> Text
+sanitizeAlias = T.replace "." "_"
+
+
+-- | Extract the explicit alias from an AggFunction (if set)
+-- Uses generic-lens to access the Maybe Text alias field in each constructor
+getAlias :: AggFunction -> Maybe Text
+getAlias = view typed
+
+
+-- | Get default alias for aggregation (e.g., count_, sum_field)
 defaultAlias :: AggFunction -> Text
 defaultAlias = \case
-  Count (Subject name _ _) _ -> if name == "*" then "count_" else "count_" <> name
-  CountIf _ _ -> "countif_"
-  DCount (Subject name _ _) _ _ -> "dcount_" <> name
-  P50 (Subject name _ _) _ -> "p50_" <> name
-  P75 (Subject name _ _) _ -> "p75_" <> name
-  P90 (Subject name _ _) _ -> "p90_" <> name
-  P95 (Subject name _ _) _ -> "p95_" <> name
-  P99 (Subject name _ _) _ -> "p99_" <> name
-  P100 (Subject name _ _) _ -> "p100_" <> name
-  Percentile (SubjectExpr (Subject name _ _) _) pct _ -> "percentile_" <> name <> "_" <> T.replace "." "_" (show pct)
-  Percentiles (SubjectExpr (Subject name _ _) _) _ _ -> "percentiles_" <> name
-  Sum (Subject name _ _) _ -> "sum_" <> name
-  Avg (Subject name _ _) _ -> "avg_" <> name
-  Min (Subject name _ _) _ -> "min_" <> name
-  Max (Subject name _ _) _ -> "max_" <> name
-  Median (Subject name _ _) _ -> "median_" <> name
-  Stdev (Subject name _ _) _ -> "stdev_" <> name
-  Range (Subject name _ _) _ -> "range_" <> name
-  Coalesce _ _ -> "coalesce_"
-  Strcat _ _ -> "strcat_"
-  Iff _ _ _ _ -> "iff_"
-  Case _ _ _ -> "case_"
-  Plain (Subject name _ _) _ -> name
+  Count (Subject n _ _) _ -> "count_" <> if n == "*" then "" else sanitizeAlias n
+  CountIf{} -> "countif_"
+  DCount (Subject n _ _) _ _ -> "dcount_" <> sanitizeAlias n
+  P50 (Subject n _ _) _ -> "p50_" <> sanitizeAlias n
+  P75 (Subject n _ _) _ -> "p75_" <> sanitizeAlias n
+  P90 (Subject n _ _) _ -> "p90_" <> sanitizeAlias n
+  P95 (Subject n _ _) _ -> "p95_" <> sanitizeAlias n
+  P99 (Subject n _ _) _ -> "p99_" <> sanitizeAlias n
+  P100 (Subject n _ _) _ -> "p100_" <> sanitizeAlias n
+  Percentile (SubjectExpr (Subject n _ _) _) pct _ -> "percentile_" <> sanitizeAlias n <> "_" <> T.replace "." "_" (show pct)
+  Percentiles (SubjectExpr (Subject n _ _) _) _ _ -> "percentiles_" <> sanitizeAlias n
+  Sum (Subject n _ _) _ -> "sum_" <> sanitizeAlias n
+  Avg (Subject n _ _) _ -> "avg_" <> sanitizeAlias n
+  Min (Subject n _ _) _ -> "min_" <> sanitizeAlias n
+  Max (Subject n _ _) _ -> "max_" <> sanitizeAlias n
+  Median (Subject n _ _) _ -> "median_" <> sanitizeAlias n
+  Stdev (Subject n _ _) _ -> "stdev_" <> sanitizeAlias n
+  Range (Subject n _ _) _ -> "range_" <> sanitizeAlias n
+  Coalesce{} -> "coalesce_"
+  Strcat{} -> "strcat_"
+  Iff{} -> "iff_"
+  Case{} -> "case_"
+  Round{} -> "round_"
+  ToFloat{} -> "tofloat_"
+  ToInt{} -> "toint_"
+  ToString{} -> "tostring_"
+  Plain (Subject n _ _) _ -> sanitizeAlias n
 
 
--- | Wrap SQL expression with AS alias (user-supplied or default)
-withAlias :: Text -> Maybe Text -> AggFunction -> Text
-withAlias sql explicitAlias agg = sql <> " AS " <> fromMaybe (defaultAlias agg) explicitAlias
-
-
+-- | Display with alias: SQL AS (explicit or default)
 instance Display AggFunction where
-  displayPrec _prec agg@(Count sub alias) = displayBuilder $ withAlias ("count(" <> display sub <> ")::float") alias agg
-  displayPrec _prec agg@(CountIf cond alias) = displayBuilder $ withAlias ("COUNT(*) FILTER (WHERE " <> display cond <> ")::float") alias agg
-  -- dcount(field [, accuracy]) -> COUNT(DISTINCT field)
-  -- Note: KQL accuracy parameter (0-4 for HyperLogLog precision) is intentionally ignored
-  -- because PostgreSQL's COUNT(DISTINCT) doesn't support HLL accuracy hints
-  displayPrec _prec agg@(DCount sub _ alias) = displayBuilder $ withAlias ("COUNT(DISTINCT " <> display sub <> ")::float") alias agg
-  displayPrec _prec agg@(P50 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.50, percentile_agg((" <> display sub <> ")::float))::int") alias agg
-  displayPrec _prec agg@(P75 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.75, percentile_agg((" <> display sub <> ")::float))::int") alias agg
-  displayPrec _prec agg@(P90 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.90, percentile_agg((" <> display sub <> ")::float))::int") alias agg
-  displayPrec _prec agg@(P95 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.95, percentile_agg((" <> display sub <> ")::float))::int") alias agg
-  displayPrec _prec agg@(P99 sub alias) = displayBuilder $ withAlias ("approx_percentile(0.99, percentile_agg((" <> display sub <> ")::float))::int") alias agg
-  displayPrec _prec agg@(P100 sub alias) = displayBuilder $ withAlias ("approx_percentile(1, percentile_agg((" <> display sub <> ")::float))::int") alias agg
-  -- Percentile/Percentiles are handled specially via extractPercentilesInfo and LATERAL unnest SQL
-  displayPrec _prec agg@(Percentile subExpr pct alias) =
-    displayBuilder $ withAlias ("approx_percentile(" <> show (pct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float") alias agg
-  displayPrec _prec agg@(Percentiles subExpr pcts alias) =
-    let firstPct = fromMaybe 50.0 (listToMaybe pcts)
-     in displayBuilder $ withAlias ("approx_percentile(" <> show (firstPct / 100.0) <> ", percentile_agg((" <> subjectExprToSQL subExpr <> ")::float))::float") alias agg
-  displayPrec _prec agg@(Sum sub alias) = displayBuilder $ withAlias ("sum((" <> display sub <> ")::float)") alias agg
-  displayPrec _prec agg@(Avg sub alias) = displayBuilder $ withAlias ("avg((" <> display sub <> ")::float)") alias agg
-  displayPrec _prec agg@(Min sub alias) = displayBuilder $ withAlias ("min((" <> display sub <> ")::float)") alias agg
-  displayPrec _prec agg@(Max sub alias) = displayBuilder $ withAlias ("max((" <> display sub <> ")::float)") alias agg
-  displayPrec _prec agg@(Median sub alias) = displayBuilder $ withAlias ("median((" <> display sub <> ")::float)") alias agg
-  displayPrec _prec agg@(Stdev sub alias) = displayBuilder $ withAlias ("stdev((" <> display sub <> ")::float)") alias agg
-  displayPrec _prec agg@(Range sub alias) = displayBuilder $ withAlias ("range((" <> display sub <> ")::float)") alias agg
-  -- coalesce(expr1, expr2, ...) -> COALESCE(expr1, expr2, ...)
-  displayPrec _prec agg@(Coalesce exprs alias) =
-    displayBuilder $ withAlias ("COALESCE(" <> T.intercalate ", " (map display exprs) <> ")") alias agg
-  -- strcat(expr1, expr2, ...) -> CONCAT(expr1, expr2, ...)
-  displayPrec _prec agg@(Strcat exprs alias) =
-    displayBuilder $ withAlias ("CONCAT(" <> T.intercalate ", " (map display exprs) <> ")") alias agg
-  -- iff(condition, then, else) -> CASE WHEN condition THEN then ELSE else END
-  displayPrec _prec agg@(Iff cond thenVal elseVal alias) =
-    displayBuilder $ withAlias ("CASE WHEN " <> display cond <> " THEN " <> display thenVal <> " ELSE " <> display elseVal <> " END") alias agg
-  -- case(pred1, val1, ..., else) -> CASE WHEN pred1 THEN val1 ... ELSE else END
-  displayPrec _prec agg@(Case pairs defaultVal alias) =
-    displayBuilder $ withAlias ("CASE " <> foldMap displayCaseWhen pairs <> "ELSE " <> display defaultVal <> " END") alias agg
-    where
-      displayCaseWhen (cond, val) = "WHEN " <> display cond <> " THEN " <> display val <> " "
-  displayPrec _prec agg@(Plain sub alias) = displayBuilder $ withAlias (display sub) alias agg
+  displayPrec _ agg = displayBuilder $ aggToSqlNoAlias agg <> " AS " <> fromMaybe (defaultAlias agg) (getAlias agg)
 
 
 instance ToQueryText Section where
@@ -453,6 +601,10 @@ instance ToQueryText Section where
     "summarize "
       <> T.intercalate "," (map toQText funcs)
       <> maybeToMonoid (toQText <$> byClauseM)
+  toQText (ExtendCommand cols) =
+    "extend " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
+  toQText (ProjectCommand cols) =
+    "project " <> T.intercalate ", " [name <> " = " <> toQText expr | (name, expr) <- cols]
   toQText (SortCommand fields) = "sort by " <> T.intercalate ", " (map toQText fields)
   toQText (TakeCommand limit) = "take " <> toText (show (limit :: Int))
 
@@ -474,6 +626,8 @@ data Section
   = Search Expr
   | WhereClause Expr -- New constructor for where clause after pipe
   | SummarizeCommand [AggFunction] (Maybe SummarizeByClause)
+  | ExtendCommand [(Text, AggFunction)] -- extend col = expr, col2 = expr2 (add computed columns)
+  | ProjectCommand [(Text, AggFunction)] -- project col = expr, col2 = expr2 (select specific columns)
   | SortCommand [SortField] -- sort by multiple fields
   | TakeCommand Int -- limit/take number of results
   | Source Sources
@@ -591,31 +745,44 @@ pTakeSection = do
   return $ TakeCommand (fromMaybe 1000 limit) -- Default to 1000 if parsing fails
 
 
+-- | Parse 'name = expression' pattern, returns (name, aliased expression)
+-- Used by extend/project commands and named aggregations in summarize
+-- Allows dots in names which are sanitized to underscores for valid SQL aliases
+pNamedExpr :: Parser (Text, AggFunction)
+pNamedExpr = do
+  name <- toText <$> some (alphaNumChar <|> oneOf ("_." :: String))
+  space *> string "=" *> space
+  let sanitized = sanitizeAlias name
+  (sanitized,) . setAlias sanitized <$> aggFunctionParser
+
+
+-- | Helper for column-assignment commands (extend/project)
+pColumnCommand :: Text -> ([(Text, AggFunction)] -> Section) -> Parser Section
+pColumnCommand keyword ctor = string keyword *> space *> (ctor <$> pNamedExpr `sepBy1` comma)
+
+
+-- | Parser for 'extend' command - add computed columns
+-- Microsoft KQL: extend ColumnName = Expression [, ...]
+--
+-- >>> parse pExtendSection "" "extend error_cat = case(status >= 500, \"5xx\", \"ok\")"
+-- Right (ExtendCommand [("error_cat",Case [(GTEq (Subject "status" "status" []) (Num "500"),Str "5xx")] (Str "ok") (Just "error_cat"))])
+pExtendSection :: Parser Section
+pExtendSection = pColumnCommand "extend" ExtendCommand
+
+
+-- | Parser for 'project' command - select specific columns
+-- Microsoft KQL: project ColumnName = Expression [, ...]
+--
+-- >>> parse pProjectSection "" "project service = resource.service.name, count = count()"
+-- Right (ProjectCommand [("service",Plain (Subject "resource.service.name" "resource" [FieldKey "service",FieldKey "name"]) (Just "service")),("count",Count (Subject "*" "*" []) (Just "count"))])
+pProjectSection :: Parser Section
+pProjectSection = pColumnCommand "project" ProjectCommand
+
+
 -- | Set alias on an aggregation function
+-- Uses generic-lens to set the Maybe Text alias field in each constructor
 setAlias :: Text -> AggFunction -> AggFunction
-setAlias name (Count sub _) = Count sub (Just name)
-setAlias name (CountIf cond _) = CountIf cond (Just name)
-setAlias name (DCount sub acc _) = DCount sub acc (Just name)
-setAlias name (Sum sub _) = Sum sub (Just name)
-setAlias name (Avg sub _) = Avg sub (Just name)
-setAlias name (Min sub _) = Min sub (Just name)
-setAlias name (Max sub _) = Max sub (Just name)
-setAlias name (P50 sub _) = P50 sub (Just name)
-setAlias name (P75 sub _) = P75 sub (Just name)
-setAlias name (P90 sub _) = P90 sub (Just name)
-setAlias name (P95 sub _) = P95 sub (Just name)
-setAlias name (P99 sub _) = P99 sub (Just name)
-setAlias name (P100 sub _) = P100 sub (Just name)
-setAlias name (Percentile subExpr pct _) = Percentile subExpr pct (Just name)
-setAlias name (Percentiles subExpr pcts _) = Percentiles subExpr pcts (Just name)
-setAlias name (Median sub _) = Median sub (Just name)
-setAlias name (Stdev sub _) = Stdev sub (Just name)
-setAlias name (Range sub _) = Range sub (Just name)
-setAlias name (Coalesce exprs _) = Coalesce exprs (Just name)
-setAlias name (Strcat exprs _) = Strcat exprs (Just name)
-setAlias name (Iff cond thenVal elseVal _) = Iff cond thenVal elseVal (Just name)
-setAlias name (Case pairs defVal _) = Case pairs defVal (Just name)
-setAlias name (Plain sub _) = Plain sub (Just name)
+setAlias n = set typed (Just n)
 
 
 -- | Parse a named aggregation like 'TotalCount = count()'
@@ -626,12 +793,7 @@ setAlias name (Plain sub _) = Plain sub (Just name)
 -- >>> parse namedAggregation "" "error_count = countif(status_code == \"ERROR\")"
 -- Right (CountIf (Eq (Subject "status_code" "status_code" []) (Str "ERROR")) (Just "error_count"))
 namedAggregation :: Parser AggFunction
-namedAggregation = do
-  name <- toText <$> some (alphaNumChar <|> oneOf ("_" :: String))
-  space
-  _ <- string "="
-  space
-  setAlias name <$> aggFunctionParser
+namedAggregation = snd <$> pNamedExpr
 
 
 -- | Parse the summarize command
@@ -673,6 +835,8 @@ pSection = do
     [ pSummarizeSection
     , pSortSection
     , pTakeSection
+    , try pExtendSection
+    , try pProjectSection
     , try pWhereSection -- Try to parse 'where' clause first
     , Search <$> pExpr -- Fall back to bare expression for backward compatibility
     , Source <$> pSource
@@ -717,7 +881,9 @@ parseQuery :: Parser [Section]
 parseQuery = do
   -- Optionally parse a leading pipe character and ignore it
   _ <- optional (space *> char '|' <* space)
-  sepBy pSection (space *> char '|' <* space)
+  sections <- sepBy pSection (space *> char '|' <* space)
+  space *> eof
+  pure sections
 
 
 instance ToQueryText [Section] where

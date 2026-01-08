@@ -367,8 +367,8 @@ pValues =
     , try pNowFunction
     , try pAgoFunction
     , try pDuration
-    , try (Num . toText . show <$> L.float)
-    , Num . toText . show <$> L.decimal
+    , try (Num . toText . show <$> L.signed (pure ()) L.float)
+    , Num . toText . show <$> L.signed (pure ()) L.decimal
     ]
 
 

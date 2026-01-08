@@ -16,6 +16,8 @@ This document provides a complete reference for the Kusto Query Language (KQL) i
 - [Pipe Operators](#pipe-operators)
   - [where](#where)
   - [summarize](#summarize)
+  - [extend](#extend)
+  - [project](#project)
   - [sort by / order by](#sort-by--order-by)
   - [take / limit](#take--limit)
 - [Aggregation Functions](#aggregation-functions)
@@ -25,6 +27,8 @@ This document provides a complete reference for the Kusto Query Language (KQL) i
 - [Scalar Functions](#scalar-functions)
   - [String Functions](#string-functions)
   - [Conditional Functions](#conditional-functions)
+  - [Type Casting Functions](#type-casting-functions)
+  - [Formatting Functions](#formatting-functions)
 - [Date and Time Functions](#date-and-time-functions)
   - [now()](#now)
   - [ago()](#ago)
@@ -219,6 +223,52 @@ Aggregates data using aggregation functions, optionally grouped by fields.
 | summarize count() by bin(timestamp, 1h)
 ```
 
+### extend
+
+Adds computed columns to the result set while preserving all existing columns.
+
+```kusto
+| extend column_name = expression [, column_name2 = expression2, ...]
+```
+
+**Examples:**
+```kusto
+// Add error category based on status code
+| extend error_category = case(
+    status_code >= 500, "5xx",
+    status_code >= 400, "4xx",
+    "ok"
+  )
+
+// Add duration in milliseconds
+| extend duration_ms = round(duration / 1000000, 2)
+
+// Add multiple columns
+| extend
+    is_error = status_code >= 400,
+    status_text = tostring(status_code)
+```
+
+### project
+
+Selects and renames specific columns, removing all others.
+
+```kusto
+| project column_name = expression [, column_name2 = expression2, ...]
+```
+
+**Examples:**
+```kusto
+// Select specific columns with renamed aliases
+| project
+    service = resource.service.name,
+    total = count(),
+    error_rate = round(countif(status_code == "ERROR") * 100.0 / count(), 2)
+
+// Simple column selection
+| project service_name = resource.service.name, method, status_code
+```
+
 ### sort by / order by
 
 Orders results by one or more fields.
@@ -359,6 +409,50 @@ You can perform unit conversions directly in percentile functions:
     status_code >= 300, "redirect",
     "success"
   )
+```
+
+### Type Casting Functions
+
+| Function | Aliases | Description | Example |
+|----------|---------|-------------|---------|
+| `tofloat(value)` | `todouble(value)` | Convert to float | `tofloat(count_val)` |
+| `toint(value)` | `tolong(value)` | Convert to integer | `toint(duration)` |
+| `tostring(value)` | | Convert to text | `tostring(status_code)` |
+
+**Note:** These functions are best used with `extend` or `project` operators for value transformation.
+
+**Examples:**
+```kusto
+// Convert duration to integer milliseconds
+| extend duration_ms = toint(duration / 1000000)
+
+// Add formatted status text column
+| extend status_text = tostring(status_code)
+
+// Convert count to float for percentage calculation
+| extend error_rate = tofloat(error_count) / tofloat(total_count) * 100
+```
+
+### Formatting Functions
+
+| Function | Description | Example |
+|----------|-------------|---------|
+| `round(value, decimals)` | Round to N decimal places | `round(error_rate, 2)` |
+
+**Examples:**
+```kusto
+// Round error rate to 2 decimal places
+| summarize error_rate = round(countif(status >= 400) * 100.0 / count(), 2)
+
+// Round duration to integer
+| extend duration_rounded = round(duration / 1e6, 0)
+
+// Calculate and round percentages
+| summarize
+    total = count(),
+    errors = countif(status_code >= 400),
+    error_pct = round(countif(status_code >= 400) * 100.0 / count(), 2)
+  by service_name
 ```
 
 ---
