@@ -252,6 +252,7 @@ body, :host {
   --tags-border-color: var(--color-strokeStrong);
   --tags-hover-border-color: var(--color-strokeStrong);
   --chkbg: var(--brand-color);
+  --root-bg: var(--color-bgBase);
 }
 
 @layer custom {
@@ -293,9 +294,15 @@ body, :host {
 
   /* Frosted glass backdrop for modals */
   .modal-backdrop {
-    background-color: rgba(0 0 0 / 0.5);
-    backdrop-filter: blur(14px);
-    -webkit-backdrop-filter: blur(14px);
+    /*background-color: rgba(0 0 0 / 0.5);*/
+    backdrop-filter: blur(3px);
+    -webkit-backdrop-filter: blur(3px);
+  }
+
+  /* Fix dark mode modal backdrop */
+  [data-theme="dark"] {
+    --page-scroll-bg: color-mix(in srgb, oklch(14% 0.025 263), oklch(0% 0 0) 40%);
+    --root-bg: oklch(14% 0.025 263);
   }
 
   .dropdown summary {
