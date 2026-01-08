@@ -150,7 +150,7 @@ replaceNullChars = T.replace "\\u0000" ""
 
 -- | Process errors with optional HTTP-specific fields
 -- If HTTP fields are not provided, they remain as Nothing in the error record
-processErrors :: Projects.ProjectId -> Maybe RequestDumps.SDKTypes -> Maybe Text -> Maybe Text -> Errors.ATError -> ( Query, [DBField])
+processErrors :: Projects.ProjectId -> Maybe RequestDumps.SDKTypes -> Maybe Text -> Maybe Text -> Errors.ATError -> (Query, [DBField])
 processErrors pid maybeSdkType maybeMethod maybePath err = (q, params)
   where
     (q, params) = Errors.upsertErrorQueryAndParam pid err
