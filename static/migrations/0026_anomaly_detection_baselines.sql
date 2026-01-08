@@ -52,8 +52,26 @@ WHERE state = 'established';
 DROP TRIGGER IF EXISTS error_created_anomaly ON apis.errors;
 DROP TABLE IF EXISTS apis.errors;
 
-
-
+CREATE OR REPLACE FUNCTION apis.new_error_proc() RETURNS trigger AS $$
+BEGIN
+  IF TG_WHEN <> 'AFTER' THEN
+    RAISE EXCEPTION 'apis.new_error_proc() may only run as an AFTER trigger';
+  END IF;
+  -- Create a job for the new error
+  -- JSON format matches Aeson's derived FromJSON for:
+  -- NewErrorDetected Projects.ProjectId Text
+  INSERT INTO background_jobs (run_at, status, payload)
+  VALUES (
+    NOW(),
+    'queued',
+    jsonb_build_object(
+      'tag', 'NewErrorDetected',
+      'contents', jsonb_build_array(NEW.project_id, NEW.hash)
+    )
+  );
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
 
 CREATE TABLE apis.errors (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -105,7 +123,7 @@ CREATE UNIQUE INDEX idx_apis_errors_project_id_hash ON apis.errors(project_id, h
 CREATE INDEX idx_apis_errors_project_id ON apis.errors(project_id);
 CREATE INDEX idx_errors_active ON apis.errors(project_id, state, last_seen_at DESC) WHERE state != 'resolved';
 CREATE INDEX idx_errors_state ON apis.errors(project_id, state);
-CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_anomaly_proc('runtime_exception', 'created', 'skip_anomaly_record');
+CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_error_proc('runtime_exception', 'created', 'skip_anomaly_record');
 
 -- all data here that is not in errors (top level) go into error_data jsonb
 -- Whenever the same error occurs, we update the error_data with latest values for these fields
