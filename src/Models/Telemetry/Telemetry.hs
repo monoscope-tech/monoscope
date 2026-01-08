@@ -98,6 +98,7 @@ import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (lookupValueText, toXXHash)
+import Models.Apis.Errors qualified as Errors
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -1012,7 +1013,7 @@ getErrorEvents _ = []
 
 -- | Extract all runtime errors from a collection of spans
 -- This is the main entry point for error anomaly detection
-getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector RequestDumps.ATError
+getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector Errors.ATError
 getAllATErrors = V.concatMap extractErrorsFromSpan
   where
     extractErrorsFromSpan spanObj =
@@ -1026,7 +1027,7 @@ getAllATErrors = V.concatMap extractErrorsFromSpan
 -- - exception.message: The exception message
 -- - exception.stacktrace: The stacktrace
 -- Also extracts HTTP context (method, path) for better error tracking
-extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe RequestDumps.ATError
+extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe Errors.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
   AE.Object attrs <- KEM.lookup "exception" attrs'
@@ -1072,7 +1073,7 @@ extractATError spanObj (AE.Object o) = do
   -- Hash components: projectId + service + span name + error type + sanitized message/stack
   -- This ensures similar errors are grouped while allowing variations in the actual message
   return
-    $ RequestDumps.ATError
+    $ Errors.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
       , when = spanObj.timestamp
       , errorType = typ

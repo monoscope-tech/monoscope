@@ -673,13 +673,13 @@ processOneMinuteErrors scheduledTime pid = do
 -- Log.logInfo "Completed 1-minute error processing" ()
 
 -- | Process and insert errors for a specific project
-processProjectErrors :: Projects.ProjectId -> V.Vector RequestDumps.ATError -> ATBackgroundCtx ()
+processProjectErrors :: Projects.ProjectId -> V.Vector Errors.ATError -> ATBackgroundCtx ()
 processProjectErrors pid errors = do
   -- Process each error, extracting HTTP fields if available
   let processedErrors = V.map processError errors
 
   -- Extract queries and params
-  let (_, queries, paramsList) = V.unzip3 processedErrors
+  let (queries, paramsList) = V.unzip processedErrors
 
   -- Bulk insert errors
   result <- try $ V.zipWithM_ PG.execute queries paramsList
@@ -694,7 +694,7 @@ processProjectErrors pid errors = do
   where
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
-    processError :: RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
+    processError :: Errors.ATError -> (Query, [DBField])
     processError = RequestMessages.processErrors pid Nothing Nothing Nothing
 
 
