@@ -1146,6 +1146,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     -- Each unique error pattern gets its own issue for tracking
     _ -> pass
 
+
 -- | Process API change anomalies (endpoint, shape, format) into unified APIChange issues
 -- This function groups related anomalies by endpoint to prevent notification spam.
 -- For example, if a new endpoint is added with 5 fields and 2 formats, instead of
@@ -1706,17 +1707,19 @@ processNewError pid errorHash authCtx = do
             Projects.NEmail ->
               forM_ users \u -> do
                 let e = err.errorData
-                    errorsJ = V.singleton $ AE.object
-                                [ "root_error_message" AE..= e.rootErrorMessage
-                                , "error_type" AE..= e.errorType
-                                , "error_message" AE..= e.message
-                                , "stack_trace" AE..= e.stackTrace
-                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                                , "hash" AE..= e.hash
-                                , "tech" AE..= e.technology
-                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                                , "root_error_type" AE..= e.rootErrorType
-                                ]
+                    errorsJ =
+                      V.singleton
+                        $ AE.object
+                          [ "root_error_message" AE..= e.rootErrorMessage
+                          , "error_type" AE..= e.errorType
+                          , "error_message" AE..= e.message
+                          , "stack_trace" AE..= e.stackTrace
+                          , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                          , "hash" AE..= e.hash
+                          , "tech" AE..= e.technology
+                          , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                          , "root_error_type" AE..= e.rootErrorType
+                          ]
                     title = project.title
                     errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
                     templateVars =
@@ -1898,8 +1901,20 @@ detectEndpointErrorRateSpike pid authCtx = do
 
         Relude.when isSpike $ do
           Log.logInfo "Endpoint error rate spike detected" (epRate.endpointHash, currentErrorRate, baselineMean, zScore)
-          issue <- liftIO $ Issues.createEndpointErrorRateSpikeIssue 
-                pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentErrorRate baselineMean stddev epRate.currentHourErrors epRate.currentHourRequests V.empty 
+          issue <-
+            liftIO
+              $ Issues.createEndpointErrorRateSpikeIssue
+                pid
+                epRate.endpointHash
+                epRate.method
+                epRate.urlPath
+                (Just epRate.host)
+                currentErrorRate
+                baselineMean
+                stddev
+                epRate.currentHourErrors
+                epRate.currentHourRequests
+                V.empty
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1925,8 +1940,18 @@ detectEndpointVolumeRateChange pid authCtx = do
             direction = if currentRate > baselineMean then "spike" else "drop"
         Relude.when isSignificantChange $ do
           Log.logInfo "Endpoint volume rate change detected" (epRate.endpointHash, currentRate, baselineMean, zScore, direction)
-          issue <- liftIO $ Issues.createEndpointVolumeRateChangeIssue
-            pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentRate baselineMean stddev direction
+          issue <-
+            liftIO
+              $ Issues.createEndpointVolumeRateChangeIssue
+                pid
+                epRate.endpointHash
+                epRate.method
+                epRate.urlPath
+                (Just epRate.host)
+                currentRate
+                baselineMean
+                stddev
+                direction
 
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->

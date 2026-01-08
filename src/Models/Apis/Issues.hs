@@ -411,10 +411,10 @@ data NewShapeData = NewShapeData
   , statusCode :: Int
   , exampleRequestPayload :: AE.Value
   , exampleResponsePayload :: AE.Value
-  , newFields :: V.Vector Text 
+  , newFields :: V.Vector Text
   , deletedFields :: V.Vector Text
-  , modifiedFields :: V.Vector Text 
-  , fieldHashes :: V.Vector Text 
+  , modifiedFields :: V.Vector Text
+  , fieldHashes :: V.Vector Text
   , firstSeenAt :: UTCTime
   }
   deriving stock (Generic, Show)
@@ -433,7 +433,7 @@ data FieldChangeData = FieldChangeData
   , fieldCategory :: Text
   , previousType :: Maybe Text
   , newType :: Text
-  , changeType :: Text 
+  , changeType :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -448,8 +448,8 @@ data Issue = Issue
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
-  , target_hash :: Text 
-  , endpointHash :: Text 
+  , target_hash :: Text
+  , endpointHash :: Text
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
@@ -856,7 +856,7 @@ createNewErrorIssue projectId err = do
 
 
 -- | Create issue for an error spike
-createErrorSpikeIssue :: Projects.ProjectId -> Errors.Error -> Double  -> Double  -> Double  -> IO Issue
+createErrorSpikeIssue :: Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> IO Issue
 createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -952,7 +952,7 @@ createNewLogPatternIssue projectId lp = do
 
 
 -- | Create an issue for a log pattern volume spike
-createLogPatternSpikeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double  -> Double  -> Double  -> IO Issue
+createLogPatternSpikeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> IO Issue
 createLogPatternSpikeIssue projectId lp currentRate baselineMean baselineStddev = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1051,7 +1051,7 @@ createLogPatternIssue projectId lp = do
 
 
 -- | Create an issue for an escalating error
-createErrorEscalatingIssue :: Projects.ProjectId -> Errors.Error -> Text  -> Double -> Text -> IO Issue
+createErrorEscalatingIssue :: Projects.ProjectId -> Errors.Error -> Text -> Double -> Text -> IO Issue
 createErrorEscalatingIssue projectId err prevState escalationRate escalationWindow = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1357,7 +1357,7 @@ createEndpointVolumeRateChangeIssue projectId epHash method path serviceName cur
 
 
 -- | Create an issue for a new endpoint
-createNewEndpointIssue :: Projects.ProjectId -> Text  -> Text  -> Text -> Text -> IO Issue
+createNewEndpointIssue :: Projects.ProjectId -> Text -> Text -> Text -> Text -> IO Issue
 createNewEndpointIssue projectId epHash method path host = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1398,7 +1398,7 @@ createNewEndpointIssue projectId epHash method path host = do
 
 
 -- | Create an issue for a new shape
-createNewShapeIssue :: Projects.ProjectId -> Text  -> Text  -> Text -> Text  -> Int -> AE.Value  -> AE.Value  -> V.Vector Text  -> V.Vector Text -> V.Vector Text -> V.Vector Text  -> IO Issue
+createNewShapeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Int -> AE.Value -> AE.Value -> V.Vector Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> IO Issue
 createNewShapeIssue projectId shHash epHash method path statusCode reqPayload respPayload newFlds deletedFlds modifiedFlds fldHashes = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1439,9 +1439,10 @@ createNewShapeIssue projectId shHash epHash method path statusCode reqPayload re
       , service = ""
       , critical = hasBreakingChanges
       , severity = if hasBreakingChanges then "critical" else "warning"
-      , recommendedAction = if hasBreakingChanges
-          then "Breaking API changes detected: " <> T.pack (show (V.length deletedFlds)) <> " deleted, " <> T.pack (show (V.length modifiedFlds)) <> " modified fields. Update clients immediately."
-          else "New API shape detected with " <> T.pack (show (V.length newFlds)) <> " new fields. Review for compatibility."
+      , recommendedAction =
+          if hasBreakingChanges
+            then "Breaking API changes detected: " <> T.pack (show (V.length deletedFlds)) <> " deleted, " <> T.pack (show (V.length modifiedFlds)) <> " modified fields. Update clients immediately."
+            else "New API shape detected with " <> T.pack (show (V.length newFlds)) <> " new fields. Review for compatibility."
       , migrationComplexity = if V.length deletedFlds > 5 then "high" else if hasBreakingChanges then "medium" else "low"
       , issueData = Aeson $ AE.toJSON shapeData
       , requestPayloads = Aeson []
@@ -1452,7 +1453,7 @@ createNewShapeIssue projectId shHash epHash method path statusCode reqPayload re
 
 
 -- | Create an issue for a field change
-createFieldChangeIssue :: Projects.ProjectId -> Text -> Text  -> Text  -> Text  -> Text  -> Text  -> Maybe Text  -> Text  -> Text  -> IO Issue
+createFieldChangeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> IO Issue
 createFieldChangeIssue projectId fldHash epHash method path keyPath category prevType newType changeType = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
