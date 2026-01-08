@@ -412,11 +412,51 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
     it "generates SQL for round with nested countif" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(countif(status >= 400), 2) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
-      T.isInfixOf "ROUND((COUNT(*) FILTER (WHERE" sql `shouldBe` True
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', ROUND((COUNT(*) FILTER (WHERE status >= 400)::float)::numeric, 2)::float AS round_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
 
     it "parses tofloat with nested count" do
       let result = parseQueryToAST "| summarize tofloat(count()) by bin_auto(timestamp)"
       isRight result `shouldBe` True
+
+    it "generates SQL for tofloat with nested sum" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize tofloat(sum(duration)) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (sum((duration)::float))::float AS tofloat_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
+
+    it "generates SQL for toint with nested count" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize toint(count()) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      let expected =
+            [text|
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (count(*)::float)::integer AS toint_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+            |]
+      normT sql `shouldBe` normT expected
+
+    it "generates SQL for extend with nested round(countif)" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| extend error_rate = round(countif(status >= 400), 3)"
+      T.isInfixOf "ROUND((COUNT(*) FILTER (WHERE status >= 400)::float)::numeric, 3)::float AS error_rate" query `shouldBe` True
+
+    it "generates SQL for project with nested toint(sum)" do
+      let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| project total_duration = toint(sum(duration))"
+      T.isInfixOf "(sum((duration)::float))::integer AS total_duration" query `shouldBe` True
+
+    it "parses named nested aggregation in summarize" do
+      let result = parseQueryToAST "| summarize error_pct = round(countif(status >= 500), 2) by bin(timestamp, 1h)"
+      isRight result `shouldBe` True
+
+    it "generates SQL for named nested aggregation" do
+      let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize error_pct = round(countif(status >= 500), 2) by bin(timestamp, 1h)"
+      let sql = fromMaybe "" c.finalSummarizeQuery
+      T.isInfixOf "AS error_pct" sql `shouldBe` True
+      T.isInfixOf "ROUND((COUNT(*) FILTER (WHERE status >= 500)::float)::numeric, 2)::float" sql `shouldBe` True
 
   describe "project SQL output" do
     it "project generates correct alias" do
