@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS apis.log_patterns (
     created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    pattern                 TEXT NOT NULL,
+    log_pattern             TEXT NOT NULL,
     pattern_hash            TEXT NOT NULL,
 
     service_name            TEXT,
@@ -33,22 +33,16 @@ CREATE TABLE IF NOT EXISTS apis.log_patterns (
 
 SELECT manage_updated_at('apis.log_patterns');
 
--- Indexes for efficient queries
 CREATE INDEX IF NOT EXISTS idx_log_patterns_project ON apis.log_patterns(project_id);
 CREATE INDEX IF NOT EXISTS idx_log_patterns_project_state ON apis.log_patterns(project_id, state);
 CREATE INDEX IF NOT EXISTS idx_log_patterns_last_seen ON apis.log_patterns(project_id, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_log_patterns_service ON apis.log_patterns(project_id, service_name);
-
 
 CREATE OR REPLACE FUNCTION apis.new_log_pattern_proc() RETURNS trigger AS $$
 BEGIN
   IF TG_WHEN <> 'AFTER' THEN
     RAISE EXCEPTION 'apis.new_log_pattern_proc() may only run as an AFTER trigger';
   END IF;
-
-  -- Create a job for the new pattern
-  -- JSON format matches Aeson's derived FromJSON for:
-  -- NewLogPatternDetected Projects.ProjectId Text
   INSERT INTO background_jobs (run_at, status, payload)
   VALUES (
     NOW(),
@@ -58,18 +52,11 @@ BEGIN
       'contents', jsonb_build_array(NEW.project_id, NEW.pattern_hash)
     )
   );
-
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE OR REPLACE TRIGGER log_pattern_created_notify
-  AFTER INSERT ON apis.log_patterns
-  FOR EACH ROW
-  EXECUTE PROCEDURE apis.new_log_pattern_proc();
-
-ALTER TABLE projects.projects
-ADD COLUMN IF NOT EXISTS log_pattern_alerts BOOLEAN NOT NULL DEFAULT false;
+CREATE OR REPLACE TRIGGER log_pattern_created_notify AFTER INSERT ON apis.log_patterns FOR EACH ROW EXECUTE PROCEDURE apis.new_log_pattern_proc();
 
 
 ALTER TABLE apis.endpoints
@@ -84,7 +71,5 @@ ADD COLUMN IF NOT EXISTS baseline_latency_p95 FLOAT,
 ADD COLUMN IF NOT EXISTS baseline_latency_p99 FLOAT,
 ADD COLUMN IF NOT EXISTS baseline_volume_hourly_mean FLOAT,
 ADD COLUMN IF NOT EXISTS baseline_volume_hourly_stddev FLOAT;
-
-
 
 COMMIT;
