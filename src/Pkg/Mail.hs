@@ -25,6 +25,7 @@ import System.Config (AuthContext (env))
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB)
+import Models.Apis.Errors qualified as Errors
 
 
 sendPostmarkEmail :: Notify.Notify :> es => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()
@@ -44,7 +45,7 @@ sendSlackMessage pid message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
-  | RuntimeErrorAlert {issueId :: Text, errorData :: RequestDumps.ATError}
+  | RuntimeErrorAlert {issueId :: Text, errorData :: Errors.ATError}
   | ShapeAlert
   | ReportAlert
       { reportType :: Text
@@ -199,7 +200,7 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* Errors-" <> toText (show errCount) <> ", Total-" <> toText (show evCount))]) breakDown
 
 
-slackErrorAlert :: RequestDumps.ATError -> Text -> Text -> Text -> AE.Value
+slackErrorAlert :: Errors.ATError -> Text -> Text -> Text -> AE.Value
 slackErrorAlert err project channelId projectUrl =
   AE.object
     [ "blocks"
@@ -305,7 +306,7 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
-discordErrorAlert :: RequestDumps.ATError -> Text -> Text -> AE.Value
+discordErrorAlert :: Errors.ATError -> Text -> Text -> AE.Value
 discordErrorAlert err project projectUrl =
   [aesonQQ|{
 "embeds": [
