@@ -152,6 +152,7 @@ issueTypeToText EndpointLatencyDegradation = "endpoint_latency_degradation"
 issueTypeToText EndpointErrorRateSpike = "endpoint_error_rate_spike"
 issueTypeToText EndpointVolumeRateChange = "endpoint_volume_rate_change"
 
+
 parseIssueType :: Text -> Maybe IssueType
 parseIssueType "api_change" = Just APIChange
 parseIssueType "shape" = Just APIChange -- Handle DB anomaly_type
@@ -177,6 +178,7 @@ instance FromField IssueType where
     Just bs -> case parseIssueType (decodeUtf8 bs) of
       Just t -> pure t
       Nothing -> returnError ConversionFailed f $ "Unknown issue type: " <> decodeUtf8 bs
+
 
 -- | API Change issue data
 data APIChangeData = APIChangeData
@@ -1035,7 +1037,7 @@ createErrorEscalatingIssue projectId err prevState escalationRate escalationWind
 
 
 -- | Create an issue for a regressed error
-createErrorRegressedIssue :: Projects.ProjectId -> Errors.Error -> UTCTime -> Int -> Int  -> IO Issue
+createErrorRegressedIssue :: Projects.ProjectId -> Errors.Error -> UTCTime -> Int -> Int -> IO Issue
 createErrorRegressedIssue projectId err resolvedAtTime quietMins prevOccurrences = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1080,7 +1082,7 @@ createErrorRegressedIssue projectId err resolvedAtTime quietMins prevOccurrences
 
 
 -- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double  -> Double -> Double  -> Text  -> IO Issue
+createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> IO Issue
 createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1134,7 +1136,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
 
 
 -- | Create an issue for endpoint latency degradation
-createEndpointLatencyDegradationIssue :: Projects.ProjectId -> Text  -> Text  -> Text  -> Maybe Text  -> Double  -> Double -> Double -> Text  -> V.Vector Text  -> IO Issue
+createEndpointLatencyDegradationIssue :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Double -> Double -> Double -> Text -> V.Vector Text -> IO Issue
 createEndpointLatencyDegradationIssue projectId epHash method path serviceName currentLatency baselineLatency baselineStddev percentile traceIds = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1184,7 +1186,7 @@ createEndpointLatencyDegradationIssue projectId epHash method path serviceName c
 
 
 -- | Create an issue for endpoint error rate spike
-createEndpointErrorRateSpikeIssue :: Projects.ProjectId -> Text  -> Text  -> Text -> Maybe Text  -> Double  -> Double  -> Double -> Int -> Int  -> V.Vector Text -> IO Issue
+createEndpointErrorRateSpikeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Double -> Double -> Double -> Int -> Int -> V.Vector Text -> IO Issue
 createEndpointErrorRateSpikeIssue projectId epHash method path serviceName currentRate baselineRate baselineStddev errorCount totalReqs topErrors = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
@@ -1234,7 +1236,7 @@ createEndpointErrorRateSpikeIssue projectId epHash method path serviceName curre
       }
 
 
-createEndpointVolumeRateChangeIssue :: Projects.ProjectId -> Text  -> Text -> Text  -> Maybe Text  -> Double  -> Double  -> Double  -> Text  -> IO Issue
+createEndpointVolumeRateChangeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Double -> Double -> Double -> Text -> IO Issue
 createEndpointVolumeRateChangeIssue projectId epHash method path serviceName currentRate baselineRate baselineStddev direction = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime

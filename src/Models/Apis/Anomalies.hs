@@ -349,7 +349,6 @@ instance Default IssuesData where
   def = IDEmpty
 
 
-
 data IssueEventAgg = IssueEventAgg
   { count :: Int
   , lastSeen :: UTCTime
