@@ -3,6 +3,7 @@ module Models.Apis.LogPatterns (
   LogPatternId,
   LogPatternState (..),
   getLogPatterns,
+  getLogPatternTexts,
   getLogPatternByHash,
   acknowledgeLogPatterns,
   upsertLogPattern,
@@ -119,7 +120,7 @@ getLogPatterns pid mstate limit offset = PG.query q (pid, maybe "%" logPatternSt
   where
     q =
       [sql|
-        SELECT id, project_id, created_at, updated_at, pattern, pattern_hash,
+        SELECT id, project_id, created_at, updated_at, log_pattern, pattern_hash,
                service_name, log_level, sample_message, first_seen_at, last_seen_at,
                occurrence_count, state, acknowledged_by, acknowledged_at,
                baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
@@ -130,7 +131,11 @@ getLogPatterns pid mstate limit offset = PG.query q (pid, maybe "%" logPatternSt
         LIMIT ? OFFSET ?
       |]
 
-
+getLogPatternTexts :: DB es => Projects.ProjectId -> Eff es [Text]
+getLogPatternTexts pid = PG.query q (Only pid)
+  where
+    q = [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ?|]
+    
 -- | Get log pattern by hash
 getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe LogPattern)
 getLogPatternByHash pid hash = do
@@ -139,7 +144,7 @@ getLogPatternByHash pid hash = do
   where
     q =
       [sql|
-        SELECT id, project_id, created_at, updated_at, pattern, pattern_hash,
+        SELECT id, project_id, created_at, updated_at, log_pattern, pattern_hash,
                service_name, log_level, sample_message, first_seen_at, last_seen_at,
                occurrence_count, state, acknowledged_by, acknowledged_at,
                baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
@@ -163,22 +168,13 @@ acknowledgeLogPatterns uid patternHashes
       |]
 
 
--- | Upsert a log pattern (insert or update occurrence count)
-upsertLogPattern
-  :: DB es
-  => Projects.ProjectId
-  -> Text -- pattern
-  -> Text -- pattern_hash
-  -> Maybe Text -- service_name
-  -> Maybe Text -- log_level
-  -> Maybe Text -- sample_message
-  -> Eff es Int64
+upsertLogPattern :: DB es => Projects.ProjectId -> Text  -> Text  -> Maybe Text  -> Maybe Text  -> Maybe Text  -> Eff es Int64
 upsertLogPattern pid pat patHash serviceName logLevel sampleMsg =
   PG.execute q (pid, pat, patHash, serviceName, logLevel, sampleMsg)
   where
     q =
       [sql|
-        INSERT INTO apis.log_patterns (project_id, pattern, pattern_hash, service_name, log_level, sample_message)
+        INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, service_name, log_level, sample_message)
         VALUES (?, ?, ?, ?, ?, ?)
         ON CONFLICT (project_id, pattern_hash) DO UPDATE SET
           last_seen_at = NOW(),
@@ -226,10 +222,6 @@ updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
       |]
 
 
--- ============================================================================
--- Log Pattern Occurrence Queries (from otel_logs_and_spans)
--- ============================================================================
-
 -- | Stats for a log pattern from otel_logs_and_spans
 data PatternStats = PatternStats
   { hourlyMean :: Double
@@ -242,12 +234,7 @@ data PatternStats = PatternStats
 
 
 -- | Get pattern stats from otel_logs_and_spans
-getPatternStats
-  :: DB es
-  => Projects.ProjectId
-  -> Text -- pattern (log_pattern value)
-  -> Int -- hours to look back
-  -> Eff es (Maybe PatternStats)
+getPatternStats :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe PatternStats)
 getPatternStats pid pattern' hoursBack = do
   results <- PG.query q (pid, pattern', hoursBack)
   return $ listToMaybe results
@@ -344,7 +331,7 @@ getLogPatternById lpid = do
   where
     q =
       [sql|
-        SELECT id, project_id, created_at, updated_at, pattern, pattern_hash,
+        SELECT id, project_id, created_at, updated_at, log_pattern, pattern_hash,
                service_name, log_level, sample_message, first_seen_at, last_seen_at,
                occurrence_count, state, acknowledged_by, acknowledged_at,
                baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,

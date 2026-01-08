@@ -524,7 +524,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- coerce @[Only Text] @[Text] <$> PG.query (Query $ encodeUtf8 qq) pid
+    existingPatterns <-  if kind == "summary" then coerce @[Only Text] @[Text] <$> PG.query (Query $ encodeUtf8 qq) pid else LogPattern.getLogPatternTexts pid
     let known = V.fromList $ map ("",) existingPatterns
         combined = known <> events
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
@@ -539,14 +539,11 @@ processPatterns kind fieldName events pid scheduledTime since = do
         -- Update otel_logs_and_spans with pattern
         void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
 
-        -- Also store in apis.log_patterns table (only for log patterns, not summaries)
         Relude.when (kind == "log" && not (T.null patternTxt)) $ do
           let patternHash = toXXHash patternTxt
-              -- Get a sample message from the first non-empty id
               sampleMsg = case V.find (/= "") (V.map snd events) of
                 Just msg -> Just (T.take 500 msg)
                 Nothing -> Nothing
-          -- Upsert the pattern (increments count if exists, inserts if new)
           void $ LogPatterns.upsertLogPattern pid patternTxt patternHash Nothing Nothing sampleMsg
 
 
