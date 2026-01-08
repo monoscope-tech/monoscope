@@ -20,6 +20,12 @@ normT :: Text -> Text
 normT = unwords . words . T.filter (`notElem` ['\n', '\r', '\t'])
 
 
+-- Check that parse result is Left containing expected substring
+shouldFailWith :: Either Text a -> Text -> IO ()
+shouldFailWith (Left err) expected = T.isInfixOf expected err `shouldBe` True
+shouldFailWith (Right _) _ = fail "Expected parse error"
+
+
 spec :: Spec
 spec = do
   describe "parseQueryToSQL" do
@@ -52,40 +58,40 @@ spec = do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize count(*) by bin(timestamp, 1d)"
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', (count(*))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('1 days', timestamp) ORDER BY time_bucket('1 days', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', count(*)::float AS count_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('1 days', timestamp) ORDER BY time_bucket('1 days', timestamp) DESC
       |]
       normT (fromMaybe "" c.finalSummarizeQuery) `shouldBe` normT expected
     it "summarize with bin()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
       let expected =
             [text|
-      SELECT extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
+      SELECT extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float) AS sum_attributes_client, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC |]
       normT query `shouldBe` normT expected
     it "summarize with named aggregation" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "timestamp >= ago(7d) | summarize TotalCount = count() by Computer"
       let expected =
             [text|
-      SELECT count(*), count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY Computer ORDER BY timestamp desc limit 500 |]
+      SELECT count(*)::float AS TotalCount, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((timestamp >= NOW() - INTERVAL '7 days')) GROUP BY Computer ORDER BY timestamp desc limit 500 |]
       normT query `shouldBe` normT expected
     it "summarize with sort by and take" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "method==\"GET\" | summarize sum(attributes.client) by attributes.client, bin(timestamp, 60) | sort by parent_id asc | take 1000"
       let expected =
             [text|
-      SELECT extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float), count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC limit 1000 |]
+      SELECT extract(epoch from time_bucket('5 minutes', timestamp))::integer, sum((attributes->>'client')::float) AS sum_attributes_client, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((method = 'GET')) GROUP BY time_bucket('5 minutes', timestamp) ORDER BY time_bucket('5 minutes', timestamp) DESC limit 1000 |]
       normT query `shouldBe` normT expected
 
     it "summarize with bin_auto()" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count(*) by bin_auto(timestamp)"
       let expected =
             [text|
-      SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*), count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
+      SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*)::float AS count_, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
 
     it "query a metric" do
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "telemetry.metrics | where metric_name == \"app_recommendations_counter\" | summarize count(*) by bin_auto(timestamp),attributes"
       let expected =
             [text|
-      SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*), count(*) OVER() as _total_count FROM telemetry.metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
+      SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, count(*)::float AS count_, count(*) OVER() as _total_count FROM telemetry.metrics WHERE project_id='00000000-0000-0000-0000-000000000000' and ((metric_name = 'app_recommendations_counter')) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
 
   describe "percentile parsing" do
@@ -138,7 +144,7 @@ SELECT timeB, quantile, value FROM (
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "resource.service.name == \"cart\" | where duration != null | summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg((duration)::float))::float, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_percentile(0.5, percentile_agg((duration)::float))::float AS percentiles_duration, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and ((resource___service___name = 'cart' AND duration IS NOT NULL)) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT query `shouldBe` normT expected
 
@@ -156,7 +162,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, approx_pe
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(*) FILTER (WHERE status_code = 'ERROR'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(*) FILTER (WHERE status_code = 'ERROR')::float AS countif_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -179,7 +185,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(DISTINCT user_id))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(DISTINCT user_id)::float AS dcount_user_id FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -188,7 +194,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COUNT(DISTINCT resource___service___name))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COUNT(DISTINCT resource___service___name)::float AS dcount_resource_service_name FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -207,7 +213,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (COALESCE(method, 'unknown'))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', COALESCE(method, 'unknown') AS coalesce_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -226,7 +232,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CONCAT(method, ' ', url_path))::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CONCAT(method, ' ', url_path) AS strcat_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -245,7 +251,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CASE WHEN status_code = 'ERROR' THEN 'error' ELSE 'ok' END)::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CASE WHEN status_code = 'ERROR' THEN 'error' ELSE 'ok' END AS iff_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -264,7 +270,7 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', (CASE WHEN status >= 500 THEN '5xx' WHEN status >= 400 THEN '4xx' ELSE 'ok' END)::float FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
+SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', CASE WHEN status >= 500 THEN '5xx' WHEN status >= 400 THEN '4xx' ELSE 'ok' END AS case_ FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('1 hours', timestamp) ORDER BY time_bucket('1 hours', timestamp) DESC
             |]
       normT sql `shouldBe` normT expected
 
@@ -283,8 +289,10 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
 
   describe "edge cases and validation" do
     it "rejects dcount with accuracy > 4" do
-      let result = parseQueryToAST "| summarize dcount(user_id, 5) by bin_auto(timestamp)"
-      isLeft result `shouldBe` True
+      parseQueryToAST "| summarize dcount(user_id, 5) by bin_auto(timestamp)" `shouldFailWith` "dcount accuracy must be 0-4 per KQL spec"
+
+    it "rejects coalesce with single argument" do
+      parseQueryToAST "| summarize coalesce(x) by bin_auto(timestamp)" `shouldFailWith` "coalesce requires at least 2 arguments"
 
     it "accepts dcount with accuracy 0-4" do
       let result0 = parseQueryToAST "| summarize dcount(user_id, 0) by bin_auto(timestamp)"
@@ -317,6 +325,9 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
     it "parses round with value and decimals" do
       let result = parseQueryToAST "| summarize round(duration, 2) by bin_auto(timestamp)"
       isRight result `shouldBe` True
+
+    it "rejects round with non-numeric decimals" do
+      parseQueryToAST "| summarize round(duration, \"two\") by bin_auto(timestamp)" `shouldFailWith` "round() decimals must be numeric"
 
     it "generates ROUND SQL" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize round(duration, 2) by bin(timestamp, 1h)"
@@ -387,6 +398,9 @@ SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer, 'value', 
       isRight result `shouldBe` True
 
     it "parses project with aggregation functions" do
-      let result = parseQueryToAST "| project error_rate = round(countif(status_code == \"ERROR\"), 2)"
+      let result = parseQueryToAST "| project total = count(), avg_duration = avg(duration)"
       isRight result `shouldBe` True
+
+    it "rejects project with no columns" do
+      parseQueryToAST "| project" `shouldFailWith` "expecting"
 

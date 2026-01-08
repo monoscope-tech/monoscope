@@ -406,11 +406,11 @@ aggFunctionParser =
     , try pCountIf -- countif must come before count
     , pDCount -- dcount commits after matching "dcount(" to enforce accuracy validation (0-4)
     , try pCount
-    , try pCoalesce
+    , pCoalesce -- coalesce commits to enforce minimum 2 arguments validation
     , try pStrcat
     , try pIff
     , try pCase
-    , try pRound -- Type casting and formatting functions
+    , pRound -- round commits to enforce numeric decimals validation
     , try pToFloat
     , try pToInt
     , try pToString
@@ -461,27 +461,32 @@ instance ToQueryText [AggFunction] where
   toQText xs = T.intercalate ", " $ map toQText xs
 
 
+-- | Sanitize field name for use as SQL alias (replace dots with underscores)
+sanitizeAlias :: Text -> Text
+sanitizeAlias = T.replace "." "_"
+
+
 -- | Get KQL default alias for aggregation (e.g., count_, sum_field)
 defaultAlias :: AggFunction -> Text
 defaultAlias = \case
-  Count (Subject name _ _) _ -> if name == "*" then "count_" else "count_" <> name
+  Count (Subject name _ _) _ -> if name == "*" then "count_" else "count_" <> sanitizeAlias name
   CountIf _ _ -> "countif_"
-  DCount (Subject name _ _) _ _ -> "dcount_" <> name
-  P50 (Subject name _ _) _ -> "p50_" <> name
-  P75 (Subject name _ _) _ -> "p75_" <> name
-  P90 (Subject name _ _) _ -> "p90_" <> name
-  P95 (Subject name _ _) _ -> "p95_" <> name
-  P99 (Subject name _ _) _ -> "p99_" <> name
-  P100 (Subject name _ _) _ -> "p100_" <> name
-  Percentile (SubjectExpr (Subject name _ _) _) pct _ -> "percentile_" <> name <> "_" <> T.replace "." "_" (show pct)
-  Percentiles (SubjectExpr (Subject name _ _) _) _ _ -> "percentiles_" <> name
-  Sum (Subject name _ _) _ -> "sum_" <> name
-  Avg (Subject name _ _) _ -> "avg_" <> name
-  Min (Subject name _ _) _ -> "min_" <> name
-  Max (Subject name _ _) _ -> "max_" <> name
-  Median (Subject name _ _) _ -> "median_" <> name
-  Stdev (Subject name _ _) _ -> "stdev_" <> name
-  Range (Subject name _ _) _ -> "range_" <> name
+  DCount (Subject name _ _) _ _ -> "dcount_" <> sanitizeAlias name
+  P50 (Subject name _ _) _ -> "p50_" <> sanitizeAlias name
+  P75 (Subject name _ _) _ -> "p75_" <> sanitizeAlias name
+  P90 (Subject name _ _) _ -> "p90_" <> sanitizeAlias name
+  P95 (Subject name _ _) _ -> "p95_" <> sanitizeAlias name
+  P99 (Subject name _ _) _ -> "p99_" <> sanitizeAlias name
+  P100 (Subject name _ _) _ -> "p100_" <> sanitizeAlias name
+  Percentile (SubjectExpr (Subject name _ _) _) pct _ -> "percentile_" <> sanitizeAlias name <> "_" <> T.replace "." "_" (show pct)
+  Percentiles (SubjectExpr (Subject name _ _) _) _ _ -> "percentiles_" <> sanitizeAlias name
+  Sum (Subject name _ _) _ -> "sum_" <> sanitizeAlias name
+  Avg (Subject name _ _) _ -> "avg_" <> sanitizeAlias name
+  Min (Subject name _ _) _ -> "min_" <> sanitizeAlias name
+  Max (Subject name _ _) _ -> "max_" <> sanitizeAlias name
+  Median (Subject name _ _) _ -> "median_" <> sanitizeAlias name
+  Stdev (Subject name _ _) _ -> "stdev_" <> sanitizeAlias name
+  Range (Subject name _ _) _ -> "range_" <> sanitizeAlias name
   Coalesce _ _ -> "coalesce_"
   Strcat _ _ -> "strcat_"
   Iff _ _ _ _ -> "iff_"
@@ -490,7 +495,7 @@ defaultAlias = \case
   ToFloat _ _ -> "tofloat_"
   ToInt _ _ -> "toint_"
   ToString _ _ -> "tostring_"
-  Plain (Subject name _ _) _ -> name
+  Plain (Subject name _ _) _ -> sanitizeAlias name
 
 
 -- | Wrap SQL expression with AS alias (user-supplied or default)
@@ -864,7 +869,9 @@ parseQuery :: Parser [Section]
 parseQuery = do
   -- Optionally parse a leading pipe character and ignore it
   _ <- optional (space *> char '|' <* space)
-  sepBy pSection (space *> char '|' <* space)
+  sections <- sepBy pSection (space *> char '|' <* space)
+  space *> eof
+  pure sections
 
 
 instance ToQueryText [Section] where
