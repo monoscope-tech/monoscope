@@ -133,7 +133,9 @@ getLogPatterns pid mstate limit offset = PG.query q (pid, maybe "%" logPatternSt
 
 
 getLogPatternTexts :: DB es => Projects.ProjectId -> Eff es [Text]
-getLogPatternTexts pid = PG.query q (Only pid)
+getLogPatternTexts pid = do
+  result <- PG.query q (Only pid)
+  return $ fmap (\(Only pat) -> pat) result
   where
     q = [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ?|]
 

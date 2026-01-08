@@ -109,6 +109,5 @@ source-repository-package
 
 constraints:
   streamly ^>=0.10.0,
-  effectful-postgresql +enable-otel,
   proto-lens-setup ==0.4.0.9
 allow-newer: all

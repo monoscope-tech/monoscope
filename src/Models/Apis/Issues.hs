@@ -110,6 +110,13 @@ data IssueType
   = APIChange
   | RuntimeException
   | QueryAlert
+  | LogPattern
+  | ErrorEscalating
+  | ErrorRegressed
+  | LogPatternRateChange
+  | EndpointLatencyDegradation
+  | EndpointErrorRateSpike
+  | EndpointVolumeRateChange
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] IssueType
@@ -123,13 +130,26 @@ issueTypeToText :: IssueType -> Text
 issueTypeToText APIChange = "api_change" -- Maps to anomaly_type 'shape' in DB
 issueTypeToText RuntimeException = "runtime_exception"
 issueTypeToText QueryAlert = "query_alert"
-
+issueTypeToText LogPattern = "log_pattern"
+issueTypeToText ErrorEscalating = "error_escalating"
+issueTypeToText ErrorRegressed = "error_regressed"
+issueTypeToText LogPatternRateChange = "log_pattern_rate_change"
+issueTypeToText EndpointLatencyDegradation = "endpoint_latency_degradation"
+issueTypeToText EndpointErrorRateSpike = "endpoint_error_rate_spike"
+issueTypeToText EndpointVolumeRateChange = "endpoint_volume_rate_change"
 
 parseIssueType :: Text -> Maybe IssueType
 parseIssueType "api_change" = Just APIChange
 parseIssueType "shape" = Just APIChange -- Handle DB anomaly_type
 parseIssueType "runtime_exception" = Just RuntimeException
 parseIssueType "query_alert" = Just QueryAlert
+parseIssueType "log_pattern" = Just LogPattern
+parseIssueType "error_escalating" = Just ErrorEscalating
+parseIssueType "error_regressed" = Just ErrorRegressed
+parseIssueType "log_pattern_rate_change" = Just LogPatternRateChange
+parseIssueType "endpoint_latency_degradation" = Just EndpointLatencyDegradation
+parseIssueType "endpoint_error_rate_spike" = Just EndpointErrorRateSpike
+parseIssueType "endpoint_volume_rate_change" = Just EndpointVolumeRateChange
 parseIssueType _ = Nothing
 
 
@@ -143,7 +163,6 @@ instance FromField IssueType where
     Just bs -> case parseIssueType (decodeUtf8 bs) of
       Just t -> pure t
       Nothing -> returnError ConversionFailed f $ "Unknown issue type: " <> decodeUtf8 bs
-
 
 -- | API Change issue data
 data APIChangeData = APIChangeData
@@ -203,30 +222,21 @@ data Issue = Issue
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
-  , endpointHash :: Text -- For API changes, empty for others
-  -- Status fields
+  , target_hash :: Text -- links to error.hash, log_pattern.pattern_hash, endpoint.hash
+  , endpointHash :: Text -- For API changes, empty for othersxl
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
-  , -- Issue details
-    title :: Text
+  , title :: Text
   , service :: Text
   , critical :: Bool
   , severity :: Text -- "critical", "warning", "info"
-  -- Impact metrics
-  , affectedRequests :: Int
-  , affectedClients :: Int
-  , errorRate :: Maybe Double
-  , -- Actions
-    recommendedAction :: Text
+  , recommendedAction :: Text
   , migrationComplexity :: Text -- "low", "medium", "high", "n/a"
-  -- Data payload (polymorphic based on issueType)
   , issueData :: Aeson AE.Value
-  , -- Payload changes tracking (for API changes)
-    requestPayloads :: Aeson [PayloadChange]
+  , requestPayloads :: Aeson [PayloadChange]
   , responsePayloads :: Aeson [PayloadChange]
-  , -- LLM enhancement tracking
-    llmEnhancedAt :: Maybe UTCTime
+  , llmEnhancedAt :: Maybe UTCTime
   , llmEnhancementVersion :: Maybe Int
   }
   deriving stock (Generic, Show)
@@ -250,9 +260,6 @@ instance Default Issue where
       , service = ""
       , critical = False
       , severity = "info"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = ""
       , migrationComplexity = "low"
       , issueData = Aeson AE.Null
@@ -477,9 +484,6 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , service = Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
       , critical = isCritical
       , severity = if isCritical then "critical" else "warning"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "Review the API changes and update your integration accordingly."
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
       , issueData = Aeson $ AE.toJSON apiChangeData
@@ -523,9 +527,6 @@ createRuntimeExceptionIssue projectId atError = do
       , service = fromMaybe "unknown-service" atError.serviceName
       , critical = True
       , severity = "critical"
-      , affectedRequests = 1
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "Investigate the error and implement a fix."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON exceptionData
@@ -569,9 +570,6 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , service = "Monitoring"
       , critical = True
       , severity = "warning"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "Review the query results and take appropriate action."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON alertData
@@ -616,9 +614,6 @@ createNewErrorIssue projectId err = do
       , service = fromMaybe "unknown-service" err.service
       , critical = True
       , severity = "critical"
-      , affectedRequests = 1
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "Investigate the new error and implement a fix."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON exceptionData
@@ -671,9 +666,6 @@ createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
       , service = fromMaybe "unknown-service" err.service
       , critical = True
       , severity = "critical"
-      , affectedRequests = round currentRate
-      , affectedClients = 0
-      , errorRate = Just currentRate
       , recommendedAction = "Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON exceptionData
@@ -722,9 +714,6 @@ createNewLogPatternIssue projectId lp = do
           Just "error" -> "high"
           Just "warning" -> "medium"
           _ -> "low"
-      , affectedRequests = fromIntegral lp.occurrenceCount
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior. Pattern first seen at: " <> T.pack (show lp.firstSeenAt)
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON exceptionData
@@ -782,9 +771,6 @@ createLogPatternSpikeIssue projectId lp currentRate baselineMean baselineStddev 
           Just "error" -> "critical"
           Just "warning" -> "high"
           _ -> "medium"
-      , affectedRequests = round currentRate
-      , affectedClients = 0
-      , errorRate = Just currentRate
       , recommendedAction = "Log pattern volume has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent changes."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON exceptionData
