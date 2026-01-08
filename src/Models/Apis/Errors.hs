@@ -344,11 +344,7 @@ data HourlyBucket = HourlyBucket
 
 -- | Get hourly error counts for a specific error over a time range
 -- Returns counts bucketed by hour for baseline calculation
-getHourlyErrorCounts
-  :: DB es
-  => ErrorId
-  -> Int -- hours to look back
-  -> Eff es [HourlyBucket]
+getHourlyErrorCounts :: DB es => ErrorId -> Int -> Eff es [HourlyBucket]
 getHourlyErrorCounts eid hoursBack =
   PG.query q (eid, hoursBack)
   where
@@ -421,10 +417,7 @@ getErrorEventStats eid hoursBack = do
 
 -- | Check if an error is spiking compared to its baseline
 -- Returns (isSpike, currentRate, zScore) if baseline is established
-checkErrorSpike
-  :: DB es
-  => Error
-  -> Eff es (Maybe (Bool, Double, Double))
+checkErrorSpike :: DB es => Error -> Eff es (Maybe (Bool, Double, Double))
 checkErrorSpike err = do
   case (err.baselineState, err.baselineErrorRateMean, err.baselineErrorRateStddev) of
     ("established", Just mean, Just stddev) | stddev > 0 -> do
