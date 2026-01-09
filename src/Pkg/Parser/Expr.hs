@@ -6,7 +6,9 @@ import Control.Monad.Combinators.Expr (
  )
 import Data.Aeson qualified as AE
 import Data.Char (isDigit)
+import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
+import Data.Set (member)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
@@ -47,6 +49,7 @@ symbol = L.symbol sc
 -- TimeFunction stores KQL time functions like now()
 -- AgoExpression represents KQL ago() function with the value and unit for SQL interval conversion
 -- Field represents a field reference (column name) - displayed unquoted in SQL
+-- ScalarFunc represents KQL scalar functions: coalesce, iff, isnull, etc.
 data Values
   = Num Text
   | Str Text
@@ -58,6 +61,7 @@ data Values
   | AgoExpression Text -- The original KQL timespan expression for direct conversion to PostgreSQL interval
   | NowExpression -- Represents now() function
   | Field Subject -- Field reference - displayed as column name, not quoted string
+  | ScalarFunc Text [Values] -- Scalar function: name, arguments (coalesce, iff, isnull, toint, etc.)
   deriving stock (Eq, Generic, Ord, Show)
 
 
@@ -67,7 +71,7 @@ instance AE.FromJSON Values where
   parseJSON (AE.Bool b) = return $ Boolean b
   parseJSON AE.Null = return Null
   parseJSON (AE.Array arr) = List <$> traverse AE.parseJSON (V.toList arr)
-  parseJSON (AE.Object _) = fail "Cannot parse Object into Values"
+  parseJSON (AE.Object obj) = ScalarFunc <$> obj AE..: "func" <*> obj AE..: "args"
 
 
 instance AE.ToJSON Values where
@@ -83,9 +87,12 @@ instance AE.ToJSON Values where
   toJSON (AgoExpression expr) = AE.String ("ago(" <> expr <> ")")
   toJSON NowExpression = AE.String "now()"
   toJSON (Field sub) = AE.toJSON sub
+  toJSON (ScalarFunc name args) = AE.object ["func" AE..= name, "args" AE..= args]
 
 
 instance ToQueryText Values where
+  toQText (ScalarFunc name args) = name <> "(" <> T.intercalate ", " (map toQText args) <> ")"
+  toQText (Field sub) = toQText sub
   toQText v = decodeUtf8 $ AE.encode v
 
 
@@ -171,9 +178,13 @@ data Expr
   | Paren Expr
   | And Expr Expr
   | Or Expr Expr
-  --  | Not Expr
-  --  | JSONPathExpr Expr
-  --  | FunctionCall String [Expr] -- For functions like ANY
+  | ValEq Values Values -- Value-to-value comparison (e.g., "" == "")
+  | ValNotEq Values Values -- Value-to-value not-equal (e.g., "" != "x")
+  | ValGT Values Values -- Value-to-value greater than (e.g., coalesce(x,0) > 100)
+  | ValLT Values Values -- Value-to-value less than
+  | ValGTEq Values Values -- Value-to-value greater than or equal
+  | ValLTEq Values Values -- Value-to-value less than or equal
+  | BoolFunc Values -- Boolean scalar function as standalone expression (isnull, isnotnull, isempty, isnotempty)
   deriving stock (Eq, Generic, Ord, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -312,6 +323,57 @@ pAgoFunction = do
   return $ AgoExpression (toText timespan)
 
 
+-- | KQL scalar function names (longer names first to avoid prefix matching)
+scalarFuncNames :: [Text]
+scalarFuncNames = ["isnotnull", "isnotempty", "isnull", "isempty", "coalesce", "strcat", "iff", "iif", "todouble", "tofloat", "tolong", "toint", "tostring", "tobool"]
+
+
+-- | Boolean scalar functions that can be used as standalone expressions in filters
+boolScalarFuncNames :: [Text]
+boolScalarFuncNames = ["isnotnull", "isnotempty", "isnull", "isempty"]
+
+
+-- | Parse boolean scalar function as standalone expression (isnull(x), isnotnull(x), etc.)
+pBoolScalarFunc :: Parser Values
+pBoolScalarFunc = do
+  name <- asum $ map (\n -> n <$ string n) boolScalarFuncNames
+  args <- parens (pScalarArg `sepBy` (space *> char ',' <* space))
+  pure $ ScalarFunc name args
+
+
+-- | Parse scalar function argument: nested function, field reference, or literal
+pScalarArg :: Parser Values
+pScalarArg = try pScalarFunc <|> try (Field <$> pSubject) <|> pValuesNoFunc
+
+
+-- | Parse KQL scalar functions: coalesce(a,b), iff(cond,t,f), isnull(x), toint(x), etc.
+pScalarFunc :: Parser Values
+pScalarFunc = do
+  name <- asum $ map (\n -> n <$ string n) scalarFuncNames
+  args <- parens (pScalarArg `sepBy` (space *> char ',' <* space))
+  pure $ ScalarFunc (if name == "iif" then "iff" else name) args
+
+
+-- | pValuesNoFunc: pValues without scalar function parsing (avoids left recursion)
+pValuesNoFunc :: Parser Values
+pValuesNoFunc =
+  choice @[]
+    [ Null <$ string "null"
+    , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
+    , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
+    , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
+    , List [] <$ string "[]"
+    , List <$> sqParens (pValuesNoFunc `sepBy` (space *> char ',' <* space))
+    , List [] <$ string "()"
+    , List <$> parens (pValuesNoFunc `sepBy` (space *> char ',' <* space))
+    , try pNowFunction
+    , try pAgoFunction
+    , try pDuration
+    , try (Num . toText . show <$> L.signed pass L.float)
+    , Num . toText . show <$> L.signed pass L.decimal
+    ]
+
+
 -- | parse values into our internal AST representation. Int, Str, Num, Bool, List, etc
 --
 -- Examples:
@@ -356,7 +418,8 @@ pAgoFunction = do
 pValues :: Parser Values
 pValues =
   choice @[]
-    [ Null <$ string "null"
+    [ try pScalarFunc -- Must come first to handle coalesce(), iff(), etc.
+    , Null <$ string "null"
     , Boolean <$> (True <$ string "true" <|> False <$ string "false" <|> False <$ string "FALSE" <|> True <$ string "TRUE")
     , Str . toText <$> (char '\"' *> manyTill L.charLiteral (char '\"'))
     , Str . toText <$> (char '\'' *> manyTill L.charLiteral (char '\''))
@@ -367,8 +430,8 @@ pValues =
     , try pNowFunction
     , try pAgoFunction
     , try pDuration
-    , try (Num . toText . show <$> L.signed (pure ()) L.float)
-    , Num . toText . show <$> L.signed (pure ()) L.decimal
+    , try (Num . toText . show <$> L.signed pass L.float)
+    , Num . toText . show <$> L.signed pass L.decimal
     ]
 
 
@@ -429,6 +492,12 @@ pValues =
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
+    <|> try (ValEq <$> pValues <* space <* void (symbol "==") <* space <*> pValues)
+    <|> try (ValNotEq <$> pValues <* space <* void (symbol "!=") <* space <*> pValues)
+    <|> try (ValGTEq <$> pValues <* space <* void (symbol ">=") <* space <*> pValues)
+    <|> try (ValLTEq <$> pValues <* space <* void (symbol "<=") <* space <*> pValues)
+    <|> try (ValGT <$> pValues <* space <* void (symbol ">") <* space <*> pValues)
+    <|> try (ValLT <$> pValues <* space <* void (symbol "<") <* space <*> pValues)
     <|> try (Eq <$> pSubject <* space <* void (symbol "==") <* space <*> pValues)
     <|> try (NotEq <$> pSubject <* space <* void (symbol "!=") <* space <*> pValues)
     <|> try (GTEq <$> pSubject <* space <* void (symbol ">=") <* space <*> pValues)
@@ -449,6 +518,7 @@ pTerm =
     <|> try (EndsWith <$> pSubject <* space <* void (symbol "endswith") <* space <*> pValues)
     <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
     <|> try regexParser
+    <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
 
 
 -- >>> parse regexParser "" "abc=~/abc.*/"
@@ -522,46 +592,47 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
     isArrayWildcard _ = False
 
 
--- List of OpenTelemetry attribute paths that have been flattened in the database schema
-flattenedOtelAttributes :: [T.Text]
+-- Set of OpenTelemetry attribute paths that have been flattened in the database schema (O(log n) lookup)
+flattenedOtelAttributes :: Set T.Text
 flattenedOtelAttributes =
-  [ "attributes.http.request.method"
-  , "attributes.http.request.method_original"
-  , "attributes.http.response.status_code"
-  , "attributes.http.request.resend_count"
-  , "attributes.http.request.body.size"
-  , "attributes.url.fragment"
-  , "attributes.url.full"
-  , "attributes.url.path"
-  , "attributes.url.query"
-  , "attributes.url.scheme"
-  , "attributes.user_agent.original"
-  , "attributes.db.system.name"
-  , "attributes.db.collection.name"
-  , "attributes.db.namespace"
-  , "attributes.db.operation.name"
-  , "attributes.db.operation.batch.size"
-  , "attributes.db.query.summary"
-  , "attributes.db.query.text"
-  , "context.trace_id"
-  , "context.span_id"
-  , "context.trace_state"
-  , "context.trace_flags"
-  , "context.is_remote"
-  , "resource.service.name"
-  , "resource.service.version"
-  , "resource.service.instance.id"
-  , "resource.service.namespace"
-  , "resource.telemetry.sdk.language"
-  , "resource.telemetry.sdk.name"
-  , "resource.telemetry.sdk.version"
-  ]
+  fromList
+    [ "attributes.http.request.method"
+    , "attributes.http.request.method_original"
+    , "attributes.http.response.status_code"
+    , "attributes.http.request.resend_count"
+    , "attributes.http.request.body.size"
+    , "attributes.url.fragment"
+    , "attributes.url.full"
+    , "attributes.url.path"
+    , "attributes.url.query"
+    , "attributes.url.scheme"
+    , "attributes.user_agent.original"
+    , "attributes.db.system.name"
+    , "attributes.db.collection.name"
+    , "attributes.db.namespace"
+    , "attributes.db.operation.name"
+    , "attributes.db.operation.batch.size"
+    , "attributes.db.query.summary"
+    , "attributes.db.query.text"
+    , "context.trace_id"
+    , "context.span_id"
+    , "context.trace_state"
+    , "context.trace_flags"
+    , "context.is_remote"
+    , "resource.service.name"
+    , "resource.service.version"
+    , "resource.service.instance.id"
+    , "resource.service.namespace"
+    , "resource.telemetry.sdk.language"
+    , "resource.telemetry.sdk.name"
+    , "resource.telemetry.sdk.version"
+    ]
 
 
 -- Transform dot notation to triple-underscore notation for flattened attributes
 transformFlattenedAttribute :: T.Text -> T.Text
 transformFlattenedAttribute entire
-  | entire `elem` flattenedOtelAttributes = T.replace "." "___" entire
+  | entire `member` flattenedOtelAttributes = T.replace "." "___" entire
   | entire == "url_path" = "attributes___url___path"
   | otherwise = entire
 
@@ -579,7 +650,7 @@ transformFlattenedAttribute entire
 -- "errors->0->>'message' as message"
 instance Display Subject where
   displayPrec prec (Subject entire x keys) =
-    if entire `elem` flattenedOtelAttributes
+    if entire `member` flattenedOtelAttributes
       then displayPrec prec (transformFlattenedAttribute entire)
       else case keys of
         [] -> displayPrec prec x
@@ -608,7 +679,13 @@ instance Display Subject where
 -- >>> display (List [Num "2"])
 -- "ARRAY[2]"
 
--- | Convert a KQL timespan to PostgreSQL interval syntax
+-- | Maximum allowed timespan in days (1 year) to prevent DoS
+maxTimespanDays :: Double
+maxTimespanDays = 365
+
+
+-- | Convert a KQL timespan to PostgreSQL interval syntax with bounds checking.
+-- Timespans exceeding 1 year are capped to prevent DoS attacks.
 --
 -- Example conversion:
 -- 7d -> INTERVAL '7 days'
@@ -619,31 +696,34 @@ instance Display Subject where
 kqlTimespanToInterval :: Text -> Text
 kqlTimespanToInterval timespan =
   let
-    parseTimeUnit :: Text -> (Text, Text)
+    parseTimeUnit :: Text -> (Text, Text, Double)
     parseTimeUnit input =
       let (digits, rest) = T.span (\c -> isDigit c || c == '.') input
+          num = fromMaybe 0 $ readMaybe @Double (toString digits)
        in case rest of
-            rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest')
-            rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest')
-            rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest')
-            rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest')
-            rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest')
-            rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest')
-            rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest')
-            _ -> ("", input) -- No recognized unit or parsing error
-    parseComplexTimespan :: Text -> Text
+            rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest', num)
+            rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest', num / 24)
+            rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest', num / 1440)
+            rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest', num / 86400)
+            rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest', num / 86400000)
+            rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest', num / 86400000000)
+            rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest', num / 86400000000000)
+            _ -> ("", input, 0)
+    parseComplexTimespan :: Text -> (Text, Double)
     parseComplexTimespan ts =
       case parseTimeUnit ts of
-        ("", _) -> "" -- Parsing error or no recognized unit
-        (unit, "") -> unit -- End of input
-        (unit, rest) -> unit <> " " <> parseComplexTimespan rest
+        ("", _, _) -> ("", 0)
+        (unit, "", days) -> (unit, days)
+        (unit, rest, days) -> let (restUnits, restDays) = parseComplexTimespan rest in (unit <> " " <> restUnits, days + restDays)
 
-    intervalExpr =
-      case T.strip (parseComplexTimespan timespan) of
-        "" -> "0" -- Default if parsing fails
-        expr -> expr
+    (intervalExpr, totalDays) =
+      case parseComplexTimespan timespan of
+        ("", _) -> ("0", 0)
+        (expr, days) -> (T.strip expr, days)
    in
-    "INTERVAL '" <> intervalExpr <> "'"
+    if totalDays > maxTimespanDays
+      then "INTERVAL '365 days'"
+      else "INTERVAL '" <> intervalExpr <> "'"
 
 
 -- | Convert KQL timespan to PostgreSQL time bucket string
@@ -665,7 +745,7 @@ kqlTimespanToTimeBucket timespan =
 
 instance Display Values where
   displayPrec prec (Num a) = displayPrec prec a
-  displayPrec prec (Str a) = displayPrec prec $ "'" <> a <> "'"
+  displayPrec prec (Str a) = displayPrec prec $ "'" <> T.replace "'" "''" a <> "'"
   displayPrec prec (Boolean True) = "true"
   displayPrec prec (Boolean False) = "false"
   displayPrec prec Null = "null"
@@ -677,6 +757,37 @@ instance Display Values where
     let arrayElements = mconcat . intersperse "," . map (displayPrec prec) $ vs
      in "ARRAY[" <> arrayElements <> "]"
   displayPrec prec (Field sub) = displayPrec prec sub
+  displayPrec _ (ScalarFunc name args) = displayBuilder $ scalarFuncToSQL name args
+
+
+-- | Type cast function name to SQL type mapping
+typeCastMap :: Map Text Text
+typeCastMap = M.fromList [("toint", "integer"), ("tolong", "bigint"), ("tostring", "text"), ("tofloat", "float"), ("todouble", "double precision"), ("tobool", "boolean")]
+
+
+-- | Unary scalar functions with their SQL templates (use {} for argument placeholder)
+unaryFuncSQL :: Map Text (Text -> Text)
+unaryFuncSQL =
+  M.fromList
+    [ ("isnull", \v -> v <> " IS NULL")
+    , ("isnotnull", \v -> v <> " IS NOT NULL")
+    , ("isempty", \v -> "(" <> v <> " IS NULL OR " <> v <> " = '')")
+    , ("isnotempty", \v -> "(" <> v <> " IS NOT NULL AND " <> v <> " != '')")
+    ]
+
+
+-- | Map scalar function to SQL (consolidates all function->SQL logic)
+scalarFuncToSQL :: Text -> [Values] -> Text
+scalarFuncToSQL "coalesce" args = "COALESCE(" <> T.intercalate ", " (map display args) <> ")"
+scalarFuncToSQL "strcat" args = "CONCAT(" <> T.intercalate ", " (map display args) <> ")"
+scalarFuncToSQL "iff" [c, t, f] = "CASE WHEN " <> display c <> " THEN " <> display t <> " ELSE " <> display f <> " END"
+scalarFuncToSQL "iff" args = error $ "iff requires 3 arguments, got " <> show (length args)
+scalarFuncToSQL name [v]
+  | Just sqlType <- M.lookup name typeCastMap = "(" <> display v <> ")::" <> sqlType
+  | Just toSQL <- M.lookup name unaryFuncSQL = toSQL (display v)
+scalarFuncToSQL name args
+  | name `M.member` unaryFuncSQL = error $ name <> " requires 1 argument, got " <> show (length args)
+  | otherwise = T.toUpper name <> "(" <> T.intercalate ", " (map display args) <> ")"
 
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath
@@ -774,6 +885,13 @@ instance Display Expr where
   displayPrec prec (And u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " AND " <> displayPrec prec u2
   displayPrec prec (Or u1 u2) = displayParen (prec > 0) $ displayPrec prec u1 <> " OR " <> displayPrec prec u2
   displayPrec prec (Regex sub val) = displayPrec prec $ jsonPathQuery "like_regex" sub (Str val)
+  displayPrec prec (ValEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " = " <> displayPrec prec v2
+  displayPrec prec (ValNotEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " != " <> displayPrec prec v2
+  displayPrec prec (ValGT v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " > " <> displayPrec prec v2
+  displayPrec prec (ValLT v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " < " <> displayPrec prec v2
+  displayPrec prec (ValGTEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " >= " <> displayPrec prec v2
+  displayPrec prec (ValLTEq v1 v2) = displayParen (prec > 0) $ displayPrec prec v1 <> " <= " <> displayPrec prec v2
+  displayPrec prec (BoolFunc v) = displayPrec prec v -- Boolean scalar function renders directly to SQL
 
 
 -- To be used when generating the text query given an ast
@@ -801,6 +919,13 @@ instance ToQueryText Expr where
   toQText (And left right) = toQText left <> " AND " <> toQText right
   toQText (Or left right) = toQText left <> " OR " <> toQText right
   toQText (Regex sub val) = toQText sub <> " =~ " <> toQText (Str val)
+  toQText (ValEq v1 v2) = toQText v1 <> " == " <> toQText v2
+  toQText (ValNotEq v1 v2) = toQText v1 <> " != " <> toQText v2
+  toQText (ValGT v1 v2) = toQText v1 <> " > " <> toQText v2
+  toQText (ValLT v1 v2) = toQText v1 <> " < " <> toQText v2
+  toQText (ValGTEq v1 v2) = toQText v1 <> " >= " <> toQText v2
+  toQText (ValLTEq v1 v2) = toQText v1 <> " <= " <> toQText v2
+  toQText (BoolFunc v) = toQText v
 
 
 -- Helper function to handle the common display logic
@@ -897,3 +1022,4 @@ jsonPathQuery op' (Subject entire base keys) val =
         _ -> " ? (@ " <> oper <> " null" <> pstfx <> ")"
     buildCondition oper (List xs) pstfx = " ? (@ " <> oper <> " [" <> (mconcat . intersperse "," . map display) xs <> "]" <> pstfx <> ")"
     buildCondition oper (Field sub) pstfx = " ? (@ " <> oper <> " " <> display sub <> pstfx <> ")"
+    buildCondition oper (ScalarFunc name args) pstfx = " ? (@ " <> oper <> " " <> scalarFuncToSQL name args <> pstfx <> ")"

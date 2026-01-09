@@ -30,7 +30,7 @@ import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..))
 import Pkg.Parser (SqlQueryCfg (..), calculateAutoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..))
-import Pkg.Parser.Stats (BinFunction (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
+import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
 import System.DB (DB)
 import Utils (toXXHash)
@@ -66,19 +66,22 @@ data CacheResult = CacheHit CacheEntry | PartialHit CacheEntry | CacheMiss | Cac
 -- | Check if query has a summarize command with time binning (bin or bin_auto)
 hasSummarizeWithBin :: [Section] -> Bool
 hasSummarizeWithBin = any \case
-  SummarizeCommand _ (Just (SummarizeByClause fields)) -> any isRight fields
+  SummarizeCommand _ (Just (SummarizeByClause items)) -> any isBinFunc items
   _ -> False
+  where
+    isBinFunc (ByBinFunc _) = True
+    isBinFunc _ = False
 
 
 -- | Rewrite bin_auto to fixed bin interval for delta fetches
 rewriteBinAutoToFixed :: Text -> [Section] -> [Section]
 rewriteBinAutoToFixed interval = map \case
-  SummarizeCommand aggs (Just (SummarizeByClause fields)) ->
-    SummarizeCommand aggs (Just (SummarizeByClause (map rewriteField fields)))
+  SummarizeCommand aggs (Just (SummarizeByClause items)) ->
+    SummarizeCommand aggs (Just (SummarizeByClause (map rewriteItem items)))
   s -> s
   where
-    rewriteField (Right (BinAuto subj)) = Right (Bin subj interval)
-    rewriteField f = f
+    rewriteItem (ByBinFunc (BinAuto subj)) = ByBinFunc (Bin subj interval)
+    rewriteItem item = item
 
 
 -- | Parse bin interval text to seconds (e.g., "5 minutes" -> 300, "1 hour" -> 3600)
@@ -109,11 +112,12 @@ slidingWindowSeconds binInterval =
 extractBinInterval :: SqlQueryCfg -> [Section] -> Text
 extractBinInterval sqlCfg =
   fromMaybe defaultBinSize . asum . map \case
-    SummarizeCommand _ (Just (SummarizeByClause fields)) -> asum $ map getBinInterval (rights fields)
+    SummarizeCommand _ (Just (SummarizeByClause items)) -> asum $ map getBinInterval items
     _ -> Nothing
   where
-    getBinInterval (Bin _ interval) = Just interval
-    getBinInterval (BinAuto _) = Just $ calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
+    getBinInterval (ByBinFunc (Bin _ interval)) = Just interval
+    getBinInterval (ByBinFunc (BinAuto _)) = Just $ calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
+    getBinInterval _ = Nothing
 
 
 -- | Generate a cache key from query components

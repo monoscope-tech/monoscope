@@ -10,7 +10,19 @@
   },
 });
 
-// HTMX extension to forward current page query parameters to GET requests
+// Helper to get dashboard constants from data attribute
+const getDashboardConstants = (el?: Element | null): Record<string, string> => {
+  const constantsEl = el?.closest('[data-constants]') ?? document.querySelector('[data-constants]');
+  if (!constantsEl) return {};
+  try {
+    return JSON.parse(constantsEl.getAttribute('data-constants') || '{}');
+  } catch {
+    return {};
+  }
+};
+(window as any).getDashboardConstants = getDashboardConstants;
+
+// HTMX extension to forward current page query parameters and dashboard constants to GET requests
 (window as any).htmx.defineExtension('forward-page-params', {
   onEvent: function (name: string, evt: any) {
     if (name === 'htmx:configRequest') {
@@ -19,8 +31,16 @@
         const url = new URL(evt.detail.path, window.location.origin);
         const currentParams = new URLSearchParams(window.location.search);
 
-        // Forward all current page params to the request URL
+        // Forward URL params first (they take precedence)
         currentParams.forEach((value: string, key: string) => {
+          if (!url.searchParams.has(key)) {
+            url.searchParams.set(key, value);
+          }
+        });
+
+        // Add dashboard constants as fallback (only if not in URL)
+        const constants = getDashboardConstants(evt.detail.elt);
+        Object.entries(constants).forEach(([key, value]) => {
           if (!url.searchParams.has(key)) {
             url.searchParams.set(key, value);
           }

@@ -6,7 +6,7 @@ import Data.Vector qualified as V
 import Pages.Charts.Types (MetricsData (..))
 import Pkg.Parser (defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
-import Pkg.Parser.Stats (BinFunction (..), Section (..), SummarizeByClause (..))
+import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))
 import Pkg.QueryCache (CacheKey (..), generateCacheKey, hasSummarizeWithBin, mergeTimeseriesData, trimOldData, trimToRange)
 import Relude
 import Test.Hspec (Spec, describe, it, shouldBe)
@@ -43,11 +43,11 @@ spec :: Spec
 spec = do
   describe "hasSummarizeWithBin" do
     it "detects bin(timestamp, interval)" do
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [Right $ Bin timestampSubject "5m"])]
+      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "5m"])]
       hasSummarizeWithBin sections `shouldBe` True
 
     it "detects bin_auto(timestamp)" do
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [Right $ BinAuto timestampSubject])]
+      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ BinAuto timestampSubject])]
       hasSummarizeWithBin sections `shouldBe` True
 
     it "returns False for summarize without bin" do
@@ -61,14 +61,14 @@ spec = do
   describe "generateCacheKey" do
     it "produces consistent hash for same query" do
       let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [Right $ Bin timestampSubject "5m"])]
+      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "5m"])]
       let key1 = generateCacheKey defPid Nothing sections cfg
       let key2 = generateCacheKey defPid Nothing sections cfg
       key1.queryHash `shouldBe` key2.queryHash
 
     it "extracts bin interval" do
       let cfg = defSqlQueryCfg defPid fixedUTCTime Nothing Nothing
-      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [Right $ Bin timestampSubject "10m"])]
+      let sections = [SummarizeCommand [] (Just $ SummarizeByClause [ByBinFunc $ Bin timestampSubject "10m"])]
       let key = generateCacheKey defPid Nothing sections cfg
       key.binInterval `shouldBe` "10m"
 

@@ -81,18 +81,11 @@ tabs:
           - type: 'timeseries_stat'
             title: 'Total Requests'
             icon: list-tree
-            sql: |
-              SELECT 
-                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-                '' as series,
-                COUNT(*)::float as value
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
-                {{time_filter}}
-              GROUP BY time
-              ORDER BY time DESC
-              LIMIT 200
+            query: |
+              (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
             unit: reqs
             eager: true
             layout: { w: 3, h: 2 }
@@ -100,12 +93,9 @@ tabs:
           - type: 'stat'
             title: 'Global Error Rate'
             icon: bug
-            sql: |
-              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND (kind = 'server' OR name = 'apitoolkit-http-span')
-                {{time_filter}}
+            query: |
+              (kind == "server" or name == "apitoolkit-http-span")
+              | summarize round(countif(status_code == "ERROR") * 100.0 / count(), 2)
             unit: '%'
             eager: true
             layout: { w: 3, h: 2 }
@@ -113,12 +103,9 @@ tabs:
           - type: 'stat'
             title: 'Active Services'
             icon: server
-            sql: |
-              SELECT COUNT(DISTINCT resource___service___name)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND resource___service___name IS NOT NULL
-                {{time_filter}}
+            query: |
+              resource.service.name != null
+              | summarize dcount(resource.service.name)
             unit: services
             eager: true
             layout: { w: 3, h: 2 }
@@ -126,12 +113,9 @@ tabs:
           - type: 'stat'
             title: 'DB Systems'
             icon: database
-            sql: |
-              SELECT COUNT(DISTINCT attributes___db___system___name)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND attributes___db___system___name IS NOT NULL
-                {{time_filter}}
+            query: |
+              attributes.db.system.name != null
+              | summarize dcount(attributes.db.system.name)
             unit: systems
             eager: true
             layout: { w: 3, h: 2 }
@@ -186,18 +170,11 @@ tabs:
       # Events by Service
       - type: 'timeseries'
         title: 'Events by Service'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            resource___service___name as service,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___service___name IS NOT NULL
-            {{time_filter}}
-          GROUP BY time, service
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          resource.service.name != null
+          | summarize count() by bin_auto(timestamp), resource.service.name
+          | order by timestamp desc
+          | limit 10000
         unit: events
         layout: { w: 6, h: 4 }
 
@@ -205,57 +182,33 @@ tabs:
       - type: 'timeseries'
         title: 'Error Rates by Service'
         theme: 'roma'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            resource___service___name as service,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND status_code = 'ERROR'
-            AND resource___service___name IS NOT NULL
-            {{time_filter}}
-          GROUP BY time, service
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          status_code == "ERROR" and resource.service.name != null
+          | summarize count() by bin_auto(timestamp), resource.service.name
+          | order by timestamp desc
+          | limit 10000
         unit: errors
         layout: { w: 6, h: 4 }
 
       # HTTP Request Volume by Service
       - type: 'timeseries'
         title: 'HTTP Request Volume by Service'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            resource___service___name as service,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___service___name IS NOT NULL
-            AND kind = 'server'
-            {{time_filter}}
-          GROUP BY time, service
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          resource.service.name != null and kind == "server"
+          | summarize count() by bin_auto(timestamp), resource.service.name
+          | order by timestamp desc
+          | limit 10000
         unit: reqs
         layout: { w: 6, h: 4 }
 
       # HTTP Requests by Status Code
       - type: 'timeseries'
         title: 'HTTP Requests by Status Code'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
-            AND attributes___http___response___status_code IS NOT NULL
-            {{time_filter}}
-          GROUP BY time, attributes___http___response___status_code
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and attributes.http.response.status_code != null
+          | summarize count() by bin_auto(timestamp), coalesce(tostring(attributes.http.response.status_code), "unknown")
+          | order by timestamp desc
+          | limit 10000
         unit: reqs
         layout: { w: 6, h: 4 }
 
@@ -263,24 +216,12 @@ tabs:
       - type: 'timeseries'
         title: 'HTTP Errors (4xx & 5xx) - Incoming'
         theme: 'roma'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE 
-              WHEN attributes___http___response___status_code BETWEEN 400 AND 499 THEN '4xx'
-              WHEN attributes___http___response___status_code >= 500 THEN '5xx'
-              ELSE attributes___http___response___status_code::text
-            END as error_category,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http')
-            AND attributes___http___response___status_code IS NOT NULL
-            AND COALESCE(attributes___http___response___status_code, 0) >= 400
-            {{time_filter}}
-          GROUP BY time, error_category
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and attributes.http.response.status_code != null and attributes.http.response.status_code >= 400
+          | extend error_category = case(attributes.http.response.status_code >= 500, "5xx", attributes.http.response.status_code >= 400, "4xx", tostring(attributes.http.response.status_code))
+          | summarize count() by bin_auto(timestamp), error_category
+          | order by timestamp desc
+          | limit 10000
         unit: errors
         layout: { w: 6, h: 4 }
 
@@ -340,79 +281,50 @@ tabs:
           - type: 'timeseries_stat'
             title: 'Service Requests'
             icon: list-tree
-            sql: |
-              SELECT 
-                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-                '' as series,
-                COUNT(*)::float as value
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND resource___service___name = '{{var-service}}'
-                AND kind = 'server'
-                {{time_filter}}
-              GROUP BY time
-              ORDER BY time DESC
-              LIMIT 200
+            query: |
+              resource.service.name == "{{var-service}}" and kind == "server"
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
             unit: reqs
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Service Error Rate'
             icon: bug
-            sql: |
-              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400) * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND resource___service___name = '{{var-service}}'
-                AND kind = 'server'
-                {{time_filter}}
+            query: |
+              resource.service.name == "{{var-service}}" and kind == "server"
+              | summarize round(countif(status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 400) * 100.0 / count(), 2)
             unit: '%'
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Avg Latency'
             icon: activity
-            sql: |
-              SELECT ROUND((AVG(duration) / 1e6)::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND resource___service___name = '{{var-service}}'
-                AND kind = 'server'
-                AND duration IS NOT NULL
-                {{time_filter}}
+            query: |
+              resource.service.name == "{{var-service}}" and kind == "server" and duration != null
+              | summarize round(avg(duration) / 1e6, 2)
             unit: ms
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Endpoints'
             icon: routes
-            sql: |
-              SELECT COUNT(DISTINCT name)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND resource___service___name = '{{var-service}}'
-                AND kind = 'server'
-                AND name IS NOT NULL
-                {{time_filter}}
+            query: |
+              resource.service.name == "{{var-service}}" and kind == "server" and name != null
+              | summarize dcount(name)
             unit: endpoints
             layout: { w: 3, h: 2 }
 
       # Total Service Requests by Status Code
       - type: 'timeseries'
         title: 'Total Service Requests'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___service___name = '{{var-service}}'
-            AND kind = 'server'
-            {{time_filter}}
-          GROUP BY time, attributes___http___response___status_code
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          resource.service.name == "{{var-service}}" and kind == "server"
+          | extend status_code_str = coalesce(tostring(attributes.http.response.status_code), "unknown")
+          | summarize count() by bin_auto(timestamp), status_code_str
+          | order by timestamp desc
+          | limit 10000
         unit: reqs
         layout: { w: 6, h: 4 }
 
@@ -432,25 +344,12 @@ tabs:
       - type: 'timeseries'
         title: 'Service Errors'
         theme: 'roma'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE 
-              WHEN status_code = 'ERROR' THEN 'ERROR'
-              WHEN attributes___http___response___status_code BETWEEN 400 AND 499 THEN '4xx'
-              WHEN attributes___http___response___status_code >= 500 THEN '5xx'
-              ELSE status_code
-            END as error_type,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___service___name = '{{var-service}}'
-            AND kind = 'server'
-            AND (status_code NOT IN ('UNSET', 'OK') OR COALESCE(attributes___http___response___status_code, 0) >= 400)
-            {{time_filter}}
-          GROUP BY time, error_type
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          resource.service.name == "{{var-service}}" and kind == "server" and (status_code != "UNSET" and status_code != "OK" or coalesce(attributes.http.response.status_code, 0) >= 400)
+          | extend error_type = case(status_code == "ERROR", "ERROR", attributes.http.response.status_code >= 500, "5xx", attributes.http.response.status_code >= 400, "4xx", status_code)
+          | summarize count() by bin_auto(timestamp), error_type
+          | order by timestamp desc
+          | limit 10000
         unit: errors
         layout: { w: 6, h: 4 }
 
@@ -541,70 +440,35 @@ tabs:
       # Three charts in one row - using {{const-top_resources}} constant for efficiency
       - type: 'timeseries'
         title: 'Requests'
-        sql: |
-          SELECT
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE
-              WHEN name IN {{const-top_resources}} THEN name
-              ELSE 'Others'
-            END as resource,
-            COUNT(*)::float as value
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND name IS NOT NULL
-            AND kind = 'server'
-            AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-            {{time_filter}}
-          GROUP BY time, CASE WHEN name IN {{const-top_resources}} THEN name ELSE 'Others' END
-          ORDER BY time DESC
-          LIMIT 2000
+        query: |
+          name != null and kind == "server" and ("{{var-resource}}" == "" or name == "{{var-resource}}")
+          | extend resource = case(name in {{const-top_resources}}, name, "Others")
+          | summarize count() by bin_auto(timestamp), resource
+          | order by timestamp desc
+          | limit 2000
         unit: reqs
         layout: { w: 4, h: 3 }
 
       - type: 'timeseries_line'
         title: 'P95 Latency'
-        sql: |
-          SELECT
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE
-              WHEN name IN {{const-top_resources}} THEN name
-              ELSE 'Others'
-            END as resource,
-            COALESCE(approx_percentile(0.95, percentile_agg(duration))::float, 0)::float as value
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND name IS NOT NULL
-            AND kind = 'server'
-            AND duration IS NOT NULL
-            AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-            {{time_filter}}
-          GROUP BY time, CASE WHEN name IN {{const-top_resources}} THEN name ELSE 'Others' END
-          ORDER BY time DESC
-          LIMIT 2000
+        query: |
+          name != null and kind == "server" and duration != null and ("{{var-resource}}" == "" or name == "{{var-resource}}")
+          | extend resource = case(name in {{const-top_resources}}, name, "Others")
+          | summarize p95(duration) by bin_auto(timestamp), resource
+          | order by timestamp desc
+          | limit 2000
         unit: ns
         layout: { w: 4, h: 3 }
 
       - type: 'timeseries'
         title: 'Errors'
         theme: 'roma'
-        sql: |
-          SELECT
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            CASE
-              WHEN name IN {{const-top_resources}} THEN name
-              ELSE 'Others'
-            END as resource,
-            COUNT(*)::float as value
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND name IS NOT NULL
-            AND kind = 'server'
-            AND (status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)
-            AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-            {{time_filter}}
-          GROUP BY time, CASE WHEN name IN {{const-top_resources}} THEN name ELSE 'Others' END
-          ORDER BY time DESC
-          LIMIT 2000
+        query: |
+          name != null and kind == "server" and (status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 400) and ("{{var-resource}}" == "" or name == "{{var-resource}}")
+          | extend resource = case(name in {{const-top_resources}}, name, "Others")
+          | summarize count() by bin_auto(timestamp), resource
+          | order by timestamp desc
+          | limit 2000
         unit: errors
         layout: { w: 4, h: 3 }
 
@@ -669,74 +533,49 @@ tabs:
           - type: 'timeseries_stat'
             title: 'Total Spans'
             icon: list-tree
-            sql: |
-              SELECT 
-                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-                '' as series,
-                COUNT(*)::float as value
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND kind IS NOT NULL
-                {{time_filter}}
-              GROUP BY time
-              ORDER BY time DESC
-              LIMIT 200
+            query: |
+              kind != null
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
             unit: spans
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Error Rate'
             icon: bug
-            sql: |
-              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND kind IS NOT NULL
-                {{time_filter}}
+            query: |
+              kind != null
+              | summarize round(countif(status_code == "ERROR") * 100.0 / count(), 2)
             unit: '%'
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Avg Trace Duration'
             icon: activity
-            sql: |
-              SELECT ROUND((AVG(duration) / 1e6)::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND parent_id = ''
-                AND duration IS NOT NULL
-                {{time_filter}}
+            query: |
+              parent_id == "" and duration != null
+              | summarize round(avg(duration) / 1e6, 2)
             unit: ms
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Traces'
             icon: route
-            sql: |
-              SELECT COUNT(DISTINCT context___trace_id)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND parent_id = ''
-                {{time_filter}}
+            query: |
+              parent_id == ""
+              | summarize dcount(context.trace_id)
             unit: traces
             layout: { w: 3, h: 2 }
 
       # Span Rate by Service
       - type: 'timeseries'
         title: 'Span Rate by Service'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            resource___service___name as service_name,
-            COUNT(*)::float / 5.0 as value
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND resource___service___name IS NOT NULL
-            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
-            {{time_filter}}
-          GROUP BY time, service_name
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          resource.service.name != null and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          | summarize count() / 5.0 by bin_auto(timestamp), resource.service.name
+          | order by timestamp desc
+          | limit 10000
         unit: spans/min
         layout: { w: 6, h: 4 }
 
@@ -820,73 +659,49 @@ tabs:
           - type: 'timeseries_stat'
             title: 'Total Logs'
             icon: file-text
-            sql: |
-              SELECT 
-                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-                '' as series,
-                COUNT(*)::float as value
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND body IS NOT NULL
-                {{time_filter}}
-              GROUP BY time
-              ORDER BY time DESC
-              LIMIT 200
+            query: |
+              body != null
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
             unit: logs
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Error Logs'
             icon: alert-triangle
-            sql: |
-              SELECT COUNT(*)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND level IN ('ERROR', 'FATAL')
-                {{time_filter}}
+            query: |
+              level in ("ERROR", "FATAL")
+              | summarize count()
             unit: logs
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Warn Logs'
             icon: alert-circle
-            sql: |
-              SELECT COUNT(*)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND level = 'WARN'
-                {{time_filter}}
+            query: |
+              level == "WARN"
+              | summarize count()
             unit: logs
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Log Sources'
             icon: server
-            sql: |
-              SELECT COUNT(DISTINCT resource___service___name)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND resource___service___name IS NOT NULL
-                {{time_filter}}
+            query: |
+              resource.service.name != null
+              | summarize dcount(resource.service.name)
             unit: services
             layout: { w: 3, h: 2 }
 
       # Log Volume Time Series
       - type: 'timeseries'
         title: 'Log Volume by Level'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            level,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND level IS NOT NULL
-            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
-            {{time_filter}}
-          GROUP BY time, level
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          level != null and ("{{var-service}}" == "" or resource.service.name == "{{var-service}}")
+          | summarize count() by bin_auto(timestamp), level
+          | order by timestamp desc
+          | limit 10000
         layout: { w: 6, h: 4 }
 
       # Error Pattern Analysis
@@ -991,115 +806,89 @@ tabs:
           - type: 'timeseries_stat'
             title: 'Total Queries'
             icon: database
-            sql: |
-              SELECT 
-                extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-                '' as series,
-                COUNT(*)::float as value
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND attributes___db___system___name IS NOT NULL
-                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-                {{time_filter}}
-              GROUP BY time
-              ORDER BY time DESC
-              LIMIT 200
+            query: |
+              attributes.db.system.name != null and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
             unit: queries
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Query Error Rate'
             icon: bug
-            sql: |
-              SELECT ROUND((COUNT(*) FILTER (WHERE status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND attributes___db___system___name IS NOT NULL
-                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-                {{time_filter}}
+            query: |
+              attributes.db.system.name != null and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+              | summarize round(countif(status_code == "ERROR") * 100.0 / count(), 2)
             unit: '%'
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'Avg Query Time'
             icon: activity
-            sql: |
-              SELECT ROUND((AVG(duration) / 1e6)::numeric, 2)::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND attributes___db___system___name IS NOT NULL
-                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-                AND duration IS NOT NULL
-                {{time_filter}}
+            query: |
+              attributes.db.system.name != null and duration != null and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+              | summarize round(avg(duration) / 1e6, 2)
             unit: ms
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
             title: 'DB Operations'
             icon: layers
-            sql: |
-              SELECT COUNT(DISTINCT COALESCE(attributes___db___operation___name, name))::float
-              FROM otel_logs_and_spans
-              WHERE project_id='{{project_id}}'
-                AND attributes___db___system___name IS NOT NULL
-                AND COALESCE(attributes___db___operation___name, name) IS NOT NULL
-                AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-                {{time_filter}}
+            query: |
+              attributes.db.system.name != null and coalesce(attributes.db.operation.name, name) != null and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+              | summarize dcount(coalesce(attributes.db.operation.name, name))
             unit: types
             layout: { w: 3, h: 2 }
 
       # Query Performance by Operation
       - type: 'timeseries'
         title: 'Query Performance by Operation'
-        sql: |
-          SELECT
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            COALESCE(attributes___db___operation___name, name) as operation,
-            AVG(duration)::float as value
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND attributes___db___system___name IS NOT NULL
-            AND COALESCE(attributes___db___operation___name, name) IS NOT NULL
-            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-            AND duration IS NOT NULL
-            {{time_filter}}
-          GROUP BY time, COALESCE(attributes___db___operation___name, name)
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          attributes.db.system.name != null and duration != null and coalesce(attributes.db.operation.name, name) != null and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+          | extend operation = coalesce(attributes.db.operation.name, name)
+          | summarize avg(duration) by bin_auto(timestamp), operation
+          | order by timestamp desc
+          | limit 10000
         unit: ns
         layout: { w: 6, h: 4 }
 
       # Query Volume
       - type: 'timeseries'
         title: 'Query Volume by Database'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            attributes___db___system___name as db_system,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND attributes___db___system___name IS NOT NULL
-            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-            {{time_filter}}
-          GROUP BY time, db_system
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          attributes.db.system.name != null and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+          | summarize count() by bin_auto(timestamp), attributes.db.system.name
+          | order by timestamp desc
+          | limit 10000
         unit: queries
         layout: { w: 6, h: 4 }
 
       # Slow Queries
-      - type: list
+      - type: table
         title: 'Slowest Queries'
         layout: { w: 12, h: 6 }
+        columns:
+          - field: query
+            title: Query
+          - field: operation
+            title: Operation
+          - field: database
+            title: Database
+          - field: duration_ms
+            title: Duration
+            columnType: duration
+            unit: ms
+            progress: column_percent
+          - field: service
+            title: Service
         sql: |
           SELECT
             COALESCE(attributes___db___query___text, attributes___db___query___summary, name) as query,
             COALESCE(attributes___db___operation___name, name) as operation,
             attributes___db___system___name as database,
             ROUND((duration / 1e6)::numeric, 2) as duration_ms,
-            resource___service___name as service,
-            timestamp
+            resource___service___name as service
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND (attributes___db___query___text IS NOT NULL OR attributes___db___query___summary IS NOT NULL OR name IS NOT NULL)
@@ -1112,37 +901,19 @@ tabs:
       - type: 'timeseries'
         title: 'Database Errors'
         theme: 'roma'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            attributes___db___system___name as db_system,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND attributes___db___system___name IS NOT NULL
-            AND status_code = 'ERROR'
-            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-            {{time_filter}}
-          GROUP BY time, db_system
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          attributes.db.system.name != null and status_code == "ERROR" and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+          | summarize count() by bin_auto(timestamp), attributes.db.system.name
+          | order by timestamp desc
+          | limit 10000
         layout: { w: 6, h: 4 }
 
       # Connection Pool Status
       - type: 'timeseries'
         title: 'Database Connections'
-        sql: |
-          SELECT 
-            extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
-            COALESCE(attributes___db___collection___name, 'default') as state,
-            COUNT(*)::float as avg_value
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND name LIKE '%connection%'
-            AND attributes___db___system___name IS NOT NULL
-            AND ('{{var-database}}' = '' OR attributes___db___system___name = '{{var-database}}')
-            {{time_filter}}
-          GROUP BY time, state
-          ORDER BY time DESC
-          LIMIT 10000
+        query: |
+          name has "connection" and attributes.db.system.name != null and ("{{var-database}}" == "" or attributes.db.system.name == "{{var-database}}")
+          | summarize count() by bin_auto(timestamp), coalesce(attributes.db.collection.name, "default")
+          | order by timestamp desc
+          | limit 10000
         layout: { w: 6, h: 4 }

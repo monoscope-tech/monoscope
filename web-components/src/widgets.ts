@@ -8,8 +8,11 @@ const $ = (id: string) => document.getElementById(id);
 const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc'];
 
 const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
-  // Use deterministic color based on series name
-  const paletteColor = getSeriesColor(name);
+  // For timeseries_stat widgets with generic column names, use the default blue color
+  // This ensures stat widgets (total requests, etc.) show in blue as expected
+  const isGenericStatColumn = widgetData.widgetType === 'timeseries_stat' &&
+    (name === 'value' || name.startsWith('count') || name === '' || !name);
+  const paletteColor = isGenericStatColumn ? DEFAULT_PALETTE[0] : getSeriesColor(name);
 
   const gradientColor = new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, 1) },
@@ -84,6 +87,12 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   try {
     const params = new URLSearchParams(window.location.search);
     params.set('pid', pid);
+
+    // Add dashboard constants (from data-constants attribute)
+    const constants = (window as any).getDashboardConstants?.() || {};
+    Object.entries(constants).forEach(([key, value]) => {
+      if (!params.has(key)) params.set(key, value as string);
+    });
 
     // Default query to use when no query is provided
     const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';

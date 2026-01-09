@@ -1,8 +1,11 @@
 module Pkg.Parser.Stats (
   -- Types
   AggFunction (..),
+  ArithOp (..),
+  ScalarExpr (..),
   Section (..),
   SummarizeByClause (..),
+  ByClauseItem (..),
   BinFunction (..),
   SortField (..),
   Sources (..),
@@ -14,6 +17,7 @@ module Pkg.Parser.Stats (
   pExtendSection,
   pProjectSection,
   parseQuery,
+  transformAST,
   pSource,
   -- Aggregation parsers
   aggFunctionParser,
@@ -37,6 +41,7 @@ module Pkg.Parser.Stats (
   pPercentilesMulti,
   pSubjectExpr,
   pScalarExpr,
+  pScalarExprNested,
   -- Utilities
   defaultBinSize,
   extractPercentilesInfo,
@@ -44,14 +49,15 @@ module Pkg.Parser.Stats (
 ) where
 
 import Control.Lens (set, view)
+import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
 import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
-import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
+import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
 import Relude hiding (Sum, many, some)
 import Text.Megaparsec
-import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
+import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
 
@@ -95,21 +101,37 @@ instance ToQueryText SubjectExpr where
   toQText (SubjectExpr sub (Just (op, val))) = toQText sub <> " " <> op <> " " <> show val
 
 
--- | Scalar expression that can be either a simple value or a nested aggregation
--- This enables patterns like round(countif(...), 2) where the first arg is an aggregation
-data ScalarExpr = SVal Values | SAgg AggFunction
+-- | Arithmetic operators for scalar expressions
+data ArithOp = Mul | Div | Add | Sub
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Scalar expression that can be a value, aggregation, or arithmetic combination
+-- Enables: round(countif(...) * 100.0 / count(), 2)
+data ScalarExpr = SVal Values | SAgg AggFunction | SArith ScalarExpr ArithOp ScalarExpr
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+arithOpToSQL :: ArithOp -> Text
+arithOpToSQL = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
 
 
 instance Display ScalarExpr where
   displayPrec p (SVal v) = displayPrec p v
   displayPrec _ (SAgg agg) = displayBuilder $ aggToSqlNoAlias agg
+  displayPrec _ (SArith l op r) = displayBuilder $ "(" <> display l <> arithOpToSQL op <> display r <> ")"
+
+
+arithOpToKQL :: ArithOp -> Text
+arithOpToKQL = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
 
 
 instance ToQueryText ScalarExpr where
   toQText (SVal v) = toQText v
   toQText (SAgg agg) = toQText agg
+  toQText (SArith l op r) = toQText l <> arithOpToKQL op <> toQText r
 
 
 -- | SQL pattern for simple aggregations: fn((subject)::float)
@@ -117,9 +139,9 @@ simpleAggSQL :: Text -> Subject -> Text
 simpleAggSQL fn sub = fn <> "((" <> display sub <> ")::float)"
 
 
--- | SQL pattern for percentiles: approx_percentile(pct, percentile_agg((subject)::float))::int
+-- | SQL pattern for percentiles: approx_percentile(pct, percentile_agg((subject)::float))::float
 percentileSQL :: Double -> Subject -> Text
-percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg((" <> display sub <> ")::float))::int"
+percentileSQL pct sub = "approx_percentile(" <> show pct <> ", percentile_agg((" <> display sub <> ")::float))::float"
 
 
 -- | Convert AggFunction to SQL without the AS alias (for use inside other expressions)
@@ -151,6 +173,7 @@ aggToSqlNoAlias (ToFloat val _) = "(" <> display val <> ")::float"
 aggToSqlNoAlias (ToInt val _) = "(" <> display val <> ")::integer"
 aggToSqlNoAlias (ToString val _) = "(" <> display val <> ")::text"
 aggToSqlNoAlias (Plain sub _) = display sub
+aggToSqlNoAlias (ArithExpr expr _) = "(" <> display expr <> ")::float"
 
 
 -- Modify Aggregation Functions to include optional aliases
@@ -185,6 +208,7 @@ data AggFunction
   | ToInt ScalarExpr (Maybe Text) -- toint(value) - convert to integer
   | ToString ScalarExpr (Maybe Text) -- tostring(value) - convert to text
   | Plain Subject (Maybe Text)
+  | ArithExpr ScalarExpr (Maybe Text) -- Arithmetic on aggregations: count() / 5.0
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -197,8 +221,17 @@ data BinFunction
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- Support for summarize by with bin() function
-newtype SummarizeByClause = SummarizeByClause [Either Subject BinFunction]
+-- | Items that can appear in a summarize by clause
+data ByClauseItem
+  = BySubject Subject -- Simple field like status_code
+  | ByBinFunc BinFunction -- bin_auto(timestamp) or bin(timestamp, 60)
+  | ByScalarFunc AggFunction -- Scalar expressions like coalesce(tostring(x), "default")
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Support for summarize by with bin() function and scalar expressions
+newtype SummarizeByClause = SummarizeByClause [ByClauseItem]
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -280,12 +313,18 @@ pSubjectExpr = do
 -- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) Nothing) 95.0 Nothing)
 -- >>> parse pPercentileSingle "" "percentile(duration / 1e6, 95)"
 -- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) 95.0 Nothing)
+-- >>> parse pPercentileSingle "" "percentile(duration, 150)"
+-- Left ...
 pPercentileSingle :: Parser AggFunction
-pPercentileSingle =
-  withoutAlias
-    $ Percentile
-    <$> (string "percentile(" *> pSubjectExpr)
-    <*> (comma *> pNumericValue <* string ")")
+pPercentileSingle = do
+  _ <- string "percentile("
+  subExpr <- pSubjectExpr
+  _ <- comma
+  pct <- pNumericValue
+  _ <- string ")"
+  if pct < 0 || pct > 100
+    then fail "percentile value must be between 0 and 100"
+    else pure $ Percentile subExpr pct Nothing
 
 
 -- | Parse percentiles(expr, p1, p2, ...) - multiple percentiles (Microsoft KQL syntax)
@@ -293,12 +332,18 @@ pPercentileSingle =
 -- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) Nothing) [50.0,75.0,90.0,95.0] Nothing)
 -- >>> parse pPercentilesMulti "" "percentiles(duration / 1e6, 50, 75, 90, 95)"
 -- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) [50.0,75.0,90.0,95.0] Nothing)
+-- >>> parse pPercentilesMulti "" "percentiles(duration, 50, 150)"
+-- Left ...
 pPercentilesMulti :: Parser AggFunction
-pPercentilesMulti =
-  withoutAlias
-    $ Percentiles
-    <$> (string "percentiles(" *> pSubjectExpr <* comma)
-    <*> (pNumericValue `sepBy1` comma <* string ")")
+pPercentilesMulti = do
+  _ <- string "percentiles("
+  subExpr <- pSubjectExpr
+  _ <- comma
+  pcts <- pNumericValue `sepBy1` comma
+  _ <- string ")"
+  if any (\p -> p < 0 || p > 100) pcts
+    then fail "percentile value must be between 0 and 100"
+    else pure $ Percentiles subExpr pcts Nothing
 
 
 -- | Parse countif(predicate) - count with a filter condition
@@ -318,17 +363,14 @@ pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 -- >>> parse pDCount "" "dcount(user_id, 5)"
 -- Left ...
 pDCount :: Parser AggFunction
-pDCount = withoutAlias $ do
+pDCount = do
   _ <- string "dcount("
   sub <- pSubject
-  accM <- optional $ do
-    _ <- comma
-    acc <- L.decimal :: Parser Int
-    if acc >= 0 && acc <= 4
-      then pure acc
-      else fail "dcount accuracy must be 0-4 per KQL spec"
+  accM <- optional (comma *> (L.decimal :: Parser Int))
   _ <- string ")"
-  pure $ DCount sub accM
+  case accM of
+    Just acc | acc < 0 || acc > 4 -> fail "dcount accuracy must be 0-4 per KQL spec"
+    _ -> pure $ DCount sub accM Nothing
 
 
 -- | Parse a scalar expression (field reference or literal value)
@@ -344,8 +386,8 @@ pScalarExpr = try pValues <|> (Field <$> pSubject)
 baseAggParsers :: [Parser AggFunction]
 baseAggParsers =
   [ pSimpleAgg "sum" Sum
-  , try pPercentilesMulti
-  , try pPercentileSingle
+  , pPercentilesMulti -- percentiles commits to enforce range validation (0-100)
+  , pPercentileSingle -- percentile commits to enforce range validation (0-100)
   , pSimpleAgg "p50" P50
   , pSimpleAgg "p75" P75
   , pSimpleAgg "p90" P90
@@ -368,10 +410,30 @@ baseAggParsers =
   ]
 
 
--- | Parse a nested scalar expression that can be a value or an aggregation
--- This enables patterns like round(countif(...), 2) or tofloat(sum(field))
+-- | Left-associative chain combinator for expression parsing
+chainl1 :: Parser a -> Parser (a -> a -> a) -> Parser a
+chainl1 p op = p >>= rest where rest x = (op <*> pure x <*> p >>= rest) <|> pure x
+
+
+-- | Parse a nested scalar expression with arithmetic support
+-- Precedence: * / binds tighter than + -
+-- Enables: round(countif(status >= 400) * 100.0 / count(), 2)
+--
+-- >>> parse pScalarExprNested "" "countif(status >= 400) * 100.0 / count()"
+-- Right (SArith (SArith (SAgg (CountIf (GTEq (Subject "status" "status" []) (Num "400")) Nothing)) Mul (SVal (Num "100.0"))) Div (SAgg (Count (Subject "*" "*" []) Nothing)))
 pScalarExprNested :: Parser ScalarExpr
-pScalarExprNested = (SAgg <$> try (choice baseAggParsers)) <|> (SVal <$> pScalarExpr)
+pScalarExprNested = pAddSub
+  where
+    pAddSub = chainl1 pMulDiv (space *> (pOp '+' Add <|> pOp '-' Sub) <* space)
+    pMulDiv = chainl1 pFactor (space *> (pOp '*' Mul <|> pOp '/' Div) <* space)
+    -- No try on choice baseAggParsers: validation errors propagate after consuming function input
+    pFactor =
+      between (char '(' <* space) (space *> char ')') pAddSub
+        <|> SAgg
+        <$> choice baseAggParsers
+        <|> SVal
+        <$> pScalarExpr
+    pOp c op = (`SArith` op) <$ char c
 
 
 -- | Helper for variadic scalar functions like coalesce/strcat
@@ -445,8 +507,9 @@ pRound = withoutAlias $ do
   decimals <- pScalarExpr
   case decimals of
     Num n -> case readMaybe (toString n) :: Maybe Int of
-      Just d | d < 0 || d > 15 -> fail "round() decimals must be 0-15 per PostgreSQL limit"
-      _ -> pure ()
+      Just d | d >= 0 && d <= 15 -> pass
+      Just _ -> fail "round() decimals must be 0-15 per PostgreSQL limit"
+      Nothing -> fail "round() decimals must be a valid integer"
     _ -> fail "round() decimals must be numeric"
   _ <- string ")"
   pure $ Round val decimals
@@ -539,6 +602,7 @@ instance ToQueryText AggFunction where
   toQText (ToInt val _) = "toint(" <> toQText val <> ")"
   toQText (ToString val _) = "tostring(" <> toQText val <> ")"
   toQText (Plain sub _) = toQText sub
+  toQText (ArithExpr expr _) = toQText expr
 
 
 instance ToQueryText [AggFunction] where
@@ -586,6 +650,7 @@ defaultAlias = \case
   ToInt{} -> "toint_"
   ToString{} -> "tostring_"
   Plain (Subject n _ _) _ -> sanitizeAlias n
+  ArithExpr{} -> "arith_"
 
 
 -- | Display with alias: SQL AS (explicit or default)
@@ -674,25 +739,45 @@ instance Display BinFunction where
   displayPrec _prec (BinAuto subj) = displayBuilder $ "time_bucket('" <> defaultBinSize <> "', " <> display subj <> ")"
 
 
--- | Parse a summarize by clause which can contain fields and bin functions
+instance Display ByClauseItem where
+  displayPrec p (BySubject s) = displayPrec p s
+  displayPrec p (ByBinFunc b) = displayPrec p b
+  displayPrec _ (ByScalarFunc f) = displayBuilder $ aggToSqlNoAlias f
+
+
+-- | Parse a summarize by clause which can contain fields, bin functions, and scalar expressions
 --
 -- >>> parse pSummarizeByClause "" "by attributes.client, bin(timestamp, 60)"
--- Right (SummarizeByClause [Left (Subject "attributes.client" "attributes" [FieldKey "client"]),Right (Bin (Subject "timestamp" "timestamp" []) "60")])
+-- Right (SummarizeByClause [BySubject (Subject "attributes.client" "attributes" [FieldKey "client"]),ByBinFunc (Bin (Subject "timestamp" "timestamp" []) "60")])
 --
 -- >>> parse pSummarizeByClause "" "by Computer, bin_auto(timestamp)"
--- Right (SummarizeByClause [Left (Subject "Computer" "Computer" []),Right (BinAuto (Subject "timestamp" "timestamp" []))])
+-- Right (SummarizeByClause [BySubject (Subject "Computer" "Computer" []),ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])
 --
 -- >>> parse pSummarizeByClause "" "by bin_auto(timestamp)"
--- Right (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))])
+-- Right (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])
+--
+-- >>> parse pSummarizeByClause "" "by bin_auto(timestamp), coalesce(tostring(status), \"unknown\")"
+-- Right (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" [])),ByScalarFunc (Coalesce [ScalarFunc "tostring" [Field (Subject "status" "status" [])],Str "unknown"] Nothing)])
 pSummarizeByClause :: Parser SummarizeByClause
 pSummarizeByClause = do
   _ <- string "by"
   space
-  SummarizeByClause <$> (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) `sepBy` comma
+  SummarizeByClause <$> pByClauseItem `sepBy` comma
+  where
+    -- Order matters: bin functions, then actual scalar functions (with parens), then plain subjects
+    pByClauseItem = choice @[] [try (ByBinFunc <$> pBinFunction), try (ByScalarFunc <$> pScalarFuncOnly), BySubject <$> pSubject]
+    -- Scalar-only parsers for by clause (not aggregations like sum/count/avg)
+    pScalarFuncOnly = choice @[] [try pCoalesce, try pStrcat, try pIff, try pCase, try pRound, try pToFloat, try pToInt, try pToString]
 
 
 instance ToQueryText SummarizeByClause where
-  toQText (SummarizeByClause fields) = "by " <> T.intercalate ", " (map (either toQText toQText) fields)
+  toQText (SummarizeByClause items) = "by " <> T.intercalate ", " (map toQText items)
+
+
+instance ToQueryText ByClauseItem where
+  toQText (BySubject s) = toQText s
+  toQText (ByBinFunc b) = toQText b
+  toQText (ByScalarFunc f) = toQText f
 
 
 -- | Parse a sort field that can include an optional direction
@@ -748,10 +833,10 @@ pTakeSection = do
 -- | Parse 'name = expression' pattern, returns (name, aliased expression)
 -- Used by extend/project commands and named aggregations in summarize
 -- Allows dots in names which are sanitized to underscores for valid SQL aliases
+-- NOTE: try is only on the prefix "name =" so validation errors propagate
 pNamedExpr :: Parser (Text, AggFunction)
 pNamedExpr = do
-  name <- toText <$> some (alphaNumChar <|> oneOf ("_." :: String))
-  space *> string "=" *> space
+  name <- try $ toText <$> some (alphaNumChar <|> oneOf ("_." :: String)) <* space <* string "=" <* space
   let sanitized = sanitizeAlias name
   (sanitized,) . setAlias sanitized <$> aggFunctionParser
 
@@ -799,25 +884,66 @@ namedAggregation = snd <$> pNamedExpr
 -- | Parse the summarize command
 --
 -- >>> parse pSummarizeSection "" "summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
--- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes" [FieldKey "client"]) Nothing] (Just (SummarizeByClause [Left (Subject "attributes.client" "attributes" [FieldKey "client"]),Right (Bin (Subject "timestamp" "timestamp" []) "60")])))
+-- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes" [FieldKey "client"]) Nothing] (Just (SummarizeByClause [BySubject (Subject "attributes.client" "attributes" [FieldKey "client"]),ByBinFunc (Bin (Subject "timestamp" "timestamp" []) "60")])))
 --
 -- >>> parse pSummarizeSection "" "summarize TotalCount=count() by Computer"
--- Right (SummarizeCommand [Count (Subject "*" "*" []) (Just "TotalCount")] (Just (SummarizeByClause [Left (Subject "Computer" "Computer" [])])))
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) (Just "TotalCount")] (Just (SummarizeByClause [BySubject (Subject "Computer" "Computer" [])])))
 --
 -- >>> parse pSummarizeSection "" "summarize count(*) by bin_auto(timestamp)"
--- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))])))
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
+--
+-- >>> parse pSummarizeSection "" "summarize count() / 5.0 by bin_auto(timestamp)"
+-- Right (SummarizeCommand [ArithExpr (SArith (SAgg (Count (Subject "*" "*" []) Nothing)) Div (SVal (Num "5.0"))) Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
+--
+-- >>> parse pSummarizeSection "" "summarize count() * 100 / sum(total) by status"
+-- Right (SummarizeCommand [ArithExpr (SArith (SArith (SAgg (Count (Subject "*" "*" []) Nothing)) Mul (SVal (Num "100"))) Div (SAgg (Sum (Subject "total" "total" []) Nothing))) Nothing] (Just (SummarizeByClause [BySubject (Subject "status" "status" [])])))
+--
+-- Operator precedence test: * binds tighter than +
+-- count() + 5 * 10 should parse as count() + (5 * 10), not (count() + 5) * 10
+-- >>> parse pSummarizeSection "" "summarize count() + 5 * 10 by status"
+-- Right (SummarizeCommand [ArithExpr (SArith (SAgg (Count (Subject "*" "*" []) Nothing)) Add (SArith (SVal (Num "5")) Mul (SVal (Num "10")))) Nothing] (Just (SummarizeByClause [BySubject (Subject "status" "status" [])])))
+--
+-- Regression test: percentiles with by clause (requires try in arithmetic operators)
+-- >>> parse pSummarizeSection "" "summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)"
+-- Right (SummarizeCommand [Percentiles (SubjectExpr (Subject "duration" "duration" []) Nothing) [50.0,75.0,90.0,95.0,99.0] Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
+--
+-- >>> parse pSummarizeSection "" "summarize count()"
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] Nothing)
 pSummarizeSection :: Parser Section
 pSummarizeSection = do
   _ <- string "summarize"
   space
-  funcs <- sepBy (try namedAggregation <|> aggFunctionParser) (char ',' <* space)
+  -- namedAggregation has try only on prefix "name =" so validation errors propagate
+  funcs <- sepBy (namedAggregation <|> pAggWithOptionalArith) (char ',' <* space)
   byClause <- optional $ try (space *> pSummarizeByClause)
+  return $ SummarizeCommand funcs byClause
+  where
+    -- Parse arithmetic expression with proper operator precedence
+    -- \* and / bind tighter than + and -
+    -- Example: count() + 5 * 10 parses as count() + (5 * 10)
+    pAggWithOptionalArith = do
+      expr <- pArithExpr
+      pure $ case expr of
+        SAgg agg -> agg -- Plain aggregation, return as-is
+        _ -> ArithExpr expr Nothing -- Arithmetic expression
+    pArithExpr :: Parser ScalarExpr
+    pArithExpr = makeExprParser pArithTerm arithOperatorTable
 
-  -- If no by clause was provided, automatically add "by status_code"
-  let defaultByClause = SummarizeByClause [Left $ Subject "status_code" "status_code" []]
-      finalByClause = Just $ fromMaybe defaultByClause byClause
+    arithOperatorTable :: [[Operator Parser ScalarExpr]]
+    arithOperatorTable =
+      [ [infixL '*' Mul, infixL '/' Div]
+      , [infixL '+' Add, infixL '-' Sub]
+      ]
 
-  return $ SummarizeCommand funcs finalByClause
+    infixL :: Char -> ArithOp -> Operator Parser ScalarExpr
+    infixL c op = InfixL $ try ((`SArith` op) <$ (hspace *> char c <* hspace))
+
+    -- try on pNumericOnly is fine; aggFunctionParser parsers use try on prefix only
+    -- so validation errors propagate after consuming function input
+    pArithTerm :: Parser ScalarExpr
+    pArithTerm = choice [SVal <$> try pNumericOnly, SAgg <$> aggFunctionParser, char '(' *> pArithExpr <* char ')']
+
+    pNumericOnly = Num . toText <$> (try ((\a c -> a ++ "." ++ c) <$> some digitChar <* char '.' <*> some digitChar) <|> some digitChar)
 
 
 -- | Parser for where clause section
@@ -883,7 +1009,39 @@ parseQuery = do
   _ <- optional (space *> char '|' <* space)
   sections <- sepBy pSection (space *> char '|' <* space)
   space *> eof
-  pure sections
+  pure $ transformAST sections
+
+
+-- | Transform AST to normalize and optimize the query structure.
+-- Combines consecutive WHERE/Search clauses and reorders sections to canonical order.
+--
+-- >>> transformAST [Search (Eq (Subject "a" "a" []) (Str "1")), Search (Eq (Subject "b" "b" []) (Str "2"))]
+-- [Search (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
+--
+-- >>> transformAST [WhereClause (Eq (Subject "a" "a" []) (Str "1")), WhereClause (Eq (Subject "b" "b" []) (Str "2"))]
+-- [WhereClause (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
+transformAST :: [Section] -> [Section]
+transformAST = reorderSections . combineWheres
+  where
+    -- Combine consecutive Search or WhereClause sections into single And expressions
+    combineWheres :: [Section] -> [Section]
+    combineWheres [] = []
+    combineWheres (Search e1 : Search e2 : rest) = combineWheres (Search (And e1 e2) : rest)
+    combineWheres (WhereClause e1 : WhereClause e2 : rest) = combineWheres (WhereClause (And e1 e2) : rest)
+    combineWheres (x : rest) = x : combineWheres rest
+
+    -- Reorder sections to canonical order (respects state dependencies)
+    -- Order: Source -> filters -> extends -> summarize -> project -> sort -> take
+    reorderSections :: [Section] -> [Section]
+    reorderSections secs = sources <> filters <> extends <> summarizes <> projects <> sorts <> takes
+      where
+        sources = [s | s@(Source _) <- secs]
+        filters = [s | s@(Search _) <- secs] <> [s | s@(WhereClause _) <- secs]
+        extends = [s | s@(ExtendCommand _) <- secs]
+        summarizes = [s | s@(SummarizeCommand _ _) <- secs]
+        projects = [s | s@(ProjectCommand _) <- secs]
+        sorts = [s | s@(SortCommand _) <- secs]
+        takes = [s | s@(TakeCommand _) <- secs]
 
 
 instance ToQueryText [Section] where

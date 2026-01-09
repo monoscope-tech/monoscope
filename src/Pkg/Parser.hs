@@ -1,8 +1,9 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
@@ -21,7 +22,9 @@ data QueryComponents = QueryComponents
   { whereClause :: Maybe Text
   , groupByClause :: [Text]
   , fromTable :: Maybe Text
-  , select :: [Text]
+  , select :: [Text] -- project: replaces default columns
+  , extendSelect :: [Text] -- extend: appends to default columns
+  , aggregations :: [Text] -- Summarize aggregations (separate from extended columns in select)
   , finalColumns :: [Text]
   , finalSqlQuery :: Text -- includes count(*) OVER() as last column
   , finalAlertQuery :: Maybe Text
@@ -29,13 +32,114 @@ data QueryComponents = QueryComponents
   , sortFields :: Maybe [SortField] -- Fields to sort by
   , takeLimit :: Maybe Int -- Limit number of results
   , percentilesInfo :: Maybe (Text, [Double]) -- (field expr SQL, percentile values) extracted from AST
+  , extendedColumns :: [(Text, Text)] -- Extended column mappings (alias -> full SQL expression without AS)
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
 
 
+-- | Normalized query with pre-computed SQL fragments ready for generation.
+-- This is the intermediate representation between QueryComponents and final SQL.
+data NormalizedQuery = NormalizedQuery
+  { nqTable :: Text
+  , nqSelectCols :: [Text]
+  , nqAggregations :: [Text]
+  , nqWhere :: Text -- "TRUE" or "(conditions)"
+  , nqDateRange :: Text -- Date range clause
+  , nqProjectId :: Text
+  , nqGroupBy :: Text -- "" or "GROUP BY x, y"
+  , nqOrderBy :: Text -- "" or "ORDER BY x DESC"
+  , nqLimit :: Text -- "" or "LIMIT 500"
+  , nqBinInterval :: Maybe Text
+  , nqPercentiles :: Maybe (Text, [Double])
+  , nqExtendedColumns :: [(Text, Text)]
+  }
+  deriving stock (Generic, Show)
+
+
+-- | Build date range SQL clause from config
+buildDateRange :: SqlQueryCfg -> Text
+buildDateRange cfg =
+  let fmtTime = toText . iso8601Show
+      timestampCol = "timestamp"
+   in case (cfg.dateRange, cfg.cursorM) of
+        ((Nothing, Just b), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
+        ((Just a, Just _), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
+        ((Just a, Nothing), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
+        ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
+        ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
+        ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> ""
+
+
+-- | Build GROUP BY clause with resolved extended columns
+buildGroupBy :: [(Text, Text)] -> [Text] -> Text
+buildGroupBy extCols cols
+  | null cols = ""
+  | otherwise = let extColsMap = Map.fromList extCols in " GROUP BY " <> T.intercalate "," (map (resolveExtendedColumn extColsMap) cols)
+
+
+-- | Build ORDER BY clause with fallback logic
+buildOrderBy :: QueryComponents -> Text
+buildOrderBy qc =
+  let timestampCol = "timestamp"
+   in case qc.sortFields of
+        Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
+        Nothing -> case qc.finalSummarizeQuery of
+          Just binInterval -> "ORDER BY time_bucket('" <> binInterval <> "', " <> timestampCol <> ") desc"
+          Nothing
+            | any (\s -> "time_bucket" `T.isInfixOf` s) qc.select ->
+                "ORDER BY time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
+            | not (null qc.groupByClause) ->
+                "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
+            | otherwise -> "ORDER BY " <> timestampCol <> " desc"
+
+
+-- | Build LIMIT clause with defaults
+buildLimit :: QueryComponents -> Text
+buildLimit qc = case qc.takeLimit of
+  Just limit -> "limit " <> toText (show limit)
+  Nothing -> case qc.finalSummarizeQuery of
+    Just _ -> "" -- No limit for summarize queries
+    Nothing -> "limit 500"
+
+
+-- | Build WHERE condition from raw clause
+buildWhereCondition :: Maybe Text -> Text
+buildWhereCondition Nothing = "TRUE"
+buildWhereCondition (Just w) | T.null w = "TRUE"
+buildWhereCondition (Just w) = "(" <> w <> ")"
+
+
+-- | Normalize QueryComponents into NormalizedQuery for SQL generation
+normalizeQuery :: SqlQueryCfg -> QueryComponents -> NormalizedQuery
+normalizeQuery cfg qc =
+  let (_, selVec) = getProcessedColumns cfg.projectedColsByUser cfg.defaultSelect
+      baseCols = if null qc.select then selVec else qc.select
+      selectedCols = baseCols <> qc.extendSelect
+   in NormalizedQuery
+        { nqTable = fromMaybe "otel_logs_and_spans" qc.fromTable
+        , nqSelectCols = selectedCols
+        , nqAggregations = qc.aggregations
+        , nqWhere = buildWhereCondition qc.whereClause
+        , nqDateRange = buildDateRange cfg
+        , nqProjectId = cfg.pid.toText
+        , nqGroupBy = buildGroupBy qc.extendedColumns qc.groupByClause
+        , nqOrderBy = buildOrderBy qc
+        , nqLimit = buildLimit qc
+        , nqBinInterval = qc.finalSummarizeQuery
+        , nqPercentiles = qc.percentilesInfo
+        , nqExtendedColumns = qc.extendedColumns
+        }
+
+
 sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
 sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) (def :: QueryComponents)
+
+
+-- | Resolve a column name to its full expression if it's an extended column (O(log n) lookup)
+resolveExtendedColumn :: Map.Map Text Text -> Text -> Text
+resolveExtendedColumn extColsMap colName = fromMaybe colName (Map.lookup colName extColsMap)
 
 
 -- | Combine where clauses using AND
@@ -50,9 +154,14 @@ applySectionToComponent _ qc (WhereClause expr) = qc{whereClause = combineWhereC
 applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display source}
 applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
   let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
-   in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{select = qc.select <> map display aggs, percentilesInfo = pctInfo}
--- extend adds computed columns to existing select (preserves all columns)
-applySectionToComponent _ qc (ExtendCommand cols) = qc{select = qc.select <> map (display . snd) cols}
+   in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = pctInfo}
+-- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
+applySectionToComponent _ qc (ExtendCommand cols) =
+  let colMappings = [(name, stripAlias $ display expr) | (name, expr) <- cols]
+      extendCols = map (display . snd) cols
+   in qc{extendedColumns = qc.extendedColumns <> colMappings, extendSelect = qc.extendSelect <> extendCols}
+  where
+    stripAlias expr = let (pre, post) = T.breakOn " AS " expr in if T.null post then expr else pre
 -- project replaces select with only the specified columns
 applySectionToComponent _ qc (ProjectCommand cols) = qc{select = map (display . snd) cols}
 applySectionToComponent _ qc (SortCommand sortFields) = qc{sortFields = Just sortFields}
@@ -62,22 +171,20 @@ applySectionToComponent _ qc (TakeCommand limit) = qc{takeLimit = Just limit}
 -- | Apply summarize by clause to query components
 applySummarizeByClauseToQC :: SqlQueryCfg -> Maybe SummarizeByClause -> QueryComponents -> QueryComponents
 applySummarizeByClauseToQC _ Nothing qc = qc
-applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause fields)) qc =
-  let (regularFields, binFields) = partitionEithers fields
-      -- Extract bin functions for special handling
+applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause items)) qc =
+  let binFields = [b | ByBinFunc b <- items]
+      regularFields = [item | item <- items, not (isBinFunc item)]
+      isBinFunc (ByBinFunc _) = True
+      isBinFunc _ = False
       hasBinFuncs = not (null binFields)
-      -- Extract the bin interval from the first bin function, or use auto bin calculation
       binInterval = case listToMaybe binFields of
         Just (Bin _ interval) -> kqlTimespanToTimeBucket interval
         Just (BinAuto _) -> calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
         Nothing -> defaultBinSize
-      -- Only add regular fields to GROUP BY
       groupByClauses = map display regularFields
    in qc
-        { -- Store bin interval for SQL generation when bin functions are present
-          finalSummarizeQuery = if hasBinFuncs then Just binInterval else Nothing
-        , -- Add regular fields to GROUP BY
-          groupByClause = qc.groupByClause <> groupByClauses
+        { finalSummarizeQuery = if hasBinFuncs then Just binInterval else Nothing
+        , groupByClause = qc.groupByClause <> groupByClauses
         }
 
 
@@ -111,6 +218,7 @@ normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T
 
 
 getProcessedColumns :: [Text] -> [Text] -> (Text, [Text])
+getProcessedColumns [] defaultSelect = (T.intercalate "," $ colsNoAsClause defaultSelect, defaultSelect)
 getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause selectedCols, selectedCols)
   where
     prs =
@@ -122,125 +230,80 @@ getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause sel
 
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
-  let fmtTime = toText . iso8601Show
-      -- Use the table from query components if available, otherwise default to otel_logs_and_spans
-      fromTable = fromMaybe "otel_logs_and_spans" qc.fromTable
-      timestampCol = "timestamp"
+  let
+    -- Use normalized query for pre-computed values
+    nq = normalizeQuery sqlCfg qc
+    timestampCol = "timestamp"
 
-      -- Note: cursorT is now handled in the whereCondition computation
-      -- Handle the Either error case correctly not hushing it.
-      (_, selVec) = getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect
-      selectedCols = if null qc.select then selVec else qc.select
-      -- When building json_build_array, we need to handle TEXT[] columns specially
-      -- Process each column to convert arrays to JSON
-      processedCols =
-        map
-          ( \col ->
-              if "summary" == col || "summary" `T.isSuffixOf` col
-                then "to_json(summary)"
-                else col
-          )
-          $ colsNoAsClause selectedCols
-      selectClause = T.intercalate "," processedCols
+    -- Process columns for summary JSON conversion
+    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "to_json(summary)" else col) $ colsNoAsClause nq.nqSelectCols
+    selectClause = T.intercalate "," processedCols
 
-      -- Extract the raw where clause without the AND prefix
-      rawWhere = fromMaybe "" qc.whereClause
-      -- Use raw where with parentheses but NO AND prefix
-      whereClause =
-        if T.null rawWhere
-          then ""
-          else "(" <> rawWhere <> ")"
-      groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
+    -- Use pre-computed values from NormalizedQuery
+    fromTable = nq.nqTable
+    groupByClause = nq.nqGroupBy
+    sortOrder = nq.nqOrderBy
+    limitClause = nq.nqLimit
+    whereCondition = nq.nqWhere
+    dateRangeStr = nq.nqDateRange
 
-      -- Date range for data queries (with cursor for pagination)
-      -- When cursor is present, use it as the upper bound for data queries
-      dateRangeStr = case (sqlCfg.dateRange, sqlCfg.cursorM) of
-        -- Cursor modifies the end time for pagination
-        ((Nothing, Just b), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
-        ((Just a, Just b), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
-        ((Just a, Nothing), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
-        -- No cursor - use the original date range
-        ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
-        ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
-        ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
+    -- Build complete WHERE clause for data queries
+    buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
 
-      -- Handle sort order
-      sortOrder = case qc.sortFields of
-        Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
-        Nothing ->
-          -- If there's a bin function on timestamp, order by that instead of raw timestamp
-          case qc.finalSummarizeQuery of
-            Just binInterval -> "ORDER BY " <> "time_bucket('" <> binInterval <> "', " <> timestampCol <> ") desc"
-            Nothing ->
-              if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
-                then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
-                else "ORDER BY " <> timestampCol <> " desc"
-
-      -- Handle limit - only apply for non-summarize queries by default
-      limitClause = case qc.takeLimit of
-        Just limit -> "limit " <> toText (show limit)
-        Nothing ->
-          -- For summarize queries, don't apply a default limit to ensure we get complete data
-          case qc.finalSummarizeQuery of
-            Just _ -> "" -- No limit for summarize queries unless explicitly specified
-            Nothing -> "limit 500"
-
-      -- Create WHERE clause with user query only (cursor and timestamp range handled in dateRangeStr)
-      whereCondition =
-        let whereEmpty = T.null rawWhere
-         in if whereEmpty then "TRUE" else whereClause
-
-      -- Build complete WHERE clause for data queries (with cursor)
-      buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
-
-      -- All queries include count(*) OVER() as last column for total count
-      countOver = "count(*) OVER() as _total_count" :: Text
-      finalSqlQuery = case sqlCfg.targetSpansM of
-        Just "service-entry-spans" ->
-          [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
+    -- All queries include count(*) OVER() as last column for total count
+    countOver = "count(*) OVER() as _total_count" :: Text
+    finalSqlQuery = case sqlCfg.targetSpansM of
+      Just "service-entry-spans" ->
+        [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
                 ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
                 FROM otel_logs_and_spans where {buildWhere}
                 {groupByClause}
                 )
                SELECT {selectClause}, {countOver} FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
-        _ ->
-          case qc.finalSummarizeQuery of
-            Just binInterval ->
-              let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                  selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") qc.select
-               in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectCols}, {countOver}
+      _ ->
+        case qc.finalSummarizeQuery of
+          Just binInterval ->
+            let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                -- Use aggregations if available (from summarize), otherwise fall back to select
+                cols = if null qc.aggregations then qc.select else qc.aggregations
+                selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") cols
+                -- Only add comma separator if there are select columns
+                selectPart = if T.null selectCols then "" else selectCols <> ", "
+             in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectPart}{countOver}
                    FROM {fromTable}
                    WHERE {buildWhere}
                    GROUP BY {timeBucketExpr}
                    ORDER BY {timeBucketExpr} DESC
                    {limitClause} |]
-            Nothing ->
-              [fmt|SELECT {selectClause}, {countOver} FROM {fromTable}
+          Nothing ->
+            -- For non-bin summarize queries with aggregations, use aggregations instead of default columns
+            let useAggregations = not (null qc.aggregations) && not (null qc.groupByClause)
+                selectPart = if useAggregations then T.intercalate "," qc.aggregations else selectClause
+             in [fmt|SELECT {selectPart}, {countOver} FROM {fromTable}
                  WHERE {buildWhere}
                  {groupByClause} {sortOrder} {limitClause} |]
 
-      -- Generate the summarize query depending on bin functions and data type
-      -- Percentiles info is extracted directly from AST in applySectionToComponent
-      -- The fieldExpr comes from parser-validated SubjectExpr and is safe for SQL interpolation
-      summarizeQuery =
-        case qc.finalSummarizeQuery of
-          Just binInterval ->
-            case qc.percentilesInfo of
-              Just (fieldExpr, pcts) ->
-                -- Generate LATERAL unnest query for percentiles with custom percentile values
-                let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                    -- Generate ARRAY of percentile expressions (fieldExpr already includes any division)
-                    pctExprs =
-                      T.intercalate
-                        ",\n                          "
-                        [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> fieldExpr <> ")::float)))::float, 0)"
-                        | p <- pcts
-                        ]
-                    -- Generate ARRAY of percentile labels
-                    pctLabels = T.intercalate "," ["'p" <> show (round p :: Int) <> "'" | p <- pcts]
-                 in [fmt|SELECT timeB, quantile, value FROM (
+    -- Generate the summarize query depending on bin functions and data type
+    -- Percentiles info is extracted directly from AST in applySectionToComponent
+    -- The fieldExpr comes from parser-validated SubjectExpr and is safe for SQL interpolation
+    summarizeQuery =
+      case qc.finalSummarizeQuery of
+        Just binInterval ->
+          case qc.percentilesInfo of
+            Just (fieldExpr, pcts) ->
+              -- Generate LATERAL unnest query for percentiles with custom percentile values
+              let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                  -- Generate ARRAY of percentile expressions (fieldExpr already includes any division)
+                  pctExprs =
+                    T.intercalate
+                      ",\n                          "
+                      [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> fieldExpr <> ")::float)))::float, 0)"
+                      | p <- pcts
+                      ]
+                  -- Generate ARRAY of percentile labels
+                  pctLabels = T.intercalate "," ["'p" <> show (round p :: Int) <> "'" | p <- pcts]
+               in [fmt|SELECT timeB, quantile, value FROM (
                       SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
                         ARRAY[{pctExprs}] AS values,
                         ARRAY[{pctLabels}] AS quantiles
@@ -251,62 +314,66 @@ sqlFromQueryComponents sqlCfg qc =
                     ) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
                     WHERE value IS NOT NULL
                     ORDER BY timeB DESC {limitClause}|]
-              Nothing ->
-                -- Normal summarize query
-                let groupCol =
-                      if null qc.groupByClause
-                        then "'" <> (if null qc.select then "count" else "value") <> "'"
-                        else "COALESCE(" <> fromMaybe "status_code" (listToMaybe qc.groupByClause) <> "::text, 'null')"
-                    aggCol = if null qc.select then "count(*)::float" else fromMaybe "count(*)::float" (listToMaybe qc.select)
-                    timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                    firstGroupCol = fromMaybe "status_code" (listToMaybe qc.groupByClause)
-                    groupByPart = if null qc.groupByClause then timeBucketExpr else timeBucketExpr <> ", " <> firstGroupCol
-                 in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {groupCol}, {aggCol}
+            Nothing ->
+              -- Normal summarize query
+              let resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)
+                  groupCol =
+                    if null qc.groupByClause
+                      then "'" <> (if null qc.aggregations then "count" else "value") <> "'"
+                      else "COALESCE(" <> maybe "status_code" resolve (listToMaybe qc.groupByClause) <> "::text, 'null')"
+                  aggCol = if null qc.aggregations then "count(*)::float" else fromMaybe "count(*)::float" (listToMaybe qc.aggregations)
+                  timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+                  firstGroupCol = resolve $ fromMaybe "status_code" (listToMaybe qc.groupByClause)
+                  groupByPart = if null qc.groupByClause then timeBucketExpr else timeBucketExpr <> ", " <> firstGroupCol
+               in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {groupCol}, {aggCol}
                       FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
                       ORDER BY {timeBucketExpr} DESC {limitClause}|]
-          Nothing ->
-            [fmt|SELECT {T.intercalate "," qc.select} FROM {fromTable} WHERE {buildWhere}
-              {groupByClause} ORDER BY {timestampCol} DESC {limitClause}|]
+        Nothing ->
+          let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
+              orderCol = if null qc.groupByClause then timestampCol else fromMaybe timestampCol (listToMaybe qc.groupByClause)
+              selectCols = if null qc.aggregations then qc.select else qc.aggregations
+              orderClause = if hasAggregationsNoGroupBy then "" else " ORDER BY " <> orderCol <> " DESC"
+              limitPart = if hasAggregationsNoGroupBy then "" else limitClause
+           in [fmt|SELECT {T.intercalate "," selectCols} FROM {fromTable} WHERE {buildWhere}
+              {groupByClause}{orderClause} {limitPart}|]
 
-      -- FIXME: render this based on the aggregations, but without the aliases
-      alertSelect = [fmt| count(*)::integer|] :: Text
-      alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," qc.groupByClause
-      -- Returns the max of all the values returned by the query. Change 5mins to
-      -- For alert queries, we use a simplified whereCondition without the time range/cursor
-      alertWhereCondition =
-        if not (T.null rawWhere)
-          then whereClause
-          else "TRUE"
+    -- FIXME: render this based on the aggregations, but without the aliases
+    alertSelect = [fmt| count(*)::integer|] :: Text
+    resolvedGroupByCols = let extColsMap = Map.fromList nq.nqExtendedColumns in map (resolveExtendedColumn extColsMap) qc.groupByClause
+    alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
+    -- For alert queries, we use a simplified whereCondition without the time range/cursor
+    alertWhereCondition = nq.nqWhere
 
-      alertQuery =
-        case qc.finalSummarizeQuery of
-          Just binInterval ->
-            -- For queries with bin functions, create a time-bucketed alert query
-            let
-              -- Create time bucket expression
-              timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-             in
-              [fmt|
+    alertQuery =
+      case qc.finalSummarizeQuery of
+        Just binInterval ->
+          -- For queries with bin functions, create a time-bucketed alert query
+          let
+            -- Create time bucket expression
+            timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+           in
+            [fmt|
                 SELECT GREATEST({alertSelect}) FROM {fromTable}
                 WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
                 GROUP BY {timeBucketExpr}
               |]
-          Nothing ->
-            -- For regular summarize queries without time buckets
-            [fmt|
+        Nothing ->
+          -- For regular summarize queries without time buckets
+          [fmt|
               SELECT GREATEST({alertSelect}) FROM {fromTable}
               WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
               {alertGroupByClause}
             |]
-   in ( finalSqlQuery
-      , qc
-          { finalColumns = listToColNames selectedCols
-          , finalSqlQuery = finalSqlQuery
-          , whereClause = Just whereCondition
-          , finalSummarizeQuery = Just summarizeQuery
-          , finalAlertQuery = Just alertQuery
-          }
-      )
+   in
+    ( finalSqlQuery
+    , qc
+        { finalColumns = listToColNames nq.nqSelectCols
+        , finalSqlQuery = finalSqlQuery
+        , whereClause = Just whereCondition
+        , finalSummarizeQuery = Just summarizeQuery
+        , finalAlertQuery = Just alertQuery
+        }
+    )
 
 
 ----------------------------------------------------------------------------------
