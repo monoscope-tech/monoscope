@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), listToColNames, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -36,6 +36,101 @@ data QueryComponents = QueryComponents
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
+
+
+-- | Normalized query with pre-computed SQL fragments ready for generation.
+-- This is the intermediate representation between QueryComponents and final SQL.
+data NormalizedQuery = NormalizedQuery
+  { nqTable :: Text
+  , nqSelectCols :: [Text]
+  , nqAggregations :: [Text]
+  , nqWhere :: Text -- "TRUE" or "(conditions)"
+  , nqDateRange :: Text -- Date range clause
+  , nqProjectId :: Text
+  , nqGroupBy :: Text -- "" or "GROUP BY x, y"
+  , nqOrderBy :: Text -- "" or "ORDER BY x DESC"
+  , nqLimit :: Text -- "" or "LIMIT 500"
+  , nqBinInterval :: Maybe Text
+  , nqPercentiles :: Maybe (Text, [Double])
+  , nqExtendedColumns :: [(Text, Text)]
+  }
+  deriving stock (Generic, Show)
+
+
+-- | Build date range SQL clause from config
+buildDateRange :: SqlQueryCfg -> Text
+buildDateRange cfg =
+  let fmtTime = toText . iso8601Show
+      timestampCol = "timestamp"
+   in case (cfg.dateRange, cfg.cursorM) of
+        ((Nothing, Just b), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
+        ((Just a, Just _), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
+        ((Just a, Nothing), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
+        ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
+        ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
+        ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> ""
+
+
+-- | Build GROUP BY clause with resolved extended columns
+buildGroupBy :: [(Text, Text)] -> [Text] -> Text
+buildGroupBy extCols cols
+  | null cols = ""
+  | otherwise = " GROUP BY " <> T.intercalate "," (map (resolveExtendedColumn extCols) cols)
+
+
+-- | Build ORDER BY clause with fallback logic
+buildOrderBy :: QueryComponents -> Text
+buildOrderBy qc =
+  let timestampCol = "timestamp"
+   in case qc.sortFields of
+        Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
+        Nothing -> case qc.finalSummarizeQuery of
+          Just binInterval -> "ORDER BY time_bucket('" <> binInterval <> "', " <> timestampCol <> ") desc"
+          Nothing
+            | any (\s -> "time_bucket" `T.isInfixOf` s) qc.select ->
+                "ORDER BY time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
+            | not (null qc.groupByClause) ->
+                "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
+            | otherwise -> "ORDER BY " <> timestampCol <> " desc"
+
+
+-- | Build LIMIT clause with defaults
+buildLimit :: QueryComponents -> Text
+buildLimit qc = case qc.takeLimit of
+  Just limit -> "limit " <> toText (show limit)
+  Nothing -> case qc.finalSummarizeQuery of
+    Just _ -> "" -- No limit for summarize queries
+    Nothing -> "limit 500"
+
+
+-- | Build WHERE condition from raw clause
+buildWhereCondition :: Maybe Text -> Text
+buildWhereCondition Nothing = "TRUE"
+buildWhereCondition (Just w) | T.null w = "TRUE"
+buildWhereCondition (Just w) = "(" <> w <> ")"
+
+
+-- | Normalize QueryComponents into NormalizedQuery for SQL generation
+normalizeQuery :: SqlQueryCfg -> QueryComponents -> NormalizedQuery
+normalizeQuery cfg qc =
+  let (_, selVec) = getProcessedColumns cfg.projectedColsByUser cfg.defaultSelect
+      baseCols = if null qc.select then selVec else qc.select
+      selectedCols = baseCols <> qc.extendSelect
+   in NormalizedQuery
+        { nqTable = fromMaybe "otel_logs_and_spans" qc.fromTable
+        , nqSelectCols = selectedCols
+        , nqAggregations = qc.aggregations
+        , nqWhere = buildWhereCondition qc.whereClause
+        , nqDateRange = buildDateRange cfg
+        , nqProjectId = cfg.pid.toText
+        , nqGroupBy = buildGroupBy qc.extendedColumns qc.groupByClause
+        , nqOrderBy = buildOrderBy qc
+        , nqLimit = buildLimit qc
+        , nqBinInterval = qc.finalSummarizeQuery
+        , nqPercentiles = qc.percentilesInfo
+        , nqExtendedColumns = qc.extendedColumns
+        }
 
 
 sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
@@ -134,84 +229,24 @@ getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause sel
 
 sqlFromQueryComponents :: SqlQueryCfg -> QueryComponents -> (Text, QueryComponents)
 sqlFromQueryComponents sqlCfg qc =
-  let fmtTime = toText . iso8601Show
-      -- Use the table from query components if available, otherwise default to otel_logs_and_spans
-      fromTable = fromMaybe "otel_logs_and_spans" qc.fromTable
+  let -- Use normalized query for pre-computed values
+      nq = normalizeQuery sqlCfg qc
       timestampCol = "timestamp"
 
-      -- Note: cursorT is now handled in the whereCondition computation
-      -- Handle the Either error case correctly not hushing it.
-      (_, selVec) = getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect
-      -- project replaces defaults, extend appends to defaults
-      baseCols = if null qc.select then selVec else qc.select
-      selectedCols = baseCols <> qc.extendSelect
-      -- When building json_build_array, we need to handle TEXT[] columns specially
-      -- Process each column to convert arrays to JSON
-      processedCols =
-        map
-          ( \col ->
-              if "summary" == col || "summary" `T.isSuffixOf` col
-                then "to_json(summary)"
-                else col
-          )
-          $ colsNoAsClause selectedCols
+      -- Process columns for summary JSON conversion
+      processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "to_json(summary)" else col) $ colsNoAsClause nq.nqSelectCols
       selectClause = T.intercalate "," processedCols
 
-      -- Extract the raw where clause without the AND prefix
-      rawWhere = fromMaybe "" qc.whereClause
-      -- Use raw where with parentheses but NO AND prefix
-      whereClause =
-        if T.null rawWhere
-          then ""
-          else "(" <> rawWhere <> ")"
-      resolvedGroupByCols = map (resolveExtendedColumn qc.extendedColumns) qc.groupByClause
-      groupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
+      -- Use pre-computed values from NormalizedQuery
+      fromTable = nq.nqTable
+      groupByClause = nq.nqGroupBy
+      sortOrder = nq.nqOrderBy
+      limitClause = nq.nqLimit
+      whereCondition = nq.nqWhere
+      dateRangeStr = nq.nqDateRange
 
-      -- Date range for data queries (with cursor for pagination)
-      -- When cursor is present, use it as the upper bound for data queries
-      dateRangeStr = case (sqlCfg.dateRange, sqlCfg.cursorM) of
-        -- Cursor modifies the end time for pagination
-        ((Nothing, Just b), Just cursor) -> timestampCol <> " <= '" <> fmtTime cursor <> "'"
-        ((Just a, Just b), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
-        ((Just a, Nothing), Just cursor) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime cursor <> "'"
-        -- No cursor - use the original date range
-        ((Nothing, Just b), Nothing) -> timestampCol <> " <= '" <> fmtTime b <> "'"
-        ((Just a, Nothing), Nothing) -> timestampCol <> " >= '" <> fmtTime a <> "'"
-        ((Just a, Just b), Nothing) -> timestampCol <> " BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
-        _ -> ""
-
-      -- Handle sort order
-      sortOrder = case qc.sortFields of
-        Just fields -> "ORDER BY " <> T.intercalate ", " (map displaySortField fields)
-        Nothing ->
-          -- If there's a bin function on timestamp, order by that instead of raw timestamp
-          case qc.finalSummarizeQuery of
-            Just binInterval -> "ORDER BY " <> "time_bucket('" <> binInterval <> "', " <> timestampCol <> ") desc"
-            Nothing ->
-              if any (\s -> "time_bucket" `T.isInfixOf` s) qc.select
-                then "ORDER BY " <> "time_bucket('" <> defaultBinSize <> "', " <> timestampCol <> ") desc"
-                -- When GROUP BY exists without bin, order by first group column (timestamp not in GROUP BY)
-                else
-                  if not (null qc.groupByClause)
-                    then "ORDER BY " <> fromMaybe timestampCol (listToMaybe qc.groupByClause) <> " desc"
-                    else "ORDER BY " <> timestampCol <> " desc"
-
-      -- Handle limit - only apply for non-summarize queries by default
-      limitClause = case qc.takeLimit of
-        Just limit -> "limit " <> toText (show limit)
-        Nothing ->
-          -- For summarize queries, don't apply a default limit to ensure we get complete data
-          case qc.finalSummarizeQuery of
-            Just _ -> "" -- No limit for summarize queries unless explicitly specified
-            Nothing -> "limit 500"
-
-      -- Create WHERE clause with user query only (cursor and timestamp range handled in dateRangeStr)
-      whereCondition =
-        let whereEmpty = T.null rawWhere
-         in if whereEmpty then "TRUE" else whereClause
-
-      -- Build complete WHERE clause for data queries (with cursor)
-      buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> sqlCfg.pid.toText <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
+      -- Build complete WHERE clause for data queries
+      buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
 
       -- All queries include count(*) OVER() as last column for total count
       countOver = "count(*) OVER() as _total_count" :: Text
@@ -302,13 +337,10 @@ sqlFromQueryComponents sqlCfg qc =
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text
+      resolvedGroupByCols = map (resolveExtendedColumn nq.nqExtendedColumns) qc.groupByClause
       alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
-      -- Returns the max of all the values returned by the query. Change 5mins to
       -- For alert queries, we use a simplified whereCondition without the time range/cursor
-      alertWhereCondition =
-        if not (T.null rawWhere)
-          then whereClause
-          else "TRUE"
+      alertWhereCondition = nq.nqWhere
 
       alertQuery =
         case qc.finalSummarizeQuery of
@@ -332,7 +364,7 @@ sqlFromQueryComponents sqlCfg qc =
             |]
    in ( finalSqlQuery
       , qc
-          { finalColumns = listToColNames selectedCols
+          { finalColumns = listToColNames nq.nqSelectCols
           , finalSqlQuery = finalSqlQuery
           , whereClause = Just whereCondition
           , finalSummarizeQuery = Just summarizeQuery

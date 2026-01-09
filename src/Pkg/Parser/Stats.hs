@@ -17,6 +17,7 @@ module Pkg.Parser.Stats (
   pExtendSection,
   pProjectSection,
   parseQuery,
+  transformAST,
   pSource,
   -- Aggregation parsers
   aggFunctionParser,
@@ -48,11 +49,12 @@ module Pkg.Parser.Stats (
 ) where
 
 import Control.Lens (set, view)
+import Control.Monad.Combinators.Expr (Operator (..), makeExprParser)
 import Data.Aeson qualified as AE
 import Data.Generics.Product (typed)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display, displayBuilder, displayPrec)
-import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
+import Pkg.Parser.Expr (Expr (..), Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
 import Relude hiding (Sum, many, some)
 import Text.Megaparsec
 import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
@@ -885,6 +887,15 @@ namedAggregation = snd <$> pNamedExpr
 -- >>> parse pSummarizeSection "" "summarize count() * 100 / sum(total) by status"
 -- Right (SummarizeCommand [ArithExpr (SArith (SArith (SAgg (Count (Subject "*" "*" []) Nothing)) Mul (SVal (Num "100"))) Div (SAgg (Sum (Subject "total" "total" []) Nothing))) Nothing] (Just (SummarizeByClause [BySubject (Subject "status" "status" [])])))
 --
+-- Operator precedence test: * binds tighter than +
+-- count() + 5 * 10 should parse as count() + (5 * 10), not (count() + 5) * 10
+-- >>> parse pSummarizeSection "" "summarize count() + 5 * 10 by status"
+-- Right (SummarizeCommand [ArithExpr (SArith (SAgg (Count (Subject "*" "*" []) Nothing)) Add (SArith (SVal (Num "5")) Mul (SVal (Num "10")))) Nothing] (Just (SummarizeByClause [BySubject (Subject "status" "status" [])])))
+--
+-- Regression test: percentiles with by clause (requires try in arithmetic operators)
+-- >>> parse pSummarizeSection "" "summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)"
+-- Right (SummarizeCommand [Percentiles (Subject "duration" "duration" []) [50.0,75.0,90.0,95.0,99.0] Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
+--
 -- >>> parse pSummarizeSection "" "summarize count()"
 -- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] Nothing)
 pSummarizeSection :: Parser Section
@@ -895,21 +906,29 @@ pSummarizeSection = do
   byClause <- optional $ try (space *> pSummarizeByClause)
   return $ SummarizeCommand funcs byClause
   where
-    -- Parse aggregation, then optionally arithmetic operations on it
+    -- Parse arithmetic expression with proper operator precedence
+    -- * and / bind tighter than + and -
+    -- Example: count() + 5 * 10 parses as count() + (5 * 10)
     pAggWithOptionalArith = do
-      firstAgg <- aggFunctionParser
-      ops <- many pArithOp
-      pure $ case ops of
-        [] -> firstAgg -- No arithmetic, return plain aggregation
-        _ -> ArithExpr (foldl' (\acc (op, val) -> SArith acc op val) (SAgg firstAgg) ops) Nothing
+      expr <- pArithExpr
+      pure $ case expr of
+        SAgg agg -> agg -- Plain aggregation, return as-is
+        _ -> ArithExpr expr Nothing -- Arithmetic expression
 
-    pArithOp = try $ do
-      hspace -- horizontal space only (not newlines)
-      op <- (Mul <$ char '*') <|> (Div <$ char '/') <|> (Add <$ char '+') <|> (Sub <$ char '-')
-      hspace
-      -- Try numeric values FIRST to avoid aggFunctionParser's Plain fallback catching "5.0"
-      val <- (SVal <$> try pNumericOnly) <|> (SAgg <$> aggFunctionParser)
-      pure (op, val)
+    pArithExpr :: Parser ScalarExpr
+    pArithExpr = makeExprParser pArithTerm arithOperatorTable
+
+    arithOperatorTable :: [[Operator Parser ScalarExpr]]
+    arithOperatorTable =
+      [ [infixL '*' Mul, infixL '/' Div]
+      , [infixL '+' Add, infixL '-' Sub]
+      ]
+
+    infixL :: Char -> ArithOp -> Operator Parser ScalarExpr
+    infixL c op = InfixL $ try ((\l r -> SArith l op r) <$ (hspace *> char c <* hspace))
+
+    pArithTerm :: Parser ScalarExpr
+    pArithTerm = choice [SVal <$> try pNumericOnly, SAgg <$> try aggFunctionParser, char '(' *> pArithExpr <* char ')']
 
     pNumericOnly = Num . toText <$> (try ((\a c -> a ++ "." ++ c) <$> some digitChar <* char '.' <*> some digitChar) <|> some digitChar)
 
@@ -977,7 +996,39 @@ parseQuery = do
   _ <- optional (space *> char '|' <* space)
   sections <- sepBy pSection (space *> char '|' <* space)
   space *> eof
-  pure sections
+  pure $ transformAST sections
+
+
+-- | Transform AST to normalize and optimize the query structure.
+-- Combines consecutive WHERE/Search clauses and reorders sections to canonical order.
+--
+-- >>> transformAST [Search (Eq (Subject "a" "a" []) (Str "1")), Search (Eq (Subject "b" "b" []) (Str "2"))]
+-- [Search (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
+--
+-- >>> transformAST [WhereClause (Eq (Subject "a" "a" []) (Str "1")), WhereClause (Eq (Subject "b" "b" []) (Str "2"))]
+-- [WhereClause (And (Eq (Subject "a" "a" []) (Str "1")) (Eq (Subject "b" "b" []) (Str "2")))]
+transformAST :: [Section] -> [Section]
+transformAST = reorderSections . combineWheres
+  where
+    -- Combine consecutive Search or WhereClause sections into single And expressions
+    combineWheres :: [Section] -> [Section]
+    combineWheres [] = []
+    combineWheres (Search e1 : Search e2 : rest) = combineWheres (Search (And e1 e2) : rest)
+    combineWheres (WhereClause e1 : WhereClause e2 : rest) = combineWheres (WhereClause (And e1 e2) : rest)
+    combineWheres (x : rest) = x : combineWheres rest
+
+    -- Reorder sections to canonical order (respects state dependencies)
+    -- Order: Source -> filters -> extends -> summarize -> project -> sort -> take
+    reorderSections :: [Section] -> [Section]
+    reorderSections secs = sources <> filters <> extends <> summarizes <> projects <> sorts <> takes
+      where
+        sources = [s | s@(Source _) <- secs]
+        filters = [s | s@(Search _) <- secs] <> [s | s@(WhereClause _) <- secs]
+        extends = [s | s@(ExtendCommand _) <- secs]
+        summarizes = [s | s@(SummarizeCommand _ _) <- secs]
+        projects = [s | s@(ProjectCommand _) <- secs]
+        sorts = [s | s@(SortCommand _) <- secs]
+        takes = [s | s@(TakeCommand _) <- secs]
 
 
 instance ToQueryText [Section] where
