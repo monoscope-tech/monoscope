@@ -3,7 +3,7 @@ module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedCol
 
 import Control.Error (hush)
 import Data.Default (Default (def))
-import Data.List qualified as L
+import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
@@ -76,7 +76,7 @@ buildDateRange cfg =
 buildGroupBy :: [(Text, Text)] -> [Text] -> Text
 buildGroupBy extCols cols
   | null cols = ""
-  | otherwise = " GROUP BY " <> T.intercalate "," (map (resolveExtendedColumn extCols) cols)
+  | otherwise = let extColsMap = Map.fromList extCols in " GROUP BY " <> T.intercalate "," (map (resolveExtendedColumn extColsMap) cols)
 
 
 -- | Build ORDER BY clause with fallback logic
@@ -137,9 +137,9 @@ sectionsToComponents :: SqlQueryCfg -> [Section] -> QueryComponents
 sectionsToComponents sqlCfg = foldl' (applySectionToComponent sqlCfg) (def :: QueryComponents)
 
 
--- | Resolve a column name to its full expression if it's an extended column
-resolveExtendedColumn :: [(Text, Text)] -> Text -> Text
-resolveExtendedColumn extCols colName = fromMaybe colName (L.lookup colName extCols)
+-- | Resolve a column name to its full expression if it's an extended column (O(log n) lookup)
+resolveExtendedColumn :: Map.Map Text Text -> Text -> Text
+resolveExtendedColumn extColsMap colName = fromMaybe colName (Map.lookup colName extColsMap)
 
 
 -- | Combine where clauses using AND
@@ -315,7 +315,7 @@ sqlFromQueryComponents sqlCfg qc =
                     ORDER BY timeB DESC {limitClause}|]
             Nothing ->
               -- Normal summarize query
-              let resolve = resolveExtendedColumn qc.extendedColumns
+              let resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)
                   groupCol =
                     if null qc.groupByClause
                       then "'" <> (if null qc.aggregations then "count" else "value") <> "'"
@@ -338,7 +338,7 @@ sqlFromQueryComponents sqlCfg qc =
 
     -- FIXME: render this based on the aggregations, but without the aliases
     alertSelect = [fmt| count(*)::integer|] :: Text
-    resolvedGroupByCols = map (resolveExtendedColumn nq.nqExtendedColumns) qc.groupByClause
+    resolvedGroupByCols = let extColsMap = Map.fromList nq.nqExtendedColumns in map (resolveExtendedColumn extColsMap) qc.groupByClause
     alertGroupByClause = if null qc.groupByClause then "" else " GROUP BY " <> T.intercalate "," resolvedGroupByCols
     -- For alert queries, we use a simplified whereCondition without the time range/cursor
     alertWhereCondition = nq.nqWhere

@@ -6,6 +6,7 @@ import Control.Monad.Combinators.Expr (
  )
 import Data.Aeson qualified as AE
 import Data.Char (isDigit)
+import Data.Set (member)
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
@@ -590,46 +591,47 @@ subjectHasWildcard (Subject _ _ keys) = any isArrayWildcard keys
     isArrayWildcard _ = False
 
 
--- List of OpenTelemetry attribute paths that have been flattened in the database schema
-flattenedOtelAttributes :: [T.Text]
+-- Set of OpenTelemetry attribute paths that have been flattened in the database schema (O(log n) lookup)
+flattenedOtelAttributes :: Set T.Text
 flattenedOtelAttributes =
-  [ "attributes.http.request.method"
-  , "attributes.http.request.method_original"
-  , "attributes.http.response.status_code"
-  , "attributes.http.request.resend_count"
-  , "attributes.http.request.body.size"
-  , "attributes.url.fragment"
-  , "attributes.url.full"
-  , "attributes.url.path"
-  , "attributes.url.query"
-  , "attributes.url.scheme"
-  , "attributes.user_agent.original"
-  , "attributes.db.system.name"
-  , "attributes.db.collection.name"
-  , "attributes.db.namespace"
-  , "attributes.db.operation.name"
-  , "attributes.db.operation.batch.size"
-  , "attributes.db.query.summary"
-  , "attributes.db.query.text"
-  , "context.trace_id"
-  , "context.span_id"
-  , "context.trace_state"
-  , "context.trace_flags"
-  , "context.is_remote"
-  , "resource.service.name"
-  , "resource.service.version"
-  , "resource.service.instance.id"
-  , "resource.service.namespace"
-  , "resource.telemetry.sdk.language"
-  , "resource.telemetry.sdk.name"
-  , "resource.telemetry.sdk.version"
-  ]
+  fromList
+    [ "attributes.http.request.method"
+    , "attributes.http.request.method_original"
+    , "attributes.http.response.status_code"
+    , "attributes.http.request.resend_count"
+    , "attributes.http.request.body.size"
+    , "attributes.url.fragment"
+    , "attributes.url.full"
+    , "attributes.url.path"
+    , "attributes.url.query"
+    , "attributes.url.scheme"
+    , "attributes.user_agent.original"
+    , "attributes.db.system.name"
+    , "attributes.db.collection.name"
+    , "attributes.db.namespace"
+    , "attributes.db.operation.name"
+    , "attributes.db.operation.batch.size"
+    , "attributes.db.query.summary"
+    , "attributes.db.query.text"
+    , "context.trace_id"
+    , "context.span_id"
+    , "context.trace_state"
+    , "context.trace_flags"
+    , "context.is_remote"
+    , "resource.service.name"
+    , "resource.service.version"
+    , "resource.service.instance.id"
+    , "resource.service.namespace"
+    , "resource.telemetry.sdk.language"
+    , "resource.telemetry.sdk.name"
+    , "resource.telemetry.sdk.version"
+    ]
 
 
 -- Transform dot notation to triple-underscore notation for flattened attributes
 transformFlattenedAttribute :: T.Text -> T.Text
 transformFlattenedAttribute entire
-  | entire `elem` flattenedOtelAttributes = T.replace "." "___" entire
+  | entire `member` flattenedOtelAttributes = T.replace "." "___" entire
   | entire == "url_path" = "attributes___url___path"
   | otherwise = entire
 
@@ -647,7 +649,7 @@ transformFlattenedAttribute entire
 -- "errors->0->>'message' as message"
 instance Display Subject where
   displayPrec prec (Subject entire x keys) =
-    if entire `elem` flattenedOtelAttributes
+    if entire `member` flattenedOtelAttributes
       then displayPrec prec (transformFlattenedAttribute entire)
       else case keys of
         [] -> displayPrec prec x
@@ -676,7 +678,12 @@ instance Display Subject where
 -- >>> display (List [Num "2"])
 -- "ARRAY[2]"
 
--- | Convert a KQL timespan to PostgreSQL interval syntax
+-- | Maximum allowed timespan in days (1 year) to prevent DoS
+maxTimespanDays :: Double
+maxTimespanDays = 365
+
+-- | Convert a KQL timespan to PostgreSQL interval syntax with bounds checking.
+-- Timespans exceeding 1 year are capped to prevent DoS attacks.
 --
 -- Example conversion:
 -- 7d -> INTERVAL '7 days'
@@ -687,31 +694,34 @@ instance Display Subject where
 kqlTimespanToInterval :: Text -> Text
 kqlTimespanToInterval timespan =
   let
-    parseTimeUnit :: Text -> (Text, Text)
+    parseTimeUnit :: Text -> (Text, Text, Double)
     parseTimeUnit input =
       let (digits, rest) = T.span (\c -> isDigit c || c == '.') input
+          num = fromMaybe 0 $ readMaybe @Double (toString digits)
        in case rest of
-            rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest')
-            rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest')
-            rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest')
-            rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest')
-            rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest')
-            rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest')
-            rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest')
-            _ -> ("", input) -- No recognized unit or parsing error
-    parseComplexTimespan :: Text -> Text
+            rest' | T.isPrefixOf "d" rest' -> (digits <> " days", T.drop 1 rest', num)
+            rest' | T.isPrefixOf "h" rest' -> (digits <> " hours", T.drop 1 rest', num / 24)
+            rest' | T.isPrefixOf "m" rest' -> (digits <> " minutes", T.drop 1 rest', num / 1440)
+            rest' | T.isPrefixOf "s" rest' -> (digits <> " seconds", T.drop 1 rest', num / 86400)
+            rest' | T.isPrefixOf "ms" rest' -> (digits <> " milliseconds", T.drop 2 rest', num / 86400000)
+            rest' | T.isPrefixOf "us" rest' -> (digits <> " microseconds", T.drop 2 rest', num / 86400000000)
+            rest' | T.isPrefixOf "ns" rest' -> (digits <> " nanoseconds", T.drop 2 rest', num / 86400000000000)
+            _ -> ("", input, 0)
+    parseComplexTimespan :: Text -> (Text, Double)
     parseComplexTimespan ts =
       case parseTimeUnit ts of
-        ("", _) -> "" -- Parsing error or no recognized unit
-        (unit, "") -> unit -- End of input
-        (unit, rest) -> unit <> " " <> parseComplexTimespan rest
+        ("", _, _) -> ("", 0)
+        (unit, "", days) -> (unit, days)
+        (unit, rest, days) -> let (restUnits, restDays) = parseComplexTimespan rest in (unit <> " " <> restUnits, days + restDays)
 
-    intervalExpr =
-      case T.strip (parseComplexTimespan timespan) of
-        "" -> "0" -- Default if parsing fails
-        expr -> expr
+    (intervalExpr, totalDays) =
+      case parseComplexTimespan timespan of
+        ("", _) -> ("0", 0)
+        (expr, days) -> (T.strip expr, days)
    in
-    "INTERVAL '" <> intervalExpr <> "'"
+    if totalDays > maxTimespanDays
+      then "INTERVAL '365 days'"
+      else "INTERVAL '" <> intervalExpr <> "'"
 
 
 -- | Convert KQL timespan to PostgreSQL time bucket string

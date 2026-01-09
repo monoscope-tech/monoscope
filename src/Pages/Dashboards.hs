@@ -566,13 +566,10 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
     valueToText v = decodeUtf8 $ AE.encode v
 
 
--- Process a single widget recursively.
-processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
-processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBase = do
-  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD allParams now)
-      replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD allParams now)
-      widget = widgetBase & #_projectId %~ (<|> Just pid) & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
+-- Process a single widget recursively with pre-computed replacement maps for efficiency.
+processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> (Text -> Text, Text -> Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
+processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetBase = do
+  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
 
   widget' <-
     if widget.eager == Just True || widget.wType == Widget.WTAnomalies
@@ -584,7 +581,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
     Nothing -> pure widget'
     Just childWidgets -> do
       let addDashboardId child = child & #_dashboardId %~ (<|> widget'._dashboardId)
-      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams . addDashboardId)
+      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) . addDashboardId)
       pure $ widget' & #children ?~ processedChildren
 
 
@@ -1851,12 +1848,15 @@ dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Tex
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-  let timeParams = (Nothing, Nothing, Nothing)
+  let timeParams@(sinceStr, fromDStr, toDStr) = (Nothing, Nothing, Nothing)
   (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams [] (fromMaybe [] dash.constants)
   case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
-      processedWidget <- processWidget pid now timeParams allParamsWithConstants widgetToExpand
+      let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+          replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD allParamsWithConstants now)
+          replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD allParamsWithConstants now)
+      processedWidget <- processWidget pid now timeParams allParamsWithConstants (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetToExpand
       addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing Nothing (Just processedWidget) "edit"
 
 
@@ -1943,7 +1943,8 @@ processConstantsAndExtendParams pid now timeParams allParams constants =
     )
 
 
--- | Create a widget processor that adds dashboard ID to processed widgets
+-- | Create a widget processor that adds dashboard ID to processed widgets.
+-- Pre-computes replacement maps once for efficiency across all widgets.
 mkWidgetProcessor
   :: Projects.ProjectId
   -> Dashboards.DashboardId
@@ -1952,8 +1953,11 @@ mkWidgetProcessor
   -> [(Text, Maybe Text)]
   -> Widget.Widget
   -> ATAuthCtx Widget.Widget
-mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
-  fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants
+mkWidgetProcessor pid dashId now timeParams@(sinceStr, fromDStr, toDStr) paramsWithConstants =
+  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
+      replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD paramsWithConstants now)
+      replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD paramsWithConstants now)
+   in fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants (replacePlaceholdersSQL, replacePlaceholdersKQL)
 
 
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}

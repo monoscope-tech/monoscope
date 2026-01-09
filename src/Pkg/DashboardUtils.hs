@@ -56,6 +56,7 @@ variablePresets pid mf mt allParams currentTime =
 -- | Like variablePresets but uses KQL format for constants.
 -- Automatically maps {{const-*}} placeholders to their KQL-formatted values.
 -- Users just use {{const-foo}} in both SQL and KQL - the system handles formatting.
+-- Filters out -kql suffix entries from the output.
 variablePresetsKQL :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map.Map Text Text
 variablePresetsKQL pid mf mt allParams currentTime =
   let basePresets = variablePresets pid mf mt allParams currentTime
@@ -64,7 +65,8 @@ variablePresetsKQL pid mf mt allParams currentTime =
       mkKqlMapping (k, _)
         | "const-" `T.isPrefixOf` k, not ("-kql" `T.isSuffixOf` k), Just v <- Map.lookup (k <> "-kql") paramsMap = Just (k, v)
         | otherwise = Nothing
-   in Map.union kqlRemapping basePresets
+      filteredBase = Map.filterWithKey (\k _ -> not ("-kql" `T.isSuffixOf` k)) basePresets
+   in Map.union kqlRemapping filteredBase
 
 
 -- | Convert constant results to a SQL list format suitable for IN clauses.
