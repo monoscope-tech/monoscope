@@ -838,7 +838,8 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
     Nothing -> do
       -- No tabs - render the dashboard normally (existing behavior for non-tabbed dashboards)
       let timeParams = (sinceStr, fromDStr, toDStr)
-      (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
+          paramsWithVarDefaults = addVariableDefaults allParams dash.variables
+      (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
 
       let dashWithConstants = dash & #constants ?~ processedConstants
           processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
@@ -1862,7 +1863,8 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
   let timeParams@(sinceStr, fromDStr, toDStr) = (Nothing, Nothing, Nothing)
-  (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams [] (fromMaybe [] dash.constants)
+      paramsWithVarDefaults = addVariableDefaults [] dash.variables
+  (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
   case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
@@ -1944,6 +1946,15 @@ queryStringFrom :: [(Text, Maybe Text)] -> Text
 queryStringFrom params = let qs = toQueryParams params in if T.null qs then "" else "?" <> qs
 
 
+-- | Add variable defaults to params for any variable not already in params.
+-- This ensures constants can reference variables like {{var-resource}} even when not in URL.
+addVariableDefaults :: [(Text, Maybe Text)] -> Maybe [Dashboards.Variable] -> [(Text, Maybe Text)]
+addVariableDefaults params varsM = params <> defaults
+  where
+    paramsMap = Map.fromList params
+    defaults = [("var-" <> v.key, v.value) | v <- fromMaybe [] varsM, not (Map.member ("var-" <> v.key) paramsMap)]
+
+
 -- | Process dashboard constants concurrently and build extended params with constant results
 processConstantsAndExtendParams
   :: Projects.ProjectId
@@ -1994,9 +2005,10 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
       activeTabIdx = maybe 0 fst activeTabInfo
       activeTabName = fmap ((.name) . snd) activeTabInfo
       timeParams = (sinceStr, fromDStr, toDStr)
+      paramsWithVarDefaults = addVariableDefaults allParams dash.variables
 
   -- Process constants and variables
-  (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
+  (processedConstants, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
   let dashWithConstants = dash & #constants ?~ processedConstants
       processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
@@ -2049,6 +2061,7 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
   now <- Time.currentTime
   (_dashVM, dash) <- getDashAndVM dashId fileM
   let timeParams = (sinceStr, fromDStr, toDStr)
+      paramsWithVarDefaults = addVariableDefaults allParams dash.variables
       -- Check if constants are already in params (passed from initial page load)
       hasConstants = any (\(k, _) -> "const-" `T.isPrefixOf` k) allParams
 
@@ -2061,8 +2074,8 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
         -- Skip constant processing if already provided via params (avoids redundant SQL queries)
         allParamsWithConstants <-
           if hasConstants
-            then pure allParams
-            else snd <$> processConstantsAndExtendParams pid now timeParams allParams (fromMaybe [] dash.constants)
+            then pure paramsWithVarDefaults
+            else snd <$> processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
         let processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
         -- Process variables to check if tab requires one that's not set
