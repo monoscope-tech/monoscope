@@ -865,17 +865,30 @@ tabs:
         layout: { w: 6, h: 4 }
 
       # Slow Queries
-      - type: list
+      - type: table
         title: 'Slowest Queries'
         layout: { w: 12, h: 6 }
+        columns:
+          - field: query
+            title: Query
+          - field: operation
+            title: Operation
+          - field: database
+            title: Database
+          - field: duration_ms
+            title: Duration
+            columnType: duration
+            unit: ms
+            progress: column_percent
+          - field: service
+            title: Service
         sql: |
           SELECT
             COALESCE(attributes___db___query___text, attributes___db___query___summary, name) as query,
             COALESCE(attributes___db___operation___name, name) as operation,
             attributes___db___system___name as database,
             ROUND((duration / 1e6)::numeric, 2) as duration_ms,
-            resource___service___name as service,
-            timestamp
+            resource___service___name as service
           FROM otel_logs_and_spans
           WHERE project_id='{{project_id}}'
             AND (attributes___db___query___text IS NOT NULL OR attributes___db___query___summary IS NOT NULL OR name IS NOT NULL)
