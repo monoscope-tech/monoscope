@@ -136,8 +136,8 @@ data ShapeForIssue = ShapeForIssue
   deriving anyclass (FromRow)
 
 
-getShapeForIssue :: DB es => Text -> Eff es (Maybe ShapeForIssue)
-getShapeForIssue hash = listToMaybe <$> PG.query q (Only hash)
+getShapeForIssue :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ShapeForIssue)
+getShapeForIssue pid hash = listToMaybe <$> PG.query q (Only hash)
   where
     q =
       [sql|
@@ -155,5 +155,5 @@ getShapeForIssue hash = listToMaybe <$> PG.query q (Only hash)
           COALESCE(s.field_hashes, '{}'::TEXT[])
         FROM apis.shapes s
         LEFT JOIN apis.endpoints e ON e.hash = s.endpoint_hash
-        WHERE s.hash = ?
+        WHERE s.project_id = ? AND s.hash = ?
       |]
