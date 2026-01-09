@@ -1,11 +1,6 @@
--- Migration: Replace generic new_anomaly_proc with specific triggers for NewEndpoint, NewShape, NewFieldChange
--- These triggers create background jobs directly without inserting into apis.anomalies table
 
 BEGIN;
 
-------------------------------------------------------------------------
--- UNIFIED API CHANGE TRIGGER FUNCTION
-------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION apis.api_change_detected_proc() RETURNS trigger AS $$
 DECLARE
   job_tag TEXT;
@@ -13,48 +8,19 @@ BEGIN
   IF TG_WHEN <> 'AFTER' THEN
     RAISE EXCEPTION 'apis.api_change_detected_proc() may only run as an AFTER trigger';
   END IF;
-
-  -- Get job tag from trigger argument (NewEndpoint, NewShape, NewFieldChange)
   job_tag := TG_ARGV[0];
-
   INSERT INTO background_jobs (run_at, status, payload)
-  VALUES (
-    now(),
-    'queued',
-    jsonb_build_object(
-      'tag', job_tag,
-      'projectId', NEW.project_id,
-      'hash', NEW.hash
-    )
-  );
-
+  VALUES (now(),'queued',jsonb_build_object('tag', job_tag,'projectId', NEW.project_id,'hash', NEW.hash));
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
 
-------------------------------------------------------------------------
--- DROP OLD TRIGGERS AND CREATE NEW ONES
-------------------------------------------------------------------------
+DROP TRIGGER IF EXISTS fields_created_anomaly AFTER INSERT ON apis.fields
+DROP TRIGGER IF EXISTS endpoint_created_anomaly AFTER INSERT ON apis.endpoints 
+DROP TRIGGER IF EXISTS shapes_created_anomaly AFTER INSERT ON apis.shapes
 
--- Drop old triggers that use new_anomaly_proc
-DROP TRIGGER IF EXISTS endpoint_created_anomaly ON apis.endpoints;
-DROP TRIGGER IF EXISTS shapes_created_anomaly ON apis.shapes;
-DROP TRIGGER IF EXISTS fields_created_anomaly ON apis.fields;
-
--- Create new triggers
-CREATE TRIGGER endpoint_created_new
-  AFTER INSERT ON apis.endpoints
-  FOR EACH ROW
-  EXECUTE FUNCTION apis.api_change_detected_proc('NewEndpoint');
-
-CREATE TRIGGER shape_created_new
-  AFTER INSERT ON apis.shapes
-  FOR EACH ROW
-  EXECUTE FUNCTION apis.api_change_detected_proc('NewShape');
-
-CREATE TRIGGER field_created_new
-  AFTER INSERT ON apis.fields
-  FOR EACH ROW
-  EXECUTE FUNCTION apis.api_change_detected_proc('NewFieldChange');
+CREATE TRIGGER endpoint_created_new AFTER INSERT ON apis.endpoints FOR EACH ROW EXECUTE FUNCTION apis.api_change_detected_proc('NewEndpoint');
+CREATE TRIGGER shape_created_new AFTER INSERT ON apis.shapes FOR EACH ROW EXECUTE FUNCTION apis.api_change_detected_proc('NewShape');
+CREATE TRIGGER field_created_new AFTER INSERT ON apis.fields FOR EACH ROW EXECUTE FUNCTION apis.api_change_detected_proc('NewFieldChange');
 
 COMMIT;
