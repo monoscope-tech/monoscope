@@ -5,6 +5,7 @@ module Pkg.Parser.Stats (
   ScalarExpr (..),
   Section (..),
   SummarizeByClause (..),
+  ByClauseItem (..),
   BinFunction (..),
   SortField (..),
   Sources (..),
@@ -54,7 +55,7 @@ import Data.Text.Display (Display, display, displayBuilder, displayPrec)
 import Pkg.Parser.Expr (Expr, Parser, Subject (..), ToQueryText (..), Values (..), kqlTimespanToTimeBucket, pExpr, pSubject, pValues)
 import Relude hiding (Sum, many, some)
 import Text.Megaparsec
-import Text.Megaparsec.Char (alphaNumChar, char, digitChar, space, string)
+import Text.Megaparsec.Char (alphaNumChar, char, digitChar, hspace, space, string)
 import Text.Megaparsec.Char.Lexer qualified as L
 
 
@@ -170,6 +171,7 @@ aggToSqlNoAlias (ToFloat val _) = "(" <> display val <> ")::float"
 aggToSqlNoAlias (ToInt val _) = "(" <> display val <> ")::integer"
 aggToSqlNoAlias (ToString val _) = "(" <> display val <> ")::text"
 aggToSqlNoAlias (Plain sub _) = display sub
+aggToSqlNoAlias (ArithExpr expr _) = "(" <> display expr <> ")::float"
 
 
 -- Modify Aggregation Functions to include optional aliases
@@ -204,6 +206,7 @@ data AggFunction
   | ToInt ScalarExpr (Maybe Text) -- toint(value) - convert to integer
   | ToString ScalarExpr (Maybe Text) -- tostring(value) - convert to text
   | Plain Subject (Maybe Text)
+  | ArithExpr ScalarExpr (Maybe Text) -- Arithmetic on aggregations: count() / 5.0
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -216,8 +219,17 @@ data BinFunction
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
--- Support for summarize by with bin() function
-newtype SummarizeByClause = SummarizeByClause [Either Subject BinFunction]
+-- | Items that can appear in a summarize by clause
+data ByClauseItem
+  = BySubject Subject -- Simple field like status_code
+  | ByBinFunc BinFunction -- bin_auto(timestamp) or bin(timestamp, 60)
+  | ByScalarFunc AggFunction -- Scalar expressions like coalesce(tostring(x), "default")
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- Support for summarize by with bin() function and scalar expressions
+newtype SummarizeByClause = SummarizeByClause [ByClauseItem]
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -577,6 +589,7 @@ instance ToQueryText AggFunction where
   toQText (ToInt val _) = "toint(" <> toQText val <> ")"
   toQText (ToString val _) = "tostring(" <> toQText val <> ")"
   toQText (Plain sub _) = toQText sub
+  toQText (ArithExpr expr _) = toQText expr
 
 
 instance ToQueryText [AggFunction] where
@@ -624,6 +637,7 @@ defaultAlias = \case
   ToInt{} -> "toint_"
   ToString{} -> "tostring_"
   Plain (Subject n _ _) _ -> sanitizeAlias n
+  ArithExpr{} -> "arith_"
 
 
 -- | Display with alias: SQL AS (explicit or default)
@@ -712,25 +726,45 @@ instance Display BinFunction where
   displayPrec _prec (BinAuto subj) = displayBuilder $ "time_bucket('" <> defaultBinSize <> "', " <> display subj <> ")"
 
 
--- | Parse a summarize by clause which can contain fields and bin functions
+instance Display ByClauseItem where
+  displayPrec p (BySubject s) = displayPrec p s
+  displayPrec p (ByBinFunc b) = displayPrec p b
+  displayPrec _ (ByScalarFunc f) = displayBuilder $ aggToSqlNoAlias f
+
+
+-- | Parse a summarize by clause which can contain fields, bin functions, and scalar expressions
 --
 -- >>> parse pSummarizeByClause "" "by attributes.client, bin(timestamp, 60)"
--- Right (SummarizeByClause [Left (Subject "attributes.client" "attributes" [FieldKey "client"]),Right (Bin (Subject "timestamp" "timestamp" []) "60")])
+-- Right (SummarizeByClause [BySubject (Subject "attributes.client" "attributes" [FieldKey "client"]),ByBinFunc (Bin (Subject "timestamp" "timestamp" []) "60")])
 --
 -- >>> parse pSummarizeByClause "" "by Computer, bin_auto(timestamp)"
--- Right (SummarizeByClause [Left (Subject "Computer" "Computer" []),Right (BinAuto (Subject "timestamp" "timestamp" []))])
+-- Right (SummarizeByClause [BySubject (Subject "Computer" "Computer" []),ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])
 --
 -- >>> parse pSummarizeByClause "" "by bin_auto(timestamp)"
--- Right (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))])
+-- Right (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])
+--
+-- >>> parse pSummarizeByClause "" "by bin_auto(timestamp), coalesce(tostring(status), \"unknown\")"
+-- Right (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" [])),ByScalarFunc (Coalesce [ScalarFunc "tostring" [Field (Subject "status" "status" [])],Str "unknown"] Nothing)])
 pSummarizeByClause :: Parser SummarizeByClause
 pSummarizeByClause = do
   _ <- string "by"
   space
-  SummarizeByClause <$> (try (Right <$> pBinFunction) <|> (Left <$> pSubject)) `sepBy` comma
+  SummarizeByClause <$> pByClauseItem `sepBy` comma
+  where
+    -- Order matters: bin functions, then actual scalar functions (with parens), then plain subjects
+    pByClauseItem = choice @[] [try (ByBinFunc <$> pBinFunction), try (ByScalarFunc <$> pScalarFuncOnly), BySubject <$> pSubject]
+    -- Scalar-only parsers for by clause (not aggregations like sum/count/avg)
+    pScalarFuncOnly = choice @[] [pCoalesce, try pStrcat, try pIff, try pCase, pRound, try pToFloat, try pToInt, try pToString]
 
 
 instance ToQueryText SummarizeByClause where
-  toQText (SummarizeByClause fields) = "by " <> T.intercalate ", " (map (either toQText toQText) fields)
+  toQText (SummarizeByClause items) = "by " <> T.intercalate ", " (map toQText items)
+
+
+instance ToQueryText ByClauseItem where
+  toQText (BySubject s) = toQText s
+  toQText (ByBinFunc b) = toQText b
+  toQText (ByScalarFunc f) = toQText f
 
 
 -- | Parse a sort field that can include an optional direction
@@ -837,25 +871,47 @@ namedAggregation = snd <$> pNamedExpr
 -- | Parse the summarize command
 --
 -- >>> parse pSummarizeSection "" "summarize sum(attributes.client) by attributes.client, bin(timestamp, 60)"
--- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes" [FieldKey "client"]) Nothing] (Just (SummarizeByClause [Left (Subject "attributes.client" "attributes" [FieldKey "client"]),Right (Bin (Subject "timestamp" "timestamp" []) "60")])))
+-- Right (SummarizeCommand [Sum (Subject "attributes.client" "attributes" [FieldKey "client"]) Nothing] (Just (SummarizeByClause [BySubject (Subject "attributes.client" "attributes" [FieldKey "client"]),ByBinFunc (Bin (Subject "timestamp" "timestamp" []) "60")])))
 --
 -- >>> parse pSummarizeSection "" "summarize TotalCount=count() by Computer"
--- Right (SummarizeCommand [Count (Subject "*" "*" []) (Just "TotalCount")] (Just (SummarizeByClause [Left (Subject "Computer" "Computer" [])])))
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) (Just "TotalCount")] (Just (SummarizeByClause [BySubject (Subject "Computer" "Computer" [])])))
 --
 -- >>> parse pSummarizeSection "" "summarize count(*) by bin_auto(timestamp)"
--- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [Right (BinAuto (Subject "timestamp" "timestamp" []))])))
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
+--
+-- >>> parse pSummarizeSection "" "summarize count() / 5.0 by bin_auto(timestamp)"
+-- Right (SummarizeCommand [ArithExpr (SArith (SAgg (Count (Subject "*" "*" []) Nothing)) Div (SVal (Num "5.0"))) Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
+--
+-- >>> parse pSummarizeSection "" "summarize count() * 100 / sum(total) by status"
+-- Right (SummarizeCommand [ArithExpr (SArith (SArith (SAgg (Count (Subject "*" "*" []) Nothing)) Mul (SVal (Num "100"))) Div (SAgg (Sum (Subject "total" "total" []) Nothing))) Nothing] (Just (SummarizeByClause [BySubject (Subject "status" "status" [])])))
+--
+-- >>> parse pSummarizeSection "" "summarize count()"
+-- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] Nothing)
 pSummarizeSection :: Parser Section
 pSummarizeSection = do
   _ <- string "summarize"
   space
-  funcs <- sepBy (try namedAggregation <|> aggFunctionParser) (char ',' <* space)
+  funcs <- sepBy (try namedAggregation <|> pAggWithOptionalArith) (char ',' <* space)
   byClause <- optional $ try (space *> pSummarizeByClause)
+  return $ SummarizeCommand funcs byClause
+  where
+    -- Parse aggregation, then optionally arithmetic operations on it
+    pAggWithOptionalArith = do
+      firstAgg <- aggFunctionParser
+      ops <- many pArithOp
+      pure $ case ops of
+        [] -> firstAgg -- No arithmetic, return plain aggregation
+        _ -> ArithExpr (foldl' (\acc (op, val) -> SArith acc op val) (SAgg firstAgg) ops) Nothing
 
-  -- If no by clause was provided, automatically add "by status_code"
-  let defaultByClause = SummarizeByClause [Left $ Subject "status_code" "status_code" []]
-      finalByClause = Just $ fromMaybe defaultByClause byClause
+    pArithOp = try $ do
+      hspace -- horizontal space only (not newlines)
+      op <- (Mul <$ char '*') <|> (Div <$ char '/') <|> (Add <$ char '+') <|> (Sub <$ char '-')
+      hspace
+      -- Try numeric values FIRST to avoid aggFunctionParser's Plain fallback catching "5.0"
+      val <- (SVal <$> try pNumericOnly) <|> (SAgg <$> aggFunctionParser)
+      pure (op, val)
 
-  return $ SummarizeCommand funcs finalByClause
+    pNumericOnly = Num . toText <$> (try ((\a c -> a ++ "." ++ c) <$> some digitChar <* char '.' <*> some digitChar) <|> some digitChar)
 
 
 -- | Parser for where clause section

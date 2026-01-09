@@ -114,12 +114,8 @@ data Widget = Widget
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
-  , -- TODO(Phase 4): Remove rawSql when placeholder expansion moves to query execution
-    rawSql :: Maybe Text -- Original SQL with {{const-...}} placeholders (for display)
   , summarizeBy :: Maybe SummarizeBy
   , query :: Maybe Text
-  , -- TODO(Phase 4): Remove rawQuery when placeholder expansion moves to query execution
-    rawQuery :: Maybe Text -- Original KQL with {{const-...}} placeholders (for display)
   , queries :: Maybe [Query] -- Multiple queries for combined visualizations
   , layout :: Maybe Layout -- Layout (x, y, w, h)
   , xAxis :: Maybe WidgetAxis
@@ -630,10 +626,8 @@ renderChart widget = do
             let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
             let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
             let query = decodeUtf8 $ AE.encode widget.query
-            let rawQuery = decodeUtf8 $ AE.encode widget.rawQuery
             let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
             let querySQL = maybeToMonoid widget.sql
-            let rawQuerySQL = maybeToMonoid widget.rawSql
             let chartType = mapWidgetTypeToChartType widget.wType
             let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
             let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
@@ -653,9 +647,7 @@ renderChart widget = do
                   chartType: '${chartType}',
                   widgetType: ${wType},
                   query: ${query},
-                  rawQuery: ${rawQuery},
                   querySQL: `${querySQL}`,
-                  rawQuerySQL: `${rawQuerySQL}`,
                   theme: "${theme}",
                   yAxisLabel: "${yAxisLabel}",
                   pid: ${pid},
@@ -708,9 +700,7 @@ renderChart widget = do
                     opt: echartOpt,
                     chartId: config.chartId,
                     query: config.query,
-                    rawQuery: config.rawQuery,
                     querySQL: config.querySQL,
-                    rawQuerySQL: config.rawQuerySQL,
                     theme: config.theme,
                     yAxisLabel: config.yAxisLabel,
                     pid: config.pid,

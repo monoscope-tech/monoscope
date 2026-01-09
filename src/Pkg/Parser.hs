@@ -22,7 +22,8 @@ data QueryComponents = QueryComponents
   { whereClause :: Maybe Text
   , groupByClause :: [Text]
   , fromTable :: Maybe Text
-  , select :: [Text]
+  , select :: [Text] -- project: replaces default columns
+  , extendSelect :: [Text] -- extend: appends to default columns
   , aggregations :: [Text] -- Summarize aggregations (separate from extended columns in select)
   , finalColumns :: [Text]
   , finalSqlQuery :: Text -- includes count(*) OVER() as last column
@@ -59,10 +60,11 @@ applySectionToComponent _ qc (Source source) = qc{fromTable = Just $ display sou
 applySectionToComponent sqlCfg qc (SummarizeCommand aggs byClauseM) =
   let pctInfo = extractPercentilesInfo [SummarizeCommand aggs byClauseM]
    in applySummarizeByClauseToQC sqlCfg byClauseM $ qc{aggregations = qc.aggregations <> map display aggs, percentilesInfo = pctInfo}
--- extend tracks computed column mappings for GROUP BY resolution (does NOT add to select)
+-- extend adds computed columns (appends to defaults) AND tracks mappings for GROUP BY resolution
 applySectionToComponent _ qc (ExtendCommand cols) =
   let colMappings = [(name, stripAlias $ display expr) | (name, expr) <- cols]
-   in qc{extendedColumns = qc.extendedColumns <> colMappings}
+      extendCols = map (display . snd) cols
+   in qc{extendedColumns = qc.extendedColumns <> colMappings, extendSelect = qc.extendSelect <> extendCols}
   where
     stripAlias expr = let (pre, post) = T.breakOn " AS " expr in if T.null post then expr else pre
 -- project replaces select with only the specified columns
@@ -74,22 +76,20 @@ applySectionToComponent _ qc (TakeCommand limit) = qc{takeLimit = Just limit}
 -- | Apply summarize by clause to query components
 applySummarizeByClauseToQC :: SqlQueryCfg -> Maybe SummarizeByClause -> QueryComponents -> QueryComponents
 applySummarizeByClauseToQC _ Nothing qc = qc
-applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause fields)) qc =
-  let (regularFields, binFields) = partitionEithers fields
-      -- Extract bin functions for special handling
+applySummarizeByClauseToQC sqlCfg (Just (SummarizeByClause items)) qc =
+  let binFields = [b | ByBinFunc b <- items]
+      regularFields = [item | item <- items, not (isBinFunc item)]
+      isBinFunc (ByBinFunc _) = True
+      isBinFunc _ = False
       hasBinFuncs = not (null binFields)
-      -- Extract the bin interval from the first bin function, or use auto bin calculation
       binInterval = case listToMaybe binFields of
         Just (Bin _ interval) -> kqlTimespanToTimeBucket interval
         Just (BinAuto _) -> calculateAutoBinWidth sqlCfg.dateRange sqlCfg.currentTime
         Nothing -> defaultBinSize
-      -- Only add regular fields to GROUP BY
       groupByClauses = map display regularFields
    in qc
-        { -- Store bin interval for SQL generation when bin functions are present
-          finalSummarizeQuery = if hasBinFuncs then Just binInterval else Nothing
-        , -- Add regular fields to GROUP BY
-          groupByClause = qc.groupByClause <> groupByClauses
+        { finalSummarizeQuery = if hasBinFuncs then Just binInterval else Nothing
+        , groupByClause = qc.groupByClause <> groupByClauses
         }
 
 
@@ -142,7 +142,9 @@ sqlFromQueryComponents sqlCfg qc =
       -- Note: cursorT is now handled in the whereCondition computation
       -- Handle the Either error case correctly not hushing it.
       (_, selVec) = getProcessedColumns sqlCfg.projectedColsByUser sqlCfg.defaultSelect
-      selectedCols = if null qc.select then selVec else qc.select
+      -- project replaces defaults, extend appends to defaults
+      baseCols = if null qc.select then selVec else qc.select
+      selectedCols = baseCols <> qc.extendSelect
       -- When building json_build_array, we need to handle TEXT[] columns specially
       -- Process each column to convert arrays to JSON
       processedCols =
@@ -238,7 +240,10 @@ sqlFromQueryComponents sqlCfg qc =
                    ORDER BY {timeBucketExpr} DESC
                    {limitClause} |]
             Nothing ->
-              [fmt|SELECT {selectClause}, {countOver} FROM {fromTable}
+              -- For non-bin summarize queries with aggregations, use aggregations instead of default columns
+              let useAggregations = not (null qc.aggregations) && not (null qc.groupByClause)
+                  selectPart = if useAggregations then T.intercalate "," qc.aggregations else selectClause
+               in [fmt|SELECT {selectPart}, {countOver} FROM {fromTable}
                  WHERE {buildWhere}
                  {groupByClause} {sortOrder} {limitClause} |]
 
@@ -287,9 +292,13 @@ sqlFromQueryComponents sqlCfg qc =
                       FROM {fromTable} WHERE {buildWhere} GROUP BY {groupByPart}
                       ORDER BY {timeBucketExpr} DESC {limitClause}|]
           Nothing ->
-            let orderCol = if null qc.groupByClause then timestampCol else fromMaybe timestampCol (listToMaybe qc.groupByClause)
-             in [fmt|SELECT {T.intercalate "," qc.select} FROM {fromTable} WHERE {buildWhere}
-              {groupByClause} ORDER BY {orderCol} DESC {limitClause}|]
+            let hasAggregationsNoGroupBy = not (null qc.aggregations) && null qc.groupByClause
+                orderCol = if null qc.groupByClause then timestampCol else fromMaybe timestampCol (listToMaybe qc.groupByClause)
+                selectCols = if null qc.aggregations then qc.select else qc.aggregations
+                orderClause = if hasAggregationsNoGroupBy then "" else " ORDER BY " <> orderCol <> " DESC"
+                limitPart = if hasAggregationsNoGroupBy then "" else limitClause
+             in [fmt|SELECT {T.intercalate "," selectCols} FROM {fromTable} WHERE {buildWhere}
+              {groupByClause}{orderClause} {limitPart}|]
 
       -- FIXME: render this based on the aggregations, but without the aliases
       alertSelect = [fmt| count(*)::integer|] :: Text

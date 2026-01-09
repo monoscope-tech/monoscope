@@ -85,6 +85,12 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     const params = new URLSearchParams(window.location.search);
     params.set('pid', pid);
 
+    // Add dashboard constants (from data-constants attribute)
+    const constants = (window as any).getDashboardConstants?.() || {};
+    Object.entries(constants).forEach(([key, value]) => {
+      if (!params.has(key)) params.set(key, value as string);
+    });
+
     // Default query to use when no query is provided
     const DEFAULT_QUERY = 'summarize count(*) by bin_auto(timestamp)';
 

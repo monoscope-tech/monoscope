@@ -331,8 +331,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     |]
   let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
       widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
+      constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage"] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
     let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result == Just []]
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
@@ -571,7 +572,7 @@ processWidget pid now timeRange@(sinceStr, fromDStr, toDStr) allParams widgetBas
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD allParams now)
       replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD allParams now)
-      widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawSql .~ widgetBase.sql & #rawQuery .~ widgetBase.query & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
+      widget = widgetBase & #_projectId %~ (<|> Just pid) & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
 
   widget' <-
     if widget.eager == Just True || widget.wType == Widget.WTAnomalies
@@ -997,7 +998,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , currentRange = Nothing
               , source = Nothing
               , targetSpan = Nothing
-              , query = widgetToUse.rawQuery <|> widgetToUse.query
+              , query = widgetToUse.query
               , vizType = Just $ case widgetToUse.wType of
                   Widget.WTTimeseries -> "timeseries"
                   Widget.WTTimeseriesLine -> "timeseries_line"
@@ -1016,7 +1017,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
             div_
               [ id_ $ widPrefix <> "-sql-preview"
               , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview"
-              , hxVals_ "js:{query: widgetJSON.query || widgetJSON.rawQuery}"
+              , hxVals_ "js:{query: widgetJSON.query}"
               , hxTrigger_ "toggle"
               , hxSwap_ "innerHTML"
               ]
