@@ -1,45 +1,5 @@
 BEGIN;
 
--- ============================================================================
--- 2. ENDPOINT BASELINES
--- ============================================================================
--- Per-endpoint, service and log pattern behavioral baselines for detecting spikes/degradations.
--- Dimensions: error_rate, latency, volume
-
-CREATE TABLE IF NOT EXISTS apis.baselines (
-    id                      BIGSERIAL PRIMARY KEY,
-    project_id              UUID NOT NULL REFERENCES projects.projects(id) ON DELETE CASCADE,
-    subject_type            TEXT NOT NULL,  -- 'endpoint', 'service', 'log_pattern'
-    subject_key             TEXT NOT NULL,  -- endpoint_hash or service_name or pattern_hash
-
-    state                   TEXT NOT NULL DEFAULT 'learning',  -- 'learning', 'established'
-    min_observations        INT DEFAULT 1000,  -- need this many data points to establish
-
-    baseline_data           JSONB NOT NULL DEFAULT '{}',
-    /*
-      error_rate: { "mean": 0.02, "stddev": 0.008, "samples": 5000 }
-      latency:    { "mean": 65, "stddev": 40, "p50": 45, "p95": 120, "p99": 250, "samples": 5000 }
-      volume:     { "mean": 150, "stddev": 35, "samples": 1440 }
-    */
-
-    baseline_window_hours   INT DEFAULT 24,
-
-    last_calculated_at      TIMESTAMPTZ,
-    established_at          TIMESTAMPTZ,
-    created_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at              TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-
-    UNIQUE(project_id, subject_key, dimension)
-);
-
-SELECT manage_updated_at('apis.baselines');
-
-CREATE INDEX IF NOT EXISTS idx_baselines_lookup
-ON apis.baselines(project_id, subject_key, subject_type);
-
-CREATE INDEX IF NOT EXISTS idx_baselines_established
-ON apis.baselines(project_id, state)
-WHERE state = 'established';
 
 
 -- ============================================================================
@@ -111,8 +71,7 @@ CREATE TABLE apis.errors (
     baseline_updated_at TIMESTAMPTZ,
 
     is_ignored                BOOLEAN DEFAULT false,
-    ignored_until             TIMESTAMPTZ,
-    PRIMARY KEY (id)
+    ignored_until             TIMESTAMPTZ
 );
 SELECT manage_updated_at('apis.errors');
 
@@ -121,7 +80,7 @@ CREATE INDEX idx_errors_project_state ON apis.errors (project_id, state);
 CREATE INDEX idx_errors_last_seen ON apis.errors (project_id, last_event_id);
 CREATE UNIQUE INDEX idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
 CREATE INDEX idx_apis_errors_project_id ON apis.errors(project_id);
-CREATE INDEX idx_errors_active ON apis.errors(project_id, state, last_seen_at DESC) WHERE state != 'resolved';
+CREATE INDEX idx_errors_active ON apis.errors(project_id, state) WHERE state != 'resolved';
 CREATE INDEX idx_errors_state ON apis.errors(project_id, state);
 CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_error_proc('runtime_exception', 'created', 'skip_anomaly_record');
 
@@ -133,7 +92,7 @@ CREATE TABLE apis.error_events (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id         UUID NOT NULL REFERENCES projects.projects(id) ON DELETE CASCADE,
     occurred_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    target_hash        TEXT NOT NULL REFERENCES apis.errors(hash) ON DELETE CASCADE,  
+    target_hash        TEXT NOT NULL,  -- references apis.errors.hash (no FK due to composite unique)  
     exception_type     TEXT NOT NULL,   
     message            TEXT NOT NULL,
     stack_trace        TEXT NOT NULL,   
@@ -151,7 +110,7 @@ CREATE TABLE apis.error_events (
     user_email         TEXT,
     user_ip            INET,
     session_id         TEXT,
-    sample_rate        FLOAT NOT NULL DEFAULT 1.0,
+    sample_rate        FLOAT NOT NULL DEFAULT 1.0
 );
 
 -- Indexes for efficient queries
