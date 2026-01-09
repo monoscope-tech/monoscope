@@ -5,42 +5,20 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Pkg.Parser (calculateAutoBinWidth)
 import Relude
-import Text.Regex.TDFA (Regex, makeRegex, match)
-import Text.Regex.TDFA.Text ()
 import Utils qualified
 
 
--- | Pre-compiled regex for placeholder matching (compiled once at module load)
-placeholderRegex :: Regex
-placeholderRegex = makeRegex ("\\{\\{([^}]+)\\}\\}" :: Text)
-
-
--- | Maximum input size for placeholder replacement (1MB) to prevent DoS
-maxPlaceholderInputSize :: Int
-maxPlaceholderInputSize = 1_000_000
-
-
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.
--- Returns input unchanged if it exceeds maxPlaceholderInputSize.
+-- Unknown placeholders are left as-is (useful for debugging).
 --
 -- >>> replacePlaceholders (Map.fromList [("name", "world")]) "Hello {{name}}!"
 -- "Hello world!"
 -- >>> replacePlaceholders (Map.fromList [("a", "1"), ("b", "2")]) "{{a}} + {{b}}"
 -- "1 + 2"
 -- >>> replacePlaceholders Map.empty "{{missing}}"
--- ""
+-- "{{missing}}"
 replacePlaceholders :: Map.Map Text Text -> Text -> Text
-replacePlaceholders mappng txt
-  | T.length txt > maxPlaceholderInputSize = txt
-  | otherwise = go txt
-  where
-    go t =
-      case match placeholderRegex t :: (Text, Text, Text, [Text]) of
-        (before, matched, after, [key])
-          | not (T.null matched) ->
-              let replacement = Map.findWithDefault "" key mappng
-               in before <> replacement <> go after
-        _ -> t
+replacePlaceholders mappng = Map.foldlWithKey' (\t k v -> T.replace ("{{" <> k <> "}}") v t) ?? mappng
 
 
 variablePresets :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map Text Text
