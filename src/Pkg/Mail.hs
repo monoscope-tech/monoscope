@@ -44,7 +44,7 @@ sendSlackMessage pid message = do
 
 
 data NotificationAlerts
-  = EndpointAlert {project :: Text, method:: Text,  urlPath ::  Text, endpointHash :: Text}
+  = EndpointAlert {project :: Text, method :: Text, urlPath :: Text, endpointHash :: Text}
   | RuntimeErrorAlert {issueId :: Text, errorData :: Errors.ATError}
   | ShapeAlert
   | ReportAlert
@@ -269,7 +269,7 @@ slackNewEndpointsAlert projectName method urlPath channelId hash projectUrl =
     targetUrl = projectUrl <> "/anomalies/by_hash/" <> hash
     query = urlEncode True $ encodeUtf8 $ "method=\"" <> method <> "\" AND attributes.http.route in (\"" <> urlPath <> "\")"
     explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
-    enps =  "`" <> method <> " " <> urlPath <> "`"
+    enps = "`" <> method <> " " <> urlPath <> "`"
 
 
 discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value

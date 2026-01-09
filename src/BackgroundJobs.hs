@@ -1206,36 +1206,36 @@ processAPIChangeAnomalies pid targetHashes = do
           createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
         pass
 
-  -- -- Send notifications
-  -- projectM <- Projects.projectById pid
-  -- whenJust projectM \project -> do
-  --   users <- Projects.usersByProjectId pid
-  --   let endpointInfo =
-  --         map
-  --           ( \(_, anoms) ->
-  --               let firstAnom = V.head anoms
-  --                in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-  --           )
-  --           anomaliesByEndpoint
-  --   -- Only send notifications if we have valid endpoint info
-  --   Relude.when (project.endpointAlerts && not (null endpointInfo)) do
-  --     let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
 
-  --     forM_ project.notificationsChannel \case
-  --       Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
-  --       Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
-  --       Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-  --       Projects.NEmail -> do
-  --         forM_ users \u -> do
-  --           let templateVars =
-  --                 AE.object
-  --                   [ "user_name" AE..= u.firstName
-  --                   , "project_name" AE..= project.title
-  --                   , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
-  --                   , "endpoint_name" AE..= (method <> " " <> urlPath)
-  --                   ]
-  --           sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+-- -- Send notifications
+-- projectM <- Projects.projectById pid
+-- whenJust projectM \project -> do
+--   users <- Projects.usersByProjectId pid
+--   let endpointInfo =
+--         map
+--           ( \(_, anoms) ->
+--               let firstAnom = V.head anoms
+--                in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
+--           )
+--           anomaliesByEndpoint
+--   -- Only send notifications if we have valid endpoint info
+--   Relude.when (project.endpointAlerts && not (null endpointInfo)) do
+--     let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
 
+--     forM_ project.notificationsChannel \case
+--       Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+--       Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
+--       Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+--       Projects.NEmail -> do
+--         forM_ users \u -> do
+--           let templateVars =
+--                 AE.object
+--                   [ "user_name" AE..= u.firstName
+--                   , "project_name" AE..= project.title
+--                   , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
+--                   , "endpoint_name" AE..= (method <> " " <> urlPath)
+--                   ]
+--           sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
 -- | Group anomalies by endpoint hash
 groupAnomaliesByEndpointHash :: V.Vector Anomalies.AnomalyVM -> [(Text, V.Vector Anomalies.AnomalyVM)]
@@ -1976,10 +1976,10 @@ processNewEndpoint :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBack
 processNewEndpoint pid hash authCtx = do
   Log.logInfo "Processing new endpoint" (pid, hash)
   totalEvents <- do
-      res <- PG.query [sql| SELECT count(5000) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)  
-      case res of
-        [Only cnt] -> return cnt
-        _ -> return 0
+    res <- PG.query [sql| SELECT count(5000) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
+    case res of
+      [Only cnt] -> return cnt
+      _ -> return 0
   if totalEvents < 5000
     then Log.logInfo "Skipping new endpoint issue creation due to low event volume" (pid, hash, totalEvents)
     else do
@@ -2015,7 +2015,7 @@ processNewEndpoint pid hash authCtx = do
                               "anomaly_url": #{endpoint_url},
                               "endpoint_name": #{endpoint_name}
                          }|]
-                    sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing           
+                    sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
 
 -- | Process new shape detected by SQL trigger
