@@ -12,17 +12,17 @@ module Pkg.DeriveUtils (
 import Data.Aeson qualified as AE
 import Data.Default (Default (..))
 import Data.Default.Instances ()
-import Deriving.Aeson qualified as DAE
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, ResultError (ConversionFailed), ToRow)
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Pkg.DBUtils (WrappedEnumSC (..))
+import Deriving.Aeson qualified as DAE
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (Symbol)
 import Language.Haskell.TH.Syntax qualified as THS
+import Pkg.DBUtils (WrappedEnumSC (..))
 import Relude
 import Web.HttpApiData (FromHttpApiData)
 
@@ -108,8 +108,8 @@ idFromText = fmap UUIDId . UUID.fromText
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "BS", DAE.CamelToSnake]] BaselineState
+  deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
 
 
 instance Default BaselineState where
