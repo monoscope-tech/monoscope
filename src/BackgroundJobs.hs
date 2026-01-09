@@ -2026,13 +2026,13 @@ processNewShape pid hash authCtx = do
   shapeM <- Shapes.getShapeForIssue hash
   existingIssueM <- Issues.findOpenIssueForEndpoint pid hash
   case existingIssueM of
-    Just issue -> do 
+    Just issue -> do
       Log.logInfo "Skipping new shape issue creation due to existing open issue for endpoint" (pid, hash, issue.id)
       let Aeson rawIssueData = issue.issueData
           endpontData = AE.decode (AE.encode rawIssueData) :: Maybe Issues.NewEndpointData
-      whenJust endpontData \Issues.NewEndpointData {..} -> do
-             let newData = Issues.NewEndpointData endpointHash endpointMethod endpointPath endpointHost firstSeenAt (V.snoc initialShapes hash)
-             Issues.updateIssueData issue.id (AE.toJSON newData)
+      whenJust endpontData \Issues.NewEndpointData{..} -> do
+        let newData = Issues.NewEndpointData endpointHash endpointMethod endpointPath endpointHost firstSeenAt (V.snoc initialShapes hash)
+        Issues.updateIssueData issue.id (AE.toJSON newData)
     Nothing -> do
       case shapeM of
         Nothing -> Log.logAttention "Shape not found for new shape processing" (pid, hash)
@@ -2053,10 +2053,10 @@ processNewShape pid hash authCtx = do
                 sh.modifiedFields
                 sh.fieldHashes
           Issues.insertIssue issue
-    
+
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-    
+
           Log.logInfo "Created issue for new shape" (pid, hash, issue.id)
 
 

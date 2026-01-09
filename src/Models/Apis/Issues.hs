@@ -615,7 +615,6 @@ findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "ne
     |]
 
 
-
 -- | Update issue with new anomaly data
 updateIssueWithNewAnomaly :: DB es => IssueId -> APIChangeData -> Eff es ()
 updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, issueId)
@@ -1508,7 +1507,7 @@ createFieldChangeIssue projectId fldHash epHash method path keyPath category pre
       }
 
 
-updateIssueData :: DB es =>  IssueId -> AE.Value -> Eff es ()
+updateIssueData :: DB es => IssueId -> AE.Value -> Eff es ()
 updateIssueData issueId newData = void $ PG.execute q (Aeson newData, issueId)
   where
     q =
@@ -1517,6 +1516,7 @@ updateIssueData issueId newData = void $ PG.execute q (Aeson newData, issueId)
       SET issue_data = ?
       WHERE  id = ?
     |]
+
 
 -- | Conversation type for AI chats
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
