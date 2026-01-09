@@ -1206,35 +1206,35 @@ processAPIChangeAnomalies pid targetHashes = do
           createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
         pass
 
-  -- Send notifications
-  projectM <- Projects.projectById pid
-  whenJust projectM \project -> do
-    users <- Projects.usersByProjectId pid
-    let endpointInfo =
-          map
-            ( \(_, anoms) ->
-                let firstAnom = V.head anoms
-                 in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-            )
-            anomaliesByEndpoint
-    -- Only send notifications if we have valid endpoint info
-    Relude.when (project.endpointAlerts && not (null endpointInfo)) do
-      let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
+  -- -- Send notifications
+  -- projectM <- Projects.projectById pid
+  -- whenJust projectM \project -> do
+  --   users <- Projects.usersByProjectId pid
+  --   let endpointInfo =
+  --         map
+  --           ( \(_, anoms) ->
+  --               let firstAnom = V.head anoms
+  --                in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
+  --           )
+  --           anomaliesByEndpoint
+  --   -- Only send notifications if we have valid endpoint info
+  --   Relude.when (project.endpointAlerts && not (null endpointInfo)) do
+  --     let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
 
-      forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
-        Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
-        Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-        Projects.NEmail -> do
-          forM_ users \u -> do
-            let templateVars =
-                  AE.object
-                    [ "user_name" AE..= u.firstName
-                    , "project_name" AE..= project.title
-                    , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
-                    , "endpoint_name" AE..= endpointInfo
-                    ]
-            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+  --     forM_ project.notificationsChannel \case
+  --       Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+  --       Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
+  --       Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+  --       Projects.NEmail -> do
+  --         forM_ users \u -> do
+  --           let templateVars =
+  --                 AE.object
+  --                   [ "user_name" AE..= u.firstName
+  --                   , "project_name" AE..= project.title
+  --                   , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
+  --                   , "endpoint_name" AE..= (method <> " " <> urlPath)
+  --                   ]
+  --           sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
 
 -- | Group anomalies by endpoint hash
@@ -1975,17 +1975,47 @@ detectEndpointVolumeRateChange pid authCtx = do
 processNewEndpoint :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewEndpoint pid hash authCtx = do
   Log.logInfo "Processing new endpoint" (pid, hash)
-  endpointM <- Endpoints.getEndpointByHash pid hash
-  case endpointM of
-    Nothing -> Log.logAttention "Endpoint not found for new endpoint processing" (pid, hash)
-    Just ep -> do
-      issue <- liftIO $ Issues.createNewEndpointIssue pid ep.hash ep.method ep.urlPath ep.host
-      Issues.insertIssue issue
-
-      liftIO $ withResource authCtx.jobsPool \conn ->
-        void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-
-      Log.logInfo "Created issue for new endpoint" (pid, hash, issue.id)
+  totalEvents <- do
+      res <- PG.query [sql| SELECT count(5000) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)  
+      case res of
+        [Only cnt] -> return cnt
+        _ -> return 0
+  if totalEvents < 5000
+    then Log.logInfo "Skipping new endpoint issue creation due to low event volume" (pid, hash, totalEvents)
+    else do
+      projectM <- Projects.projectById pid
+      whenJust projectM \project -> do
+        endpointM <- Endpoints.getEndpointByHash pid hash
+        case endpointM of
+          Nothing -> Log.logAttention "Endpoint not found for new endpoint processing" (pid, hash)
+          Just ep -> do
+            issue <- liftIO $ Issues.createNewEndpointIssue pid ep.hash ep.method ep.urlPath ep.host
+            Issues.insertIssue issue
+            liftIO $ withResource authCtx.jobsPool \conn ->
+              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+            Log.logInfo "Created issue for new endpoint" (pid, hash, issue.id)
+            -- Send notifications only if project exists and has alerts enabled
+            Relude.when project.endpointAlerts $ do
+              users <- Projects.usersByProjectId pid
+              let issueId = UUID.toText issue.id.unUUIDId
+                  title = project.title
+              forM_ project.notificationsChannel \case
+                Projects.NSlack -> sendSlackAlert (EndpointAlert title ep.method ep.urlPath ep.hash) pid project.title Nothing
+                Projects.NDiscord -> sendDiscordAlert (EndpointAlert title ep.method ep.urlPath ep.hash) pid project.title Nothing
+                Projects.NPhone -> sendWhatsAppAlert (EndpointAlert title ep.method ep.urlPath ep.hash) pid project.title project.whatsappNumbers
+                Projects.NEmail ->
+                  forM_ users \u -> do
+                    let endpoint_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issueId
+                        endpoint_name = ep.method <> " " <> ep.urlPath
+                        firstName = u.firstName
+                        templateVars =
+                          [aesonQQ|{
+                              "user_name": #{firstName},
+                              "project_name": #{title},
+                              "anomaly_url": #{endpoint_url},
+                              "endpoint_name": #{endpoint_name}
+                         }|]
+                    sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing           
 
 
 -- | Process new shape detected by SQL trigger
