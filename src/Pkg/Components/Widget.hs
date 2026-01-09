@@ -69,7 +69,7 @@ data WidgetType
   | WTTimeseriesLine
   | WTTimeseriesStat
   | WTStat
-  | WTList
+  | WTList -- https://docs.datadoghq.com/dashboards/widgets/list/ not supported yet
   | WTTopList
   | WTDistribution
   | WTGeomap
@@ -114,10 +114,12 @@ data Widget = Widget
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
-  , rawSql :: Maybe Text -- Original SQL with {{const-...}} placeholders (for display)
+  , -- TODO(Phase 4): Remove rawSql when placeholder expansion moves to query execution
+    rawSql :: Maybe Text -- Original SQL with {{const-...}} placeholders (for display)
   , summarizeBy :: Maybe SummarizeBy
   , query :: Maybe Text
-  , rawQuery :: Maybe Text -- Original KQL with {{const-...}} placeholders (for display)
+  , -- TODO(Phase 4): Remove rawQuery when placeholder expansion moves to query execution
+    rawQuery :: Maybe Text -- Original KQL with {{const-...}} placeholders (for display)
   , queries :: Maybe [Query] -- Multiple queries for combined visualizations
   , layout :: Maybe Layout -- Layout (x, y, w, h)
   , xAxis :: Maybe WidgetAxis
@@ -429,12 +431,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                  <> maybeToMonoid (widget._projectId <&> (.toText))
-                  <> "/dashboards/"
-                  <> maybeToMonoid widget._dashboardId
-                  <> "/widgets/"
-                  <> wId
-                  <> "/duplicate"
+                    <> maybeToMonoid (widget._projectId <&> (.toText))
+                    <> "/dashboards/"
+                    <> maybeToMonoid widget._dashboardId
+                    <> "/widgets/"
+                    <> wId
+                    <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -485,7 +487,7 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
+              <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -511,10 +513,10 @@ renderTraceTable widget = do
                       -- Table header
                       thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
                         tr_ [] do
-                          forM_ (zip ["Resource", "Span name", "Duration", "Latency breakdown"] [0 ..]) \(col, idx) ->
+                          ifor_ (["Resource", "Span name", "Duration", "Latency breakdown"] :: [Text]) \idx col ->
                             th_
                               [ class_ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group "
-                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show idx <> ", this)"
+                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
                               , data_ "sort-direction" "none"
                               ]
                               do
@@ -548,7 +550,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
+              <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -575,10 +577,10 @@ renderTable widget = do
                       -- Table header
                       thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
                         tr_ [] do
-                          forM_ (zip (fromMaybe [] widget.columns) [0 ..]) \(col, idx) ->
+                          ifor_ (fromMaybe [] widget.columns) \idx col ->
                             th_
                               [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show idx <> ", this)"
+                              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
                               , data_ "sort-direction" "none"
                               ]
                               do
@@ -609,8 +611,8 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-            <> bool "min-h-0 " "" isStat
-            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
+              <> bool "min-h-0 " "" isStat
+              <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ chartId <> "_bordered"
         ]
         do
@@ -973,18 +975,19 @@ renderTableWithData widget dataRows = renderTableWithDataAndParams widget dataRo
 renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()
 renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
-  let tableId = maybeToMonoid widget.id
-  let currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
+      dataRowsList = V.toList dataRows
+      tableId = maybeToMonoid widget.id
+      currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
 
   -- Render complete table with data
   table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
     -- Table header
     thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
       tr_ [] do
-        forM_ (zip columns [0 ..]) \(col, idx) -> do
+        ifor_ columns \idx col ->
           th_
             [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show idx <> ", this)"
+            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
             , data_ "sort-direction" "none"
             ]
             do
@@ -1000,13 +1003,13 @@ renderTableWithDataAndParams widget dataRows params = do
       -- Calculate max formatted width for each progress column
       let valueWidths =
             M.fromList
-              [ (col.field, foldr max 5 [T.length (formatColumnValue col (fromMaybe "" $ row V.!? idx)) | row <- V.toList dataRows])
+              [ (col.field, foldr max 5 [T.length (formatColumnValue col (fromMaybe "" $ row V.!? idx)) | row <- dataRowsList])
               | (col, idx) <- zip columns [0 ..]
               , isJust col.progress
               ]
 
       -- Render table rows
-      forM_ (V.toList dataRows) \row -> do
+      forM_ dataRowsList \row -> do
         let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
         let firstColValue = maybe "" (\c -> getRowValue c 0 row) (listToMaybe columns)
         let rowValue = case widget.onRowClick >>= (.value) of
@@ -1019,7 +1022,7 @@ renderTableWithDataAndParams widget dataRows params = do
           , data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)
           ]
           do
-            forM_ (zip columns [0 ..]) \(col, idx) -> do
+            ifor_ columns \idx col -> do
               let value = getRowValue col idx row
               td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
                 if isJust col.progress
@@ -1039,7 +1042,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
   table_ [class_ "table table-sm w-full relative", id_ tableId] do
     thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
       tr_ [] do
-        forM_ (zip columns [0 ..]) \(col, idx) -> do
+        forM_ columns \col ->
           th_
             [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
             , data_ "sort-direction" "none"
@@ -1060,7 +1063,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
         let spjson = decodeUtf8 $ fromLazy $ AE.encode spansJson
         let clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
         tr_ [term "_" clcFun, class_ "cursor-pointer"] do
-          forM_ (zip columns [0 ..]) \(col, idx) -> do
+          ifor_ columns \idx col -> do
             let value = getRowValue col idx row
             if col.field == "latency_breakdown"
               then td_ [class_ "py-2"] do
