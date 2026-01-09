@@ -148,6 +148,7 @@ data Widget = Widget
   , warningThreshold :: Maybe Double
   , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
+  , inactiveLegendItems :: Maybe [Text] -- Legend items to hide by default (user can click to show)
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -740,6 +741,9 @@ widgetToECharts widget =
                       "md" -> (14, 12, 12, [4, 8, 4, 8])
                       "lg" -> (16, 14, 14, [5, 10, 5, 10])
                       _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
+                    -- Build legend.selected object: inactive items map to False
+                    inactiveItems = fromMaybe [] widget.inactiveLegendItems
+                    selectedObj = AE.object [K.fromText item AE..= False | item <- inactiveItems]
                  in [ "show" AE..= legendVisibility
                     , "type" AE..= "scroll"
                     , "top" AE..= vPos
@@ -749,6 +753,7 @@ widgetToECharts widget =
                     , "itemGap" AE..= AE.Number (fromIntegral itemGap)
                     , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
                     , "data" AE..= fromMaybe [] (extractLegend widget)
+                    , "selected" AE..= selectedObj
                     ]
                       <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
               )

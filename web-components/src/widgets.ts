@@ -51,7 +51,7 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
   return seriesOpt;
 };
 
-const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) => {
+const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any, chart?: any) => {
   if (!data) return opt;
 
   // Avoid unnecessary updates if data structure hasn't changed
@@ -62,6 +62,15 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
   if (JSON.stringify(cols) !== JSON.stringify(currentLegendData)) {
     opt.series = cols?.map((n: any, i: number) => createSeriesConfig(widgetData, n, i, opt));
     opt.legend.data = cols;
+  }
+
+  // Preserve user's legend selection state from the chart if available
+  if (chart) {
+    const chartOption = chart.getOption();
+    if (chartOption?.legend?.[0]?.selected) {
+      opt.legend = opt.legend || {};
+      opt.legend.selected = { ...opt.legend.selected, ...chartOption.legend[0].selected };
+    }
   }
 
   return opt;
@@ -143,7 +152,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
 
     chart.hideLoading();
-    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
+    chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source, chart), true);
     if ((window as any).barChart) {
       (window as any).barChart.dispatchAction({
         type: 'takeGlobalCursor',

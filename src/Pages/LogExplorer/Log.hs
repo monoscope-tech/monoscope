@@ -679,11 +679,12 @@ apiLogsPage page = do
             , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
             , Widget.summarizeBy = Just Widget.SBMax
             , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-            , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
+            , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95, 100) by bin_auto(timestamp)"
             , Widget.unit = Just "ns"
             , Widget.legendPosition = Just "top-right"
             , Widget.legendSize = Just "xs"
             , Widget._projectId = Just page.pid
+            , Widget.inactiveLegendItems = Just ["p100"]
             }
     whenJust page.patterns \patternsData ->
       div_ [class_ "overflow-y-auto max-h-96 border border-strokeWeak rounded mt-3"] do
