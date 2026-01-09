@@ -6,8 +6,8 @@ import Control.Monad.Combinators.Expr (
  )
 import Data.Aeson qualified as AE
 import Data.Char (isDigit)
-import Data.Set (member)
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
+import Data.Set (member)
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
@@ -681,6 +681,7 @@ instance Display Subject where
 -- | Maximum allowed timespan in days (1 year) to prevent DoS
 maxTimespanDays :: Double
 maxTimespanDays = 365
+
 
 -- | Convert a KQL timespan to PostgreSQL interval syntax with bounds checking.
 -- Timespans exceeding 1 year are capped to prevent DoS attacks.
