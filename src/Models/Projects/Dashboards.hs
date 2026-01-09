@@ -210,7 +210,7 @@ readDashboardFile dir file = do
     Right content ->
       case Yml.decodeEither' content of
         Left err -> do
-          putStrLn $ "Error decoding JSON in file: " ++ filePath ++ ": " ++ show err
+          putStrLn $ "Error decoding YAML in file: " ++ filePath ++ ": " ++ show err
           pure Nothing
         Right dashboard -> pure (Just $ dashboard{file = Just $ fromString file})
 

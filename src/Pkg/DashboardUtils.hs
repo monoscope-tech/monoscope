@@ -65,10 +65,7 @@ variablePresetsKQL :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Te
 variablePresetsKQL pid mf mt allParams currentTime =
   let basePresets = variablePresets pid mf mt allParams currentTime
       paramsMap = Map.fromList [(k, fromMaybe "" v) | (k, v) <- allParams]
-      kqlRemapping = Map.fromList $ mapMaybe mkKqlMapping allParams
-      mkKqlMapping (k, _)
-        | "const-" `T.isPrefixOf` k, not ("-kql" `T.isSuffixOf` k), Just v <- Map.lookup (k <> "-kql") paramsMap = Just (k, v)
-        | otherwise = Nothing
+      kqlRemapping = Map.fromList [(k, v) | (k, _) <- allParams, "const-" `T.isPrefixOf` k, not ("-kql" `T.isSuffixOf` k), Just v <- [Map.lookup (k <> "-kql") paramsMap]]
       filteredBase = Map.filterWithKey (\k _ -> not ("-kql" `T.isSuffixOf` k)) basePresets
    in Map.union kqlRemapping filteredBase
 

@@ -1895,13 +1895,18 @@ findTabBySlug :: [Dashboards.Tab] -> Text -> Maybe (Int, Dashboards.Tab)
 findTabBySlug tabs tabSlug = find ((== tabSlug) . slugify . (.name) . snd) (zip [0 ..] tabs)
 
 
--- | Find widget by ID in dashboard, searching tabs and root. Returns (Maybe tabSlug, Widget)
+-- | Find widget by ID in dashboard, searching tabs, root, and recursively into children. Returns (Maybe tabSlug, Widget)
 findWidgetInDashboard :: Text -> Dashboards.Dashboard -> Maybe (Maybe Text, Widget.Widget)
 findWidgetInDashboard wid dash = tabResult <|> rootResult
   where
     match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
-    tabResult = listToMaybe [(Just $ slugify t.name, w) | t <- fromMaybe [] dash.tabs, w <- t.widgets, match w]
-    rootResult = (Nothing,) <$> find match dash.widgets
+    -- Recursively search widget and its children
+    findInWidget :: Widget.Widget -> Maybe Widget.Widget
+    findInWidget w
+      | match w = Just w
+      | otherwise = asum $ map findInWidget (fromMaybe [] w.children)
+    tabResult = listToMaybe [(Just $ slugify t.name, w') | t <- fromMaybe [] dash.tabs, w <- t.widgets, w' <- maybeToList (findInWidget w)]
+    rootResult = (Nothing,) <$> asum (map findInWidget dash.widgets)
 
 
 -- | Get the first tab as default if available
@@ -1927,7 +1932,7 @@ queryStringFrom :: [(Text, Maybe Text)] -> Text
 queryStringFrom params = let qs = toQueryParams params in if T.null qs then "" else "?" <> qs
 
 
--- | Process dashboard constants and build extended params with constant results
+-- | Process dashboard constants concurrently and build extended params with constant results
 processConstantsAndExtendParams
   :: Projects.ProjectId
   -> UTCTime
@@ -1936,7 +1941,7 @@ processConstantsAndExtendParams
   -> [Dashboards.Constant]
   -> ATAuthCtx ([Dashboards.Constant], [(Text, Maybe Text)])
 processConstantsAndExtendParams pid now timeParams allParams constants =
-  traverse (processConstant pid now timeParams allParams) constants <&> \pc ->
+  pooledForConcurrently constants (processConstant pid now timeParams allParams) <&> \pc ->
     ( pc
     , allParams
         <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- pc]

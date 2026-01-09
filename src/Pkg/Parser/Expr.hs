@@ -744,7 +744,7 @@ kqlTimespanToTimeBucket timespan =
 
 instance Display Values where
   displayPrec prec (Num a) = displayPrec prec a
-  displayPrec prec (Str a) = displayPrec prec $ "'" <> a <> "'"
+  displayPrec prec (Str a) = displayPrec prec $ "'" <> T.replace "'" "''" a <> "'"
   displayPrec prec (Boolean True) = "true"
   displayPrec prec (Boolean False) = "false"
   displayPrec prec Null = "null"

@@ -313,12 +313,18 @@ pSubjectExpr = do
 -- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) Nothing) 95.0 Nothing)
 -- >>> parse pPercentileSingle "" "percentile(duration / 1e6, 95)"
 -- Right (Percentile (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) 95.0 Nothing)
+-- >>> parse pPercentileSingle "" "percentile(duration, 150)"
+-- Left ...
 pPercentileSingle :: Parser AggFunction
-pPercentileSingle =
-  withoutAlias
-    $ Percentile
-    <$> (string "percentile(" *> pSubjectExpr)
-    <*> (comma *> pNumericValue <* string ")")
+pPercentileSingle = do
+  _ <- string "percentile("
+  subExpr <- pSubjectExpr
+  _ <- comma
+  pct <- pNumericValue
+  _ <- string ")"
+  if pct < 0 || pct > 100
+    then fail "percentile value must be between 0 and 100"
+    else pure $ Percentile subExpr pct Nothing
 
 
 -- | Parse percentiles(expr, p1, p2, ...) - multiple percentiles (Microsoft KQL syntax)
@@ -326,12 +332,18 @@ pPercentileSingle =
 -- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) Nothing) [50.0,75.0,90.0,95.0] Nothing)
 -- >>> parse pPercentilesMulti "" "percentiles(duration / 1e6, 50, 75, 90, 95)"
 -- Right (Percentiles (SubjectExpr (Subject "duration" "duration" []) (Just ("/",1000000.0))) [50.0,75.0,90.0,95.0] Nothing)
+-- >>> parse pPercentilesMulti "" "percentiles(duration, 50, 150)"
+-- Left ...
 pPercentilesMulti :: Parser AggFunction
-pPercentilesMulti =
-  withoutAlias
-    $ Percentiles
-    <$> (string "percentiles(" *> pSubjectExpr <* comma)
-    <*> (pNumericValue `sepBy1` comma <* string ")")
+pPercentilesMulti = do
+  _ <- string "percentiles("
+  subExpr <- pSubjectExpr
+  _ <- comma
+  pcts <- pNumericValue `sepBy1` comma
+  _ <- string ")"
+  if any (\p -> p < 0 || p > 100) pcts
+    then fail "percentile value must be between 0 and 100"
+    else pure $ Percentiles subExpr pcts Nothing
 
 
 -- | Parse countif(predicate) - count with a filter condition
@@ -351,17 +363,14 @@ pCountIf = withoutAlias $ CountIf <$> (string "countif(" *> pExpr <* string ")")
 -- >>> parse pDCount "" "dcount(user_id, 5)"
 -- Left ...
 pDCount :: Parser AggFunction
-pDCount = withoutAlias $ do
+pDCount = do
   _ <- string "dcount("
   sub <- pSubject
-  accM <- optional $ do
-    _ <- comma
-    acc <- L.decimal :: Parser Int
-    if acc >= 0 && acc <= 4
-      then pure acc
-      else fail "dcount accuracy must be 0-4 per KQL spec"
+  accM <- optional (comma *> (L.decimal :: Parser Int))
   _ <- string ")"
-  pure $ DCount sub accM
+  case accM of
+    Just acc | acc < 0 || acc > 4 -> fail "dcount accuracy must be 0-4 per KQL spec"
+    _ -> pure $ DCount sub accM Nothing
 
 
 -- | Parse a scalar expression (field reference or literal value)
@@ -377,8 +386,8 @@ pScalarExpr = try pValues <|> (Field <$> pSubject)
 baseAggParsers :: [Parser AggFunction]
 baseAggParsers =
   [ pSimpleAgg "sum" Sum
-  , try pPercentilesMulti
-  , try pPercentileSingle
+  , pPercentilesMulti -- percentiles commits to enforce range validation (0-100)
+  , pPercentileSingle -- percentile commits to enforce range validation (0-100)
   , pSimpleAgg "p50" P50
   , pSimpleAgg "p75" P75
   , pSimpleAgg "p90" P90
@@ -417,10 +426,11 @@ pScalarExprNested = pAddSub
   where
     pAddSub = chainl1 pMulDiv (space *> (pOp '+' Add <|> pOp '-' Sub) <* space)
     pMulDiv = chainl1 pFactor (space *> (pOp '*' Mul <|> pOp '/' Div) <* space)
+    -- No try on choice baseAggParsers: validation errors propagate after consuming function input
     pFactor =
       between (char '(' <* space) (space *> char ')') pAddSub
         <|> SAgg
-        <$> try (choice baseAggParsers)
+        <$> choice baseAggParsers
         <|> SVal
         <$> pScalarExpr
     pOp c op = (`SArith` op) <$ char c
@@ -822,10 +832,10 @@ pTakeSection = do
 -- | Parse 'name = expression' pattern, returns (name, aliased expression)
 -- Used by extend/project commands and named aggregations in summarize
 -- Allows dots in names which are sanitized to underscores for valid SQL aliases
+-- NOTE: try is only on the prefix "name =" so validation errors propagate
 pNamedExpr :: Parser (Text, AggFunction)
 pNamedExpr = do
-  name <- toText <$> some (alphaNumChar <|> oneOf ("_." :: String))
-  space *> string "=" *> space
+  name <- try $ toText <$> some (alphaNumChar <|> oneOf ("_." :: String)) <* space <* string "=" <* space
   let sanitized = sanitizeAlias name
   (sanitized,) . setAlias sanitized <$> aggFunctionParser
 
@@ -902,7 +912,8 @@ pSummarizeSection :: Parser Section
 pSummarizeSection = do
   _ <- string "summarize"
   space
-  funcs <- sepBy (try namedAggregation <|> pAggWithOptionalArith) (char ',' <* space)
+  -- namedAggregation has try only on prefix "name =" so validation errors propagate
+  funcs <- sepBy (namedAggregation <|> pAggWithOptionalArith) (char ',' <* space)
   byClause <- optional $ try (space *> pSummarizeByClause)
   return $ SummarizeCommand funcs byClause
   where
@@ -926,8 +937,10 @@ pSummarizeSection = do
     infixL :: Char -> ArithOp -> Operator Parser ScalarExpr
     infixL c op = InfixL $ try ((`SArith` op) <$ (hspace *> char c <* hspace))
 
+    -- try on pNumericOnly is fine; aggFunctionParser parsers use try on prefix only
+    -- so validation errors propagate after consuming function input
     pArithTerm :: Parser ScalarExpr
-    pArithTerm = choice [SVal <$> try pNumericOnly, SAgg <$> try aggFunctionParser, char '(' *> pArithExpr <* char ')']
+    pArithTerm = choice [SVal <$> try pNumericOnly, SAgg <$> aggFunctionParser, char '(' *> pArithExpr <* char ')']
 
     pNumericOnly = Num . toText <$> (try ((\a c -> a ++ "." ++ c) <$> some digitChar <* char '.' <*> some digitChar) <|> some digitChar)
 
