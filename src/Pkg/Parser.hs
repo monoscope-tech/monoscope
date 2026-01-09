@@ -319,7 +319,7 @@ sqlFromQueryComponents sqlCfg qc =
                   groupCol =
                     if null qc.groupByClause
                       then "'" <> (if null qc.aggregations then "count" else "value") <> "'"
-                      else "COALESCE(" <> fromMaybe "status_code" (resolve <$> listToMaybe qc.groupByClause) <> "::text, 'null')"
+                      else "COALESCE(" <> maybe "status_code" resolve (listToMaybe qc.groupByClause) <> "::text, 'null')"
                   aggCol = if null qc.aggregations then "count(*)::float" else fromMaybe "count(*)::float" (listToMaybe qc.aggregations)
                   timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
                   firstGroupCol = resolve $ fromMaybe "status_code" (listToMaybe qc.groupByClause)

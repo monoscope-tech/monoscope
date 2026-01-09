@@ -367,8 +367,8 @@ pValuesNoFunc =
     , try pNowFunction
     , try pAgoFunction
     , try pDuration
-    , try (Num . toText . show <$> L.signed (pure ()) L.float)
-    , Num . toText . show <$> L.signed (pure ()) L.decimal
+    , try (Num . toText . show <$> L.signed pass L.float)
+    , Num . toText . show <$> L.signed pass L.decimal
     ]
 
 
@@ -428,8 +428,8 @@ pValues =
     , try pNowFunction
     , try pAgoFunction
     , try pDuration
-    , try (Num . toText . show <$> L.signed (pure ()) L.float)
-    , Num . toText . show <$> L.signed (pure ()) L.decimal
+    , try (Num . toText . show <$> L.signed pass L.float)
+    , Num . toText . show <$> L.signed pass L.decimal
     ]
 
 

@@ -423,7 +423,7 @@ pScalarExprNested = pAddSub
         <$> try (choice baseAggParsers)
         <|> SVal
         <$> pScalarExpr
-    pOp c op = (\l r -> SArith l op r) <$ char c
+    pOp c op = (`SArith` op) <$ char c
 
 
 -- | Helper for variadic scalar functions like coalesce/strcat
@@ -924,7 +924,7 @@ pSummarizeSection = do
       ]
 
     infixL :: Char -> ArithOp -> Operator Parser ScalarExpr
-    infixL c op = InfixL $ try ((\l r -> SArith l op r) <$ (hspace *> char c <* hspace))
+    infixL c op = InfixL $ try ((`SArith` op) <$ (hspace *> char c <* hspace))
 
     pArithTerm :: Parser ScalarExpr
     pArithTerm = choice [SVal <$> try pNumericOnly, SAgg <$> try aggFunctionParser, char '(' *> pArithExpr <* char ')']
