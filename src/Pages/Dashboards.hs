@@ -567,9 +567,10 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
 
 
 -- Process a single widget recursively with pre-computed replacement maps for efficiency.
+-- Preserves original query in rawQuery for editor display.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> (Text -> Text, Text -> Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetBase = do
-  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
+  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
 
   widget' <-
     if widget.eager == Just True || widget.wType == Widget.WTAnomalies
@@ -995,7 +996,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , currentRange = Nothing
               , source = Nothing
               , targetSpan = Nothing
-              , query = widgetToUse.query
+              , query = widgetToUse.rawQuery <|> widgetToUse.query
               , vizType = Just $ case widgetToUse.wType of
                   Widget.WTTimeseries -> "timeseries"
                   Widget.WTTimeseriesLine -> "timeseries_line"

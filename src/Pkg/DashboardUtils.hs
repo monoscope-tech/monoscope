@@ -5,9 +5,14 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Pkg.Parser (calculateAutoBinWidth)
 import Relude
-import Text.Regex.TDFA ((=~))
+import Text.Regex.TDFA (Regex, makeRegex, match)
 import Text.Regex.TDFA.Text ()
 import Utils qualified
+
+
+-- | Pre-compiled regex for placeholder matching (compiled once at module load)
+placeholderRegex :: Regex
+placeholderRegex = makeRegex ("\\{\\{([^}]+)\\}\\}" :: String)
 
 
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.
@@ -21,11 +26,10 @@ import Utils qualified
 replacePlaceholders :: Map.Map Text Text -> Text -> Text
 replacePlaceholders mappng = go
   where
-    regex = "\\{\\{([^}]+)\\}\\}" :: Text
     go txt =
-      case toString txt =~ toString regex :: (String, String, String, [String]) of
-        (before, match, after, [key])
-          | not (null match) ->
+      case match placeholderRegex (toString txt) :: (String, String, String, [String]) of
+        (before, matched, after, [key])
+          | not (null matched) ->
               let replacement = Map.findWithDefault "" (toText key) mappng
                in toText before <> replacement <> go (toText after)
         _ -> txt

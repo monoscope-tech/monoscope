@@ -114,6 +114,7 @@ data Widget = Widget
   , icon :: Maybe Text
   , timeseriesStatAggregate :: Maybe Text -- average, min, max, sum, etc
   , sql :: Maybe Text
+  , rawQuery :: Maybe Text -- Original KQL query with {{const-...}} placeholders (for editor display)
   , summarizeBy :: Maybe SummarizeBy
   , query :: Maybe Text
   , queries :: Maybe [Query] -- Multiple queries for combined visualizations
