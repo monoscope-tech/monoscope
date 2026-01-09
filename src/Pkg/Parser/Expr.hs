@@ -6,6 +6,7 @@ import Control.Monad.Combinators.Expr (
  )
 import Data.Aeson qualified as AE
 import Data.Char (isDigit)
+import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Set (member)
 import Data.Text qualified as T
@@ -759,34 +760,34 @@ instance Display Values where
   displayPrec _ (ScalarFunc name args) = displayBuilder $ scalarFuncToSQL name args
 
 
+-- | Type cast function name to SQL type mapping
+typeCastMap :: Map Text Text
+typeCastMap = M.fromList [("toint", "integer"), ("tolong", "bigint"), ("tostring", "text"), ("tofloat", "float"), ("todouble", "double precision"), ("tobool", "boolean")]
+
+
+-- | Unary scalar functions with their SQL templates (use {} for argument placeholder)
+unaryFuncSQL :: Map Text (Text -> Text)
+unaryFuncSQL =
+  M.fromList
+    [ ("isnull", \v -> v <> " IS NULL")
+    , ("isnotnull", \v -> v <> " IS NOT NULL")
+    , ("isempty", \v -> "(" <> v <> " IS NULL OR " <> v <> " = '')")
+    , ("isnotempty", \v -> "(" <> v <> " IS NOT NULL AND " <> v <> " != '')")
+    ]
+
+
 -- | Map scalar function to SQL (consolidates all function->SQL logic)
 scalarFuncToSQL :: Text -> [Values] -> Text
 scalarFuncToSQL "coalesce" args = "COALESCE(" <> T.intercalate ", " (map display args) <> ")"
 scalarFuncToSQL "strcat" args = "CONCAT(" <> T.intercalate ", " (map display args) <> ")"
 scalarFuncToSQL "iff" [c, t, f] = "CASE WHEN " <> display c <> " THEN " <> display t <> " ELSE " <> display f <> " END"
 scalarFuncToSQL "iff" args = error $ "iff requires 3 arguments, got " <> show (length args)
-scalarFuncToSQL "isnull" [v] = display v <> " IS NULL"
-scalarFuncToSQL "isnull" args = error $ "isnull requires 1 argument, got " <> show (length args)
-scalarFuncToSQL "isnotnull" [v] = display v <> " IS NOT NULL"
-scalarFuncToSQL "isnotnull" args = error $ "isnotnull requires 1 argument, got " <> show (length args)
-scalarFuncToSQL "isempty" [v] = "(" <> display v <> " IS NULL OR " <> display v <> " = '')"
-scalarFuncToSQL "isempty" args = error $ "isempty requires 1 argument, got " <> show (length args)
-scalarFuncToSQL "isnotempty" [v] = "(" <> display v <> " IS NOT NULL AND " <> display v <> " != '')"
-scalarFuncToSQL "isnotempty" args = error $ "isnotempty requires 1 argument, got " <> show (length args)
-scalarFuncToSQL name [v] | name `elem` ["toint", "tolong", "tostring", "tofloat", "todouble", "tobool"] = "(" <> display v <> ")::" <> typeCastSQL name
-scalarFuncToSQL name args = T.toUpper name <> "(" <> T.intercalate ", " (map display args) <> ")"
-
-
--- | Map type cast function name to SQL type
-typeCastSQL :: Text -> Text
-typeCastSQL = \case
-  "toint" -> "integer"
-  "tolong" -> "bigint"
-  "tostring" -> "text"
-  "tofloat" -> "float"
-  "todouble" -> "double precision"
-  "tobool" -> "boolean"
-  _ -> "text"
+scalarFuncToSQL name [v]
+  | Just sqlType <- M.lookup name typeCastMap = "(" <> display v <> ")::" <> sqlType
+  | Just toSQL <- M.lookup name unaryFuncSQL = toSQL (display v)
+scalarFuncToSQL name args
+  | name `M.member` unaryFuncSQL = error $ name <> " requires 1 argument, got " <> show (length args)
+  | otherwise = T.toUpper name <> "(" <> T.intercalate ", " (map display args) <> ")"
 
 
 -- | Render the expr ast to a value. Start with Eq only, for supporting jsonpath

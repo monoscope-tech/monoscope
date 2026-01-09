@@ -334,7 +334,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
-    let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result == Just []]
+    let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result `elem` [Nothing, Just []]]
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
       span_ $ toHtml $ "Constants with no data: " <> T.intercalate ", " emptyConstants

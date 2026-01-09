@@ -966,7 +966,6 @@ renderTableWithData widget dataRows = renderTableWithDataAndParams widget dataRo
 renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()
 renderTableWithDataAndParams widget dataRows params = do
   let columns = fromMaybe [] widget.columns
-      dataRowsList = V.toList dataRows
       tableId = maybeToMonoid widget.id
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
 
@@ -994,13 +993,13 @@ renderTableWithDataAndParams widget dataRows params = do
       -- Calculate max formatted width for each progress column
       let valueWidths =
             M.fromList
-              [ (col.field, foldr max 5 [T.length (formatColumnValue col (fromMaybe "" $ row V.!? idx)) | row <- dataRowsList])
+              [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (fromMaybe "" $ row V.!? idx))) 5 dataRows)
               | (col, idx) <- zip columns [0 ..]
               , isJust col.progress
               ]
 
       -- Render table rows
-      forM_ dataRowsList \row -> do
+      V.forM_ dataRows \row -> do
         let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
         let firstColValue = maybe "" (\c -> getRowValue c 0 row) (listToMaybe columns)
         let rowValue = case widget.onRowClick >>= (.value) of
@@ -1042,7 +1041,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
               div_ [class_ "flex items-center justify-between"] do
                 toHtml col.title
     tbody_ [] do
-      forM_ (V.toList dataRows) \row -> do
+      V.forM_ dataRows \row -> do
         let val = V.last row
         let cdrn = fromMaybe [] $ HM.lookup val spGroup
         let spansJson =

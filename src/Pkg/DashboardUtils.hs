@@ -15,7 +15,13 @@ placeholderRegex :: Regex
 placeholderRegex = makeRegex ("\\{\\{([^}]+)\\}\\}" :: Text)
 
 
+-- | Maximum input size for placeholder replacement (1MB) to prevent DoS
+maxPlaceholderInputSize :: Int
+maxPlaceholderInputSize = 1_000_000
+
+
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.
+-- Returns input unchanged if it exceeds maxPlaceholderInputSize.
 --
 -- >>> replacePlaceholders (Map.fromList [("name", "world")]) "Hello {{name}}!"
 -- "Hello world!"
@@ -24,15 +30,17 @@ placeholderRegex = makeRegex ("\\{\\{([^}]+)\\}\\}" :: Text)
 -- >>> replacePlaceholders Map.empty "{{missing}}"
 -- ""
 replacePlaceholders :: Map.Map Text Text -> Text -> Text
-replacePlaceholders mappng = go
+replacePlaceholders mappng txt
+  | T.length txt > maxPlaceholderInputSize = txt
+  | otherwise = go txt
   where
-    go txt =
-      case match placeholderRegex txt :: (Text, Text, Text, [Text]) of
+    go t =
+      case match placeholderRegex t :: (Text, Text, Text, [Text]) of
         (before, matched, after, [key])
           | not (T.null matched) ->
               let replacement = Map.findWithDefault "" key mappng
                in before <> replacement <> go after
-        _ -> txt
+        _ -> t
 
 
 variablePresets :: Text -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Map Text Text
