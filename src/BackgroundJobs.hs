@@ -1999,8 +1999,8 @@ processNewShape pid hash authCtx = do
     Nothing -> Log.logAttention "Shape not found for new shape processing" (pid, hash)
     Just sh -> do
       issue <-
-        liftIO $
-          Issues.createNewShapeIssue
+        liftIO
+          $ Issues.createNewShapeIssue
             pid
             sh.shapeHash
             sh.endpointHash
@@ -2032,8 +2032,8 @@ processNewFieldChange pid hash authCtx = do
     Nothing -> Log.logAttention "Field not found for new field change processing" (pid, hash)
     Just fld -> do
       issue <-
-        liftIO $
-          Issues.createFieldChangeIssue
+        liftIO
+          $ Issues.createFieldChangeIssue
             pid
             fld.fieldHash
             fld.endpointHash
