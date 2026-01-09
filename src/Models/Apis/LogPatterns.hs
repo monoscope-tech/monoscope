@@ -35,6 +35,7 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import Pkg.DeriveUtils (BaselineState (..))
 import Relude hiding (id)
 import System.Types (DB)
 
@@ -98,7 +99,7 @@ data LogPattern = LogPattern
   , state :: LogPatternState
   , acknowledgedBy :: Maybe Users.UserId
   , acknowledgedAt :: Maybe ZonedTime
-  , baselineState :: Text
+  , baselineState :: BaselineState
   , baselineVolumeHourlyMean :: Maybe Double
   , baselineVolumeHourlyStddev :: Maybe Double
   , baselineSamples :: Int
@@ -201,7 +202,7 @@ updateLogPatternStats pid patHash additionalCount =
       |]
 
 
-updateBaseline :: DB es => Projects.ProjectId -> Text -> Text -> Double -> Double -> Int -> Eff es Int64
+updateBaseline :: DB es => Projects.ProjectId -> Text -> BaselineState -> Double -> Double -> Int -> Eff es Int64
 updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
   PG.execute q (bState, hourlyMean, hourlyStddev, samples, pid, patHash)
   where
@@ -279,7 +280,7 @@ data LogPatternWithRate = LogPatternWithRate
   , projectId :: Projects.ProjectId
   , logPattern :: Text
   , patternHash :: Text
-  , baselineState :: Text
+  , baselineState :: BaselineState
   , baselineMean :: Maybe Double
   , baselineStddev :: Maybe Double
   , currentHourCount :: Int
