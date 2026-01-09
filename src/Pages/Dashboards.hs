@@ -279,7 +279,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-              <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
   window.addEventListener('DOMContentLoaded', () => {
@@ -596,17 +596,17 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     let issuesVM = V.fromList $ map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
-        & #html
-          ?~ renderText
-            ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"] $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
-                div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
-                  Table.renderRowWithColumns
-                    [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
-                    , style_ (if hideByDefault then "display:none" else "")
-                    ]
-                    (AnomalyList.issueColumns issue.projectId)
-                    vm
-            )
+      & #html
+        ?~ renderText
+          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"] $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
+              div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
+                Table.renderRowWithColumns
+                  [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
+                  , style_ (if hideByDefault then "display:none" else "")
+                  ]
+                  (AnomalyList.issueColumns issue.projectId)
+                  vm
+          )
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
@@ -616,8 +616,8 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
     -- Render the table with data server-side
     pure
       $ widget
-        & #html
-          ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
+      & #html
+        ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
@@ -633,21 +633,21 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
 
     pure
       $ widget
-        & #html
-          ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
+      & #html
+        ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure
       $ widget
-        & #dataset
-          ?~ Widget.WidgetDataset
-            { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-            , rowsPerMin = metricsD.rowsPerMin
-            , value = Just metricsD.rowsCount
-            , from = metricsD.from
-            , to = metricsD.to
-            , stats = metricsD.stats
-            }
+      & #dataset
+        ?~ Widget.WidgetDataset
+          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
+          , rowsPerMin = metricsD.rowsPerMin
+          , value = Just metricsD.rowsCount
+          , from = metricsD.from
+          , to = metricsD.to
+          , stats = metricsD.stats
+          }
 
 
 -- | Populate widgets with their alert statuses
@@ -789,10 +789,10 @@ reorderWidgets patch ws = mapMaybe findAndUpdate (Map.toList patch)
       let newLayout =
             Just
               $ maybe def Relude.id orig.layout
-                & #x .~ (item.x <|> (orig.layout >>= (.x)))
-                & #y .~ (item.y <|> (orig.layout >>= (.y)))
-                & #w .~ (item.w <|> (orig.layout >>= (.w)))
-                & #h .~ (item.h <|> (orig.layout >>= (.h)))
+              & #x .~ (item.x <|> (orig.layout >>= (.x)))
+              & #y .~ (item.y <|> (orig.layout >>= (.y)))
+              & #w .~ (item.w <|> (orig.layout >>= (.w)))
+              & #h .~ (item.h <|> (orig.layout >>= (.h)))
       pure
         orig
           { Widget.layout = newLayout
@@ -963,7 +963,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
                     , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
                     , name_ $ wid <> "-drawer-tab"
                     ]
-                    <> [checked_ | isActive]
+                  <> [checked_ | isActive]
                 toHtml tabName
           mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
           mkTab "Edit" (effectiveActiveTab == "edit")
@@ -1313,7 +1313,7 @@ starButton_ pid dashId isStarred = do
     ]
     $ faSprite_ "star" starIconType
     $ "w-4 h-4 "
-      <> if isStarred then "text-yellow-500" else "text-iconNeutral"
+    <> if isStarred then "text-yellow-500" else "text-iconNeutral"
 
 
 dashboardsGet_ :: DashboardsGetD -> Html ()
