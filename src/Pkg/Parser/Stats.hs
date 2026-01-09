@@ -907,14 +907,13 @@ pSummarizeSection = do
   return $ SummarizeCommand funcs byClause
   where
     -- Parse arithmetic expression with proper operator precedence
-    -- * and / bind tighter than + and -
+    -- \* and / bind tighter than + and -
     -- Example: count() + 5 * 10 parses as count() + (5 * 10)
     pAggWithOptionalArith = do
       expr <- pArithExpr
       pure $ case expr of
         SAgg agg -> agg -- Plain aggregation, return as-is
         _ -> ArithExpr expr Nothing -- Arithmetic expression
-
     pArithExpr :: Parser ScalarExpr
     pArithExpr = makeExprParser pArithTerm arithOperatorTable
 
