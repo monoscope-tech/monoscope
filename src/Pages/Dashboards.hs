@@ -696,12 +696,24 @@ updateDashboardWidgets :: Dashboards.Dashboard -> Maybe Text -> Maybe Text -> Wi
 updateDashboardWidgets dash tabSlugM normalizedWidgetIdM widgetUpdated =
   let updateWidgets ws = case normalizedWidgetIdM of
         Just nwid ->
-          let updateWidget w = if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid) then widgetUpdated else w
+          let updateWidget w =
+                if (w.id == Just nwid) || (maybeToMonoid (slugify <$> w.title) == nwid)
+                  then mergeWidgetPreservingQuery w widgetUpdated
+                  else w
            in map updateWidget ws
         Nothing -> ws <> [widgetUpdated]
    in case (tabSlugM, dash.tabs) of
         (Just slug, Just _) -> updateTabBySlug slug (#widgets %~ updateWidgets) dash
         _ -> dash & #widgets %~ updateWidgets
+
+
+-- | Merge widgets, preserving the original query/rawQuery if the new widget doesn't have one.
+-- This ensures we don't lose the original KQL query when a widget is updated.
+mergeWidgetPreservingQuery :: Widget.Widget -> Widget.Widget -> Widget.Widget
+mergeWidgetPreservingQuery original updated =
+  updated
+    & #query %~ (<|> original.query)
+    & #rawQuery %~ (<|> original.rawQuery)
 
 
 syncWidgetAlert :: DB es => Projects.ProjectId -> Text -> Widget.Widget -> Eff es ()
@@ -1015,8 +1027,8 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
             div_
               [ id_ $ widPrefix <> "-sql-preview"
               , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview"
-              , hxVals_ "js:{query: widgetJSON.query}"
-              , hxTrigger_ "toggle"
+              , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
+              , hxTrigger_ "toggle from:closest details"
               , hxSwap_ "innerHTML"
               ]
               $ span_ [class_ "loading loading-spinner loading-xs"] ""
