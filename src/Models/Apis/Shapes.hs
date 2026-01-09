@@ -3,7 +3,9 @@ module Models.Apis.Shapes (
   ShapeWithFields (..),
   SwShape (..),
   ShapeId,
+  ShapeForIssue (..),
   bulkInsertShapes,
+  getShapeForIssue,
 )
 where
 
@@ -12,7 +14,7 @@ import Data.Default (Default)
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -114,3 +116,44 @@ data SwShape = SwShape
   deriving anyclass (AE.ToJSON)
   deriving (FromField) via Aeson SwShape
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
+
+
+-- | Shape data needed for creating issues
+data ShapeForIssue = ShapeForIssue
+  { shapeHash :: Text
+  , endpointHash :: Text
+  , method :: Text
+  , path :: Text
+  , statusCode :: Int
+  , exampleRequestPayload :: AE.Value
+  , exampleResponsePayload :: AE.Value
+  , newFields :: V.Vector Text
+  , deletedFields :: V.Vector Text
+  , modifiedFields :: V.Vector Text
+  , fieldHashes :: V.Vector Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow)
+
+
+getShapeForIssue :: DB es => Text -> Eff es (Maybe ShapeForIssue)
+getShapeForIssue hash = listToMaybe <$> PG.query q (Only hash)
+  where
+    q =
+      [sql|
+        SELECT
+          s.hash,
+          s.endpoint_hash,
+          COALESCE(e.method, 'UNKNOWN'),
+          COALESCE(e.url_path, '/'),
+          s.status_code,
+          COALESCE(s.example_request_payload, '{}'::jsonb),
+          COALESCE(s.example_response_payload, '{}'::jsonb),
+          COALESCE(s.new_unique_fields, '{}'::TEXT[]),
+          COALESCE(s.deleted_fields, '{}'::TEXT[]),
+          COALESCE(s.updated_field_formats, '{}'::TEXT[]),
+          COALESCE(s.field_hashes, '{}'::TEXT[])
+        FROM apis.shapes s
+        LEFT JOIN apis.endpoints e ON e.hash = s.endpoint_hash
+        WHERE s.hash = ?
+      |]
