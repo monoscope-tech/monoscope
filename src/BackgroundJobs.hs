@@ -1831,7 +1831,6 @@ processNewLogPattern pid patternHash authCtx = do
         Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
 
 
-
 calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateEndpointBaselines pid = do
   Log.logInfo "Calculating endpoint baselines" pid
@@ -2022,51 +2021,62 @@ processNewShape pid hash authCtx = do
         Just endpoint | endpoint.baselineState == BSEstablished -> do
           existingIssueM <- Issues.findOpenIssueForEndpoint pid hash
           case existingIssueM of
-              Just issue -> do
-                Log.logInfo "Skipping new shape issue creation due to existing open issue for endpoint" (pid, hash, issue.id)
-                let Aeson rawIssueData = issue.issueData
-                    shapeData = AE.decode (AE.encode rawIssueData) :: Maybe Issues.NewShapeData
-                whenJust shapeData \sh -> do
-                  let newData = sh {Issues.newShapesAfterIssue= V.snoc sh.newShapesAfterIssue hash}
-                  Issues.updateIssueData issue.id (AE.toJSON newData)
-              Nothing -> do
-                issue <- liftIO 
-                          $ Issues.createNewShapeIssue 
-                            pid shape.shapeHash shape.endpointHash shape.method shape.path shape.statusCode shape.exampleRequestPayload shape.exampleResponsePayload shape.newFields shape.deletedFields shape.modifiedFields shape.fieldHashes
-                Issues.insertIssue issue
-                liftIO $ withResource authCtx.jobsPool \conn ->
-                           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-                Log.logInfo "Created issue for new shape" (pid, hash, issue.id)
+            Just issue -> do
+              Log.logInfo "Skipping new shape issue creation due to existing open issue for endpoint" (pid, hash, issue.id)
+              let Aeson rawIssueData = issue.issueData
+                  shapeData = AE.decode (AE.encode rawIssueData) :: Maybe Issues.NewShapeData
+              whenJust shapeData \sh -> do
+                let newData = sh{Issues.newShapesAfterIssue = V.snoc sh.newShapesAfterIssue hash}
+                Issues.updateIssueData issue.id (AE.toJSON newData)
+            Nothing -> do
+              issue <-
+                liftIO
+                  $ Issues.createNewShapeIssue
+                    pid
+                    shape.shapeHash
+                    shape.endpointHash
+                    shape.method
+                    shape.path
+                    shape.statusCode
+                    shape.exampleRequestPayload
+                    shape.exampleResponsePayload
+                    shape.newFields
+                    shape.deletedFields
+                    shape.modifiedFields
+                    shape.fieldHashes
+              Issues.insertIssue issue
+              liftIO $ withResource authCtx.jobsPool \conn ->
+                void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              Log.logInfo "Created issue for new shape" (pid, hash, issue.id)
         _ -> pass
 
-        
-     
+
 processNewFieldChange :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewFieldChange pid hash authCtx = do
   Log.logInfo "Processing new field change" (pid, hash)
   pass -- Temporarily disabled field change issue creation
 
-  -- fieldM <- Fields.getFieldForIssue hash
+-- fieldM <- Fields.getFieldForIssue hash
 
-  -- case fieldM of
-  --   Nothing -> Log.logAttention "Field not found for new field change processing" (pid, hash)
-  --   Just fld -> do
-  --     issue <-
-  --       liftIO
-  --         $ Issues.createFieldChangeIssue
-  --           pid
-  --           fld.fieldHash
-  --           fld.endpointHash
-  --           fld.method
-  --           fld.path
-  --           fld.keyPath
-  --           fld.fieldCategory
-  --           Nothing
-  --           fld.fieldType
-  --           "added"
-  --     Issues.insertIssue issue
+-- case fieldM of
+--   Nothing -> Log.logAttention "Field not found for new field change processing" (pid, hash)
+--   Just fld -> do
+--     issue <-
+--       liftIO
+--         $ Issues.createFieldChangeIssue
+--           pid
+--           fld.fieldHash
+--           fld.endpointHash
+--           fld.method
+--           fld.path
+--           fld.keyPath
+--           fld.fieldCategory
+--           Nothing
+--           fld.fieldType
+--           "added"
+--     Issues.insertIssue issue
 
-  --     liftIO $ withResource authCtx.jobsPool \conn ->
-  --       void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+--     liftIO $ withResource authCtx.jobsPool \conn ->
+--       void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
 
-  --     Log.logInfo "Created issue for new field change" (pid, hash, issue.id)
+--     Log.logInfo "Created issue for new field change" (pid, hash, issue.id)

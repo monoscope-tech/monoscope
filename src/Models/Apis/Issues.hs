@@ -616,6 +616,7 @@ findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "ne
       LIMIT 1
     |]
 
+
 findOpenShapeIssueForStatusCode :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe Issue)
 findOpenShapeIssueForStatusCode pid endpointHash statusCode = listToMaybe <$> PG.query q (pid, "new-shape" :: Text, endpointHash, statusCode)
   where
