@@ -40,7 +40,7 @@ import Effectful.PostgreSQL (withConnection)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Relude
 import System.Types (DB)
 
@@ -66,6 +66,20 @@ data Endpoint = Endpoint
   , hash :: Text
   , outgoing :: Bool
   , description :: Text
+  , firstTraceId :: Maybe Text
+  , recentTraceId :: Maybe Text
+  , service :: Maybe Text
+  , baselineState :: BaselineState
+  , baselineSamples :: Int
+  , baselineUpdatedAt :: Maybe UTCTime
+  , baselineErrorRateMean :: Maybe Double
+  , baselineErrorRateStddev :: Maybe Double
+  , baselineLatencyMean :: Maybe Double
+  , baselineLatencyStddev :: Maybe Double
+  , baselineLatencyP95 :: Maybe Double
+  , baselineLatencyP99 :: Maybe Double
+  , baselineVolumeHourlyMean :: Maybe Double
+  , baselineVolumeHourlyStddev :: Maybe Double
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -249,7 +263,7 @@ data EndpointWithCurrentRates = EndpointWithCurrentRates
   , method :: Text
   , urlPath :: Text
   , host :: Text
-  , baselineState :: Text
+  , baselineState :: BaselineState
   , baselineErrorRateMean :: Maybe Double
   , baselineErrorRateStddev :: Maybe Double
   , baselineLatencyMean :: Maybe Double
@@ -351,7 +365,6 @@ getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpo
           JOIN apis.endpoints e ON e.url_path = (ols.attributes->'http'->>'route')
             AND e.method = ols.attributes___http___request___method
           WHERE ols.project_id = ?
-            AND e.hash = ?
             AND ols.name = 'monoscope.http'
             AND ols.timestamp >= NOW() - MAKE_INTERVAL(hours => ?)
           GROUP BY DATE_TRUNC('hour', timestamp)
@@ -372,7 +385,7 @@ getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpo
 
 
 -- | Update endpoint baseline values
-updateEndpointBaseline :: DB es => EndpointId -> Text -> Double -> Double -> Double -> Double -> Double -> Double -> Double -> Double -> Int -> Eff es ()
+updateEndpointBaseline :: DB es => EndpointId -> BaselineState -> Double -> Double -> Double -> Double -> Double -> Double -> Double -> Double -> Int -> Eff es ()
 updateEndpointBaseline eid state errMean errStddev latMean latStddev latP95 latP99 volMean volStddev samples =
   void $ PG.execute q (state, errMean, errStddev, latMean, latStddev, latP95, latP99, volMean, volStddev, samples, eid)
   where

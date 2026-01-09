@@ -1,5 +1,6 @@
 module Pkg.DeriveUtils (
   AesonText (..),
+  BaselineState (..),
   PGTextArray (..),
   UUIDId (..),
   idToText,
@@ -9,14 +10,16 @@ module Pkg.DeriveUtils (
 ) where
 
 import Data.Aeson qualified as AE
-import Data.Default (Default)
+import Data.Default (Default (..))
 import Data.Default.Instances ()
+import Deriving.Aeson qualified as DAE
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, ResultError (ConversionFailed), ToRow)
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Pkg.DBUtils (WrappedEnumSC (..))
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (Symbol)
 import Language.Haskell.TH.Syntax qualified as THS
@@ -97,3 +100,17 @@ idToText = UUID.toText . unUUIDId
 -- | Parse Text to a UUID-based ID
 idFromText :: Text -> Maybe (UUIDId name)
 idFromText = fmap UUIDId . UUID.fromText
+
+
+-- | Baseline state for anomaly detection.
+-- Baselines start in 'Learning' state until enough data is collected,
+-- then transition to 'Established' once statistically significant.
+data BaselineState = BSLearning | BSEstablished
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "BS", DAE.CamelToSnake]] BaselineState
+
+
+instance Default BaselineState where
+  def = BSLearning

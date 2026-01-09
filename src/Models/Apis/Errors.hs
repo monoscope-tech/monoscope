@@ -47,6 +47,7 @@ import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
+import Pkg.DeriveUtils (BaselineState (..))
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (DBField (MkDBField))
@@ -133,7 +134,7 @@ data Error = Error
   , occurrences24h :: Int
   , quietMinutes :: Int
   , resolutionThresholdMinutes :: Int
-  , baselineState :: Text
+  , baselineState :: BaselineState
   , baselineSamples :: Int
   , baselineErrorRateMean :: Maybe Double
   , baselineErrorRateStddev :: Maybe Double
@@ -354,7 +355,7 @@ assignError eid uid = PG.execute q (uid, eid)
 
 
 -- | Update baseline data for an error
-updateBaseline :: DB es => ErrorId -> Text -> Double -> Double -> Int -> Eff es Int64
+updateBaseline :: DB es => ErrorId -> BaselineState -> Double -> Double -> Int -> Eff es Int64
 updateBaseline eid bState rateMean rateStddev samples =
   PG.execute q (bState, rateMean, rateStddev, samples, eid)
   where
@@ -457,7 +458,7 @@ getErrorEventStats eid hoursBack = do
 checkErrorSpike :: DB es => Error -> Eff es (Maybe (Bool, Double, Double))
 checkErrorSpike err = do
   case (err.baselineState, err.baselineErrorRateMean, err.baselineErrorRateStddev) of
-    ("established", Just mean, Just stddev) | stddev > 0 -> do
+    (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
       currentCount <- getCurrentHourErrorCount err.id
       let currentRate = fromIntegral currentCount :: Double
           zScore = (currentRate - mean) / stddev
@@ -474,7 +475,7 @@ data ErrorWithCurrentRate = ErrorWithCurrentRate
   , exceptionType :: Text
   , message :: Text
   , service :: Maybe Text
-  , baselineState :: Text
+  , baselineState :: BaselineState
   , baselineMean :: Maybe Double
   , baselineStddev :: Maybe Double
   , currentHourCount :: Int
