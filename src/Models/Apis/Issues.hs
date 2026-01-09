@@ -64,6 +64,7 @@ module Models.Apis.Issues (
   createNewEndpointIssue,
   createNewShapeIssue,
   createFieldChangeIssue,
+  findOpenShapeIssueForStatusCode,
 
   -- * Utilities
   issueIdText,
@@ -417,6 +418,7 @@ data NewShapeData = NewShapeData
   , modifiedFields :: V.Vector Text
   , fieldHashes :: V.Vector Text
   , firstSeenAt :: UTCTime
+  , newShapesAfterIssue :: V.Vector Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -609,6 +611,21 @@ findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "ne
       WHERE project_id = ? 
         AND issue_type = ?
         AND endpoint_hash = ?
+        AND acknowledged_at IS NULL
+        AND archived_at IS NULL
+      LIMIT 1
+    |]
+
+findOpenShapeIssueForStatusCode :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe Issue)
+findOpenShapeIssueForStatusCode pid endpointHash statusCode = listToMaybe <$> PG.query q (pid, "new-shape" :: Text, endpointHash, statusCode)
+  where
+    q =
+      [sql|
+      SELECT * FROM apis.issues
+      WHERE project_id = ? 
+        AND issue_type = ?
+        AND endpoint_hash = ?
+        AND (issue_data->>'status_code')::int = ?
         AND acknowledged_at IS NULL
         AND archived_at IS NULL
       LIMIT 1
@@ -1419,6 +1436,7 @@ createNewShapeIssue projectId shHash epHash method path statusCode reqPayload re
           , modifiedFields = modifiedFlds
           , fieldHashes = fldHashes
           , firstSeenAt = now
+          , newShapesAfterIssue = V.empty
           }
 
       hasBreakingChanges = not (V.null deletedFlds) || not (V.null modifiedFlds)

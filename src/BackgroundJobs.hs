@@ -67,7 +67,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
@@ -1647,7 +1647,7 @@ calculateErrorBaselines pid = do
             newMean = stats.hourlyMean
             newStddev = stats.hourlyStddev
             -- Establish baseline after 24 hours of data
-            newState = if newSamples >= 24 then "established" else "learning"
+            newState = if newSamples >= 24 then BSEstablished else BSLearning
         _ <- Errors.updateBaseline err.id newState newMean newStddev newSamples
         pass
 
@@ -1666,7 +1666,7 @@ detectErrorSpikes pid authCtx = do
   forM_ errorsWithRates \errRate -> do
     -- Only check errors with established baselines
     case (errRate.baselineState, errRate.baselineMean, errRate.baselineStddev) of
-      ("established", Just mean, Just stddev) | stddev > 0 -> do
+      (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
         let currentRate = fromIntegral errRate.currentHourCount :: Double
             zScore = (currentRate - mean) / stddev
             isSpike = zScore > 3.0 && currentRate > mean + 5
@@ -1766,7 +1766,7 @@ calculateLogPatternBaselines pid = do
             newMean = stats.hourlyMean
             newStddev = stats.hourlyStddev
             -- Establish baseline after 24 hours of data
-            newState = if newSamples >= 24 then "established" else "learning"
+            newState = if newSamples >= 24 then BSEstablished else BSLearning
         _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
         pass
 
@@ -1785,7 +1785,7 @@ detectLogPatternSpikes pid authCtx = do
   forM_ patternsWithRates \lpRate -> do
     -- Only check patterns with established baselines
     case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
-      ("established", Just mean, Just stddev) | stddev > 0 -> do
+      (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
         let currentRate = fromIntegral lpRate.currentHourCount :: Double
             zScore = (currentRate - mean) / stddev
             -- Spike detection: >3 std devs AND at least 10 more events than baseline
@@ -1831,12 +1831,7 @@ processNewLogPattern pid patternHash authCtx = do
         Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
 
 
--- ============================================================================
--- Endpoint Anomaly Detection Jobs
--- ============================================================================
 
--- | Calculate baselines for endpoints (latency, error rate, volume)
--- Uses hourly stats from otel_logs_and_spans over the last 7 days
 calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateEndpointBaselines pid = do
   Log.logInfo "Calculating endpoint baselines" pid
@@ -1850,7 +1845,7 @@ calculateEndpointBaselines pid = do
       Just stats -> do
         let newSamples = stats.totalHours
             -- Establish baseline after 24 hours of data
-            newState = if newSamples >= 24 then "established" else "learning"
+            newState = if newSamples >= 24 then BSEstablished else BSLearning
         Endpoints.updateEndpointBaseline
           ep.id
           newState
@@ -1867,7 +1862,6 @@ calculateEndpointBaselines pid = do
   Log.logInfo "Finished calculating endpoint baselines" (pid, length endpoints)
 
 
--- | Detect endpoint latency degradation and create issues
 detectEndpointLatencyDegradation :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectEndpointLatencyDegradation pid authCtx = do
   Log.logInfo "Detecting endpoint latency degradation" pid
@@ -1893,7 +1887,6 @@ detectEndpointLatencyDegradation pid authCtx = do
   Log.logInfo "Finished endpoint latency degradation detection" pid
 
 
--- | Detect endpoint error rate spikes and create issues
 detectEndpointErrorRateSpike :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectEndpointErrorRateSpike pid authCtx = do
   Log.logInfo "Detecting endpoint error rate spikes" pid
@@ -1933,7 +1926,6 @@ detectEndpointErrorRateSpike pid authCtx = do
   Log.logInfo "Finished endpoint error rate spike detection" pid
 
 
--- | Detect endpoint volume rate changes (spike or drop) and create issues
 detectEndpointVolumeRateChange :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectEndpointVolumeRateChange pid authCtx = do
   Log.logInfo "Detecting endpoint volume rate changes" pid
@@ -1972,7 +1964,6 @@ detectEndpointVolumeRateChange pid authCtx = do
   Log.logInfo "Finished endpoint volume rate change detection" pid
 
 
--- | Process new endpoint detected by SQL trigger
 processNewEndpoint :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewEndpoint pid hash authCtx = do
   Log.logInfo "Processing new endpoint" (pid, hash)
@@ -2019,73 +2010,63 @@ processNewEndpoint pid hash authCtx = do
                     sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
 
--- | Process new shape detected by SQL trigger
 processNewShape :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewShape pid hash authCtx = do
   Log.logInfo "Processing new shape" (pid, hash)
-  shapeM <- Shapes.getShapeForIssue hash
-  existingIssueM <- Issues.findOpenIssueForEndpoint pid hash
-  case existingIssueM of
-    Just issue -> do
-      Log.logInfo "Skipping new shape issue creation due to existing open issue for endpoint" (pid, hash, issue.id)
-      let Aeson rawIssueData = issue.issueData
-          endpontData = AE.decode (AE.encode rawIssueData) :: Maybe Issues.NewEndpointData
-      whenJust endpontData \Issues.NewEndpointData{..} -> do
-        let newData = Issues.NewEndpointData endpointHash endpointMethod endpointPath endpointHost firstSeenAt (V.snoc initialShapes hash)
-        Issues.updateIssueData issue.id (AE.toJSON newData)
-    Nothing -> do
-      case shapeM of
-        Nothing -> Log.logAttention "Shape not found for new shape processing" (pid, hash)
-        Just sh -> do
-          issue <-
-            liftIO
-              $ Issues.createNewShapeIssue
-                pid
-                sh.shapeHash
-                sh.endpointHash
-                sh.method
-                sh.path
-                sh.statusCode
-                sh.exampleRequestPayload
-                sh.exampleResponsePayload
-                sh.newFields
-                sh.deletedFields
-                sh.modifiedFields
-                sh.fieldHashes
-          Issues.insertIssue issue
+  projectM <- Projects.projectById pid
+  whenJust projectM \project -> do
+    shapeM <- Shapes.getShapeForIssue pid hash
+    whenJust shapeM \shape -> do
+      endpointM <- Endpoints.getEndpointByHash pid shape.endpointHash
+      case endpointM of
+        Just endpoint | endpoint.baselineState == BSEstablished -> do
+          existingIssueM <- Issues.findOpenIssueForEndpoint pid hash
+          case existingIssueM of
+              Just issue -> do
+                Log.logInfo "Skipping new shape issue creation due to existing open issue for endpoint" (pid, hash, issue.id)
+                let Aeson rawIssueData = issue.issueData
+                    shapeData = AE.decode (AE.encode rawIssueData) :: Maybe Issues.NewShapeData
+                whenJust shapeData \sh -> do
+                  let newData = sh {Issues.newShapesAfterIssue= V.snoc sh.newShapesAfterIssue hash}
+                  Issues.updateIssueData issue.id (AE.toJSON newData)
+              Nothing -> do
+                issue <- liftIO 
+                          $ Issues.createNewShapeIssue 
+                            pid shape.shapeHash shape.endpointHash shape.method shape.path shape.statusCode shape.exampleRequestPayload shape.exampleResponsePayload shape.newFields shape.deletedFields shape.modifiedFields shape.fieldHashes
+                Issues.insertIssue issue
+                liftIO $ withResource authCtx.jobsPool \conn ->
+                           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+                Log.logInfo "Created issue for new shape" (pid, hash, issue.id)
+        _ -> pass
 
-          liftIO $ withResource authCtx.jobsPool \conn ->
-            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-
-          Log.logInfo "Created issue for new shape" (pid, hash, issue.id)
-
-
--- | Process new field change detected by SQL trigger
+        
+     
 processNewFieldChange :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewFieldChange pid hash authCtx = do
   Log.logInfo "Processing new field change" (pid, hash)
+  pass -- Temporarily disabled field change issue creation
 
-  fieldM <- Fields.getFieldForIssue hash
+  -- fieldM <- Fields.getFieldForIssue hash
 
-  case fieldM of
-    Nothing -> Log.logAttention "Field not found for new field change processing" (pid, hash)
-    Just fld -> do
-      issue <-
-        liftIO
-          $ Issues.createFieldChangeIssue
-            pid
-            fld.fieldHash
-            fld.endpointHash
-            fld.method
-            fld.path
-            fld.keyPath
-            fld.fieldCategory
-            Nothing
-            fld.fieldType
-            "added"
-      Issues.insertIssue issue
+  -- case fieldM of
+  --   Nothing -> Log.logAttention "Field not found for new field change processing" (pid, hash)
+  --   Just fld -> do
+  --     issue <-
+  --       liftIO
+  --         $ Issues.createFieldChangeIssue
+  --           pid
+  --           fld.fieldHash
+  --           fld.endpointHash
+  --           fld.method
+  --           fld.path
+  --           fld.keyPath
+  --           fld.fieldCategory
+  --           Nothing
+  --           fld.fieldType
+  --           "added"
+  --     Issues.insertIssue issue
 
-      liftIO $ withResource authCtx.jobsPool \conn ->
-        void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+  --     liftIO $ withResource authCtx.jobsPool \conn ->
+  --       void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
 
-      Log.logInfo "Created issue for new field change" (pid, hash, issue.id)
+  --     Log.logInfo "Created issue for new field change" (pid, hash, issue.id)
