@@ -1,14 +1,14 @@
 BEGIN;
 
-ALTER TABLE apis.endpoints 
- ADD COLUMN first_trace_id,
- ADD COLUMN recent_trace_id,
- ADD COLUMN service;
- 
-ALTER TABLE apis.shapes 
- ADD COLUMN first_trace_id,
- ADD COLUMN recent_trace_id,
- ADD COLUMN service;
+ALTER TABLE apis.endpoints
+ ADD COLUMN IF NOT EXISTS first_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS recent_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS service TEXT;
+
+ALTER TABLE apis.shapes
+ ADD COLUMN IF NOT EXISTS first_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS recent_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS service TEXT;
 
 CREATE OR REPLACE FUNCTION apis.update_occurance()
 RETURNS trigger AS $$
