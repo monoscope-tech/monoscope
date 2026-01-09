@@ -741,7 +741,7 @@ widgetToECharts widget =
                       "md" -> (14, 12, 12, [4, 8, 4, 8])
                       "lg" -> (16, 14, 14, [5, 10, 5, 10])
                       _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
-                    -- Build legend.selected object: inactive items map to False
+                      -- Build legend.selected object: inactive items map to False
                     inactiveItems = fromMaybe [] widget.inactiveLegendItems
                     selectedObj = AE.object [K.fromText item AE..= False | item <- inactiveItems]
                  in [ "show" AE..= legendVisibility
