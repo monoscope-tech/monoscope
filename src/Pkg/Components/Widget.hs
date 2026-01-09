@@ -431,12 +431,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               , data_ "tippy-content" "Create a copy of this widget"
               , hxPost_
                   $ "/p/"
-                    <> maybeToMonoid (widget._projectId <&> (.toText))
-                    <> "/dashboards/"
-                    <> maybeToMonoid widget._dashboardId
-                    <> "/widgets/"
-                    <> wId
-                    <> "/duplicate"
+                  <> maybeToMonoid (widget._projectId <&> (.toText))
+                  <> "/dashboards/"
+                  <> maybeToMonoid widget._dashboardId
+                  <> "/widgets/"
+                  <> wId
+                  <> "/duplicate"
               , hxTrigger_ "click"
               , [__| on click set (the closest <details/>).open to false
                      on htmx:beforeSwap
@@ -487,7 +487,7 @@ renderTraceTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-              <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -550,7 +550,7 @@ renderTable widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col "
-              <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ tableId <> "_bordered"
         ]
         do
@@ -611,8 +611,8 @@ renderChart widget = do
       div_
         [ class_
             $ "h-full w-full flex flex-col justify-end "
-              <> bool "min-h-0 " "" isStat
-              <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
+            <> bool "min-h-0 " "" isStat
+            <> if widget.naked == Just True then "" else "surface-raised rounded-2xl"
         , id_ $ chartId <> "_bordered"
         ]
         do
