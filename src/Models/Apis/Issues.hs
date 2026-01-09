@@ -44,6 +44,7 @@ module Models.Apis.Issues (
   updateIssueCriticality,
   acknowledgeIssue,
   selectIssueByHash,
+  updateIssueData,
 
   -- * Conversion Functions
   createAPIChangeIssue,
@@ -600,7 +601,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "api_change" :: Text, endpointHash)
+findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "new-endpoint" :: Text, endpointHash)
   where
     q =
       [sql|
@@ -612,6 +613,7 @@ findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "ap
         AND archived_at IS NULL
       LIMIT 1
     |]
+
 
 
 -- | Update issue with new anomaly data
@@ -1505,6 +1507,16 @@ createFieldChangeIssue projectId fldHash epHash method path keyPath category pre
       , llmEnhancementVersion = Nothing
       }
 
+
+updateIssueData :: DB es =>  IssueId -> AE.Value -> Eff es ()
+updateIssueData issueId newData = void $ PG.execute q (Aeson newData, issueId)
+  where
+    q =
+      [sql|
+      UPDATE apis.issues
+      SET issue_data = ?
+      WHERE  id = ?
+    |]
 
 -- | Conversation type for AI chats
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread

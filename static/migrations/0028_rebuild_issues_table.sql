@@ -20,7 +20,7 @@ CREATE TABLE apis.issues (
     issue_type          apis.issue_type NOT NULL,
     source_type         TEXT NOT NULL,              -- 'error', 'log_pattern', 'endpoint', 'shape'
     target_hash         TEXT NOT NULL,              -- links to error.hash, log_pattern.pattern_hash, endpoint.hash
-
+    endpoint_hash       TEXT,                       -- for endpoint-related issues
     title               TEXT NOT NULL DEFAULT '',
     service             TEXT,
     environment         TEXT,
@@ -43,18 +43,6 @@ CREATE TABLE apis.issues (
     issue_data          JSONB NOT NULL DEFAULT '{}'
 );
 
-
-  , -- Actions
-    recommendedAction :: Text
-  , migrationComplexity :: Text -- "low", "medium", "high", "n/a"
-  -- Data payload (polymorphic based on issueType)
-  , issueData :: Aeson AE.Value
-  , -- Payload changes tracking (for API changes)
-    requestPayloads :: Aeson [PayloadChange]
-  , responsePayloads :: Aeson [PayloadChange]
-  , -- LLM enhancement tracking
-    llmEnhancedAt :: Maybe UTCTime
-  , llmEnhancementVersion :: Maybe Int
 SELECT manage_updated_at('apis.issues');
 
 -- Indexes
