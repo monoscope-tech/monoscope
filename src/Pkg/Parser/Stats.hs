@@ -507,8 +507,9 @@ pRound = withoutAlias $ do
   decimals <- pScalarExpr
   case decimals of
     Num n -> case readMaybe (toString n) :: Maybe Int of
-      Just d | d < 0 || d > 15 -> fail "round() decimals must be 0-15 per PostgreSQL limit"
-      _ -> pass
+      Just d | d >= 0 && d <= 15 -> pass
+      Just _ -> fail "round() decimals must be 0-15 per PostgreSQL limit"
+      Nothing -> fail "round() decimals must be a valid integer"
     _ -> fail "round() decimals must be numeric"
   _ <- string ")"
   pure $ Round val decimals
@@ -766,7 +767,7 @@ pSummarizeByClause = do
     -- Order matters: bin functions, then actual scalar functions (with parens), then plain subjects
     pByClauseItem = choice @[] [try (ByBinFunc <$> pBinFunction), try (ByScalarFunc <$> pScalarFuncOnly), BySubject <$> pSubject]
     -- Scalar-only parsers for by clause (not aggregations like sum/count/avg)
-    pScalarFuncOnly = choice @[] [pCoalesce, try pStrcat, try pIff, try pCase, pRound, try pToFloat, try pToInt, try pToString]
+    pScalarFuncOnly = choice @[] [try pCoalesce, try pStrcat, try pIff, try pCase, try pRound, try pToFloat, try pToInt, try pToString]
 
 
 instance ToQueryText SummarizeByClause where
@@ -904,7 +905,7 @@ namedAggregation = snd <$> pNamedExpr
 --
 -- Regression test: percentiles with by clause (requires try in arithmetic operators)
 -- >>> parse pSummarizeSection "" "summarize percentiles(duration, 50, 75, 90, 95, 99) by bin_auto(timestamp)"
--- Right (SummarizeCommand [Percentiles (Subject "duration" "duration" []) [50.0,75.0,90.0,95.0,99.0] Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
+-- Right (SummarizeCommand [Percentiles (SubjectExpr (Subject "duration" "duration" []) Nothing) [50.0,75.0,90.0,95.0,99.0] Nothing] (Just (SummarizeByClause [ByBinFunc (BinAuto (Subject "timestamp" "timestamp" []))])))
 --
 -- >>> parse pSummarizeSection "" "summarize count()"
 -- Right (SummarizeCommand [Count (Subject "*" "*" []) Nothing] Nothing)

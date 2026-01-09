@@ -764,10 +764,15 @@ scalarFuncToSQL :: Text -> [Values] -> Text
 scalarFuncToSQL "coalesce" args = "COALESCE(" <> T.intercalate ", " (map display args) <> ")"
 scalarFuncToSQL "strcat" args = "CONCAT(" <> T.intercalate ", " (map display args) <> ")"
 scalarFuncToSQL "iff" [c, t, f] = "CASE WHEN " <> display c <> " THEN " <> display t <> " ELSE " <> display f <> " END"
+scalarFuncToSQL "iff" args = error $ "iff requires 3 arguments, got " <> show (length args)
 scalarFuncToSQL "isnull" [v] = display v <> " IS NULL"
+scalarFuncToSQL "isnull" args = error $ "isnull requires 1 argument, got " <> show (length args)
 scalarFuncToSQL "isnotnull" [v] = display v <> " IS NOT NULL"
+scalarFuncToSQL "isnotnull" args = error $ "isnotnull requires 1 argument, got " <> show (length args)
 scalarFuncToSQL "isempty" [v] = "(" <> display v <> " IS NULL OR " <> display v <> " = '')"
+scalarFuncToSQL "isempty" args = error $ "isempty requires 1 argument, got " <> show (length args)
 scalarFuncToSQL "isnotempty" [v] = "(" <> display v <> " IS NOT NULL AND " <> display v <> " != '')"
+scalarFuncToSQL "isnotempty" args = error $ "isnotempty requires 1 argument, got " <> show (length args)
 scalarFuncToSQL name [v] | name `elem` ["toint", "tolong", "tostring", "tofloat", "todouble", "tobool"] = "(" <> display v <> ")::" <> typeCastSQL name
 scalarFuncToSQL name args = T.toUpper name <> "(" <> T.intercalate ", " (map display args) <> ")"
 

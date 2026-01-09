@@ -218,6 +218,7 @@ normalizeKeyPath txt = T.toLower $ T.replace "]" "❳" $ T.replace "[" "❲" $ T
 
 
 getProcessedColumns :: [Text] -> [Text] -> (Text, [Text])
+getProcessedColumns [] defaultSelect = (T.intercalate "," $ colsNoAsClause defaultSelect, defaultSelect)
 getProcessedColumns cols defaultSelect = (T.intercalate "," $ colsNoAsClause selectedCols, selectedCols)
   where
     prs =

@@ -12,7 +12,7 @@ import Utils qualified
 
 -- | Pre-compiled regex for placeholder matching (compiled once at module load)
 placeholderRegex :: Regex
-placeholderRegex = makeRegex ("\\{\\{([^}]+)\\}\\}" :: String)
+placeholderRegex = makeRegex ("\\{\\{([^}]+)\\}\\}" :: Text)
 
 
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.
@@ -27,11 +27,11 @@ replacePlaceholders :: Map.Map Text Text -> Text -> Text
 replacePlaceholders mappng = go
   where
     go txt =
-      case match placeholderRegex (toString txt) :: (String, String, String, [String]) of
+      case match placeholderRegex txt :: (Text, Text, Text, [Text]) of
         (before, matched, after, [key])
-          | not (null matched) ->
-              let replacement = Map.findWithDefault "" (toText key) mappng
-               in toText before <> replacement <> go (toText after)
+          | not (T.null matched) ->
+              let replacement = Map.findWithDefault "" key mappng
+               in before <> replacement <> go after
         _ -> txt
 
 
