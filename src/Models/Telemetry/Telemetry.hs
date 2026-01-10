@@ -1043,10 +1043,17 @@ extractATError spanObj (AE.Object o) = do
         Just (AE.String s) -> Just s
         _ -> Nothing
       getTextOrEmpty k = fromMaybe "" (lookupText k)
+      getUserAttrM k v = case unAesonTextMaybe spanObj.resource >>= Map.lookup v of
+        Just (AE.Object userAttrs) -> KEM.lookup k userAttrs >>= asText
+        _ -> Nothing
 
       typ = getTextOrEmpty "type"
       msg = getTextOrEmpty "message"
       stack = getTextOrEmpty "stacktrace"
+
+      userId = getUserAttrM "id" "user"
+      userEmail = getUserAttrM "email" "user"
+      sessionId = getUserAttrM "id" "session"
 
       -- TODO: parse telemetry.sdk.name to SDKTypes
       tech = case unAesonTextMaybe spanObj.resource >>= Map.lookup "telemetry" of
@@ -1072,6 +1079,7 @@ extractATError spanObj (AE.Object o) = do
   -- The hash is critical for grouping similar errors together
   -- Hash components: projectId + service + span name + error type + sanitized message/stack
   -- This ensures similar errors are grouped while allowing variations in the actual message
+  
   return
     $ Errors.ATError
       { projectId = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
@@ -1081,7 +1089,7 @@ extractATError spanObj (AE.Object o) = do
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> replaceAllFormats (msg <> stack)))
+      , hash =  (toXXHash (spanObj.project_id <> <> typ <> replaceAllFormats (msg <> stack)))
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method
@@ -1089,6 +1097,12 @@ extractATError spanObj (AE.Object o) = do
       , spanId = spanId
       , traceId = trId
       , runtime = tech
+      , parentSpanId = spanObj.parent_id
+      , endpointHash = Nothing
+      , environment = Nothing
+      , userId = userId
+      , userEmail = userEmail
+      , sessionId = sessionId
       }
 extractATError _ _ = Nothing
 
