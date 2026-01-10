@@ -1,7 +1,6 @@
 module Models.Apis.Anomalies (
   AnomalyVM (..),
   AnomalyActions (..),
-  Issue (..),
   IssueL (..),
   IssueEventAgg (..),
   AnomalyTypes (..),
@@ -348,42 +347,6 @@ data IssuesData
 
 instance Default IssuesData where
   def = IDEmpty
-
-
-data Issue = Issue
-  { id :: AnomalyId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , projectId :: Projects.ProjectId
-  , acknowlegedAt :: Maybe ZonedTime
-  , anomalyType :: AnomalyTypes
-  , targetHash :: Text
-  , issueData :: IssuesData
-  , endpointId :: Maybe Endpoints.EndpointId
-  , acknowlegedBy :: Maybe Users.UserId
-  , archivedAt :: Maybe ZonedTime
-  , -- Enhanced UI fields
-    title :: Text
-  , service :: Text
-  , critical :: Bool
-  , breakingChanges :: Int
-  , incrementalChanges :: Int
-  , affectedRequests :: Int
-  , affectedClients :: Int
-  , estimatedRequests :: Text
-  , migrationComplexity :: Text
-  , recommendedAction :: Text
-  , requestPayloads :: Aeson [PayloadChange]
-  , responsePayloads :: Aeson [PayloadChange]
-  , -- New fields for anomaly grouping
-    anomalyHashes :: V.Vector Text
-  , endpointHash :: Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
 
 
 data IssueEventAgg = IssueEventAgg

@@ -13,7 +13,6 @@ custom-setup:
   dependencies:
     - base
     - Cabal
-    - proto-lens-setup
 
 build-tools:
   - proto-lens-protoc:proto-lens-protoc
