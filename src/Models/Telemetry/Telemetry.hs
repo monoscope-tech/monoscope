@@ -98,7 +98,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (lookupValueText, toXXHash)
+import Utils (lookupValueText)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -1074,22 +1074,24 @@ extractATError spanObj (AE.Object o) = do
 
       asText (AE.String t) = Just t
       asText _ = Nothing
+      pid = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
 
   -- Build ATError structure for anomaly detection
   -- The hash is critical for grouping similar errors together
   -- Hash components: projectId + service + span name + error type + sanitized message/stack
   -- This ensures similar errors are grouped while allowing variations in the actual message
-  
+  -- projectId mService mEndpoint runtime exceptionType message stackTrace
+
   return
     $ Errors.ATError
-      { projectId = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
+      { projectId = pid
       , when = spanObj.timestamp
       , errorType = typ
       , rootErrorType = typ
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash =  (toXXHash (spanObj.project_id <> <> typ <> replaceAllFormats (msg <> stack)))
+      , hash =  Errors.computeErrorFingerprint spanObj.project_id serviceName spanObj.name (fromMaybe "unknown" tech) typ msg stack
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method

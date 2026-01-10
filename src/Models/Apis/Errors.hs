@@ -60,8 +60,7 @@ import Pkg.DeriveUtils (BaselineState (..))
 import Relude hiding (id)
 import System.Types (DB)
 import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))
-import Utils (DBField (MkDBField), toXXHash)
-import RequestMessages (replaceAllFormats)
+import Utils (DBField (MkDBField), toXXHash, replaceAllFormats)
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -656,12 +655,12 @@ parseGoFrame line
     extractGoModuleFromFunc func =
       let parts = T.splitOn "." func
        in if length parts > 1
-            then Just $ T.intercalate "." $ init parts
+            then T.intercalate "." <$> viaNonEmpty init parts
             else Nothing
 
     extractGoFuncName func =
       let parts = T.splitOn "." func
-       in if not (null parts) then last parts else func
+       in fromMaybe func $ viaNonEmpty last parts
 
     isGoInApp path = not $ any (`T.isInfixOf` path)
       ["go/src/", "pkg/mod/", "vendor/", "/runtime/", "/net/", "/syscall/"]
@@ -732,7 +731,7 @@ parseJsFrame line
             _ -> (Nothing, Nothing)
 
     extractJsModule path =
-      let baseName = last $ T.splitOn "/" path
+      let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
        in Just $ T.toLower $ fromMaybe baseName $ T.stripSuffix ".js" baseName
                   <|> T.stripSuffix ".ts" baseName
                   <|> T.stripSuffix ".mjs" baseName
@@ -741,7 +740,7 @@ parseJsFrame line
     cleanJsFunction func =
       -- Remove namespacing: Object.foo.bar -> bar
       let parts = T.splitOn "." func
-       in if length parts > 1 then last parts else func
+       in fromMaybe func $ viaNonEmpty last parts
 
     isJsInApp path = not $ any (`T.isInfixOf` path)
       ["node_modules/", "<anonymous>", "internal/", "node:"]
@@ -774,7 +773,7 @@ parsePythonFrame line
   | otherwise = Nothing
   where
     extractPythonModule path =
-      let baseName = last $ T.splitOn "/" path
+      let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
           moduleName = fromMaybe baseName $ T.stripSuffix ".py" baseName
        in Just moduleName
 
@@ -816,7 +815,9 @@ parseJavaFrame line
     splitJavaQualified qualified =
       let parts = T.splitOn "." qualified
        in if length parts > 1
-            then (T.intercalate "." $ init parts, last parts)
+            then case (viaNonEmpty init parts, viaNonEmpty last parts) of
+                   (Just ps, Just l) -> (T.intercalate "." ps, l)
+                   _ -> ("", qualified)
             else ("", qualified)
 
     cleanJavaFunction func =
@@ -853,7 +854,7 @@ parsePhpFrame line
        in (file, lineNum)
 
     extractPhpModule path =
-      let baseName = last $ T.splitOn "/" path
+      let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
        in Just $ fromMaybe baseName $ T.stripSuffix ".php" baseName
 
     cleanPhpFunction func =
@@ -861,9 +862,9 @@ parsePhpFrame line
       T.replace "{closure}" "closure" $
       -- Simplify class::method or class->method
       let parts = T.splitOn "->" func
-       in if length parts > 1 then last parts else
+       in if length parts > 1 then fromMaybe func $ viaNonEmpty last parts else
             let parts' = T.splitOn "::" func
-             in if length parts' > 1 then last parts' else func
+             in if length parts' > 1 then fromMaybe func $ viaNonEmpty last parts' else func
 
     isPhpInApp path = not $ any (`T.isInfixOf` path)
       ["/vendor/", "/phar://"]
@@ -893,7 +894,9 @@ parseDotNetFrame line
     splitDotNetQualified qualified =
       let parts = T.splitOn "." qualified
        in if length parts > 1
-            then (T.intercalate "." $ init parts, last parts)
+            then case (viaNonEmpty init parts, viaNonEmpty last parts) of
+                   (Just ps, Just l) -> (T.intercalate "." ps, l)
+                   _ -> ("", qualified)
             else ("", qualified)
 
     parseDotNetLocation loc =
@@ -952,13 +955,13 @@ normalizeStackTrace runtime stackText =
     normalizeFrame :: StackFrame -> Text
     normalizeFrame frame =
       let modulePart = fromMaybe "" frame.sfModule
-          funcPart = normalizeFunction Nothing frame.sfFunction
+          funcPart = normalizeFunction frame.sfFunction
           -- Context line: normalize whitespace, truncate if > 120 chars
           contextPart = maybe "" normalizeContextLine frame.sfContextLine
        in T.intercalate "|" $ filter (not . T.null) [modulePart, funcPart, contextPart]
 
-    normalizeFunction :: Text -> Text -> Text
-    normalizeFunction _ func =
+    normalizeFunction :: Text -> Text
+    normalizeFunction func =
       -- Common normalizations across platforms:
       -- 1. Remove memory addresses (0x...)
       -- 2. Remove generic type parameters
@@ -991,8 +994,8 @@ normalizeMessage msg =
 -- 1. Stack trace (if has meaningful in-app frames)
 -- 2. Exception type + message
 -- 3. Message only
-computeErrorFingerprint :: Projects.ProjectId -> Maybe Text  -> Maybe Text -> Text -> Text  -> Text -> Text -> Text
-computeErrorFingerprint projectId mService mEndpoint runtime exceptionType message stackTrace =
+computeErrorFingerprint :: Text -> Maybe Text  -> Maybe Text -> Text -> Text  -> Text -> Text -> Text
+computeErrorFingerprint projectIdText mService spanName runtime exceptionType message stackTrace =
   let -- Normalize components
       normalizedStack = normalizeStackTrace runtime stackTrace
       normalizedMsg = normalizeMessage message
@@ -1002,23 +1005,22 @@ computeErrorFingerprint projectId mService mEndpoint runtime exceptionType messa
       fingerprintComponents =
         if hasUsableStackTrace normalizedStack
           then
-            [ projectId.toText
-            , fromMaybe "" mService
+            [ projectIdText
             , normalizedType
             , normalizedStack
             ]
           else if not (T.null normalizedType)
             then
-              [ projectId.toText
+              [ projectIdText
               , fromMaybe "" mService
-              , fromMaybe "" mEndpoint
+              , fromMaybe "" spanName
               , normalizedType
               , normalizedMsg
               ]
             else
-              [ projectId.toText
+              [ projectIdText
               , fromMaybe "" mService
-              , fromMaybe "" mEndpoint
+              , fromMaybe "" spanName
               , normalizedMsg
               ]
 
