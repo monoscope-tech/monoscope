@@ -88,11 +88,10 @@ import Pkg.THUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
 import Text.Printf (printf)
+import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
 import Text.Regex.TDFA ((=~))
 import Text.Show
 import "base64" Data.ByteString.Base64 qualified as B64
-import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
-
 
 
 -- Added only for satisfying the tests
@@ -909,4 +908,3 @@ replaceAllFormats input = restorePlaceholders $ processPatterns input formatPatt
       , -- Numbers (including HTTP status codes)
         [ed|[0-9]+///〖×INTEGER×〗|]
       ]
-

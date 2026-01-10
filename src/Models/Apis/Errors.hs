@@ -60,7 +60,7 @@ import Pkg.DeriveUtils (BaselineState (..))
 import Relude hiding (id)
 import System.Types (DB)
 import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))
-import Utils (DBField (MkDBField), toXXHash, replaceAllFormats)
+import Utils (DBField (MkDBField), replaceAllFormats, toXXHash)
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -578,16 +578,22 @@ upsertErrorQueryAndParam pid err = (q, params)
 -- - Limits to first 2 non-empty lines
 -- - Replaces UUIDs, IPs, emails, timestamps, numbers with placeholders
 
-
 -- | Represents a parsed stack frame
 data StackFrame = StackFrame
-  { sfFilePath :: Text         -- ^ Full file path or module path
-  , sfModule :: Maybe Text     -- ^ Module/package name (extracted from path)
-  , sfFunction :: Text         -- ^ Function/method name
-  , sfLineNumber :: Maybe Int  -- ^ Line number
-  , sfColumnNumber :: Maybe Int -- ^ Column number
-  , sfContextLine :: Maybe Text -- ^ Source code at this frame (if available)
-  , sfIsInApp :: Bool          -- ^ Whether this is application code vs library/system
+  { sfFilePath :: Text
+  -- ^ Full file path or module path
+  , sfModule :: Maybe Text
+  -- ^ Module/package name (extracted from path)
+  , sfFunction :: Text
+  -- ^ Function/method name
+  , sfLineNumber :: Maybe Int
+  -- ^ Line number
+  , sfColumnNumber :: Maybe Int
+  -- ^ Column number
+  , sfContextLine :: Maybe Text
+  -- ^ Source code at this frame (if available)
+  , sfIsInApp :: Bool
+  -- ^ Whether this is application code vs library/system
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -613,37 +619,40 @@ parseStackFrame runtime line =
         "dotnet" -> parseDotNetFrame trimmed
         _ -> parseGenericFrame trimmed
 
+
 -- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
 -- Format: package.function(args) or /path/to/file.go:123 +0x1f
 parseGoFrame :: Text -> Maybe StackFrame
 parseGoFrame line
-  | "goroutine" `T.isPrefixOf` line = Nothing  -- Skip goroutine headers
+  | "goroutine" `T.isPrefixOf` line = Nothing -- Skip goroutine headers
   | ".go:" `T.isInfixOf` line =
       -- File path line: /path/to/file.go:123 +0x1f
       let (pathPart, _) = T.breakOn " +" line
           (filePath, lineCol) = T.breakOnEnd ":" pathPart
           lineNum = readMaybe $ toString $ T.takeWhile (/= ':') lineCol
-       in Just StackFrame
-            { sfFilePath = T.dropEnd 1 filePath  -- Remove trailing ':'
-            , sfModule = extractGoModule filePath
-            , sfFunction = ""
-            , sfLineNumber = lineNum
-            , sfColumnNumber = Nothing
-            , sfContextLine = Nothing
-            , sfIsInApp = isGoInApp filePath
-            }
+       in Just
+            StackFrame
+              { sfFilePath = T.dropEnd 1 filePath -- Remove trailing ':'
+              , sfModule = extractGoModule filePath
+              , sfFunction = ""
+              , sfLineNumber = lineNum
+              , sfColumnNumber = Nothing
+              , sfContextLine = Nothing
+              , sfIsInApp = isGoInApp filePath
+              }
   | "(" `T.isInfixOf` line =
       -- Function call line: main.foo(0x1234, 0x5678)
       let (funcPart, _) = T.breakOn "(" line
-       in Just StackFrame
-            { sfFilePath = ""
-            , sfModule = extractGoModuleFromFunc funcPart
-            , sfFunction = extractGoFuncName funcPart
-            , sfLineNumber = Nothing
-            , sfColumnNumber = Nothing
-            , sfContextLine = Nothing
-            , sfIsInApp = isGoFuncInApp funcPart
-            }
+       in Just
+            StackFrame
+              { sfFilePath = ""
+              , sfModule = extractGoModuleFromFunc funcPart
+              , sfFunction = extractGoFuncName funcPart
+              , sfLineNumber = Nothing
+              , sfColumnNumber = Nothing
+              , sfContextLine = Nothing
+              , sfIsInApp = isGoFuncInApp funcPart
+              }
   | otherwise = Nothing
   where
     extractGoModule path =
@@ -662,11 +671,17 @@ parseGoFrame line
       let parts = T.splitOn "." func
        in fromMaybe func $ viaNonEmpty last parts
 
-    isGoInApp path = not $ any (`T.isInfixOf` path)
-      ["go/src/", "pkg/mod/", "vendor/", "/runtime/", "/net/", "/syscall/"]
+    isGoInApp path =
+      not
+        $ any
+          (`T.isInfixOf` path)
+          ["go/src/", "pkg/mod/", "vendor/", "/runtime/", "/net/", "/syscall/"]
 
-    isGoFuncInApp func = not $ any (`T.isPrefixOf` func)
-      ["runtime.", "syscall.", "net.", "net/http.", "reflect."]
+    isGoFuncInApp func =
+      not
+        $ any
+          (`T.isPrefixOf` func)
+          ["runtime.", "syscall.", "net.", "net/http.", "reflect."]
 
 
 -- | Parse JavaScript stack frame
@@ -679,9 +694,10 @@ parseJsFrame line
   | "at " `T.isPrefixOf` T.strip line =
       let content = T.strip $ T.drop 3 $ T.strip line
           -- Handle "at async ..."
-          content' = if "async " `T.isPrefixOf` content
-                       then T.drop 6 content
-                       else content
+          content' =
+            if "async " `T.isPrefixOf` content
+              then T.drop 6 content
+              else content
        in if "(" `T.isInfixOf` content'
             then parseJsWithParens content'
             else parseJsWithoutParens content'
@@ -692,28 +708,30 @@ parseJsFrame line
           locationPart = T.dropAround (\c -> c == '(' || c == ')') rest
           (filePath, lineCol) = parseJsLocation locationPart
           (lineNum, colNum) = parseLineCol lineCol
-       in Just StackFrame
-            { sfFilePath = filePath
-            , sfModule = extractJsModule filePath
-            , sfFunction = cleanJsFunction funcPart
-            , sfLineNumber = lineNum
-            , sfColumnNumber = colNum
-            , sfContextLine = Nothing
-            , sfIsInApp = isJsInApp filePath
-            }
+       in Just
+            StackFrame
+              { sfFilePath = filePath
+              , sfModule = extractJsModule filePath
+              , sfFunction = cleanJsFunction funcPart
+              , sfLineNumber = lineNum
+              , sfColumnNumber = colNum
+              , sfContextLine = Nothing
+              , sfIsInApp = isJsInApp filePath
+              }
 
     parseJsWithoutParens txt =
       let (filePath, lineCol) = parseJsLocation txt
           (lineNum, colNum) = parseLineCol lineCol
-       in Just StackFrame
-            { sfFilePath = filePath
-            , sfModule = extractJsModule filePath
-            , sfFunction = "<anonymous>"
-            , sfLineNumber = lineNum
-            , sfColumnNumber = colNum
-            , sfContextLine = Nothing
-            , sfIsInApp = isJsInApp filePath
-            }
+       in Just
+            StackFrame
+              { sfFilePath = filePath
+              , sfModule = extractJsModule filePath
+              , sfFunction = "<anonymous>"
+              , sfLineNumber = lineNum
+              , sfColumnNumber = colNum
+              , sfContextLine = Nothing
+              , sfIsInApp = isJsInApp filePath
+              }
 
     parseJsLocation loc =
       -- Split from the right to handle paths with colons (Windows)
@@ -732,18 +750,24 @@ parseJsFrame line
 
     extractJsModule path =
       let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-       in Just $ T.toLower $ fromMaybe baseName $ T.stripSuffix ".js" baseName
-                  <|> T.stripSuffix ".ts" baseName
-                  <|> T.stripSuffix ".mjs" baseName
-                  <|> T.stripSuffix ".cjs" baseName
+       in Just
+            $ T.toLower
+            $ fromMaybe baseName
+            $ T.stripSuffix ".js" baseName
+            <|> T.stripSuffix ".ts" baseName
+            <|> T.stripSuffix ".mjs" baseName
+            <|> T.stripSuffix ".cjs" baseName
 
     cleanJsFunction func =
       -- Remove namespacing: Object.foo.bar -> bar
       let parts = T.splitOn "." func
        in fromMaybe func $ viaNonEmpty last parts
 
-    isJsInApp path = not $ any (`T.isInfixOf` path)
-      ["node_modules/", "<anonymous>", "internal/", "node:"]
+    isJsInApp path =
+      not
+        $ any
+          (`T.isInfixOf` path)
+          ["node_modules/", "<anonymous>", "internal/", "node:"]
 
 
 -- | Parse Python stack frame
@@ -751,25 +775,26 @@ parseJsFrame line
 parsePythonFrame :: Text -> Maybe StackFrame
 parsePythonFrame line
   | "File \"" `T.isPrefixOf` T.strip line =
-      let content = T.drop 6 $ T.strip line  -- Remove 'File "'
+      let content = T.drop 6 $ T.strip line -- Remove 'File "'
           (filePath, rest) = T.breakOn "\"" content
           -- Parse ", line 123, in func_name"
-          parts = T.splitOn ", " $ T.drop 2 rest  -- Skip '",'
+          parts = T.splitOn ", " $ T.drop 2 rest -- Skip '",'
           lineNum = case find ("line " `T.isPrefixOf`) parts of
-                      Just p -> readMaybe $ toString $ T.drop 5 p
-                      Nothing -> Nothing
+            Just p -> readMaybe $ toString $ T.drop 5 p
+            Nothing -> Nothing
           funcName = case find ("in " `T.isPrefixOf`) parts of
-                       Just p -> T.drop 3 p
-                       Nothing -> "<module>"
-       in Just StackFrame
-            { sfFilePath = filePath
-            , sfModule = extractPythonModule filePath
-            , sfFunction = cleanPythonFunction funcName
-            , sfLineNumber = lineNum
-            , sfColumnNumber = Nothing
-            , sfContextLine = Nothing
-            , sfIsInApp = isPythonInApp filePath
-            }
+            Just p -> T.drop 3 p
+            Nothing -> "<module>"
+       in Just
+            StackFrame
+              { sfFilePath = filePath
+              , sfModule = extractPythonModule filePath
+              , sfFunction = cleanPythonFunction funcName
+              , sfLineNumber = lineNum
+              , sfColumnNumber = Nothing
+              , sfContextLine = Nothing
+              , sfIsInApp = isPythonInApp filePath
+              }
   | otherwise = Nothing
   where
     extractPythonModule path =
@@ -779,12 +804,15 @@ parsePythonFrame line
 
     cleanPythonFunction func =
       -- Remove lambda indicators
-      T.replace "<lambda>" "lambda" $
-      T.replace "<listcomp>" "listcomp" $
-      T.replace "<dictcomp>" "dictcomp" func
+      T.replace "<lambda>" "lambda"
+        $ T.replace "<listcomp>" "listcomp"
+        $ T.replace "<dictcomp>" "dictcomp" func
 
-    isPythonInApp path = not $ any (`T.isInfixOf` path)
-      ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
+    isPythonInApp path =
+      not
+        $ any
+          (`T.isInfixOf` path)
+          ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
 
 
 -- | Parse Java stack frame
@@ -797,15 +825,16 @@ parseJavaFrame line
           locationPart = T.dropAround (\c -> c == '(' || c == ')') rest
           (fileName, lineNum) = parseJavaLocation locationPart
           (moduleName, funcName) = splitJavaQualified qualifiedMethod
-       in Just StackFrame
-            { sfFilePath = fileName
-            , sfModule = Just moduleName
-            , sfFunction = cleanJavaFunction funcName
-            , sfLineNumber = lineNum
-            , sfColumnNumber = Nothing
-            , sfContextLine = Nothing
-            , sfIsInApp = isJavaInApp qualifiedMethod
-            }
+       in Just
+            StackFrame
+              { sfFilePath = fileName
+              , sfModule = Just moduleName
+              , sfFunction = cleanJavaFunction funcName
+              , sfLineNumber = lineNum
+              , sfColumnNumber = Nothing
+              , sfContextLine = Nothing
+              , sfIsInApp = isJavaInApp qualifiedMethod
+              }
   | otherwise = Nothing
   where
     parseJavaLocation loc =
@@ -816,16 +845,19 @@ parseJavaFrame line
       let parts = T.splitOn "." qualified
        in if length parts > 1
             then case (viaNonEmpty init parts, viaNonEmpty last parts) of
-                   (Just ps, Just l) -> (T.intercalate "." ps, l)
-                   _ -> ("", qualified)
+              (Just ps, Just l) -> (T.intercalate "." ps, l)
+              _ -> ("", qualified)
             else ("", qualified)
 
     cleanJavaFunction func =
       -- Remove generics: method<T> -> method
       T.takeWhile (/= '<') func
 
-    isJavaInApp qualified = not $ any (`T.isPrefixOf` qualified)
-      ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
+    isJavaInApp qualified =
+      not
+        $ any
+          (`T.isPrefixOf` qualified)
+          ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
 
 
 -- | Parse PHP stack frame
@@ -833,19 +865,20 @@ parseJavaFrame line
 parsePhpFrame :: Text -> Maybe StackFrame
 parsePhpFrame line
   | "#" `T.isPrefixOf` T.strip line =
-      let content = T.drop 1 $ T.dropWhile (/= ' ') $ T.strip line  -- Skip "#N "
+      let content = T.drop 1 $ T.dropWhile (/= ' ') $ T.strip line -- Skip "#N "
           (pathPart, funcPart) = T.breakOn ": " content
           (filePath, lineNum) = parsePhpPath pathPart
           funcName = T.takeWhile (/= '(') $ T.drop 2 funcPart
-       in Just StackFrame
-            { sfFilePath = filePath
-            , sfModule = extractPhpModule filePath
-            , sfFunction = cleanPhpFunction funcName
-            , sfLineNumber = lineNum
-            , sfColumnNumber = Nothing
-            , sfContextLine = Nothing
-            , sfIsInApp = isPhpInApp filePath
-            }
+       in Just
+            StackFrame
+              { sfFilePath = filePath
+              , sfModule = extractPhpModule filePath
+              , sfFunction = cleanPhpFunction funcName
+              , sfLineNumber = lineNum
+              , sfColumnNumber = Nothing
+              , sfContextLine = Nothing
+              , sfIsInApp = isPhpInApp filePath
+              }
   | otherwise = Nothing
   where
     parsePhpPath path =
@@ -859,15 +892,21 @@ parsePhpFrame line
 
     cleanPhpFunction func =
       -- Remove {closure} markers
-      T.replace "{closure}" "closure" $
-      -- Simplify class::method or class->method
-      let parts = T.splitOn "->" func
-       in if length parts > 1 then fromMaybe func $ viaNonEmpty last parts else
-            let parts' = T.splitOn "::" func
-             in if length parts' > 1 then fromMaybe func $ viaNonEmpty last parts' else func
+      T.replace "{closure}" "closure"
+        $
+        -- Simplify class::method or class->method
+        let parts = T.splitOn "->" func
+         in if length parts > 1
+              then fromMaybe func $ viaNonEmpty last parts
+              else
+                let parts' = T.splitOn "::" func
+                 in if length parts' > 1 then fromMaybe func $ viaNonEmpty last parts' else func
 
-    isPhpInApp path = not $ any (`T.isInfixOf` path)
-      ["/vendor/", "/phar://"]
+    isPhpInApp path =
+      not
+        $ any
+          (`T.isInfixOf` path)
+          ["/vendor/", "/phar://"]
 
 
 -- | Parse .NET stack frame
@@ -880,23 +919,24 @@ parseDotNetFrame line
           qualifiedMethod = T.takeWhile (/= '(') methodPart
           (moduleName, funcName) = splitDotNetQualified qualifiedMethod
           (filePath, lineNum) = parseDotNetLocation $ T.drop 4 locationPart
-       in Just StackFrame
-            { sfFilePath = filePath
-            , sfModule = Just moduleName
-            , sfFunction = cleanDotNetFunction funcName
-            , sfLineNumber = lineNum
-            , sfColumnNumber = Nothing
-            , sfContextLine = Nothing
-            , sfIsInApp = isDotNetInApp qualifiedMethod
-            }
+       in Just
+            StackFrame
+              { sfFilePath = filePath
+              , sfModule = Just moduleName
+              , sfFunction = cleanDotNetFunction funcName
+              , sfLineNumber = lineNum
+              , sfColumnNumber = Nothing
+              , sfContextLine = Nothing
+              , sfIsInApp = isDotNetInApp qualifiedMethod
+              }
   | otherwise = Nothing
   where
     splitDotNetQualified qualified =
       let parts = T.splitOn "." qualified
        in if length parts > 1
             then case (viaNonEmpty init parts, viaNonEmpty last parts) of
-                   (Just ps, Just l) -> (T.intercalate "." ps, l)
-                   _ -> ("", qualified)
+              (Just ps, Just l) -> (T.intercalate "." ps, l)
+              _ -> ("", qualified)
             else ("", qualified)
 
     parseDotNetLocation loc =
@@ -907,8 +947,11 @@ parseDotNetFrame line
       -- Remove generic arity: Method`1 -> Method
       T.takeWhile (/= '`') func
 
-    isDotNetInApp qualified = not $ any (`T.isPrefixOf` qualified)
-      ["System.", "Microsoft.", "Newtonsoft."]
+    isDotNetInApp qualified =
+      not
+        $ any
+          (`T.isPrefixOf` qualified)
+          ["System.", "Microsoft.", "Newtonsoft."]
 
 
 -- | Generic stack frame parser for unknown formats
@@ -917,15 +960,17 @@ parseGenericFrame line =
   let trimmed = T.strip line
    in if T.null trimmed || "..." `T.isPrefixOf` trimmed
         then Nothing
-        else Just StackFrame
-          { sfFilePath = trimmed
-          , sfModule = Nothing
-          , sfFunction = extractGenericFunction trimmed
-          , sfLineNumber = extractGenericLineNumber trimmed
-          , sfColumnNumber = Nothing
-          , sfContextLine = Nothing
-          , sfIsInApp = True  -- Assume in-app by default
-          }
+        else
+          Just
+            StackFrame
+              { sfFilePath = trimmed
+              , sfModule = Nothing
+              , sfFunction = extractGenericFunction trimmed
+              , sfLineNumber = extractGenericLineNumber trimmed
+              , sfColumnNumber = Nothing
+              , sfContextLine = Nothing
+              , sfIsInApp = True -- Assume in-app by default
+              }
   where
     extractGenericFunction txt =
       -- Try to find function-like patterns
@@ -976,8 +1021,9 @@ normalizeStackTrace runtime stackText =
     normalizeContextLine ctx =
       let normalized = T.unwords $ T.words ctx
        in if T.length normalized > 120
-            then ""  -- Skip overly long context lines (like Sentry does)
+            then "" -- Skip overly long context lines (like Sentry does)
             else normalized
+
 
 -- | Normalize an error message for fingerprinting
 -- Limits to first 2 non-empty lines and replaces variable content
@@ -989,27 +1035,30 @@ normalizeMessage msg =
       normalized = replaceAllFormats combined
    in T.strip normalized
 
+
 -- | Compute the error fingerprint hash using Sentry-style prioritization
 -- Priority:
 -- 1. Stack trace (if has meaningful in-app frames)
 -- 2. Exception type + message
 -- 3. Message only
-computeErrorFingerprint :: Text -> Maybe Text  -> Maybe Text -> Text -> Text  -> Text -> Text -> Text
+computeErrorFingerprint :: Text -> Maybe Text -> Maybe Text -> Text -> Text -> Text -> Text -> Text
 computeErrorFingerprint projectIdText mService spanName runtime exceptionType message stackTrace =
-  let -- Normalize components
-      normalizedStack = normalizeStackTrace runtime stackTrace
-      normalizedMsg = normalizeMessage message
-      normalizedType = T.strip exceptionType
+  let
+    -- Normalize components
+    normalizedStack = normalizeStackTrace runtime stackTrace
+    normalizedMsg = normalizeMessage message
+    normalizedType = T.strip exceptionType
 
-      -- Build fingerprint components based on priority
-      fingerprintComponents =
-        if hasUsableStackTrace normalizedStack
-          then
-            [ projectIdText
-            , normalizedType
-            , normalizedStack
-            ]
-          else if not (T.null normalizedType)
+    -- Build fingerprint components based on priority
+    fingerprintComponents =
+      if hasUsableStackTrace normalizedStack
+        then
+          [ projectIdText
+          , normalizedType
+          , normalizedStack
+          ]
+        else
+          if not (T.null normalizedType)
             then
               [ projectIdText
               , fromMaybe "" mService
@@ -1024,9 +1073,10 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
               , normalizedMsg
               ]
 
-      -- Combine and hash
-      combined = T.intercalate "|" $ filter (not . T.null) fingerprintComponents
-   in toXXHash combined
+    -- Combine and hash
+    combined = T.intercalate "|" $ filter (not . T.null) fingerprintComponents
+   in
+    toXXHash combined
   where
     hasUsableStackTrace :: Text -> Bool
     hasUsableStackTrace normalized =
