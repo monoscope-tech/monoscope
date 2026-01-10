@@ -123,7 +123,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
   case alert of
     RuntimeErrorAlert{..} -> do
       let template = appCtx.config.whatsappErrorTemplate
-          url = pid.toText <> "/anomalies/by_hash/" <> fromMaybe "" errorData.hash
+          url = pid.toText <> "/anomalies/by_hash/" <> errorData.hash
           contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> errorData.errorType <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
       pass
@@ -326,7 +326,7 @@ discordErrorAlert err project projectUrl =
   "content": "**🔴 New Runtime Error**"
 }|]
   where
-    url = projectUrl <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
+    url = projectUrl <> "/anomalies/by_hash/" <> err.hash
     msg = "```" <> err.message <> "```"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath
