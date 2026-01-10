@@ -706,15 +706,24 @@ mkIssue
   :: AE.ToJSON a
   => Projects.ProjectId
   -> IssueType
-  -> Text -- ^ targetHash
-  -> Text -- ^ endpointHash
-  -> Maybe Text -- ^ service
-  -> Bool -- ^ critical
-  -> Text -- ^ severity
-  -> Text -- ^ title
-  -> Text -- ^ recommendedAction
-  -> Text -- ^ migrationComplexity
-  -> a -- ^ issueData
+  -> Text
+  -- ^ targetHash
+  -> Text
+  -- ^ endpointHash
+  -> Maybe Text
+  -- ^ service
+  -> Bool
+  -- ^ critical
+  -> Text
+  -- ^ severity
+  -> Text
+  -- ^ title
+  -> Text
+  -- ^ recommendedAction
+  -> Text
+  -- ^ migrationComplexity
+  -> a
+  -- ^ issueData
   -> IO Issue
 mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
   issueId <- UUIDId <$> UUID4.nextRandom
@@ -746,6 +755,7 @@ mkIssue projectId issueType targetHash endpointHash service critical severity ti
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
+
 
 -- | Create Query Alert issue
 createQueryAlertIssue :: Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> IO Issue

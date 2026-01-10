@@ -437,7 +437,7 @@ buildAIContext issue errM trDataM spans =
       , Just $ "- **Title**: " <> issue.title
       , Just $ "- **Type**: " <> show issue.issueType
       , Just $ "- **Severity**: " <> issue.severity
-      , Just $ "- **Service**: " <>  fromMaybe "" issue.service
+      , Just $ "- **Service**: " <> fromMaybe "" issue.service
       , Just $ "- **Affected Requests**: 0"
       , Just $ "- **Affected Clients**: 0"
       , Just $ "- **Recommended Action**: " <> issue.recommendedAction
@@ -940,7 +940,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     -- Time since
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
-  -- Statistics row (only for API changes)
+    -- Statistics row (only for API changes)
 
     let allChanges = getAeson issue.requestPayloads <> getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
         countChange (!b, !i, !t) c = case c.changeType of
@@ -987,7 +987,6 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
 
   -- Recommended action
   div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
-
 
   -- Action buttons
   div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
