@@ -93,28 +93,28 @@ generateEnhancedDescription authCtx issue = do
 buildTitlePrompt :: Issues.Issue -> Text
 buildTitlePrompt issue =
   let baseContext = case issue.issueType of
-        Issues.APIChange ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  "Generate a concise, descriptive title for this API change.\n"
-                    <> "Endpoint: "
-                    <> apiData.endpointMethod
-                    <> " "
-                    <> apiData.endpointPath
-                    <> "\n"
-                    <> "New fields: "
-                    <> toText (show $ V.length apiData.newFields)
-                    <> "\n"
-                    <> "Deleted fields: "
-                    <> toText (show $ V.length apiData.deletedFields)
-                    <> "\n"
-                    <> "Modified fields: "
-                    <> toText (show $ V.length apiData.modifiedFields)
-                    <> "\n"
-                    <> "Service: "
-                    <> issue.service
-                _ -> "Generate a concise title for this API change."
+        -- Issues.APIChange ->
+        --   let Aeson issueDataValue = issue.issueData
+        --    in case AE.fromJSON issueDataValue of
+        --         AE.Success (apiData :: Issues.APIChangeData) ->
+        --           "Generate a concise, descriptive title for this API change.\n"
+        --             <> "Endpoint: "
+        --             <> apiData.endpointMethod
+        --             <> " "
+        --             <> apiData.endpointPath
+        --             <> "\n"
+        --             <> "New fields: "
+        --             <> toText (show $ V.length apiData.newFields)
+        --             <> "\n"
+        --             <> "Deleted fields: "
+        --             <> toText (show $ V.length apiData.deletedFields)
+        --             <> "\n"
+        --             <> "Modified fields: "
+        --             <> toText (show $ V.length apiData.modifiedFields)
+        --             <> "\n"
+        --             <> "Service: "
+        --             <> issue.service
+        --         _ -> "Generate a concise title for this API change."
         Issues.RuntimeException ->
           let Aeson issueDataValue = issue.issueData
            in case AE.fromJSON issueDataValue of
@@ -127,7 +127,7 @@ buildTitlePrompt issue =
                     <> T.take 100 errorData.errorMessage
                     <> "\n"
                     <> "Service: "
-                    <> issue.service
+                    <> fromMaybe "" issue.service
                 _ -> "Generate a concise title for this runtime exception."
         Issues.QueryAlert ->
           let Aeson issueDataValue = issue.issueData
@@ -165,31 +165,31 @@ buildTitlePrompt issue =
 buildDescriptionPrompt :: Issues.Issue -> Text
 buildDescriptionPrompt issue =
   let baseContext = case issue.issueType of
-        Issues.APIChange ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  "Describe this API change and its impact.\n"
-                    <> "Endpoint: "
-                    <> apiData.endpointMethod
-                    <> " "
-                    <> apiData.endpointPath
-                    <> "\n"
-                    <> "New fields: "
-                    <> toText (show $ V.toList apiData.newFields)
-                    <> "\n"
-                    <> "Deleted fields: "
-                    <> toText (show $ V.toList apiData.deletedFields)
-                    <> "\n"
-                    <> "Modified fields: "
-                    <> toText (show $ V.toList apiData.modifiedFields)
-                    <> "\n"
-                    <> "Total anomalies grouped: "
-                    <> toText (show $ V.length apiData.anomalyHashes)
-                    <> "\n"
-                    <> "Service: "
-                    <> issue.service
-                _ -> "Describe this API change and its implications."
+        -- Issues.APIChange ->
+        --   let Aeson issueDataValue = issue.issueData
+        --    in case AE.fromJSON issueDataValue of
+        --         AE.Success (apiData :: Issues.APIChangeData) ->
+        --           "Describe this API change and its impact.\n"
+        --             <> "Endpoint: "
+        --             <> apiData.endpointMethod
+        --             <> " "
+        --             <> apiData.endpointPath
+        --             <> "\n"
+        --             <> "New fields: "
+        --             <> toText (show $ V.toList apiData.newFields)
+        --             <> "\n"
+        --             <> "Deleted fields: "
+        --             <> toText (show $ V.toList apiData.deletedFields)
+        --             <> "\n"
+        --             <> "Modified fields: "
+        --             <> toText (show $ V.toList apiData.modifiedFields)
+        --             <> "\n"
+        --             <> "Total anomalies grouped: "
+        --             <> toText (show $ V.length apiData.anomalyHashes)
+        --             <> "\n"
+        --             <> "Service: "
+        --             <> issue.service
+        --         _ -> "Describe this API change and its implications."
         Issues.RuntimeException ->
           let Aeson issueDataValue = issue.issueData
            in case AE.fromJSON issueDataValue of
@@ -282,18 +282,18 @@ classifyIssueCriticality authCtx issue = do
 buildCriticalityPrompt :: Issues.Issue -> Text
 buildCriticalityPrompt issue =
   let context = case issue.issueType of
-        Issues.APIChange ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  unlines
-                    [ "API change detected"
-                    , "Endpoint: " <> apiData.endpointMethod <> " " <> apiData.endpointPath
-                    , "New fields: " <> toText (show $ V.length apiData.newFields)
-                    , "Deleted fields: " <> toText (show $ V.length apiData.deletedFields)
-                    , "Modified fields: " <> toText (show $ V.length apiData.modifiedFields)
-                    ]
-                _ -> "API change: " <> issue.title
+        -- Issues.APIChange ->
+        --   let Aeson issueDataValue = issue.issueData
+        --    in case AE.fromJSON issueDataValue of
+        --         AE.Success (apiData :: Issues.APIChangeData) ->
+        --           unlines
+        --             [ "API change detected"
+        --             , "Endpoint: " <> apiData.endpointMethod <> " " <> apiData.endpointPath
+        --             , "New fields: " <> toText (show $ V.length apiData.newFields)
+        --             , "Deleted fields: " <> toText (show $ V.length apiData.deletedFields)
+        --             , "Modified fields: " <> toText (show $ V.length apiData.modifiedFields)
+        --             ]
+        --         _ -> "API change: " <> issue.title
         Issues.RuntimeException ->
           "Runtime exception: " <> issue.title
         Issues.QueryAlert ->

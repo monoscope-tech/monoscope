@@ -353,22 +353,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                             span_ [class_ "text-sm text-textWeak"] "Service:"
                             span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown service" err.errorData.serviceName
           _ -> pass
-      Issues.APIChange -> do
-        case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (changeData :: Issues.APIChangeData) -> do
-            div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-              statBox_ (Just pid) Nothing "Affected Requests" "" "0" Nothing Nothing
-              statBox_ (Just pid) Nothing "New fields" "" (show $ V.length changeData.newFields) Nothing Nothing
-              statBox_ (Just pid) Nothing "Modified fields" "" (show $ V.length changeData.modifiedFields) Nothing Nothing
-              statBox_ (Just pid) Nothing "Deleted fields" "" (show $ V.length changeData.deletedFields) Nothing Nothing
-              widget
-            div_ [class_ "flex flex-col gap-4"] do
-              div_ [class_ "w-full"] do
-                div_ [class_ "flex items-center gap-2"] do
-                  span_ [class_ $ "badge " <> methodFillColor changeData.endpointMethod] $ toHtml changeData.endpointMethod
-                  span_ [class_ "monospace px-2 py-1 rounded text-xs text-textStrong"] $ toHtml changeData.endpointPath
-              div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] $ renderPayloadChanges issue.id issue.issueType issue.requestPayloads issue.responsePayloads
-          _ -> pass
       Issues.QueryAlert -> do
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (alertData :: Issues.QueryAlertData) -> do
@@ -453,7 +437,7 @@ buildAIContext issue errM trDataM spans =
       , Just $ "- **Title**: " <> issue.title
       , Just $ "- **Type**: " <> show issue.issueType
       , Just $ "- **Severity**: " <> issue.severity
-      , Just $ "- **Service**: " <> issue.service
+      , Just $ "- **Service**: " <>  fromMaybe "" issue.service
       , Just $ "- **Affected Requests**: 0"
       , Just $ "- **Affected Clients**: 0"
       , Just $ "- **Recommended Action**: " <> issue.recommendedAction
@@ -949,22 +933,15 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   -- Metadata row (method, endpoint, service, time)
   div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
     -- Method and endpoint (for API changes)
-    when (issue.issueType == Issues.APIChange) do
-      case AE.fromJSON (getAeson issue.issueData) of
-        AE.Success (apiData :: Issues.APIChangeData) -> do
-          div_ [class_ "flex items-center gap-2"] do
-            span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
-            span_ [class_ "monospace bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
-        _ -> pass
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
       div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-      span_ [class_ "text-textStrong"] $ toHtml issue.service
+      span_ [class_ "text-textStrong"] $ toHtml $ fromMaybe "" issue.service
     -- Time since
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
   -- Statistics row (only for API changes)
-  when (issue.issueType == Issues.APIChange) do
+
     let allChanges = getAeson issue.requestPayloads <> getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
         countChange (!b, !i, !t) c = case c.changeType of
           Anomalies.Breaking -> (b + 1, i, t + 1)
@@ -1011,12 +988,6 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   -- Recommended action
   div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
 
-  -- Collapsible payload changes (only for API changes)
-  when (issue.issueType == Issues.APIChange) $ details_ [class_ "group mb-4"] do
-    summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
-      faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
-      "View detailed payload changes"
-    div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] $ renderPayloadChanges issue.id issue.issueType issue.requestPayloads issue.responsePayloads
 
   -- Action buttons
   div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
@@ -1050,53 +1021,6 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       do
         faSprite_ "archive" "regular" "w-4 h-4"
         span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
-
-
--- Render payload changes section
-renderPayloadChanges :: Issues.IssueId -> Issues.IssueType -> Aeson [PayloadChange] -> Aeson [PayloadChange] -> Html ()
-renderPayloadChanges issueId issueType requestPayloads responsePayloads =
-  when (issueType == Issues.APIChange) do
-    let requestChanges = getAeson requestPayloads :: [Anomalies.PayloadChange]
-    let responseChanges = getAeson responsePayloads :: [Anomalies.PayloadChange]
-
-    when (not (null requestChanges) || not (null responseChanges)) do
-      div_ [class_ "border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised group/payloadtabs"] do
-        div_ [class_ "flex flex-col gap-2"] do
-          div_ [role_ "tablist", Aria.orientation_ "horizontal", class_ "text-muted-foreground h-9 items-center justify-center rounded-xl p-[3px] w-full grid grid-cols-2 bg-fillWeak"] do
-            label_
-              [ role_ "tab"
-              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong bg-transparent text-textWeak"
-              ]
-              do
-                input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issueId), class_ "hidden payload-tab-response", checked_]
-                faSprite_ "arrow-right" "regular" "w-4 h-4"
-                span_ [] $ "Response Payloads (" <> show (length responseChanges) <> ")"
-
-            label_
-              [ role_ "tab"
-              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong bg-transparent text-textWeak"
-              ]
-              do
-                input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issueId), class_ "hidden payload-tab-request"]
-                faSprite_ "arrow-right" "regular" "w-4 h-4 rotate-180"
-                span_ [] $ "Request Payloads (" <> show (length requestChanges) <> ")"
-
-          div_
-            [ role_ "tabpanel"
-            , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-response:checked]/payloadtabs:block"
-            ]
-            do
-              if null responseChanges
-                then div_ [class_ "text-center py-8 text-textWeak"] "No response payload changes"
-                else forM_ responseChanges (renderPayloadChange True)
-          div_
-            [ role_ "tabpanel"
-            , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-request:checked]/payloadtabs:block"
-            ]
-            do
-              if null requestChanges
-                then div_ [class_ "text-center py-8 text-textWeak"] "No request payload changes"
-                else forM_ requestChanges (renderPayloadChange False)
 
 
 -- Render individual payload change
@@ -1264,7 +1188,7 @@ issueTypeBadge issueType critical = badge cls icon txt
     (cls, icon, txt) = case issueType of
       Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
       Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
-      Issues.APIChange
+      _
         | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
         | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
     badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t

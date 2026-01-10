@@ -90,14 +90,6 @@ data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | SendDiscordData Users.UserId Projects.ProjectId Text [Text] Text
-  | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
-    NewAnomaly
-      { projectId :: Projects.ProjectId
-      , createdAt :: ZonedTime
-      , anomalyType :: Text
-      , anomalyAction :: Text
-      , targetHashes :: [Text]
-      }
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
@@ -187,7 +179,6 @@ processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds authCtx
-    NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
@@ -1097,7 +1088,7 @@ sendReportForProject pid rType = do
                   slowQueriesCount = V.length slowDbQueries
                   slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
                   totalAnomalies = length anomalies'
-                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
+                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.NewEndpoint then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
                   runtimeErrorsBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral errTotal / fromIntegral totalAnomalies) * 99
                   apiChangesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral apiTotal / fromIntegral totalAnomalies) * 99
                   alertIssuesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral qTotal / fromIntegral totalAnomalies) * 99
@@ -1129,114 +1120,6 @@ sendReportForProject pid rType = do
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
 emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM (const pass)
-
-
--- | Process new anomalies detected by database triggers
--- This job is created by the apis.new_anomaly_proc() stored procedure
--- when new entities (endpoints, shapes, fields, formats, errors) are inserted.
---
--- Anomaly Processing Strategy:
--- 1. API Changes (endpoint/shape/format) -> Group by endpoint into single issue
--- 2. Runtime Exceptions -> Create individual issues for each error
--- 3. All issues are queued for LLM enhancement if configured
--- 4. Notifications are sent based on project settings
-newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
-newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
-  authCtx <- ask @Config.AuthContext
-  let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
-  Log.logInfo "Processing new anomalies" ()
-  case anomalyType of
-    -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
-    -- This prevents notification spam when multiple related changes occur
-    Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
-    Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes
-    Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
-    -- Runtime exceptions get individual issues
-    -- Each unique error pattern gets its own issue for tracking
-    _ -> pass
-
-
--- | Process API change anomalies (endpoint, shape, format) into unified APIChange issues
--- This function groups related anomalies by endpoint to prevent notification spam.
--- For example, if a new endpoint is added with 5 fields and 2 formats, instead of
--- creating 8 separate issues, we create 1 issue that encompasses all changes.
---
--- Grouping Strategy:
--- 1. All anomalies are grouped by their endpoint hash
--- 2. If an open issue exists for that endpoint, update it with new anomalies
--- 3. Otherwise, create a new issue containing all anomalies for that endpoint
-processAPIChangeAnomalies :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
-processAPIChangeAnomalies pid targetHashes = do
-  authCtx <- ask @Config.AuthContext
-
-  -- Get all anomalies
-  anomaliesList <- Anomalies.getAnomaliesVM pid targetHashes
-  let anomaliesVM = V.fromList anomaliesList
-
-  -- Group by endpoint hash to consolidate related changes
-  let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
-
-  -- Process each endpoint group
-  forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
-    -- Check for existing open issue to avoid duplicates
-    existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
-
-    case existingIssueM of
-      Just existingIssue -> do
-        -- Update existing issue with new anomaly data
-        let apiChangeData =
-              Issues.APIChangeData
-                { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
-                , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
-                , endpointHost = "Unknown"
-                , anomalyHashes = V.map (.targetHash) anomalies
-                , shapeChanges = V.empty -- Simplified for now
-                , formatChanges = V.empty -- Simplified for now
-                , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
-                , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
-                , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
-                }
-        Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
-      Nothing -> do
-        -- Create new issue
-        issue <- liftIO $ Issues.createAPIChangeIssue pid endpointHash anomalies
-        Issues.insertIssue issue
-
-        -- Queue enhancement job
-        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        pass
-
-
--- -- Send notifications
--- projectM <- Projects.projectById pid
--- whenJust projectM \project -> do
---   users <- Projects.usersByProjectId pid
---   let endpointInfo =
---         map
---           ( \(_, anoms) ->
---               let firstAnom = V.head anoms
---                in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
---           )
---           anomaliesByEndpoint
---   -- Only send notifications if we have valid endpoint info
---   Relude.when (project.endpointAlerts && not (null endpointInfo)) do
---     let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
-
---     forM_ project.notificationsChannel \case
---       Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
---       Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
---       Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
---       Projects.NEmail -> do
---         forM_ users \u -> do
---           let templateVars =
---                 AE.object
---                   [ "user_name" AE..= u.firstName
---                   , "project_name" AE..= project.title
---                   , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
---                   , "endpoint_name" AE..= (method <> " " <> urlPath)
---                   ]
---           sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
 -- | Group anomalies by endpoint hash
 groupAnomaliesByEndpointHash :: V.Vector Anomalies.AnomalyVM -> [(Text, V.Vector Anomalies.AnomalyVM)]
