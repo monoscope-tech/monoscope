@@ -1060,7 +1060,7 @@ extractATError spanObj (AE.Object o) = do
         Just (AE.Object tel) ->
           KEM.lookup "sdk" tel
             >>= ( \case
-                    AE.Object sdkObj -> KEM.lookup "name" sdkObj >>= asText
+                    AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
                     _ -> Nothing
                 )
         _ -> Nothing

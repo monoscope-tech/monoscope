@@ -61,6 +61,7 @@ import Relude hiding (id)
 import System.Types (DB)
 import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))
 import Utils (DBField (MkDBField), toXXHash)
+import RequestMessages (replaceAllFormats)
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
@@ -601,63 +602,17 @@ parseStackTrace mSdk stackText =
 
 -- | Parse a single stack frame line based on SDK type
 parseStackFrame :: Text -> Text -> Maybe StackFrame
-parseStackFrame mSdk line =
+parseStackFrame runtime line =
   let trimmed = T.strip line
-   in case mSdk of
-        Just sdk | isGoSDK sdk -> parseGoFrame trimmed
-        Just sdk | isJsSDK sdk -> parseJsFrame trimmed
-        Just sdk | isPythonSDK sdk -> parsePythonFrame trimmed
-        Just sdk | isJavaSDK sdk -> parseJavaFrame trimmed
-        Just sdk | isPhpSDK sdk -> parsePhpFrame trimmed
-        Just sdk | isDotNetSDK sdk -> parseDotNetFrame trimmed
+   in case runtime of
+        "go" -> parseGoFrame trimmed
+        "nodejs" -> parseJsFrame trimmed
+        "webjs" -> parseJsFrame trimmed
+        "python" -> parsePythonFrame trimmed
+        "java" -> parseJavaFrame trimmed
+        "php" -> parsePhpFrame trimmed
+        "dotnet" -> parseDotNetFrame trimmed
         _ -> parseGenericFrame trimmed
-  where
-    isGoSDK = \case
-      RequestDumps.GoGin -> True
-      RequestDumps.GoBuiltIn -> True
-      RequestDumps.GoGorillaMux -> True
-      RequestDumps.GoFiber -> True
-      RequestDumps.GoDefault -> True
-      RequestDumps.GoOutgoing -> True
-      _ -> False
-
-    isJsSDK = \case
-      RequestDumps.JsExpress -> True
-      RequestDumps.JsNest -> True
-      RequestDumps.JsFastify -> True
-      RequestDumps.JsAdonis -> True
-      RequestDumps.JsNext -> True
-      RequestDumps.JsAxiosOutgoing -> True
-      RequestDumps.JsOutgoing -> True
-      _ -> False
-
-    isPythonSDK = \case
-      RequestDumps.PythonFastApi -> True
-      RequestDumps.PythonFlask -> True
-      RequestDumps.PythonDjango -> True
-      RequestDumps.PythonOutgoing -> True
-      RequestDumps.PythonPyramid -> True
-      _ -> False
-
-    isJavaSDK = \case
-      RequestDumps.JavaSpringBoot -> True
-      RequestDumps.JavaSpring -> True
-      RequestDumps.JavaApacheOutgoing -> True
-      RequestDumps.JavaVertx -> True
-      _ -> False
-
-    isPhpSDK = \case
-      RequestDumps.PhpLaravel -> True
-      RequestDumps.PhpSymfony -> True
-      RequestDumps.PhpSlim -> True
-      RequestDumps.GuzzleOutgoing -> True
-      _ -> False
-
-    isDotNetSDK = \case
-      RequestDumps.DotNet -> True
-      RequestDumps.DotNetOutgoing -> True
-      _ -> False
-
 
 -- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
 -- Format: package.function(args) or /path/to/file.go:123 +0x1f
@@ -1021,7 +976,6 @@ normalizeStackTrace runtime stackText =
             then ""  -- Skip overly long context lines (like Sentry does)
             else normalized
 
-
 -- | Normalize an error message for fingerprinting
 -- Limits to first 2 non-empty lines and replaces variable content
 normalizeMessage :: Text -> Text
@@ -1029,52 +983,8 @@ normalizeMessage msg =
   let lns = take 2 $ filter (not . T.null . T.strip) $ T.lines msg
       combined = T.intercalate " " $ map T.strip lns
       -- Replace variable patterns with placeholders
-      normalized = replaceMessagePatterns combined
+      normalized = replaceAllFormats combined
    in T.strip normalized
-
-
--- | Replace variable patterns in messages (UUIDs, IPs, numbers, etc.)
--- Similar to Sentry's parameterization
-replaceMessagePatterns :: Text -> Text
-replaceMessagePatterns = applyPatterns messageNormalizationPatterns
-  where
-    applyPatterns :: [SearchReplace RE Text] -> Text -> Text
-    applyPatterns [] txt = txt
-    applyPatterns (p : ps) txt = applyPatterns ps (txt *=~/ p)
-
-
--- | Patterns for message normalization
--- Order matters: more specific patterns first
-messageNormalizationPatterns :: [SearchReplace RE Text]
-messageNormalizationPatterns =
-  [ -- UUIDs
-    [ed|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}///<uuid>|]
-  , [ed|[0-9a-fA-F]{24}///<id>|]
-    -- Hashes
-  , [ed|[a-fA-F0-9]{64}///<sha256>|]
-  , [ed|[a-fA-F0-9]{40}///<sha1>|]
-  , [ed|[a-fA-F0-9]{32}///<md5>|]
-    -- Network
-  , [ed|((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)///<ip>|]
-  , [ed|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}///<email>|]
-  , [ed|https?://[^\s]+///<url>|]
-    -- Dates/Times (ISO format)
-  , [ed|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?///<datetime>|]
-  , [ed|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}///<datetime>|]
-  , [ed|[0-9]{4}-[0-9]{2}-[0-9]{2}///<date>|]
-    -- Timestamps
-  , [ed|1[0-9]{12}///<timestamp_ms>|]
-  , [ed|1[0-9]{9}///<timestamp>|]
-    -- Hex values
-  , [ed|0x[0-9A-Fa-f]+///<hex>|]
-    -- Quoted strings (after other patterns)
-  , [ed|"[^"]*"///<str>|]
-  , [ed|'[^']*'///<str>|]
-    -- Numbers (last, as they're most general)
-  , [ed|[+-]?[0-9]+\.[0-9]+///<float>|]
-  , [ed|[0-9]+///<int>|]
-  ]
-
 
 -- | Compute the error fingerprint hash using Sentry-style prioritization
 -- Priority:
