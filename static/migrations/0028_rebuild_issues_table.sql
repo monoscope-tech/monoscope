@@ -31,7 +31,6 @@ CREATE TABLE apis.issues (
     last_seen_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     acknowledged_at     TIMESTAMPTZ,
     acknowledged_by     UUID REFERENCES users.users(id) ON DELETE SET NULL,
-    resolved_at         TIMESTAMPTZ,
     recommended_action  TEXT NOT NULL DEFAULT '',
     migration_complexity TEXT NOT NULL DEFAULT 'n/a', -- 'low', 'medium', 'high', 'n/a'
     request_payloads    JSONB NOT NULL DEFAULT '[]'::jsonb,
