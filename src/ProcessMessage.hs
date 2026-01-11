@@ -20,6 +20,7 @@ import Data.ByteString.Lazy.Char8 qualified as BL
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 
 import Data.Cache qualified as Cache
+import Data.Default (def)
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HashMap
@@ -290,6 +291,12 @@ processSpanToEntities pjc otelSpan dumpId =
       -- Determine if request is outgoing based on span kind
       !outgoing = otelSpan.kind == Just "client"
 
+      -- Extract trace ID from context for linking
+      !traceId = otelSpan.context >>= Telemetry.trace_id
+
+      -- Extract service name from resource
+      !serviceName = Telemetry.atMapText "service.name" (unAesonTextMaybe otelSpan.resource)
+
       -- Build endpoint if not in cache
       -- Only create endpoint entity if:
       -- 1. Not already in project cache (prevents duplicate anomalies)
@@ -312,6 +319,20 @@ processSpanToEntities pjc otelSpan dumpId =
                 , hash = endpointHash
                 , outgoing = outgoing
                 , description = ""
+                , firstTraceId = traceId
+                , recentTraceId = traceId
+                , service = serviceName
+                , baselineState = def
+                , baselineSamples = 0
+                , baselineUpdatedAt = Nothing
+                , baselineErrorRateMean = Nothing
+                , baselineErrorRateStddev = Nothing
+                , baselineLatencyMean = Nothing
+                , baselineLatencyStddev = Nothing
+                , baselineLatencyP95 = Nothing
+                , baselineLatencyP99 = Nothing
+                , baselineVolumeHourlyMean = Nothing
+                , baselineVolumeHourlyStddev = Nothing
                 }
 
       -- Build shape if not in cache
@@ -340,6 +361,11 @@ processSpanToEntities pjc otelSpan dumpId =
                 , statusCode = statusCode
                 , responseDescription = ""
                 , requestDescription = ""
+                , exampleRequestPayload = requestBody
+                , exampleResponsePayload = responseBody
+                , firstTraceId = traceId
+                , recentTraceId = traceId
+                , service = serviceName
                 }
 
       !fields' = if statusCode == 404 then V.empty else fields

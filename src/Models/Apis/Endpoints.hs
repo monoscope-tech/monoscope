@@ -91,8 +91,8 @@ bulkInsertEndpoints :: DB es => V.Vector Endpoint -> Eff es ()
 bulkInsertEndpoints endpoints = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =
-      [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
-          VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT (hash) DO  NOTHING;
+      [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, first_trace_id, recent_trace_id, service)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (hash) DO  NOTHING;
       |]
     rowsToInsert =
       endpoints <&> \endpoint ->
@@ -103,6 +103,9 @@ bulkInsertEndpoints endpoints = void $ PG.executeMany q $ V.toList rowsToInsert
         , endpoint.host
         , endpoint.hash
         , endpoint.outgoing
+        , endpoint.firstTraceId
+        , endpoint.recentTraceId
+        , endpoint.service
         )
 
 

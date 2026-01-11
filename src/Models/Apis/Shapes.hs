@@ -62,6 +62,11 @@ data Shape = Shape
   , statusCode :: Int
   , responseDescription :: Text
   , requestDescription :: Text
+  , exampleRequestPayload :: AE.Value
+  , exampleResponsePayload :: AE.Value
+  , firstTraceId :: Maybe Text
+  , recentTraceId :: Maybe Text
+  , service :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -74,10 +79,10 @@ bulkInsertShapes :: DB es => V.Vector Shape -> Eff es ()
 bulkInsertShapes shapes = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =
-      [sql| 
+      [sql|
         INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING|]
+            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description, example_request_payload, example_response_payload, first_trace_id, recent_trace_id, service)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING|]
     rowsToInsert =
       V.map
         ( \shape ->
@@ -91,8 +96,13 @@ bulkInsertShapes shapes = void $ PG.executeMany q $ V.toList rowsToInsert
             , shape.fieldHashes
             , shape.hash
             , fromIntegral shape.statusCode
-            , ""
-            , ""
+            , shape.requestDescription
+            , shape.responseDescription
+            , shape.exampleRequestPayload
+            , shape.exampleResponsePayload
+            , shape.firstTraceId
+            , shape.recentTraceId
+            , shape.service
             )
         )
         shapes
