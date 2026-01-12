@@ -363,6 +363,7 @@ bodyWrapper bcfg child = do
                       else child
                   div_ [class_ "h-0 shrink"] do
                     Components.drawer_ "global-data-drawer" Nothing Nothing ""
+                    template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
                     -- Modal for copying widgets to other dashboards
                     Components.modal_ "dashboards-modal" "" do
                       -- Hidden fields to store widget and dashboard IDs
