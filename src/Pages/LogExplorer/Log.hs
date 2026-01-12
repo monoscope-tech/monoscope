@@ -57,6 +57,10 @@ import Pages.Components (resizer_)
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
+import BackgroundJobs qualified
+import Data.Pool (withResource)
+import OddJobs.Job (createJob)
+
 
 -- $setup
 -- >>> import Relude
@@ -399,6 +403,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   -- Get facet summary for the time range specified
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+
+  -- Queue facet generation if no precomputed facets exist (new projects)
+  when (isNothing facetSummary) $
+    liftIO $ withResource authCtx.jobsPool \conn ->
+      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
