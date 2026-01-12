@@ -1610,7 +1610,7 @@ dashboardsPostH pid form = do
       addRespHeaders DashboardNoContent
 
 
--- -- Template Haskell splice to generate the list of dashboards by reading the dashboards folder in filesystem
+-- TH splice: reads all dashboard YAML files from static/public/dashboards at compile time
 dashboardTemplates :: [Dashboards.Dashboard]
 dashboardTemplates = $(Dashboards.readDashboardsFromDirectory "static/public/dashboards")
 
@@ -2273,3 +2273,6 @@ yamlValidationSuccess_ dash = div_ [id_ "yaml-status", class_ "text-textBrand"] 
     whenJust dash.variables $ \vs -> li_ $ toHtml $ show (length vs) <> " variables"
     whenJust dash.tabs $ \ts -> li_ $ toHtml $ show (length ts) <> " tabs"
     whenJust dash.constants $ \cs -> li_ $ toHtml $ show (length cs) <> " constants"
+
+
+

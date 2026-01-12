@@ -80,6 +80,8 @@ data WidgetType
   | WTTable
   | WTTraces
   | WTFlamegraph
+  | WTServiceMap -- Service dependency graph visualization
+  | WTHeatmap -- Latency distribution heatmap
   deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
@@ -943,6 +945,8 @@ mapWidgetTypeToChartType WTTimeseries = "bar"
 mapWidgetTypeToChartType WTTimeseriesLine = "line"
 mapWidgetTypeToChartType WTTimeseriesStat = "line"
 mapWidgetTypeToChartType WTDistribution = "bar"
+mapWidgetTypeToChartType WTServiceMap = "graph" -- ECharts force-directed graph
+mapWidgetTypeToChartType WTHeatmap = "heatmap" -- ECharts heatmap
 mapWidgetTypeToChartType _ = "bar"
 
 

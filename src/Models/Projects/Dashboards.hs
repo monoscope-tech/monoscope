@@ -1,30 +1,30 @@
-module Models.Projects.Dashboards (
-  Dashboard (..),
-  DashboardVM (..),
-  DashboardId,
-  readDashboardFile,
-  Variable (..),
-  VariableType (..),
-  Tab (..),
-  Constant (..),
-  getDashboardById,
-  readDashboardsFromDirectory,
-  readDashboardEndpoint,
-  replaceQueryVariables,
-  replaceConstantVariables,
-  deleteDashboardsByIds,
-  addTeamsToDashboards,
-  insert,
-  selectDashboardsByTeam,
-  selectDashboardsSortedBy,
-  updateSchema,
-  updateTitle,
-  updateTags,
-  updateSchemaAndUpdatedAt,
-  updateStarredSince,
-  deleteDashboard,
-  getDashboardByBaseTemplate,
-) where
+module Models.Projects.Dashboards
+  ( Dashboard (..)
+  , DashboardVM (..)
+  , DashboardId
+  , readDashboardFile
+  , Variable (..)
+  , VariableType (..)
+  , Tab (..)
+  , Constant (..)
+  , getDashboardById
+  , readDashboardsFromDirectory
+  , readDashboardEndpoint
+  , replaceQueryVariables
+  , replaceConstantVariables
+  , deleteDashboardsByIds
+  , addTeamsToDashboards
+  , insert
+  , selectDashboardsByTeam
+  , selectDashboardsSortedBy
+  , updateSchema
+  , updateTitle
+  , updateTags
+  , updateSchemaAndUpdatedAt
+  , updateStarredSince
+  , deleteDashboard
+  , getDashboardByBaseTemplate
+  ) where
 
 import Control.Exception (try)
 import Control.Lens
@@ -191,14 +191,18 @@ insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
       )
 
 
+-- | Read dashboard YAML files from directory at compile time via TH
 readDashboardsFromDirectory :: FilePath -> Q Exp
 readDashboardsFromDirectory dir = do
   files <- runIO $ listDirectory dir
   let files' = sort $ filter (".yaml" `L.isSuffixOf`) files
+  mapM_ (THS.addDependentFile . (dir </>)) files'
   dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'
   THS.lift dashboards
+  where (</>) = \a b -> a ++ "/" ++ b
 
 
+-- | Read single dashboard YAML file
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
   let filePath = dir ++ "/" ++ file
@@ -294,3 +298,4 @@ deleteDashboard dashId = PG.execute (_delete @DashboardVM) (Only dashId)
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
 getDashboardByBaseTemplate pid baseTemplate = fmap (.id) . listToMaybe <$> (PG.query (_selectWhere @DashboardVM [[field| project_id |], [field| base_template |]]) (pid, baseTemplate) :: DB es => Eff es [DashboardVM])
+
