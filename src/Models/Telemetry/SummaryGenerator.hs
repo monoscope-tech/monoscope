@@ -285,10 +285,10 @@ generateSpanSummary otel =
             _ -> Nothing
         ]
         ++
-        -- 8. Status (ERROR only)
-        [ case otel.status_code of
-            Just "ERROR" -> Just "status;badge-error⇒ERROR"
-            Just "OK" -> Nothing -- Don't show OK status
+        -- 8. Status (ERROR only, skip if HTTP error status already shows the error)
+        [ case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+            (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
+            (Just "ERROR", _) -> Just "status;badge-error⇒ERROR"
             _ -> Nothing
         ]
         ++
@@ -322,9 +322,10 @@ generateSpanSummary otel =
             _ -> case atMapText "user.name" (unAesonTextMaybe otel.attributes) of
               Just s -> Just $ "user name;right-badge-neutral⇒" <> s
               _ -> Nothing
-        , -- Error status (if ERROR)
-          case otel.status_code of
-            Just "ERROR" -> Just "status;right-badge-error⇒ERROR"
+        , -- Error status (if ERROR, skip if HTTP error status already shows the error)
+          case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+            (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
+            (Just "ERROR", _) -> Just "status;right-badge-error⇒ERROR"
             _ -> Nothing
         , -- Database system with brand colors (check both old and new field names)
           case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
