@@ -156,7 +156,8 @@ softDeleteProjectMembers ids = void $ PG.execute q (Only $ V.fromList $ toList i
 deactivateNonOwnerMembers :: DB es => Projects.ProjectId -> Eff es Int64
 deactivateNonOwnerMembers pid = PG.execute q (pid, pid)
   where
-    q = [sql| UPDATE projects.project_members SET active = FALSE WHERE project_id = ?
+    q =
+      [sql| UPDATE projects.project_members SET active = FALSE WHERE project_id = ?
               AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = ? ORDER BY created_at LIMIT 1) |]
 
 
@@ -167,7 +168,13 @@ activateAllMembers pid = PG.execute q (Only pid)
 
 
 data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
-  { id :: UUID.UUID, userId :: Users.UserId, permission :: Permissions, email :: CI Text, first_name :: Text, last_name :: Text, active :: Bool
+  { id :: UUID.UUID
+  , userId :: Users.UserId
+  , permission :: Permissions
+  , email :: CI Text
+  , first_name :: Text
+  , last_name :: Text
+  , active :: Bool
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -176,7 +183,8 @@ data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
 selectAllProjectMembers :: DB es => Projects.ProjectId -> Eff es [ProjectMemberWithStatusVM]
 selectAllProjectMembers pid = PG.query q (Only pid)
   where
-    q = [sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name, pm.active
+    q =
+      [sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name, pm.active
               FROM projects.project_members pm JOIN users.users us ON (pm.user_id=us.id)
               WHERE pm.project_id=?::uuid AND pm.deleted_at IS NULL ORDER BY pm.created_at ASC |]
 

@@ -1204,16 +1204,17 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
       handleOnboarding "Open Source"
       void $ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
-      Just orderId -> getSubscriptionId (Just orderId) apiKey >>= \case
-        Just sub | not (null sub.dataVal) -> do
-          let target = sub.dataVal Unsafe.!! 0
-              subId = show target.attributes.firstSubscriptionItem.subscriptionId
-              firstSubId = show target.attributes.firstSubscriptionItem.id
-              productName = target.attributes.productName
-          _ <- updatePricing productName subId firstSubId orderId
-          handleOnboarding productName
-          void $ ProjectMembers.activateAllMembers pid
-        _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
+      Just orderId ->
+        getSubscriptionId (Just orderId) apiKey >>= \case
+          Just sub | not (null sub.dataVal) -> do
+            let target = sub.dataVal Unsafe.!! 0
+                subId = show target.attributes.firstSubscriptionItem.subscriptionId
+                firstSubId = show target.attributes.firstSubscriptionItem.id
+                productName = target.attributes.productName
+            _ <- updatePricing productName subId firstSubId orderId
+            handleOnboarding productName
+            void $ ProjectMembers.activateAllMembers pid
+          _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         handleOnboarding "Free"
