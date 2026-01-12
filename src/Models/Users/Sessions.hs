@@ -130,7 +130,7 @@ getPersistentSession sessionId = listToMaybe <$> PG.query q value
         COALESCE(json_agg(pp.* ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
         from users.persistent_sessions as ps
         left join users.users u on (u.id=ps.user_id)
-        left join projects.project_members ppm on (ps.user_id=ppm.user_id)
+        left join projects.project_members ppm on (ps.user_id=ppm.user_id AND ppm.active = TRUE)
         left join projects.projects pp on (pp.id=ppm.project_id)
         where ps.id=?
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]

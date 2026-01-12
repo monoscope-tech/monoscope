@@ -887,6 +887,9 @@ inviteTeamMemberModal pid emails = do
         div_ [class_ "flex-col gap-4 flex"] $ do
           div_ [class_ "flex-col gap-5 flex"] $ do
             div_ [class_ "w-full text-textWeak"] "The users below will be added to your project as team members"
+            div_ [class_ "bg-fillInfo-weak border border-strokeInfo-weak rounded-lg p-3 flex items-start gap-2"] do
+              faSprite_ "circle-info" "regular" "w-4 h-4 text-textInfo flex-shrink-0 mt-0.5"
+              p_ [class_ "text-sm text-textWeak"] "If you select the Free plan, additional team members will be invited but disabled until you upgrade."
             div_ [class_ "w-full gap-4 flex flex-col"] $ do
               div_ [class_ "w-full gap-2 flex items-center"] $ do
                 div_ [class_ "flex-col gap-1 inline-flex w-full"]

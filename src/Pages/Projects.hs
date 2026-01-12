@@ -450,68 +450,63 @@ manageMembersPostH pid onboardingM form = do
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
+  let usersAndPermissions = filter (\(x, _) -> not (T.null x)) $ zip (form.emails <&> T.strip) form.permissions & uniq
+  let uAndPOldAndChanged =
+        mapMaybe
+          ( \(email, permission) -> do
+              let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
+              projMembersM >>= (\projMember -> Just (projMember.id, permission))
+          )
+          usersAndPermissions
 
-  if project.paymentPlan /= "Free"
-    then do
-      let usersAndPermissions = filter (\(x, _) -> not (T.null x)) $ zip (form.emails <&> T.strip) form.permissions & uniq
-      let uAndPOldAndChanged =
-            mapMaybe
-              ( \(email, permission) -> do
-                  let projMembersM = projMembers & find (\a -> original a.email == email && a.permission /= permission)
-                  projMembersM >>= (\projMember -> Just (projMember.id, permission))
-              )
-              usersAndPermissions
+  let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
 
-      let uAndPNew = filter (\(email, _) -> not $ any (\a -> original a.email == email) projMembers) usersAndPermissions
+  let deletedUAndP =
+        projMembers
+          & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
+          & filter (\a -> a.userId /= currUserId)
+          & map (.id)
 
-      let deletedUAndP =
-            projMembers
-              & filter (\pm -> not $ any (\(email, _) -> original pm.email == email) usersAndPermissions)
-              & filter (\a -> a.userId /= currUserId)
-              & map (.id)
-
-      newProjectMembers <- forM uAndPNew \(email, permission) -> do
-        userId' <- do
-          userIdM' <- Users.userIdByEmail email
-          case userIdM' of
-            Nothing -> do
-              idM' <- Users.createEmptyUser email
-              case idM' of
-                Nothing -> error "duplicate email in createEmptyUser"
-                Just idX -> pure idX
+  newProjectMembers <- forM uAndPNew \(email, permission) -> do
+    userId' <- do
+      userIdM' <- Users.userIdByEmail email
+      case userIdM' of
+        Nothing -> do
+          idM' <- Users.createEmptyUser email
+          case idM' of
+            Nothing -> error "duplicate email in createEmptyUser"
             Just idX -> pure idX
+        Just idX -> pure idX
 
-        when (userId' /= currUserId)
-          $ void
-          $ liftIO
-          $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title
-        pure (email, permission, userId')
+    when (userId' /= currUserId)
+      $ void
+      $ liftIO
+      $ withResource appCtx.pool \conn -> createJob conn "background_jobs" $ BackgroundJobs.InviteUserToProject currUserId pid email project.title
+    pure (email, permission, userId')
 
-      let projectMembers =
-            newProjectMembers
-              & filter (\(_, _, id') -> id' /= currUserId)
-              & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
-      _ <- ProjectMembers.insertProjectMembers projectMembers
+  let projectMembers =
+        newProjectMembers
+          & filter (\(_, _, id') -> id' /= currUserId)
+          & map (\(email, permission, id') -> ProjectMembers.CreateProjectMembers pid id' permission)
+  _ <- ProjectMembers.insertProjectMembers projectMembers
 
-      unless (null uAndPOldAndChanged)
-        $ void
-        $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
+  unless (null uAndPOldAndChanged)
+    $ void
+    $ ProjectMembers.updateProjectMembersPermissons uAndPOldAndChanged
 
-      whenJust (nonEmpty deletedUAndP)
-        $ void
-        . ProjectMembers.softDeleteProjectMembers
+  whenJust (nonEmpty deletedUAndP) $ void . ProjectMembers.softDeleteProjectMembers
+  when (project.paymentPlan == "Free") $ void $ ProjectMembers.deactivateNonOwnerMembers pid
 
-      projMembersLatest <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-      if isJust onboardingM
-        then do
-          redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-          addRespHeaders $ ManageMembersPost (pid, projMembersLatest)
-        else do
-          addSuccessToast "Updated Members List Successfully" Nothing
-          addRespHeaders $ ManageMembersPost (pid, projMembersLatest)
+  projMembersLatest <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
+  if isJust onboardingM
+    then do
+      redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
+      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan)
     else do
-      addErrorToast "Only one member allowed on Free plan" Nothing
-      addRespHeaders $ ManageMembersPost (pid, V.fromList projMembers)
+      if project.paymentPlan == "Free" && not (null uAndPNew)
+        then addSuccessToast "Members invited! Upgrade to enable team access." Nothing
+        else addSuccessToast "Updated Members List Successfully" Nothing
+      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan)
 
 
 data TeamForm = TeamForm
@@ -826,7 +821,7 @@ manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
+  projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -835,86 +830,73 @@ manageMembersGetH pid = do
           , isSettingsPage = True
           , config = appCtx.config
           }
-  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers)
+  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan)
 
 
 data ManageMembers
-  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM)}
-  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberVM)}
+  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text)}
+  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text)}
 
 
 instance ToHtml ManageMembers where
-  toHtml (ManageMembersGet (PageCtx bwconf (pid, memebers))) = toHtml $ PageCtx bwconf $ manageMembersBody pid memebers
-  toHtml (ManageMembersPost (pid, memebers)) = toHtml $ manageMembersBody pid memebers
+  toHtml (ManageMembersGet (PageCtx bwconf (pid, members, plan))) = toHtml $ PageCtx bwconf $ manageMembersBody pid members plan
+  toHtml (ManageMembersPost (pid, members, plan)) = toHtml $ manageMembersBody pid members plan
   toHtmlRaw = toHtml
 
 
-manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
-manageMembersBody pid projMembers =
+manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Html ()
+manageMembersBody pid projMembers paymentPlan =
   div_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
     section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
-      -- Header
       div_ [class_ "mb-2"] do
         h2_ [class_ "text-textStrong text-xl font-semibold"] "Manage Members"
         p_ [class_ "text-textWeak text-sm mt-1"] "Invite team members and manage their access permissions"
 
-      form_
-        [ class_ "space-y-6"
-        , hxPost_ ""
-        , hxTarget_ "#main-content"
-        , hxSwap_ "outerHTML"
-        , hxIndicator_ "#submitIndicator"
-        ]
-        do
-          -- Invite section
-          div_ [class_ "surface-raised rounded-2xl p-4"] do
-            label_ [class_ "text-sm font-medium text-textStrong mb-3 block"] "Invite new member"
-            div_ [class_ "flex gap-2"] do
-              input_ [type_ "email", name_ "emails", class_ "input input-bordered flex-1", placeholder_ "colleague@company.com"]
-              select_ [name_ "permissions", class_ "select select-bordered w-32"] do
-                option_ [value_ "admin"] "Admin"
-                option_ [value_ "edit"] "Editor"
-                option_ [value_ "view"] "Viewer"
-              button_ [class_ "btn btn-outline gap-1"] do
-                faSprite_ "paper-plane" "regular" "w-3 h-3"
-                span_ "Invite"
+      when (paymentPlan == "Free" && V.length projMembers > 1) do
+        div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
+          faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-textWarning flex-shrink-0 mt-0.5"
+          div_ do
+            p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
+            p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
-          -- Members list
-          div_ [class_ "space-y-3"] do
-            div_ [class_ "flex items-center justify-between"] do
-              h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Team members (" <> show (V.length projMembers) <> ")"
-              when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm"] "Save changes"
-            div_ [class_ "surface-raised rounded-2xl divide-y divide-strokeWeak overflow-hidden"] do
-              if V.null projMembers
-                then div_ [class_ "p-8 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
-                else mapM_ (memberRow pid) projMembers
+      form_ [class_ "space-y-6", hxPost_ "", hxTarget_ "#main-content", hxSwap_ "outerHTML", hxIndicator_ "#submitIndicator"] do
+        div_ [class_ "surface-raised rounded-2xl p-4"] do
+          label_ [class_ "text-sm font-medium text-textStrong mb-3 block"] "Invite new member"
+          div_ [class_ "flex gap-2"] do
+            input_ [type_ "email", name_ "emails", class_ "input input-bordered flex-1", placeholder_ "colleague@company.com"]
+            select_ [name_ "permissions", class_ "select select-bordered w-32"] do
+              option_ [value_ "admin"] "Admin"
+              option_ [value_ "edit"] "Editor"
+              option_ [value_ "view"] "Viewer"
+            button_ [class_ "btn btn-outline gap-1"] $ faSprite_ "paper-plane" "regular" "w-3 h-3" >> span_ "Invite"
+
+        div_ [class_ "space-y-3"] do
+          div_ [class_ "flex items-center justify-between"] do
+            h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Team members (" <> show (V.length projMembers) <> ")"
+            when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm"] "Save changes"
+          div_ [class_ "surface-raised rounded-2xl divide-y divide-strokeWeak overflow-hidden"]
+            $ if V.null projMembers
+              then div_ [class_ "p-8 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
+              else V.imapM_ (memberRowWithStatus pid) projMembers
 
 
-memberRow :: Projects.ProjectId -> ProjectMembers.ProjectMemberVM -> Html ()
-memberRow pid prM = do
+memberRowWithStatus :: Projects.ProjectId -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
+memberRowWithStatus pid idx prM = do
   let email = CI.original prM.email
-      permission = prM.permission
       memberId = RealUUID.toText prM.id
-  div_ [class_ "px-4 py-3 flex items-center gap-3", id_ $ "member-" <> memberId] do
-    div_ [class_ "flex-1 min-w-0"] do
-      input_ [type_ "text", name_ "emails", value_ email, readonly_ "true", class_ "bg-transparent w-full text-textStrong text-sm truncate focus:outline-none cursor-default"]
+      isOwner = idx == 0
+      isDisabled = not prM.active && not isOwner
+  div_ [class_ $ "px-4 py-3 flex items-center gap-3" <> if isDisabled then " opacity-60" else "", id_ $ "member-" <> memberId] do
+    div_ [class_ "flex-1 min-w-0"] $ div_ [class_ "flex items-center gap-2"] do
+      input_ [type_ "text", name_ "emails", value_ email, readonly_ "true", class_ $ "bg-transparent w-full text-sm truncate focus:outline-none cursor-default" <> if isDisabled then " text-textWeak" else " text-textStrong"]
+      when isOwner $ span_ [class_ "badge badge-sm bg-fillBrand-weak text-textBrand border-strokeBrand-weak"] "Owner"
+      when isDisabled $ span_ [class_ "badge badge-sm bg-fillWarning-weak text-textWarning border-strokeWarning-weak"] "Disabled"
     div_ [class_ "flex items-center gap-2"] do
-      select_ [name_ "permissions", class_ "select select-sm select-bordered text-sm"] do
-        option_ ([value_ "admin"] <> selectedIf ProjectMembers.PAdmin permission) "Admin"
-        option_ ([value_ "edit"] <> selectedIf ProjectMembers.PEdit permission) "Editor"
-        option_ ([value_ "view"] <> selectedIf ProjectMembers.PView permission) "Viewer"
-      button_
-        [ class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak"
-        , hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId
-        , hxTarget_ $ "#member-" <> memberId
-        , hxSwap_ "outerHTML"
-        , hxConfirm_ "Remove this member from the project?"
-        ]
-        do
-          faSprite_ "trash" "regular" "w-4 h-4"
-  where
-    selectedIf :: ProjectMembers.Permissions -> ProjectMembers.Permissions -> [Attribute]
-    selectedIf a b = [selected_ "" | a == b]
+      select_ [name_ "permissions", class_ $ "select select-sm select-bordered text-sm" <> if isDisabled then " opacity-50" else ""] do
+        option_ ([value_ "admin"] <> [selected_ "" | prM.permission == ProjectMembers.PAdmin]) "Admin"
+        option_ ([value_ "edit"] <> [selected_ "" | prM.permission == ProjectMembers.PEdit]) "Editor"
+        option_ ([value_ "view"] <> [selected_ "" | prM.permission == ProjectMembers.PView]) "Viewer"
+      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
@@ -1220,25 +1202,22 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
       handleOnboarding "Open Source"
+      void $ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
-      Just orderId -> do
-        getSubscriptionId (Just orderId) apiKey >>= \case
-          Just sub | not (null sub.dataVal) -> do
-            let target = sub.dataVal Unsafe.!! 0
-                subId = show target.attributes.firstSubscriptionItem.subscriptionId
-                firstSubId = show target.attributes.firstSubscriptionItem.id
-                productName = target.attributes.productName
-            _ <- updatePricing productName subId firstSubId orderId
-            handleOnboarding productName
-          _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
+      Just orderId -> getSubscriptionId (Just orderId) apiKey >>= \case
+        Just sub | not (null sub.dataVal) -> do
+          let target = sub.dataVal Unsafe.!! 0
+              subId = show target.attributes.firstSubscriptionItem.subscriptionId
+              firstSubId = show target.attributes.firstSubscriptionItem.id
+              productName = target.attributes.productName
+          _ <- updatePricing productName subId firstSubId orderId
+          handleOnboarding productName
+          void $ ProjectMembers.activateAllMembers pid
+        _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         handleOnboarding "Free"
-        users <- ProjectMembers.selectActiveProjectMembers pid
-        let usersToDel = map (.id) $ drop 1 users
-        whenJust (nonEmpty usersToDel)
-          $ void
-          . ProjectMembers.softDeleteProjectMembers
+        void $ ProjectMembers.deactivateNonOwnerMembers pid
   if project.paymentPlan == "ONBOARDING"
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
