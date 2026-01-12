@@ -32,7 +32,6 @@ import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, toList)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (Query (Query))
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Lucid
@@ -52,7 +51,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
-import Utils (faSprite_, getOtelLangVersion, insertIfNotExist, lookupValueText, onpointerdown_)
+import Utils (faSprite_, insertIfNotExist, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
 
@@ -285,13 +284,7 @@ checkIntegrationGet pid languageM = do
   (sess, project) <- Sessions.sessionAndProject pid
   let stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Integration" stepsCompleted
-      extrQ = case languageM of
-        Just lg ->
-          let l = fromMaybe "" (getOtelLangVersion lg)
-           in "and resource ->> 'telemetry.sdk.language' = '" <> l <> "'"
-        _ -> ""
-      q = [text|SELECT context___span_id, name FROM otel_logs_and_spans WHERE project_id = ? $extrQ|]
-  v :: Maybe (Text, Text) <- listToMaybe <$> PG.query (Query $ encodeUtf8 q) (Only pid)
+  v :: Maybe (Only Text) <- listToMaybe <$> PG.query [sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = ? LIMIT 1|] (Only pid)
   if isJust v
     then do
       _ <- PG.execute [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)
