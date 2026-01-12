@@ -405,8 +405,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   -- Queue facet generation if no precomputed facets exist (new projects)
-  when (isNothing facetSummary) $
-    liftIO $ withResource authCtx.jobsPool \conn ->
+  when (isNothing facetSummary)
+    $ liftIO
+    $ withResource authCtx.jobsPool \conn ->
       void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
