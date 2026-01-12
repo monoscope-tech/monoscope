@@ -67,9 +67,11 @@ parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Tex
 parseSince now since =
   either (const (Nothing, Nothing, Nothing)) buildResult (parse timeParser "" since)
   where
-    buildResult (num, unit) = (Just start, Just now, Just ("Last " <> show num <> " " <> label, ""))
+    buildResult (num, unit) = (Just start, Just now, Just ("Last " <> show num <> " " <> pluralize num label, ""))
       where
         (secs, label) = fromMaybe (0, "") (unitToSeconds unit)
+        pluralize 1 lbl = fromMaybe lbl $ T.stripSuffix "s" lbl
+        pluralize _ lbl = lbl
         start = addUTCTime (negate . secondsToNominalDiffTime . fromIntegral $ num * secs) now
 
     timeParser :: Parser (Int, String)
