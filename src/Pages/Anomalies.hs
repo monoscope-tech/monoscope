@@ -815,7 +815,7 @@ anomalyListSlider currTime _ _ (Just issues) = do
   let anomalyIds = T.replace "\"" "'" $ show $ fmap (Issues.issueIdText . (\(IssueVM _ _ _ _ issue) -> issue.id)) issues
   let totalAnomaliesTxt = toText $ if length issues > 10 then ("10+" :: Text) else show (length issues)
   div_ do
-    script_ [text| var rem = (x,y)=>((x%y)==0?1:(x%y)); |]
+    script_ """var rem = (x,y)=>((x%y)==0?1:(x%y));"""
     script_
       [type_ "text/hyperscript"]
       [text| init set $$currentAnomaly to 0 then set $$anomalyIds to $anomalyIds

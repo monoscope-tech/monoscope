@@ -521,9 +521,7 @@ renderTraceTable widget = do
                         $ tr_ []
                         $ td_ [colspan_ "100", class_ "text-center py-8"]
                         $ span_ [class_ "loading loading-spinner loading-sm"] ""
-      script_
-        [type_ "text/javascript"]
-        [text| htmx.process(".widget-target") |]
+      script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
 
 
 -- Table widget rendering

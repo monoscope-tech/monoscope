@@ -86,6 +86,7 @@ ghc-options:
 default-extensions:
   - BlockArguments
   - DataKinds
+  - MultilineStrings
   - DerivingVia
   - DeriveAnyClass
   - DerivingStrategies

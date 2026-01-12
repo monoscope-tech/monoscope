@@ -49,6 +49,8 @@ extra-source-files:
     static/migrations/0021_move_monitors_to_haskell.sql
     static/migrations/0022_query_cache.sql
     static/migrations/0023_anomaly_chat_messages.sql
+    static/migrations/0024_ai_conversations_updated_at_trigger.sql
+    static/migrations/0025_widget_alerts.sql
 
 source-repository head
   type: git
@@ -199,6 +201,7 @@ library
   default-extensions:
       BlockArguments
       DataKinds
+      MultilineStrings
       DerivingVia
       DeriveAnyClass
       DerivingStrategies
@@ -362,6 +365,7 @@ executable monoscope
   default-extensions:
       BlockArguments
       DataKinds
+      MultilineStrings
       DerivingVia
       DeriveAnyClass
       DerivingStrategies
@@ -407,6 +411,7 @@ test-suite doctests
   default-extensions:
       BlockArguments
       DataKinds
+      MultilineStrings
       DerivingVia
       DeriveAnyClass
       DerivingStrategies
@@ -471,6 +476,7 @@ test-suite integration-tests
   default-extensions:
       BlockArguments
       DataKinds
+      MultilineStrings
       DerivingVia
       DeriveAnyClass
       DerivingStrategies
@@ -555,6 +561,7 @@ test-suite unit-tests
   default-extensions:
       BlockArguments
       DataKinds
+      MultilineStrings
       DerivingVia
       DeriveAnyClass
       DerivingStrategies

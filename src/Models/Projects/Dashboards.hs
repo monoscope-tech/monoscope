@@ -243,7 +243,7 @@ getDashboardById did = listToMaybe <$> PG.query (_selectWhere @DashboardVM [[fie
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
 deleteDashboardsByIds pid dids = PG.execute (Query $ encodeUtf8 q) (pid, dids)
   where
-    q = [text|DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])|]
+    q = """DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])"""
 
 
 addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
