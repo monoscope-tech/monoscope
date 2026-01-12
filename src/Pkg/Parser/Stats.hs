@@ -121,7 +121,7 @@ arithOpToSQL = \case Mul -> " * "; Div -> " / "; Add -> " + "; Sub -> " - "
 instance Display ScalarExpr where
   displayPrec p (SVal v) = displayPrec p v
   displayPrec _ (SAgg agg) = displayBuilder $ aggToSqlNoAlias agg
-  displayPrec _ (SArith l Div r) = displayBuilder $ "(" <> display l <> " / NULLIF(" <> display r <> ", 0))"
+  displayPrec _ (SArith l Div r) = displayBuilder $ "COALESCE((" <> display l <> " / NULLIF(" <> display r <> ", 0)), 0)"
   displayPrec _ (SArith l op r) = displayBuilder $ "(" <> display l <> arithOpToSQL op <> display r <> ")"
 
 
