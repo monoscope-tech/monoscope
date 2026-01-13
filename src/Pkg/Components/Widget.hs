@@ -274,13 +274,17 @@ widgetHelper_ w' = case w.wType of
   WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
     unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
-  WTGroup -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "h-full flex flex-col gap-4"] do
-    div_ [class_ $ "group/h gap-1 leading-none flex justify-between items-center " <> gridStackHandleClass] do
-      div_ [class_ "inline-flex gap-1 items-center"] do
-        span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
-        whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-        span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
-    div_ [class_ "grid-stack nested-grid  h-full -mx-2"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
+  WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden"] do
+    -- Header: auto height (no flex), group-header class for CSS targeting when collapsed
+    div_ [class_ $ "group-header py-2 px-4 flex items-center justify-between " <> gridStackHandleClass] do
+      div_ [class_ "inline-flex gap-2 items-center group/h"] do
+        span_ [class_ "hidden group-hover/h:inline-flex cursor-move"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
+        whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-5 h-5"
+        span_ [class_ "text-lg font-medium"] $ toHtml $ maybeToMonoid w.title
+      -- Collapse chevron: only for full-width groups
+      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-down" "regular" "w-5 h-5 transition-transform"
+    -- Nested grid: flex-1 fills remaining space
+    div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
   WTTable -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderTable w
   WTLogs -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Logs widget coming soon"
   WTTraces -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderTraceTable w
@@ -289,18 +293,32 @@ widgetHelper_ w' = case w.wType of
   where
     w = w' & #id %~ maybe (slugify <$> w'.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
-    layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
+    isFullWidth = maybe False ((== 12) . fromMaybe 0 . (.w)) w.layout
+    -- For group widgets, calculate height from children: 1 (header) + max_child_row
+    groupRequiredHeight = case w.wType of
+      WTGroup ->
+        let children = fromMaybe [] w.children
+            maxRow = foldr max 1 $ map (\c -> fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) children
+        in Just (1 + maxRow)  -- 1 cell for header + content rows
+      _ -> Nothing
+    -- For groups: full-width uses requiredHeight, partial-width uses max(yamlH, requiredHeight)
+    effectiveHeight = case (groupRequiredHeight, w.layout >>= (.h)) of
+      (Just reqH, yamlH) | isFullWidth -> Just reqH
+      (Just reqH, Just yH) -> Just (max yH reqH)
+      (Just reqH, Nothing) -> Just reqH
+      _ -> w.layout >>= (.h)
+    layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))]
     attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
+         <> maybe [] (\h -> [term "gs-h" (show h)]) effectiveHeight
     paddingBtm
       | w.standalone == Just True = ""
-      | w._isNested == Just True && w.wType `elem` [WTTimeseriesStat, WTStat] = ""
-      | otherwise = bool " pb-8 " " standalone pb-4 " (w._isNested == Just True)
+      | otherwise = ""  -- GridStack margins handle spacing between widgets
     -- Serialize the widget to JSON for easy copying
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full"]
+        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content"]
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()

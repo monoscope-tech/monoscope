@@ -1217,6 +1217,16 @@ code, pre, .code, .monospace {
   text-wrap-mode: nowrap !important;
 }
 
+/* Group widget collapsed state - header fills space and centers content */
+.grid-stack-item.collapsed .group-header {
+  flex: 1;
+}
+
+/* Group widget collapsed state - rotate chevron */
+.grid-stack-item.collapsed .collapse-toggle svg {
+  transform: rotate(180deg);
+}
+
 .grid-stack-handle, .nested-grid-stack-handle {
   @apply cursor-move;
 }

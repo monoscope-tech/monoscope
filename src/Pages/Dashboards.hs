@@ -333,7 +333,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
     let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result `elem` [Nothing, Just []]]
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
@@ -397,13 +397,11 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 column: 12,
                 acceptWidgets: true,
                 cellHeight: '5rem',
-                marginTop: '0.05rem',
-                marginLeft: '0.5rem',
-                marginRight: '0.5rem',
-                marginBottom: '2rem',
+                margin: '1rem 0.5rem 1rem 0.5rem',
                 handleClass: 'grid-stack-handle',
                 styleInHead: true,
                 staticGrid: false,
+                float: false,
               }, gridEl);
 
               grid.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
@@ -417,19 +415,53 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           // Initialize nested grids
           document.querySelectorAll('.nested-grid').forEach(nestedEl => {
             if (!nestedEl.classList.contains('grid-stack-initialized')) {
+              const parentWidget = nestedEl.closest('.grid-stack-item');
+              // Store original YAML height for partial-width groups
+              if (parentWidget) {
+                parentWidget.dataset.originalH = parentWidget.getAttribute('gs-h') || '0';
+              }
+
               const nestedInstance = GridStack.init({
                 column: 12,
                 acceptWidgets: true,
-                cellHeight: '4.9rem',
-                marginTop: '0.01rem',
-                marginLeft: '0.5rem',
-                marginRight: '0.5rem',
-                marginBottom: '1rem',
+                cellHeight: '5rem',
+                margin: '1rem 0.5rem 1rem 0.5rem',
                 handleClass: 'nested-grid-stack-handle',
                 styleInHead: true,
                 staticGrid: false,
               }, nestedEl);
+
+              // Auto-fit group to children
+              function autoFitGroupToChildren() {
+                const items = nestedInstance.getGridItems();
+                const node = parentWidget?.gridstackNode;
+                if (!node) return;
+
+                // Don't resize if group is collapsed
+                if (parentWidget.classList.contains('collapsed')) return;
+
+                const isFullWidth = node.w === 12;
+                const maxRow = items.length
+                  ? Math.max(...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)))
+                  : 1;
+
+                const requiredHeight = 1 + maxRow;  // 1 for header + content
+                const yamlHeight = parseInt(parentWidget.dataset.originalH) || requiredHeight;
+
+                // Full-width: always auto-fit. Partial-width: max of YAML and required
+                const targetHeight = isFullWidth ? requiredHeight : Math.max(yamlHeight, requiredHeight);
+
+                if (node.h !== targetHeight && window.gridStackInstance) {
+                  window.gridStackInstance.update(parentWidget, { h: targetHeight });
+                }
+              }
+
+              // Attach to nested grid events
+              nestedInstance.on('change added removed', autoFitGroupToChildren);
+              // Run once on init to fix initial sizing
+              setTimeout(autoFitGroupToChildren, 100);
               nestedInstance.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
+
               nestedEl.classList.add('grid-stack-initialized');
             }
           });
@@ -455,6 +487,46 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             gridEl.gridstack.removeWidget(widgetEl, true);
           }
         }
+      });
+
+      // Helper: compact grid by moving widgets up to fill gaps
+      function compactGrid(grid, el) {
+        const items = Array.from(el.querySelectorAll(':scope > .grid-stack-item')).sort((a, b) => (a.gridstackNode?.y || 0) - (b.gridstackNode?.y || 0));
+        const rows = {};
+        items.forEach(item => { const y = item.gridstackNode?.y || 0; (rows[y] = rows[y] || []).push(item); });
+        let nextY = 0;
+        grid.batchUpdate();
+        Object.keys(rows).map(Number).sort((a, b) => a - b).forEach(y => {
+          rows[y].forEach(item => { if (item.gridstackNode?.y !== nextY) grid.update(item, { y: nextY }); });
+          nextY += Math.max(...rows[y].map(item => item.gridstackNode?.h || 1));
+        });
+        grid.batchUpdate(false);
+      }
+
+      // Delegated handler for collapse toggle
+      document.addEventListener('click', function(e) {
+        const collapseBtn = e.target.closest('.collapse-toggle');
+        if (!collapseBtn) return;
+        const parentWidget = collapseBtn.closest('.grid-stack-item');
+        const grid = window.gridStackInstance;
+        if (!parentWidget || !grid) return;
+
+        setTimeout(() => {
+          const isCollapsed = parentWidget.classList.contains('collapsed');
+          const mainGridEl = document.querySelector('.grid-stack:not(.nested-grid)');
+          if (isCollapsed) {
+            grid.update(parentWidget, { h: 1 });
+          } else {
+            const nestedGrid = parentWidget.querySelector('.nested-grid');
+            const nestedInstance = nestedGrid?.gridstack;
+            if (nestedInstance) {
+              const items = nestedInstance.getGridItems();
+              const maxRow = items.length ? Math.max(...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1))) : 1;
+              grid.update(parentWidget, { h: 1 + maxRow });
+            }
+          }
+          compactGrid(grid, mainGridEl);
+        }, 10);
       });
       |]
 
