@@ -503,7 +503,7 @@ validateSqlQuery query =
         `T.isInfixOf` lowerQuery
 
 
-selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int))
+selectLogTable :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> Text -> Maybe UTCTime -> (Maybe UTCTime, Maybe UTCTime) -> [Text] -> Maybe Sources -> Maybe Text -> Eff es (Either Text (V.Vector (V.Vector AE.Value), [Text], Int, Text))
 selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser source targetSpansM = do
   now <- Time.currentTime
   let (q, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now source targetSpansM){cursorM, dateRange, projectedColsByUser, source, targetSpansM}) queryAST
@@ -530,7 +530,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         firstRow <- logItemsV V.!? 0
         AE.Number n <- firstRow V.!? (V.length firstRow - 1)
         pure $ round n
-  pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count)
+  pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count, q)
 
 
 selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]

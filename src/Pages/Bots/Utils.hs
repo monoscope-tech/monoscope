@@ -58,7 +58,7 @@ contentTypeHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.
 contentTypeHeader contentType = header "Content-Type" .~ [encodeUtf8 contentType]
 
 
-handleTableResponse :: BotType -> Either Text (V.Vector (V.Vector AE.Value), [Text], Int) -> EnvConfig -> Projects.ProjectId -> Text -> AE.Value
+handleTableResponse :: BotType -> Either Text (V.Vector (V.Vector AE.Value), [Text], Int, Text) -> EnvConfig -> Projects.ProjectId -> Text -> AE.Value
 handleTableResponse target tableAsVecE envCfg projectId query =
   case tableAsVecE of
     Left err -> case target of
@@ -66,7 +66,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
       WhatsApp -> AE.object ["body" AE..= "Error processing query"]
       Slack -> AE.object ["text" AE..= "Error processing query: "]
     Right tableAsVec -> do
-      let (requestVecs, colNames, resultCount) = tableAsVec
+      let (requestVecs, colNames, resultCount, _sql) = tableAsVec
           colIdxMap = listToIndexHashMap colNames
           tableData = recsVecToTableData requestVecs colIdxMap
           url' = envCfg.hostUrl <> "p/" <> projectId.toText <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 query)

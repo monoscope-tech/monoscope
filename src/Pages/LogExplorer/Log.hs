@@ -393,7 +393,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   tableAsVecE <-
     if shouldSkipLoad
-      then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0)
+      then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0, "")
       else fetchLogs
 
   -- FIXME: we're silently ignoring parse errors and the likes.
@@ -454,7 +454,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   case tableAsVecM of
     Just tableAsVec -> do
-      let (requestVecs, colNames, resultCount) = tableAsVec
+      let (requestVecs, colNames, resultCount, generatedSql) = tableAsVec
           curatedColNames = nubOrd $ curateCols summaryCols colNames
           colIdxMap = listToIndexHashMap colNames
           reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
@@ -523,6 +523,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , targetPattern = pTargetM
             , project = project
             , teams
+            , generatedSql = Just generatedSql
             }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount
@@ -610,6 +611,7 @@ data ApiLogsPageData = ApiLogsPageData
   , targetPattern :: Maybe Text
   , project :: Projects.Project
   , teams :: V.Vector ManageMembers.Team
+  , generatedSql :: Maybe Text
   }
 
 
@@ -671,6 +673,21 @@ apiLogsPage page = do
           , alert = isJust page.alert
           , patternSelected = page.targetPattern
           }
+
+      -- SQL preview for debugging
+      whenJust page.generatedSql \sql ->
+        unless (T.null sql) do
+          details_ [class_ "mt-2 text-xs text-textWeak"] do
+            summary_ [class_ "cursor-pointer hover:text-textStrong select-none"] "Show generated SQL"
+            div_ [class_ "space-y-1 p-3 bg-fillWeaker rounded-lg font-mono text-xs mt-2"] do
+              div_ [class_ "flex justify-between items-center"] do
+                span_ [class_ "text-textWeak font-sans"] "Generated SQL Query"
+                button_
+                  [ class_ "text-textBrand hover:underline font-sans text-xs"
+                  , term "_" [text| on click writeText(`${T.replace "`" "\\`" sql}`) to the navigator's clipboard then set my.innerText to 'Copied!' then wait 1.5s then set my.innerText to 'Copy' |]
+                  ]
+                  "Copy"
+              pre_ [class_ "whitespace-pre-wrap break-all bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ toHtml sql
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
         let patternTarget = fromMaybe "log_pattern" page.targetPattern

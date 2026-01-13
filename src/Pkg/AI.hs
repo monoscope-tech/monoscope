@@ -762,4 +762,5 @@ runKqlAndFormat config kqlQuery cols formatResult = case parseQueryToAST kqlQuer
   Left parseErr -> pure $ "Error: Query parse failed - " <> show parseErr
   Right queryAST -> do
     resultE <- selectLogTable config.projectId queryAST kqlQuery Nothing config.timeRange cols Nothing Nothing
-    pure $ either ("Error: Query execution failed - " <>) formatResult resultE
+    -- Drop the SQL query (4th element) since we only need the first 3 for formatting
+    pure $ either ("Error: Query execution failed - " <>) (formatResult . \(vecs, names, count, _sql) -> (vecs, names, count)) resultE
