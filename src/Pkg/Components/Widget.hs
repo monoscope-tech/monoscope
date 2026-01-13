@@ -299,7 +299,7 @@ widgetHelper_ w' = case w.wType of
       WTGroup ->
         let children = fromMaybe [] w.children
             maxRow = foldr max 1 $ map (\c -> fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) children
-        in Just (1 + maxRow)  -- 1 cell for header + content rows
+         in Just (1 + maxRow) -- 1 cell for header + content rows
       _ -> Nothing
     -- For groups: full-width uses requiredHeight, partial-width uses max(yamlH, requiredHeight)
     effectiveHeight = case (groupRequiredHeight, w.layout >>= (.h)) of
@@ -308,12 +308,13 @@ widgetHelper_ w' = case w.wType of
       (Just reqH, Nothing) -> Just reqH
       _ -> w.layout >>= (.h)
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))]
-    attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
-         <> maybe [] (\h -> [term "gs-h" (show h)]) effectiveHeight
+    attrs =
+      concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
+        <> maybe [] (\h -> [term "gs-h" (show h)]) effectiveHeight
     paddingBtm
       | w.standalone == Just True = ""
-      | otherwise = ""  -- GridStack margins handle spacing between widgets
-    -- Serialize the widget to JSON for easy copying
+      | otherwise = "" -- GridStack margins handle spacing between widgets
+      -- Serialize the widget to JSON for easy copying
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
       if w.naked == Just True

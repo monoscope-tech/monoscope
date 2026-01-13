@@ -2345,6 +2345,3 @@ yamlValidationSuccess_ dash = div_ [id_ "yaml-status", class_ "text-textBrand"] 
     whenJust dash.variables $ \vs -> li_ $ toHtml $ show (length vs) <> " variables"
     whenJust dash.tabs $ \ts -> li_ $ toHtml $ show (length ts) <> " tabs"
     whenJust dash.constants $ \cs -> li_ $ toHtml $ show (length cs) <> " constants"
-
-
-
