@@ -251,7 +251,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- Variables section (pushed to the right)
     whenJust dash.variables \variables -> do
       div_ [class_ $ "flex gap-2 flex-wrap " <> if isJust dash.tabs then "ml-auto" else ""] do
-        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
+        forM_ variables \var -> fieldset_ [class_ "relative border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
           legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
           let whitelist =
                 maybe
@@ -327,11 +327,11 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         }
       });
 
-      interpolateVarTemplates();
+      window.interpolateVarTemplates();
     });
 
     // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
-    function interpolateVarTemplates() {
+    window.interpolateVarTemplates = function() {
       const params = new URLSearchParams(window.location.search);
       document.querySelectorAll('[data-var-template]').forEach(el => {
         let text = el.dataset.varTemplate;
@@ -340,8 +340,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         });
         el.textContent = text;
       });
-    }
-    interpolateVarTemplates();
+    };
+    window.interpolateVarTemplates();
   });
     |]
   let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
@@ -441,6 +441,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                   wrapper.classList.add('dashboard-loaded');
                   if (wrapper._skeletonTimeout) clearTimeout(wrapper._skeletonTimeout);
                 }
+                window.interpolateVarTemplates();
               }
             }
           });
@@ -510,6 +511,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         document.body.addEventListener('htmx:afterSettle', function(e) {
           if (e.detail.target && e.detail.target.id === 'dashboard-tabs-content') {
             initializeGrids();
+            window.interpolateVarTemplates();
           }
         });
       });
