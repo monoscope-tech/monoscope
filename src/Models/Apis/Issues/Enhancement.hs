@@ -55,66 +55,54 @@ enhanceIssueWithLLM authCtx issue = do
                 }
 
 
--- | Generate an enhanced title using LLM
+-- | Generate an enhanced title using LLM (or simple generator for supported types)
 generateEnhancedTitle :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
 generateEnhancedTitle authCtx issue = do
-  let prompt = buildTitlePrompt issue
-  result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
-  case result of
-    Left err -> pure $ Left err
-    Right r -> do
-      let response' = AI.getNormalTupleReponse r
-      case response' of
-        Left e -> pure $ Left e
-        Right (title, _) -> pure $ Right $ T.take 200 title -- Limit title length
+  -- First try simple title generation for supported types
+  case simpleTitle issue of
+    Just title -> pure $ Right title
+    Nothing -> do
+      -- Fall back to LLM for RuntimeException and QueryAlert
+      let prompt = buildTitlePrompt issue
+      result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
+      case result of
+        Left err -> pure $ Left err
+        Right r -> do
+          let response' = AI.getNormalTupleReponse r
+          case response' of
+            Left e -> pure $ Left e
+            Right (title, _) -> pure $ Right $ T.take 200 title -- Limit title length
 
 
--- | Generate enhanced description with recommended actions
+-- | Generate enhanced description with recommended actions (or simple generator for supported types)
 generateEnhancedDescription :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
 generateEnhancedDescription authCtx issue = do
-  let prompt = buildDescriptionPrompt issue
-  result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
-  case result of
-    Left err -> pure $ Left err
-    Right r -> do
-      let response' = AI.getNormalTupleReponse r
-      case response' of
-        Left e -> pure $ Left e
-        Right (response, _) -> do
-          let lines' = lines response
-              description = fromMaybe "" $ viaNonEmpty head lines'
-              recommendedAction = fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1
-              complexity = fromMaybe "medium" $ lines' !!? 2
-          -- Note: Classification happens separately in the background job
-          pure $ Right (description, recommendedAction, complexity)
+  -- First try simple description generation for supported types
+  case simpleDescription issue of
+    Just result -> pure $ Right result
+    Nothing -> do
+      -- Fall back to LLM for RuntimeException and QueryAlert
+      let prompt = buildDescriptionPrompt issue
+      result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
+      case result of
+        Left err -> pure $ Left err
+        Right r -> do
+          let response' = AI.getNormalTupleReponse r
+          case response' of
+            Left e -> pure $ Left e
+            Right (response, _) -> do
+              let lines' = lines response
+                  description = fromMaybe "" $ viaNonEmpty head lines'
+                  recommendedAction = fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1
+                  complexity = fromMaybe "medium" $ lines' !!? 2
+              -- Note: Classification happens separately in the background job
+              pure $ Right (description, recommendedAction, complexity)
 
 
 -- | Build prompt for title generation
 buildTitlePrompt :: Issues.Issue -> Text
 buildTitlePrompt issue =
   let baseContext = case issue.issueType of
-        -- Issues.APIChange ->
-        --   let Aeson issueDataValue = issue.issueData
-        --    in case AE.fromJSON issueDataValue of
-        --         AE.Success (apiData :: Issues.APIChangeData) ->
-        --           "Generate a concise, descriptive title for this API change.\n"
-        --             <> "Endpoint: "
-        --             <> apiData.endpointMethod
-        --             <> " "
-        --             <> apiData.endpointPath
-        --             <> "\n"
-        --             <> "New fields: "
-        --             <> toText (show $ V.length apiData.newFields)
-        --             <> "\n"
-        --             <> "Deleted fields: "
-        --             <> toText (show $ V.length apiData.deletedFields)
-        --             <> "\n"
-        --             <> "Modified fields: "
-        --             <> toText (show $ V.length apiData.modifiedFields)
-        --             <> "\n"
-        --             <> "Service: "
-        --             <> issue.service
-        --         _ -> "Generate a concise title for this API change."
         Issues.RuntimeException ->
           let Aeson issueDataValue = issue.issueData
            in case AE.fromJSON issueDataValue of
@@ -165,31 +153,6 @@ buildTitlePrompt issue =
 buildDescriptionPrompt :: Issues.Issue -> Text
 buildDescriptionPrompt issue =
   let baseContext = case issue.issueType of
-        -- Issues.APIChange ->
-        --   let Aeson issueDataValue = issue.issueData
-        --    in case AE.fromJSON issueDataValue of
-        --         AE.Success (apiData :: Issues.APIChangeData) ->
-        --           "Describe this API change and its impact.\n"
-        --             <> "Endpoint: "
-        --             <> apiData.endpointMethod
-        --             <> " "
-        --             <> apiData.endpointPath
-        --             <> "\n"
-        --             <> "New fields: "
-        --             <> toText (show $ V.toList apiData.newFields)
-        --             <> "\n"
-        --             <> "Deleted fields: "
-        --             <> toText (show $ V.toList apiData.deletedFields)
-        --             <> "\n"
-        --             <> "Modified fields: "
-        --             <> toText (show $ V.toList apiData.modifiedFields)
-        --             <> "\n"
-        --             <> "Total anomalies grouped: "
-        --             <> toText (show $ V.length apiData.anomalyHashes)
-        --             <> "\n"
-        --             <> "Service: "
-        --             <> issue.service
-        --         _ -> "Describe this API change and its implications."
         Issues.RuntimeException ->
           let Aeson issueDataValue = issue.issueData
            in case AE.fromJSON issueDataValue of
@@ -256,44 +219,37 @@ buildDescriptionPrompt issue =
    in systemPrompt <> "\n\n" <> baseContext
 
 
--- | Classify issue as critical/safe and count breaking/incremental changes
+-- | Classify issue as critical/safe and count breaking/incremental changes (or simple classifier for supported types)
 classifyIssueCriticality :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
 classifyIssueCriticality authCtx issue = do
-  let prompt = buildCriticalityPrompt issue
-  result' <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
-  case result' of
-    Left err -> pure $ Left err
-    Right res -> do
-      let r = AI.getNormalTupleReponse res
-      case r of
-        Left e -> pure $ Left e
-        Right (response, _) -> do
-          let lines' = lines response
-          case lines' of
-            [criticalStr, breakingStr, incrementalStr] -> do
-              let isCritical = T.toLower criticalStr == "critical"
-                  breakingCount = fromMaybe 0 $ readMaybe $ toString breakingStr
-                  incrementalCount = fromMaybe 0 $ readMaybe $ toString incrementalStr
-              pure $ Right (isCritical, breakingCount, incrementalCount)
-            _ -> pure $ Left "Invalid response format from LLM"
+  -- First try simple criticality classification for supported types
+  case simpleCriticality issue of
+    Just result -> pure $ Right result
+    Nothing -> do
+      -- Fall back to LLM for RuntimeException and QueryAlert
+      let prompt = buildCriticalityPrompt issue
+      result' <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
+      case result' of
+        Left err -> pure $ Left err
+        Right res -> do
+          let r = AI.getNormalTupleReponse res
+          case r of
+            Left e -> pure $ Left e
+            Right (response, _) -> do
+              let lines' = lines response
+              case lines' of
+                [criticalStr, breakingStr, incrementalStr] -> do
+                  let isCritical = T.toLower criticalStr == "critical"
+                      breakingCount = fromMaybe 0 $ readMaybe $ toString breakingStr
+                      incrementalCount = fromMaybe 0 $ readMaybe $ toString incrementalStr
+                  pure $ Right (isCritical, breakingCount, incrementalCount)
+                _ -> pure $ Left "Invalid response format from LLM"
 
 
 -- | Build prompt for criticality classification
 buildCriticalityPrompt :: Issues.Issue -> Text
 buildCriticalityPrompt issue =
   let context = case issue.issueType of
-        -- Issues.APIChange ->
-        --   let Aeson issueDataValue = issue.issueData
-        --    in case AE.fromJSON issueDataValue of
-        --         AE.Success (apiData :: Issues.APIChangeData) ->
-        --           unlines
-        --             [ "API change detected"
-        --             , "Endpoint: " <> apiData.endpointMethod <> " " <> apiData.endpointPath
-        --             , "New fields: " <> toText (show $ V.length apiData.newFields)
-        --             , "Deleted fields: " <> toText (show $ V.length apiData.deletedFields)
-        --             , "Modified fields: " <> toText (show $ V.length apiData.modifiedFields)
-        --             ]
-        --         _ -> "API change: " <> issue.title
         Issues.RuntimeException ->
           "Runtime exception: " <> issue.title
         Issues.QueryAlert ->
@@ -331,3 +287,302 @@ updateIssueClassification issueId isCritical breakingCount incrementalCount = do
         | breakingCount > 0 = "warning"
         | otherwise = "info"
   Issues.updateIssueCriticality issueId isCritical severity
+
+
+-- | Generate a simple title for issue types that don't need LLM
+simpleTitle :: Issues.Issue -> Maybe Text
+simpleTitle issue = case issue.issueType of
+  Issues.NewEndpoint ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.NewEndpointData) ->
+        Just $ "New endpoint discovered: " <> d.endpointMethod <> " " <> d.endpointPath
+      _ -> Just "New endpoint discovered"
+  Issues.NewShape ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.NewShapeData) ->
+        let changes = V.length d.newFields + V.length d.deletedFields + V.length d.modifiedFields
+         in Just $ "New response shape detected on " <> d.endpointMethod <> " " <> d.endpointPath <> " (" <> toText (show changes) <> " field changes)"
+      _ -> Just "New response shape detected"
+  Issues.FieldChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.FieldChangeData) ->
+        Just $ "Field " <> d.changeType <> " at " <> d.keyPath <> " on " <> d.endpointMethod <> " " <> d.endpointPath
+      _ -> Just "Field change detected"
+  Issues.LogPattern ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternData) ->
+        let level = fromMaybe "LOG" d.logLevel
+         in Just $ "New " <> level <> " pattern detected" <> maybe "" (" in " <>) d.serviceName
+      _ -> Just "New log pattern detected"
+  Issues.ErrorEscalating ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.ErrorEscalatingData) ->
+        Just $ "Error escalating: " <> T.take 60 d.exceptionType <> " (" <> toText (show d.escalationRate) <> "x in " <> d.escalationWindow <> ")"
+      _ -> Just "Error rate escalating"
+  Issues.ErrorRegressed ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.ErrorRegressedData) ->
+        Just $ "Error regressed: " <> T.take 80 d.exceptionType
+      _ -> Just "Previously resolved error has regressed"
+  Issues.LogPatternRateChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternRateChangeData) ->
+        let direction = if d.changeDirection == "spike" then "spike" else "drop"
+         in Just $ "Log pattern " <> direction <> ": " <> toText (show (round d.changePercent :: Int)) <> "% change"
+      _ -> Just "Log pattern rate change detected"
+  Issues.EndpointLatencyDegradation ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointLatencyDegradationData) ->
+        Just $ "Latency degradation on " <> d.endpointMethod <> " " <> d.endpointPath <> " (" <> d.percentile <> " +" <> toText (show (round d.degradationPercent :: Int)) <> "%)"
+      _ -> Just "Endpoint latency degradation detected"
+  Issues.EndpointErrorRateSpike ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointErrorRateSpikeData) ->
+        Just $ "Error rate spike on " <> d.endpointMethod <> " " <> d.endpointPath <> " (" <> toText (show (round (d.currentErrorRate * 100) :: Int)) <> "% error rate)"
+      _ -> Just "Endpoint error rate spike detected"
+  Issues.EndpointVolumeRateChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointVolumeRateChangeData) ->
+        let direction = if d.changeDirection == "spike" then "Traffic spike" else "Traffic drop"
+         in Just $ direction <> " on " <> d.endpointMethod <> " " <> d.endpointPath <> " (" <> toText (show (round d.changePercent :: Int)) <> "%)"
+      _ -> Just "Endpoint traffic volume change detected"
+  -- LLM-based types return Nothing to use LLM
+  Issues.RuntimeException -> Nothing
+  Issues.QueryAlert -> Nothing
+
+
+-- | Generate a simple description for issue types that don't need LLM
+-- Returns (description, recommendedAction, complexity)
+simpleDescription :: Issues.Issue -> Maybe (Text, Text, Text)
+simpleDescription issue = case issue.issueType of
+  Issues.NewEndpoint ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.NewEndpointData) ->
+        Just
+          ( "A new endpoint " <> d.endpointMethod <> " " <> d.endpointPath <> " was discovered on host " <> d.endpointHost <> ". This endpoint was not previously tracked."
+          , "Review the endpoint to ensure it's expected and properly documented."
+          , "low"
+          )
+      _ -> Just ("A new endpoint was discovered.", "Review the endpoint.", "low")
+  Issues.NewShape ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.NewShapeData) ->
+        let newCount = V.length d.newFields
+            deletedCount = V.length d.deletedFields
+            modifiedCount = V.length d.modifiedFields
+            complexity
+              | deletedCount > 0 = "high"
+              | modifiedCount > 0 = "medium"
+              | otherwise = "low"
+         in Just
+              ( "New response shape detected on " <> d.endpointMethod <> " " <> d.endpointPath <> " (status " <> toText (show d.statusCode) <> "). "
+                  <> "New fields: "
+                  <> toText (show newCount)
+                  <> ", deleted fields: "
+                  <> toText (show deletedCount)
+                  <> ", modified fields: "
+                  <> toText (show modifiedCount)
+                  <> "."
+              , "Review the schema changes and update API clients if necessary."
+              , complexity
+              )
+      _ -> Just ("A new response shape was detected.", "Review the schema changes.", "medium")
+  Issues.FieldChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.FieldChangeData) ->
+        let complexity = case d.changeType of
+              "deleted" -> "high"
+              "type_changed" -> "high"
+              "added" -> "low"
+              _ -> "medium"
+            typeInfo = case d.previousType of
+              Just prev -> " Changed from " <> prev <> " to " <> d.newType <> "."
+              Nothing -> " New type: " <> d.newType <> "."
+         in Just
+              ( "Field " <> d.changeType <> " detected at path '" <> d.keyPath <> "' on " <> d.endpointMethod <> " " <> d.endpointPath <> "." <> typeInfo
+              , "Update API clients to handle this field change."
+              , complexity
+              )
+      _ -> Just ("A field change was detected.", "Review the field change.", "medium")
+  Issues.LogPattern ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternData) ->
+        let level = fromMaybe "LOG" d.logLevel
+            svc = fromMaybe "unknown service" d.serviceName
+         in Just
+              ( "New " <> level <> " log pattern detected in " <> svc <> ". Pattern: " <> T.take 200 d.logPattern <> ". Occurrences: " <> toText (show d.occurrenceCount) <> "."
+              , "Investigate the log pattern to determine if action is needed."
+              , "low"
+              )
+      _ -> Just ("A new log pattern was detected.", "Review the log pattern.", "low")
+  Issues.ErrorEscalating ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.ErrorEscalatingData) ->
+        let svc = fromMaybe "unknown service" d.serviceName
+         in Just
+              ( "Error '" <> T.take 100 d.exceptionType <> "' is escalating in " <> svc <> ". "
+                  <> "Rate increased "
+                  <> toText (show d.escalationRate)
+                  <> "x over the last "
+                  <> d.escalationWindow
+                  <> ". "
+                  <> "Last hour: "
+                  <> toText (show d.occurrences1h)
+                  <> " occurrences, last 24h: "
+                  <> toText (show d.occurrences24h)
+                  <> "."
+              , "Investigate and fix the root cause urgently to prevent further escalation."
+              , "high"
+              )
+      _ -> Just ("An error is escalating.", "Investigate immediately.", "high")
+  Issues.ErrorRegressed ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.ErrorRegressedData) ->
+        let svc = fromMaybe "unknown service" d.serviceName
+            quietDays = d.quietPeriodMinutes `div` 1440
+            quietHours = (d.quietPeriodMinutes `mod` 1440) `div` 60
+            quietStr
+              | quietDays > 0 = toText (show quietDays) <> " days"
+              | otherwise = toText (show quietHours) <> " hours"
+         in Just
+              ( "Previously resolved error '" <> T.take 100 d.exceptionType <> "' has regressed in " <> svc <> ". "
+                  <> "It was quiet for "
+                  <> quietStr
+                  <> " before reappearing. "
+                  <> "New occurrences: "
+                  <> toText (show d.newOccurrences)
+                  <> "."
+              , "Investigate why this error has returned after being resolved."
+              , "high"
+              )
+      _ -> Just ("A previously resolved error has regressed.", "Investigate the regression.", "high")
+  Issues.LogPatternRateChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternRateChangeData) ->
+        let svc = fromMaybe "unknown service" d.serviceName
+            direction = if d.changeDirection == "spike" then "spiked" else "dropped"
+            complexity = if d.changeDirection == "spike" then "medium" else "low"
+         in Just
+              ( "Log pattern rate " <> direction <> " in " <> svc <> ". "
+                  <> "Current rate: "
+                  <> toText (show (round d.currentRatePerHour :: Int))
+                  <> "/hour (baseline: "
+                  <> toText (show (round d.baselineMean :: Int))
+                  <> "/hour). "
+                  <> "Change: "
+                  <> toText (show (round d.changePercent :: Int))
+                  <> "%, z-score: "
+                  <> toText (show (round d.zScore :: Int))
+                  <> "."
+              , "Review the log volume change to determine if it indicates an issue."
+              , complexity
+              )
+      _ -> Just ("Log pattern rate changed significantly.", "Review the change.", "medium")
+  Issues.EndpointLatencyDegradation ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointLatencyDegradationData) ->
+        let svc = maybe "" (" in " <>) d.serviceName
+         in Just
+              ( "Latency degradation detected on " <> d.endpointMethod <> " " <> d.endpointPath <> svc <> ". "
+                  <> d.percentile
+                  <> " latency increased from "
+                  <> toText (show (round d.baselineLatencyMs :: Int))
+                  <> "ms to "
+                  <> toText (show (round d.currentLatencyMs :: Int))
+                  <> "ms (+"
+                  <> toText (show (round d.degradationPercent :: Int))
+                  <> "%)."
+              , "Profile the endpoint to identify performance bottlenecks."
+              , "medium"
+              )
+      _ -> Just ("Endpoint latency has degraded.", "Investigate performance issues.", "medium")
+  Issues.EndpointErrorRateSpike ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointErrorRateSpikeData) ->
+        let svc = maybe "" (" in " <>) d.serviceName
+         in Just
+              ( "Error rate spike on " <> d.endpointMethod <> " " <> d.endpointPath <> svc <> ". "
+                  <> "Current error rate: "
+                  <> toText (show (round (d.currentErrorRate * 100) :: Int))
+                  <> "% ("
+                  <> toText (show d.errorCount)
+                  <> " errors out of "
+                  <> toText (show d.totalRequests)
+                  <> " requests). "
+                  <> "Baseline: "
+                  <> toText (show (round (d.baselineErrorRate * 100) :: Int))
+                  <> "%."
+              , "Investigate the error spike and fix the underlying issues."
+              , "high"
+              )
+      _ -> Just ("Endpoint error rate has spiked.", "Investigate errors immediately.", "high")
+  Issues.EndpointVolumeRateChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointVolumeRateChangeData) ->
+        let svc = maybe "" (" in " <>) d.serviceName
+            direction = if d.changeDirection == "spike" then "spiked" else "dropped"
+            complexity = if d.changeDirection == "spike" then "medium" else "medium"
+         in Just
+              ( "Traffic volume " <> direction <> " on " <> d.endpointMethod <> " " <> d.endpointPath <> svc <> ". "
+                  <> "Current rate: "
+                  <> toText (show (round d.currentRatePerHour :: Int))
+                  <> " req/hour (baseline: "
+                  <> toText (show (round d.baselineRatePerHour :: Int))
+                  <> " req/hour). "
+                  <> "Change: "
+                  <> toText (show (round d.changePercent :: Int))
+                  <> "%."
+              , "Review traffic patterns to determine if this is expected or indicates an issue."
+              , complexity
+              )
+      _ -> Just ("Endpoint traffic volume changed significantly.", "Review traffic patterns.", "medium")
+  -- LLM-based types return Nothing to use LLM
+  Issues.RuntimeException -> Nothing
+  Issues.QueryAlert -> Nothing
+
+
+-- | Simple criticality classification for non-LLM issue types
+-- Returns (isCritical, breakingCount, incrementalCount)
+simpleCriticality :: Issues.Issue -> Maybe (Bool, Int, Int)
+simpleCriticality issue = case issue.issueType of
+  Issues.NewEndpoint -> Just (False, 0, 1)
+  Issues.NewShape ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.NewShapeData) ->
+        let deletedCount = V.length d.deletedFields
+            modifiedCount = V.length d.modifiedFields
+            newCount = V.length d.newFields
+            isCritical = deletedCount > 0 || modifiedCount > 0
+         in Just (isCritical, deletedCount + modifiedCount, newCount)
+      _ -> Just (False, 0, 1)
+  Issues.FieldChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.FieldChangeData) ->
+        let isCritical = d.changeType `elem` ["deleted", "type_changed"]
+         in Just (isCritical, if isCritical then 1 else 0, if isCritical then 0 else 1)
+      _ -> Just (False, 0, 1)
+  Issues.LogPattern -> Just (False, 0, 1)
+  Issues.ErrorEscalating -> Just (True, 1, 0)
+  Issues.ErrorRegressed -> Just (True, 1, 0)
+  Issues.LogPatternRateChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternRateChangeData) ->
+        let isCritical = d.changeDirection == "spike" && d.zScore > 5
+         in Just (isCritical, if isCritical then 1 else 0, 1)
+      _ -> Just (False, 0, 1)
+  Issues.EndpointLatencyDegradation ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointLatencyDegradationData) ->
+        let isCritical = d.degradationPercent > 100 || d.zScore > 5
+         in Just (isCritical, if isCritical then 1 else 0, 1)
+      _ -> Just (False, 0, 1)
+  Issues.EndpointErrorRateSpike -> Just (True, 1, 0)
+  Issues.EndpointVolumeRateChange ->
+    case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.EndpointVolumeRateChangeData) ->
+        let isCritical = d.changeDirection == "drop" && d.changePercent < -50
+         in Just (isCritical, if isCritical then 1 else 0, 1)
+      _ -> Just (False, 0, 1)
+  -- LLM-based types return Nothing to use LLM
+  Issues.RuntimeException -> Nothing
+  Issues.QueryAlert -> Nothing

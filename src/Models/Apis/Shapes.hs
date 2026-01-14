@@ -157,12 +157,12 @@ getShapeForIssue pid hash = listToMaybe <$> PG.query q (Only hash)
           COALESCE(e.method, 'UNKNOWN'),
           COALESCE(e.url_path, '/'),
           s.status_code,
-          COALESCE(s.example_request_payload, '{}'::jsonb),
-          COALESCE(s.example_response_payload, '{}'::jsonb),
-          COALESCE(s.new_unique_fields, '{}'::TEXT[]),
-          COALESCE(s.deleted_fields, '{}'::TEXT[]),
-          COALESCE(s.updated_field_formats, '{}'::TEXT[]),
-          COALESCE(s.field_hashes, '{}'::TEXT[])
+          s.example_request_payload, '{}'::jsonb,
+          s.example_response_payload, '{}'::jsonb,
+          s.new_unique_fields, '{}'::TEXT[],
+          s.deleted_fields, '{}'::TEXT[],
+          s.updated_field_formats, '{}'::TEXT[],
+          s.field_hashes, '{}'::TEXT[]
         FROM apis.shapes s
         LEFT JOIN apis.endpoints e ON e.hash = s.endpoint_hash
         WHERE s.project_id = ? AND s.hash = ?

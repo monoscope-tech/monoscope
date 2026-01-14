@@ -702,29 +702,7 @@ issueTypeToSourceType EndpointVolumeRateChange = "endpoint"
 
 
 -- | Helper to create an issue with common defaults
-mkIssue
-  :: AE.ToJSON a
-  => Projects.ProjectId
-  -> IssueType
-  -> Text
-  -- ^ targetHash
-  -> Text
-  -- ^ endpointHash
-  -> Maybe Text
-  -- ^ service
-  -> Bool
-  -- ^ critical
-  -> Text
-  -- ^ severity
-  -> Text
-  -- ^ title
-  -> Text
-  -- ^ recommendedAction
-  -> Text
-  -- ^ migrationComplexity
-  -> a
-  -- ^ issueData
-  -> IO Issue
+mkIssue :: AE.ToJSON a => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> IO Issue
 mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
