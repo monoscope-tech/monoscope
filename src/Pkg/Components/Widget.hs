@@ -308,8 +308,9 @@ widgetHelper_ w' = case w.wType of
       Just reqH -> Just $ if isFullWidth then reqH else maybe reqH (max reqH) (w.layout >>= (.h))
       Nothing -> w.layout >>= (.h)
     layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))] :: [(Text, Layout -> Maybe Int)]
-    attrs = foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
-      <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
+    attrs =
+      foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
+        <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
     paddingBtm
       | w.standalone == Just True = ""
       | otherwise = "" -- GridStack margins handle spacing between widgets
