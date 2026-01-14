@@ -282,6 +282,18 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
+  // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
+  window.interpolateVarTemplates = function() {
+    const params = new URLSearchParams(window.location.search);
+    document.querySelectorAll('[data-var-template]').forEach(el => {
+      let text = el.dataset.varTemplate;
+      params.forEach((value, key) => {
+        if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+      });
+      el.textContent = text;
+    });
+  };
+
   window.addEventListener('DOMContentLoaded', () => {
     const tagifyInstances = new Map();
     document.querySelectorAll('.tagify-select-input').forEach(input => {
@@ -330,17 +342,6 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       window.interpolateVarTemplates();
     });
 
-    // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
-    window.interpolateVarTemplates = function() {
-      const params = new URLSearchParams(window.location.search);
-      document.querySelectorAll('[data-var-template]').forEach(el => {
-        let text = el.dataset.varTemplate;
-        params.forEach((value, key) => {
-          if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
-        });
-        el.textContent = text;
-      });
-    };
     window.interpolateVarTemplates();
   });
     |]
