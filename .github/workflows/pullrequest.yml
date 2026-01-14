@@ -198,7 +198,7 @@ jobs:
       - name: Setup node env
         uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version: 22
       - name: Run UI tests
         run: |
           cd web-components
