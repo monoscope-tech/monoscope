@@ -257,7 +257,7 @@ anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace
 anomalyDetailPage pid issue tr otellogs errM now isFirst = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
-  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-auto pb-32"] do
+  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 overflow-auto pb-32"] do
     -- Header
     div_ [class_ "flex flex-col gap-3"] do
       div_ [class_ "flex gap-2 flex-wrap items-center"] do
@@ -268,16 +268,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
           _ -> pass
       h3_ [class_ "text-textStrong text-2xl font-semibold"] $ toHtml issue.title
       p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
-
-    -- -- Metrics & Timeline Row (8-column grid: 4 stats + chart)
-    -- div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-    --   -- Stats (1 column each)
-    --   statBox_ (Just pid) Nothing "Affected Requests" "" (show issue.affectedRequests) Nothing Nothing
-    --   statBox_ (Just pid) Nothing "Affected Clients" "" (show issue.affectedClients) Nothing Nothing
-    --   whenJust errM $ \err -> do
-    --     timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
-    --     timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
-    -- Timeline (4 columns)
     let widget =
           div_ [class_ "col-span-4"]
             $ Widget.widget_
@@ -524,7 +514,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               span_ [class_ "text-sm font-medium"] $ toHtml $ "Traffic " <> d.changeDirection <> " by " <> show (round (abs d.changePercent) :: Int) <> "%"
           _ -> pass
 
-    div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
+    div_ [class_ "surface-raised h-max rounded-2xl overflow-hidden", id_ "error-details-container"] do
       div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
           faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4 text-iconNeutral"
