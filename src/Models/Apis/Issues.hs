@@ -536,24 +536,20 @@ insertIssue issue = void $ PG.execute q issue
     q =
       [sql|
 INSERT INTO apis.issues (
-  id, created_at, updated_at, project_id, issue_type, endpoint_hash,
+  id, created_at, updated_at, project_id, issue_type, source_type, target_hash, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
-  title, service, critical, severity,
-  affected_requests, affected_clients, error_rate,
+  title, service, environment, critical, severity,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (project_id, endpoint_hash)
-  WHERE issue_type = 'api_change'
-    AND acknowledged_at IS NULL
+ON CONFLICT (project_id, target_hash)
+  WHERE acknowledged_at IS NULL
     AND archived_at IS NULL
-    AND endpoint_hash != ''
+    AND target_hash != ''
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
-  affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
-  affected_clients = GREATEST(issues.affected_clients, EXCLUDED.affected_clients),
-  issue_data = issues.issue_data || EXCLUDED.issue_data
+  issue_data = EXCLUDED.issue_data
     |]
 
 
@@ -587,7 +583,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     q =
       [text|
       SELECT id, created_at, updated_at, project_id, issue_type::text, endpoint_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
-        CASE WHEN critical THEN 'critical' ELSE 'info' END, affected_requests, affected_clients, NULL::double precision,
+        CASE WHEN critical THEN 'critical' ELSE 'info' END, 0::int, 0::int, NULL::double precision,
         recommended_action, migration_complexity, issue_data, request_payloads, response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
       FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
     |]
@@ -633,9 +629,8 @@ updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, 
     q =
       [sql|
       UPDATE apis.issues
-      SET 
+      SET
         issue_data = issue_data || ?::jsonb,
-        affected_requests = affected_requests + 1,
         updated_at = NOW()
       WHERE id = ?
     |]
