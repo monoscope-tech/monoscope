@@ -288,7 +288,16 @@ singleReportPage pid report =
                           let titleCls = case iss.issueType of
                                 Issues.RuntimeException -> "text-textError"
                                 Issues.QueryAlert -> "text-yellow-500"
-                                _ -> "text-textBrand-strong"
+                                Issues.NewEndpoint -> "text-textBrand-strong"
+                                Issues.NewShape -> "text-textBrand-strong"
+                                Issues.FieldChange -> "text-yellow-500"
+                                Issues.LogPattern -> "text-textBrand-strong"
+                                Issues.ErrorEscalating -> "text-textError"
+                                Issues.ErrorRegressed -> "text-textError"
+                                Issues.LogPatternRateChange -> "text-yellow-500"
+                                Issues.EndpointLatencyDegradation -> "text-yellow-500"
+                                Issues.EndpointErrorRateSpike -> "text-textError"
+                                Issues.EndpointVolumeRateChange -> "text-yellow-500"
                           span_ [class_ $ "text-sm font-medium " <> titleCls] $ toHtml iss.title
                   -- span_ [] $ toHtml iss.severity
 
