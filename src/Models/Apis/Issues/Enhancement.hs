@@ -375,7 +375,13 @@ simpleDescription issue = case issue.issueType of
               | modifiedCount > 0 = "medium"
               | otherwise = "low"
          in Just
-              ( "New response shape detected on " <> d.endpointMethod <> " " <> d.endpointPath <> " (status " <> toText (show d.statusCode) <> "). "
+              ( "New response shape detected on "
+                  <> d.endpointMethod
+                  <> " "
+                  <> d.endpointPath
+                  <> " (status "
+                  <> toText (show d.statusCode)
+                  <> "). "
                   <> "New fields: "
                   <> toText (show newCount)
                   <> ", deleted fields: "
@@ -420,7 +426,11 @@ simpleDescription issue = case issue.issueType of
       AE.Success (d :: Issues.ErrorEscalatingData) ->
         let svc = fromMaybe "unknown service" d.serviceName
          in Just
-              ( "Error '" <> T.take 100 d.exceptionType <> "' is escalating in " <> svc <> ". "
+              ( "Error '"
+                  <> T.take 100 d.exceptionType
+                  <> "' is escalating in "
+                  <> svc
+                  <> ". "
                   <> "Rate increased "
                   <> toText (show d.escalationRate)
                   <> "x over the last "
@@ -445,7 +455,11 @@ simpleDescription issue = case issue.issueType of
               | quietDays > 0 = toText (show quietDays) <> " days"
               | otherwise = toText (show quietHours) <> " hours"
          in Just
-              ( "Previously resolved error '" <> T.take 100 d.exceptionType <> "' has regressed in " <> svc <> ". "
+              ( "Previously resolved error '"
+                  <> T.take 100 d.exceptionType
+                  <> "' has regressed in "
+                  <> svc
+                  <> ". "
                   <> "It was quiet for "
                   <> quietStr
                   <> " before reappearing. "
@@ -463,7 +477,11 @@ simpleDescription issue = case issue.issueType of
             direction = if d.changeDirection == "spike" then "spiked" else "dropped"
             complexity = if d.changeDirection == "spike" then "medium" else "low"
          in Just
-              ( "Log pattern rate " <> direction <> " in " <> svc <> ". "
+              ( "Log pattern rate "
+                  <> direction
+                  <> " in "
+                  <> svc
+                  <> ". "
                   <> "Current rate: "
                   <> toText (show (round d.currentRatePerHour :: Int))
                   <> "/hour (baseline: "
@@ -483,7 +501,12 @@ simpleDescription issue = case issue.issueType of
       AE.Success (d :: Issues.EndpointLatencyDegradationData) ->
         let svc = maybe "" (" in " <>) d.serviceName
          in Just
-              ( "Latency degradation detected on " <> d.endpointMethod <> " " <> d.endpointPath <> svc <> ". "
+              ( "Latency degradation detected on "
+                  <> d.endpointMethod
+                  <> " "
+                  <> d.endpointPath
+                  <> svc
+                  <> ". "
                   <> d.percentile
                   <> " latency increased from "
                   <> toText (show (round d.baselineLatencyMs :: Int))
@@ -501,7 +524,12 @@ simpleDescription issue = case issue.issueType of
       AE.Success (d :: Issues.EndpointErrorRateSpikeData) ->
         let svc = maybe "" (" in " <>) d.serviceName
          in Just
-              ( "Error rate spike on " <> d.endpointMethod <> " " <> d.endpointPath <> svc <> ". "
+              ( "Error rate spike on "
+                  <> d.endpointMethod
+                  <> " "
+                  <> d.endpointPath
+                  <> svc
+                  <> ". "
                   <> "Current error rate: "
                   <> toText (show (round (d.currentErrorRate * 100) :: Int))
                   <> "% ("
@@ -523,7 +551,14 @@ simpleDescription issue = case issue.issueType of
             direction = if d.changeDirection == "spike" then "spiked" else "dropped"
             complexity = if d.changeDirection == "spike" then "medium" else "medium"
          in Just
-              ( "Traffic volume " <> direction <> " on " <> d.endpointMethod <> " " <> d.endpointPath <> svc <> ". "
+              ( "Traffic volume "
+                  <> direction
+                  <> " on "
+                  <> d.endpointMethod
+                  <> " "
+                  <> d.endpointPath
+                  <> svc
+                  <> ". "
                   <> "Current rate: "
                   <> toText (show (round d.currentRatePerHour :: Int))
                   <> " req/hour (baseline: "
