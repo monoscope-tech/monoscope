@@ -317,12 +317,12 @@ simpleTitle issue = case issue.issueType of
   Issues.ErrorEscalating ->
     case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.ErrorEscalatingData) ->
-        Just $ "Error escalating: " <> T.take 60 d.exceptionType <> " (" <> toText (show d.escalationRate) <> "x in " <> d.escalationWindow <> ")"
+        Just $ "Error escalating: " <> T.take 60 d.errorType <> " (" <> toText (show d.escalationRate) <> "x in " <> d.escalationWindow <> ")"
       _ -> Just "Error rate escalating"
   Issues.ErrorRegressed ->
     case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.ErrorRegressedData) ->
-        Just $ "Error regressed: " <> T.take 80 d.exceptionType
+        Just $ "Error regressed: " <> T.take 80 d.errorType
       _ -> Just "Previously resolved error has regressed"
   Issues.LogPatternRateChange ->
     case AE.fromJSON (getAeson issue.issueData) of
@@ -427,7 +427,7 @@ simpleDescription issue = case issue.issueType of
         let svc = fromMaybe "unknown service" d.serviceName
          in Just
               ( "Error '"
-                  <> T.take 100 d.exceptionType
+                  <> T.take 100 d.errorType
                   <> "' is escalating in "
                   <> svc
                   <> ". "
@@ -456,7 +456,7 @@ simpleDescription issue = case issue.issueType of
               | otherwise = toText (show quietHours) <> " hours"
          in Just
               ( "Previously resolved error '"
-                  <> T.take 100 d.exceptionType
+                  <> T.take 100 d.errorType
                   <> "' has regressed in "
                   <> svc
                   <> ". "

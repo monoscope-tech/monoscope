@@ -122,15 +122,16 @@ data Error = Error
   , projectId :: Projects.ProjectId
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
-  , exceptionType :: Text
+  , errorType :: Text
   , message :: Text
   , stacktrace :: Text
   , hash :: Text
-  , environment :: Text
+  , environment :: Maybe Text
   , service :: Maybe Text
   , runtime :: Maybe Text
   , errorData :: ATError
-  , representativeMessage :: Maybe Text
+  , firstTraceId :: Maybe Text
+  , recentTraceId :: Maybe Text
   , firstEventId :: Maybe ErrorEventId
   , lastEventId :: Maybe ErrorEventId
   , state :: ErrorState
@@ -199,7 +200,7 @@ data ErrorEvent = ErrorEvent
   , errorId :: ErrorId
   , occurredAt :: ZonedTime
   , targetHash :: Text
-  , exceptionType :: Text
+  , errorType :: Text
   , message :: Text
   , stackTrace :: Text
   , serviceName :: Text
@@ -234,9 +235,9 @@ getErrors pid mstate limit offset = PG.query q (pid, maybe "%" errorStateToText 
     q =
       [sql|
         SELECT id, project_id, created_at, updated_at,
-               exception_type, message, stacktrace, hash,
+               error_type, message, stacktrace, hash,
                environment, service, runtime, error_data,
-               representative_message, first_event_id, last_event_id,
+               first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
@@ -259,9 +260,9 @@ getErrorById eid = do
     q =
       [sql|
         SELECT id, project_id, created_at, updated_at,
-               exception_type, message, stacktrace, hash,
+               error_type, message, stacktrace, hash,
                environment, service, runtime, error_data,
-               representative_message, first_event_id, last_event_id,
+               first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
@@ -282,9 +283,9 @@ getErrorByHash pid hash = do
     q =
       [sql|
         SELECT id, project_id, created_at, updated_at,
-               exception_type, message, stacktrace, hash,
+               error_type, message, stacktrace, hash,
                environment, service, runtime, error_data,
-               representative_message, first_event_id, last_event_id,
+               first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
@@ -303,9 +304,9 @@ getActiveErrors pid = PG.query q (Only pid)
     q =
       [sql|
         SELECT id, project_id, created_at, updated_at,
-               exception_type, message, stacktrace, hash,
+               error_type, message, stacktrace, hash,
                environment, service, runtime, error_data,
-               representative_message, first_event_id, last_event_id,
+               first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
@@ -480,7 +481,7 @@ checkErrorSpike err = do
 data ErrorWithCurrentRate = ErrorWithCurrentRate
   { errorId :: ErrorId
   , projectId :: Projects.ProjectId
-  , exceptionType :: Text
+  , errorType :: Text
   , message :: Text
   , service :: Maybe Text
   , baselineState :: BaselineState
@@ -501,7 +502,7 @@ getErrorsWithCurrentRates pid =
         SELECT
           e.id,
           e.project_id,
-          e.exception_type,
+          e.error_type,
           e.message,
           e.service,
           e.baseline_state,
@@ -528,12 +529,15 @@ upsertErrorQueryAndParam pid err = (q, params)
     q =
       [sql|
         INSERT INTO apis.errors (
-          project_id, exception_type, message, stacktrace, hash,
-          environment, service, runtime, error_data, occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1)
-        ON CONFLICT (hash) DO UPDATE SET
+          project_id, error_type, message, stacktrace, hash,
+          environment, service, runtime, error_data,
+          first_trace_id, recent_trace_id,
+          occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1)
+        ON CONFLICT (project_id, hash) DO UPDATE SET
           updated_at = NOW(),
-          representative_message = EXCLUDED.message,
+          message = EXCLUDED.message,
+          recent_trace_id = EXCLUDED.recent_trace_id,
           occurrences_1m = apis.errors.occurrences_1m + 1,
           occurrences_5m = apis.errors.occurrences_5m + 1,
           occurrences_1h = apis.errors.occurrences_1h + 1,
@@ -558,6 +562,8 @@ upsertErrorQueryAndParam pid err = (q, params)
       , MkDBField err.serviceName
       , MkDBField err.runtime
       , MkDBField err
+      , MkDBField err.traceId
+      , MkDBField err.traceId
       ]
 
 

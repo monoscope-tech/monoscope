@@ -334,7 +334,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                           div_ [] do
                             span_ [class_ "text-xs text-textWeak"] "First seen:"
                             span_ [class_ "ml-2 text-xs"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt)
-
                         div_ [class_ "flex items-center gap-2"] do
                           faSprite_ "calendar" "regular" "w-3 h-3"
                           div_ [] do
@@ -440,7 +439,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "p-4 flex flex-col gap-2"] do
                 div_ [] do
                   span_ [class_ "text-sm text-textWeak"] "Exception: "
-                  span_ [class_ "text-sm font-mono text-textStrong"] $ toHtml d.exceptionType
+                  span_ [class_ "text-sm font-mono text-textStrong"] $ toHtml d.errorType
                 div_ [] do
                   span_ [class_ "text-sm text-textWeak"] "Message: "
                   span_ [class_ "text-sm text-textStrong"] $ toHtml d.errorMessage
@@ -466,7 +465,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "p-4 flex flex-col gap-2"] do
                 div_ [] do
                   span_ [class_ "text-sm text-textWeak"] "Exception: "
-                  span_ [class_ "text-sm font-mono text-textStrong"] $ toHtml d.exceptionType
+                  span_ [class_ "text-sm font-mono text-textStrong"] $ toHtml d.errorType
                 div_ [] do
                   span_ [class_ "text-sm text-textWeak"] "Message: "
                   span_ [class_ "text-sm text-textStrong"] $ toHtml d.errorMessage
@@ -1198,13 +1197,13 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     Issues.ErrorEscalating -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.ErrorEscalatingData) ->
         div_ [class_ "mb-4 p-3 bg-fillError-weak border border-strokeError-weak rounded-lg"] do
-          div_ [class_ "text-sm text-fillError-strong font-medium"] $ toHtml d.exceptionType
+          div_ [class_ "text-sm text-fillError-strong font-medium"] $ toHtml d.errorType
           div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml $ show d.escalationRate <> "x increase in " <> d.escalationWindow
       _ -> pass
     Issues.ErrorRegressed -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.ErrorRegressedData) ->
         div_ [class_ "mb-4 p-3 bg-fillError-weak border border-strokeError-weak rounded-lg"] do
-          div_ [class_ "text-sm text-fillError-strong font-medium"] $ toHtml d.exceptionType
+          div_ [class_ "text-sm text-fillError-strong font-medium"] $ toHtml d.errorType
           div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml $ "Regressed after " <> show (d.quietPeriodMinutes `div` 60) <> " hours quiet"
       _ -> pass
     Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of

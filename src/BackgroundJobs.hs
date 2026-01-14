@@ -1556,7 +1556,7 @@ detectErrorSpikes pid authCtx = do
             isSpike = zScore > 3.0 && currentRate > mean + 5
 
         Relude.when isSpike $ do
-          Log.logInfo "Error spike detected" (errRate.errorId, errRate.exceptionType, currentRate, mean, zScore)
+          Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
 
           -- Get full error record for issue creation
           errorM <- Errors.getErrorById errRate.errorId

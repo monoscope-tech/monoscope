@@ -258,7 +258,7 @@ data LogPatternData = LogPatternData
 -- | Error Escalating issue data (error rate increasing over time)
 data ErrorEscalatingData = ErrorEscalatingData
   { errorHash :: Text
-  , exceptionType :: Text
+  , errorType :: Text
   , errorMessage :: Text
   , serviceName :: Maybe Text
   , currentState :: Text -- "escalating"
@@ -279,7 +279,7 @@ data ErrorEscalatingData = ErrorEscalatingData
 -- | Error Regressed issue data (previously resolved error returned)
 data ErrorRegressedData = ErrorRegressedData
   { errorHash :: Text
-  , exceptionType :: Text
+  , errorType :: Text
   , errorMessage :: Text
   , serviceName :: Maybe Text
   , resolvedAt :: UTCTime -- when it was previously resolved
@@ -543,10 +543,8 @@ INSERT INTO apis.issues (
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (project_id, target_hash)
-  WHERE acknowledged_at IS NULL
-    AND archived_at IS NULL
-    AND target_hash != ''
+ON CONFLICT (project_id, target_hash, issue_type)
+  WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
   issue_data = EXCLUDED.issue_data
@@ -764,7 +762,7 @@ createNewErrorIssue projectId err = do
   now <- getCurrentTime
   let exceptionData =
         RuntimeExceptionData
-          { errorType = err.exceptionType
+          { errorType = err.errorType
           , errorMessage = err.message
           , stackTrace = err.stacktrace
           , requestPath = Nothing
@@ -781,7 +779,7 @@ createNewErrorIssue projectId err = do
     err.service
     True
     "critical"
-    ("New Error: " <> err.exceptionType <> " - " <> T.take 80 err.message)
+    ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
     "Investigate the new error and implement a fix."
     "n/a"
     exceptionData
@@ -795,7 +793,7 @@ createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
       increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
       exceptionData =
         RuntimeExceptionData
-          { errorType = err.exceptionType
+          { errorType = err.errorType
           , errorMessage = err.message
           , stackTrace = err.stacktrace
           , requestPath = Nothing
@@ -812,7 +810,7 @@ createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
     err.service
     True
     "critical"
-    ("Error Spike: " <> err.exceptionType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)")
+    ("Error Spike: " <> err.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)")
     ("Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes.")
     "n/a"
     exceptionData
@@ -857,7 +855,7 @@ createErrorEscalatingIssue projectId err prevState escalationRate escalationWind
   let escalatingData =
         ErrorEscalatingData
           { errorHash = err.hash
-          , exceptionType = err.exceptionType
+          , errorType = err.errorType
           , errorMessage = err.message
           , serviceName = err.service
           , currentState = "escalating"
@@ -877,7 +875,7 @@ createErrorEscalatingIssue projectId err prevState escalationRate escalationWind
     err.service
     True
     "critical"
-    ("Error Escalating: " <> err.exceptionType <> " (" <> T.pack (show (round (escalationRate * 100) :: Int)) <> "% increase)")
+    ("Error Escalating: " <> err.errorType <> " (" <> T.pack (show (round (escalationRate * 100) :: Int)) <> "% increase)")
     ("Error rate is escalating (" <> T.pack (show escalationRate) <> "x over " <> escalationWindow <> "). Investigate immediately.")
     "n/a"
     escalatingData
@@ -890,7 +888,7 @@ createErrorRegressedIssue projectId err resolvedAtTime quietMins prevOccurrences
   let regressedData =
         ErrorRegressedData
           { errorHash = err.hash
-          , exceptionType = err.exceptionType
+          , errorType = err.errorType
           , errorMessage = err.message
           , serviceName = err.service
           , resolvedAt = resolvedAtTime
@@ -907,7 +905,7 @@ createErrorRegressedIssue projectId err resolvedAtTime quietMins prevOccurrences
     err.service
     True
     "critical"
-    ("Error Regressed: " <> err.exceptionType <> " (after " <> T.pack (show quietMins) <> " min quiet)")
+    ("Error Regressed: " <> err.errorType <> " (after " <> T.pack (show quietMins) <> " min quiet)")
     ("Previously resolved error has returned after " <> T.pack (show quietMins) <> " minutes. The original fix may be incomplete.")
     "n/a"
     regressedData
