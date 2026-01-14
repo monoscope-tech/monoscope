@@ -43,7 +43,7 @@ jobs:
       - name: Setup node env
         uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 22
 
       - name: Generate required static files
         run: |
@@ -125,7 +125,7 @@ jobs:
       - name: Setup node env
         uses: actions/setup-node@v6
         with:
-          node-version: 18
+          node-version: 22
 
       - name: Generate required static files
         run: |
