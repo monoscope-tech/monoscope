@@ -414,32 +414,34 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           const gridInstances = [];
           document.querySelectorAll('.grid-stack').forEach(gridEl => {
             if (!gridEl.classList.contains('grid-stack-initialized')) {
-              const grid = GridStack.init({
-                column: 12,
-                acceptWidgets: true,
-                cellHeight: '5rem',
-                margin: '1rem 0.5rem 1rem 0.5rem',
-                handleClass: 'grid-stack-handle',
-                styleInHead: true,
-                staticGrid: false,
-                float: false,
-                animate: true,
-              }, gridEl);
-
-              grid.on('removed change', debounce(() => {
-                const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
-                if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
-                htmx.trigger(document.body, 'widget-order-changed');
-              }, 500));
-              gridEl.classList.add('grid-stack-initialized');
               const wrapper = gridEl.closest('.dashboard-grid-wrapper');
-              if (wrapper) {
-                wrapper.classList.add('dashboard-loaded');
-                if (wrapper._skeletonTimeout) clearTimeout(wrapper._skeletonTimeout);
+              try {
+                const grid = GridStack.init({
+                  column: 12,
+                  acceptWidgets: true,
+                  cellHeight: '5rem',
+                  margin: '1rem 0.5rem 1rem 0.5rem',
+                  handleClass: 'grid-stack-handle',
+                  styleInHead: true,
+                  staticGrid: false,
+                  float: false,
+                  animate: true,
+                }, gridEl);
+
+                grid.on('removed change', debounce(() => {
+                  const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
+                  if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
+                  htmx.trigger(document.body, 'widget-order-changed');
+                }, 500));
+                gridEl.classList.add('grid-stack-initialized');
+                gridInstances.push(grid);
+                window.gridStackInstance = grid;
+              } finally {
+                if (wrapper) {
+                  wrapper.classList.add('dashboard-loaded');
+                  if (wrapper._skeletonTimeout) clearTimeout(wrapper._skeletonTimeout);
+                }
               }
-              gridInstances.push(grid);
-              // Set global gridStackInstance to the current grid
-              window.gridStackInstance = grid;
             }
           });
 
@@ -474,7 +476,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
                 const isFullWidth = node.w === 12;
                 const maxRow = items.length
-                  ? Math.max(...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)))
+                  ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)))
                   : 1;
 
                 const requiredHeight = 1 + maxRow;  // 1 for header + content
@@ -564,7 +566,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             const nestedInstance = nestedGrid?.gridstack;
             if (nestedInstance) {
               const items = nestedInstance.getGridItems();
-              const maxRow = items.length ? Math.max(...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1))) : 1;
+              const maxRow = items.length ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1))) : 1;
               grid.update(parentWidget, { h: 1 + maxRow });
             }
           }
