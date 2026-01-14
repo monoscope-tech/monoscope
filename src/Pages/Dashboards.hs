@@ -353,26 +353,28 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
       span_ $ toHtml $ "Constants with no data: " <> T.intercalate ", " emptyConstants
-    case dash.tabs of
-      Just tabs -> do
-        let activeTabIdx = case activeTabSlug of
-              Just slug -> maybe 0 fst (findTabBySlug tabs slug)
-              Nothing -> 0
-        -- Tab system with htmx lazy loading - only render active tab content
-        div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"] do
-          -- Only render the active tab's content (other tabs load via htmx)
-          case tabs !!? activeTabIdx of
-            Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
-            Nothing -> pass
-      Nothing -> do
-        -- Fall back to old behavior for dashboards without tabs
-        div_
-          [class_ "grid-stack -m-2"]
-          do
-            forM_ (dash :: Dashboards.Dashboard).widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-            when (null (dash :: Dashboards.Dashboard).widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
-              faSprite_ "plus" "regular" "h-8 w-8"
-              span_ "Add a widget"
+    div_ [class_ "dashboard-grid-wrapper relative min-h-[400px]"] do
+      dashboardSkeleton_
+      case dash.tabs of
+        Just tabs -> do
+          let activeTabIdx = case activeTabSlug of
+                Just slug -> maybe 0 fst (findTabBySlug tabs slug)
+                Nothing -> 0
+          -- Tab system with htmx lazy loading - only render active tab content
+          div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"] do
+            -- Only render the active tab's content (other tabs load via htmx)
+            case tabs !!? activeTabIdx of
+              Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
+              Nothing -> pass
+        Nothing -> do
+          -- Fall back to old behavior for dashboards without tabs
+          div_
+            [class_ "grid-stack -m-2"]
+            do
+              forM_ (dash :: Dashboards.Dashboard).widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+              when (null (dash :: Dashboards.Dashboard).widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+                faSprite_ "plus" "regular" "h-8 w-8"
+                span_ "Add a widget"
 
     -- Add hidden element for the auto-refresh handler
     div_ [id_ "dashboard-refresh-handler", class_ "hidden"] ""
@@ -428,6 +430,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 htmx.trigger(document.body, 'widget-order-changed');
               }, 200));
               gridEl.classList.add('grid-stack-initialized');
+              gridEl.closest('.dashboard-grid-wrapper')?.classList.add('dashboard-loaded');
               gridInstances.push(grid);
               // Set global gridStackInstance to the current grid
               window.gridStackInstance = grid;
@@ -2210,6 +2213,19 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
             , hxSwapOob_ "true"
             ]
             ""
+
+
+-- | Skeleton loader shown while GridStack initializes
+dashboardSkeleton_ :: Html ()
+dashboardSkeleton_ = div_ [class_ "dashboard-skeleton absolute inset-0 z-10 bg-bgBase flex flex-col items-center justify-center"] do
+  span_ [class_ "loading loading-spinner loading-lg text-fillBrand-strong"] ""
+  p_ [class_ "text-sm text-textWeak mt-3"] "Loading dashboard..."
+  div_ [class_ "grid grid-cols-12 gap-4 mt-8 w-full max-w-4xl px-8"] do
+    div_ [class_ "col-span-8 h-32 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-32 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
 
 
 -- | Render a single tab content panel

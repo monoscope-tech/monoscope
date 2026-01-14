@@ -76,10 +76,12 @@ tabs:
       # Golden Signals - The 4 key metrics for any APM
       - type: group
         title: Golden Signals
+        description: 'The four key metrics from Google SRE for monitoring distributed systems: Traffic, Latency, Errors, and Saturation.'
         layout: { w: 12, h: 4 }
         children:
           - type: 'timeseries_stat'
             title: 'Traffic'
+            description: 'Incoming request rate. Measures system load and usage patterns.'
             icon: activity
             query: |
               (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
@@ -92,6 +94,7 @@ tabs:
 
           - type: 'timeseries_stat'
             title: 'P95 Latency'
+            description: '95th percentile response time. 95% of requests complete faster than this.'
             icon: clock
             query: |
               (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http") and duration != null
@@ -104,6 +107,7 @@ tabs:
 
           - type: 'timeseries_stat'
             title: 'Error Rate'
+            description: 'Percentage of failed requests (5xx errors). Lower is better.'
             icon: alert-triangle
             query: |
               (kind == "server" or name == "apitoolkit-http-span")
@@ -118,6 +122,7 @@ tabs:
 
           - type: 'stat'
             title: 'Apdex Score'
+            description: 'Application Performance Index (0-1). Measures user satisfaction based on response times. >0.9 is excellent, <0.5 is poor.'
             icon: smile
             sql: "SELECT ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::float FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http') AND duration IS NOT NULL {{time_filter}}"
             unit: '/1.0'
@@ -172,6 +177,7 @@ tabs:
       # Services Table and Issues side by side
       - type: table
         title: Services Health
+        description: 'Click a service row to view its detailed metrics in the Service tab.'
         layout: { w: 6, h: 6 }
         on_row_click:
           set_variable: service
@@ -266,6 +272,7 @@ tabs:
       # Request Latency Percentiles
       - type: 'timeseries_line'
         title: 'Request Latency Percentiles'
+        description: 'Response time distribution. P50 is median, P99 shows worst-case latency for 1% of requests.'
         hide_subtitle: true
         summarize_by: max
         query: |
@@ -513,6 +520,7 @@ tabs:
       # Full width resource table
       - type: table
         title: 'Resources Overview'
+        description: 'Click a resource to filter charts above. Total Time shows cumulative time spent on each resource.'
         layout: { w: 12, h: 8 }
         on_row_click:
           set_variable: resource
@@ -590,6 +598,7 @@ tabs:
 
           - type: 'stat'
             title: 'Avg Trace Duration'
+            description: 'Average end-to-end time for complete request traces, from entry to final response.'
             icon: activity
             query: |
               parent_id == "" and duration != null
@@ -779,6 +788,7 @@ tabs:
       # Top Error Patterns - NEW: Grouped error analysis
       - type: table
         title: 'Top Error Patterns'
+        description: 'Most frequent error messages grouped by pattern. Focus on high-count errors first.'
         layout: { w: 6, h: 6 }
         columns:
           - field: error_pattern
@@ -915,6 +925,7 @@ tabs:
 
           - type: 'stat'
             title: 'Slow Queries (>100ms)'
+            description: 'Database queries taking over 100ms. High counts may indicate missing indexes or inefficient queries.'
             icon: turtle
             sql: |
               SELECT COUNT(*)::text
@@ -930,6 +941,7 @@ tabs:
       # TOP: Query Optimization Targets - Sorted by TOTAL TIME spent
       - type: table
         title: 'Query Optimization Targets (by Total Time)'
+        description: 'Queries sorted by total time spent. Optimizing these yields the biggest performance gains.'
         layout: { w: 12, h: 7 }
         columns:
           - field: query_pattern

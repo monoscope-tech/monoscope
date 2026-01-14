@@ -345,6 +345,11 @@ body, :host {
   .skeleton-glow {
     box-shadow: 0 0 10px rgba(26, 116, 168, 0.1);
   }
+
+  /* Dashboard grid loading states */
+  .grid-stack:not(.grid-stack-initialized) { visibility: hidden; }
+  .dashboard-skeleton { transition: opacity 0.2s; }
+  .dashboard-loaded .dashboard-skeleton { opacity: 0; pointer-events: none; }
 }
 
 /*

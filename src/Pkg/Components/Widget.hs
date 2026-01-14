@@ -295,7 +295,7 @@ widgetHelper_ w' = case w.wType of
   where
     w = w' & #id %~ maybe (slugify <$> w'.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
-    isFullWidth = maybe False ((== 12) . fromMaybe 0 . (.w)) w.layout
+    isFullWidth = (== Just 12) $ w.layout >>= (.w)
     -- For group widgets, calculate height from children: 1 (header) + max_child_row
     groupRequiredHeight = case w.wType of
       WTGroup ->
@@ -304,15 +304,12 @@ widgetHelper_ w' = case w.wType of
          in Just (1 + maxRow) -- 1 cell for header + content rows
       _ -> Nothing
     -- For groups: full-width uses requiredHeight, partial-width uses max(yamlH, requiredHeight)
-    effectiveHeight = case (groupRequiredHeight, w.layout >>= (.h)) of
-      (Just reqH, yamlH) | isFullWidth -> Just reqH
-      (Just reqH, Just yH) -> Just (max yH reqH)
-      (Just reqH, Nothing) -> Just reqH
-      _ -> w.layout >>= (.h)
-    layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))]
-    attrs =
-      concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
-        <> maybe [] (\h -> [term "gs-h" (show h)]) effectiveHeight
+    effectiveHeight = case groupRequiredHeight of
+      Just reqH -> Just $ if isFullWidth then reqH else maybe reqH (max reqH) (w.layout >>= (.h))
+      Nothing -> w.layout >>= (.h)
+    layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))] :: [(Text, Layout -> Maybe Int)]
+    attrs = foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
+      <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
     paddingBtm
       | w.standalone == Just True = ""
       | otherwise = "" -- GridStack margins handle spacing between widgets
