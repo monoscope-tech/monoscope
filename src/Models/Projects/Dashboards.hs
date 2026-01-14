@@ -65,6 +65,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
+import System.FilePath ((</>))
 import System.Types (DB)
 
 
@@ -199,14 +200,12 @@ readDashboardsFromDirectory dir = do
   mapM_ (THS.addDependentFile . (dir </>)) files'
   dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'
   THS.lift dashboards
-  where
-    (</>) = \a b -> a ++ "/" ++ b
 
 
 -- | Read single dashboard YAML file
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
-  let filePath = dir ++ "/" ++ file
+  let filePath = dir </> file
   result <- try $ readFileBS filePath :: IO (Either SomeException BS.ByteString)
   case result of
     Left err -> do

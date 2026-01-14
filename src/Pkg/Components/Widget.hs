@@ -281,7 +281,7 @@ widgetHelper_ w' = case w.wType of
       div_ [class_ "inline-flex gap-2 items-center group/h"] do
         span_ [class_ "hidden group-hover/h:inline-flex cursor-move"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
         whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-5 h-5"
-        span_ ([class_ "text-lg font-medium"] <> memptyIfFalse (maybe False ("{{var-" `T.isInfixOf`) w.title) [data_ "var-template" $ maybeToMonoid w.title]) $ toHtml $ maybeToMonoid w.title
+        span_ ([class_ "text-lg font-medium"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) w.title) $ toHtml $ maybeToMonoid w.title
         whenJust w.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
       -- Collapse chevron: only for full-width groups
       when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
@@ -296,12 +296,11 @@ widgetHelper_ w' = case w.wType of
     w = w' & #id %~ maybe (slugify <$> w'.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
     isFullWidth = (== Just 12) $ w.layout >>= (.w)
-    -- For group widgets, calculate height from children: 1 (header) + max_child_row
     groupRequiredHeight = case w.wType of
       WTGroup ->
         let children = fromMaybe [] w.children
-            maxRow = foldr max 1 $ map (\c -> fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) children
-         in Just (1 + maxRow) -- 1 cell for header + content rows
+            maxRow = foldl' (\acc c -> max acc $ fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) 1 children
+         in Just (1 + maxRow)
       _ -> Nothing
     -- For groups: full-width uses requiredHeight, partial-width uses max(yamlH, requiredHeight)
     effectiveHeight = case groupRequiredHeight of
@@ -313,8 +312,7 @@ widgetHelper_ w' = case w.wType of
         <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
     paddingBtm
       | w.standalone == Just True = ""
-      | otherwise = "" -- GridStack margins handle spacing between widgets
-      -- Serialize the widget to JSON for easy copying
+      | otherwise = ""
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
       if w.naked == Just True
@@ -329,11 +327,11 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ "text-sm text-textWeak flex items-center gap-1"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-      span_ (memptyIfFalse (maybe False ("{{var-" `T.isInfixOf`) title) [data_ "var-template" $ maybeToMonoid title]) $ toHtml $ maybeToMonoid title
+      span_ (foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ toHtml $ maybeToMonoid title
       whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
-    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> memptyIfFalse (maybe False ("{{var-" `T.isInfixOf`) subValueM) [data_ "var-template" $ maybeToMonoid subValueM]) $ toHtml $ maybeToMonoid subValueM
+    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do

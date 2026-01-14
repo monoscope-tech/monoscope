@@ -405,11 +405,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           });
         };
 
-        // Flag to skip DB writes during collapse/expand (ephemeral UI state)
-        window.isCollapseAction = false;
-
-        // Function to initialize grids (called on page load and after htmx swaps)
         function initializeGrids() {
+          document.querySelectorAll('.dashboard-grid-wrapper').forEach(wrapper => {
+            if (!wrapper._skeletonTimeout && !wrapper.classList.contains('dashboard-loaded')) {
+              wrapper._skeletonTimeout = setTimeout(() => wrapper.classList.add('dashboard-loaded'), 5000);
+            }
+          });
           const gridInstances = [];
           document.querySelectorAll('.grid-stack').forEach(gridEl => {
             if (!gridEl.classList.contains('grid-stack-initialized')) {
@@ -426,11 +427,16 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               }, gridEl);
 
               grid.on('removed change', debounce(() => {
-                if (window.isCollapseAction) { window.isCollapseAction = false; return; }
+                const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
+                if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
                 htmx.trigger(document.body, 'widget-order-changed');
-              }, 200));
+              }, 500));
               gridEl.classList.add('grid-stack-initialized');
-              gridEl.closest('.dashboard-grid-wrapper')?.classList.add('dashboard-loaded');
+              const wrapper = gridEl.closest('.dashboard-grid-wrapper');
+              if (wrapper) {
+                wrapper.classList.add('dashboard-loaded');
+                if (wrapper._skeletonTimeout) clearTimeout(wrapper._skeletonTimeout);
+              }
               gridInstances.push(grid);
               // Set global gridStackInstance to the current grid
               window.gridStackInstance = grid;
@@ -482,14 +488,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 }
               }
 
-              // Attach to nested grid events
               nestedInstance.on('change added removed', autoFitGroupToChildren);
-              // Run once on init to fix initial sizing
-              setTimeout(autoFitGroupToChildren, 100);
+              requestAnimationFrame(autoFitGroupToChildren);
               nestedInstance.on('removed change', debounce(() => {
-                if (window.isCollapseAction) { window.isCollapseAction = false; return; }
+                const collapsingWidget = nestedEl.closest('[data-collapse-action]');
+                if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
                 htmx.trigger(document.body, 'widget-order-changed');
-              }, 200));
+              }, 500));
 
               nestedEl.classList.add('grid-stack-initialized');
             }
@@ -518,18 +523,23 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         }
       });
 
-      // Helper: compact grid by moving widgets up to fill gaps
       function compactGrid(grid, el) {
         const items = Array.from(el.querySelectorAll(':scope > .grid-stack-item')).sort((a, b) => (a.gridstackNode?.y || 0) - (b.gridstackNode?.y || 0));
         const rows = {};
         items.forEach(item => { const y = item.gridstackNode?.y || 0; (rows[y] = rows[y] || []).push(item); });
-        let nextY = 0;
-        grid.batchUpdate();
+        let nextY = 0, needsUpdate = false;
+        const updates = [];
         Object.keys(rows).map(Number).sort((a, b) => a - b).forEach(y => {
-          rows[y].forEach(item => { if (item.gridstackNode?.y !== nextY) grid.update(item, { y: nextY }); });
+          rows[y].forEach(item => {
+            if (item.gridstackNode?.y !== nextY) { updates.push({ item, y: nextY }); needsUpdate = true; }
+          });
           nextY += Math.max(...rows[y].map(item => item.gridstackNode?.h || 1));
         });
-        grid.batchUpdate(false);
+        if (needsUpdate) {
+          grid.batchUpdate();
+          updates.forEach(({ item, y }) => grid.update(item, { y }));
+          grid.batchUpdate(false);
+        }
       }
 
       // Delegated handler for collapse toggle
@@ -545,8 +555,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           const isCollapsed = parentWidget.classList.contains('collapsed');
           const mainGridEl = document.querySelector('.grid-stack:not(.nested-grid)');
 
-          // Set flag to prevent DB writes - collapse state is ephemeral
-          window.isCollapseAction = true;
+          parentWidget.dataset.collapseAction = 'true';
 
           if (isCollapsed) {
             grid.update(parentWidget, { h: 1 });
@@ -2028,7 +2037,7 @@ findWidgetInDashboard wid dash = tabResult <|> rootResult
     findInWidget :: Widget.Widget -> Maybe Widget.Widget
     findInWidget w
       | match w = Just w
-      | otherwise = asum $ map findInWidget (fromMaybe [] w.children)
+      | otherwise = asum $ maybe [] (map findInWidget) w.children
     tabResult = listToMaybe [(Just $ slugify t.name, w') | t <- fromMaybe [] dash.tabs, w <- t.widgets, w' <- maybeToList (findInWidget w)]
     rootResult = (Nothing,) <$> asum (map findInWidget dash.widgets)
 
