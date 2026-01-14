@@ -326,7 +326,22 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           console.error(`Error fetching data for ${input.name}:`, e);
         }
       });
+
+      interpolateVarTemplates();
     });
+
+    // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
+    function interpolateVarTemplates() {
+      const params = new URLSearchParams(window.location.search);
+      document.querySelectorAll('[data-var-template]').forEach(el => {
+        let text = el.dataset.varTemplate;
+        params.forEach((value, key) => {
+          if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+        });
+        el.textContent = text;
+      });
+    }
+    interpolateVarTemplates();
   });
     |]
   let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
@@ -388,6 +403,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           });
         };
 
+        // Flag to skip DB writes during collapse/expand (ephemeral UI state)
+        window.isCollapseAction = false;
+
         // Function to initialize grids (called on page load and after htmx swaps)
         function initializeGrids() {
           const gridInstances = [];
@@ -402,9 +420,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 styleInHead: true,
                 staticGrid: false,
                 float: false,
+                animate: true,
               }, gridEl);
 
-              grid.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
+              grid.on('removed change', debounce(() => {
+                if (window.isCollapseAction) { window.isCollapseAction = false; return; }
+                htmx.trigger(document.body, 'widget-order-changed');
+              }, 200));
               gridEl.classList.add('grid-stack-initialized');
               gridInstances.push(grid);
               // Set global gridStackInstance to the current grid
@@ -429,6 +451,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 handleClass: 'nested-grid-stack-handle',
                 styleInHead: true,
                 staticGrid: false,
+                animate: true,
               }, nestedEl);
 
               // Auto-fit group to children
@@ -460,7 +483,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               nestedInstance.on('change added removed', autoFitGroupToChildren);
               // Run once on init to fix initial sizing
               setTimeout(autoFitGroupToChildren, 100);
-              nestedInstance.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
+              nestedInstance.on('removed change', debounce(() => {
+                if (window.isCollapseAction) { window.isCollapseAction = false; return; }
+                htmx.trigger(document.body, 'widget-order-changed');
+              }, 200));
 
               nestedEl.classList.add('grid-stack-initialized');
             }
@@ -511,9 +537,14 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         const grid = window.gridStackInstance;
         if (!parentWidget || !grid) return;
 
-        setTimeout(() => {
+        // Use requestAnimationFrame for smoother animation after class toggle
+        requestAnimationFrame(() => {
           const isCollapsed = parentWidget.classList.contains('collapsed');
           const mainGridEl = document.querySelector('.grid-stack:not(.nested-grid)');
+
+          // Set flag to prevent DB writes - collapse state is ephemeral
+          window.isCollapseAction = true;
+
           if (isCollapsed) {
             grid.update(parentWidget, { h: 1 });
           } else {
@@ -526,7 +557,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             }
           }
           compactGrid(grid, mainGridEl);
-        }, 10);
+        });
       });
       |]
 

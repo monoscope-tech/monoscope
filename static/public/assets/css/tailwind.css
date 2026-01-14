@@ -1231,6 +1231,23 @@ code, pre, .code, .monospace {
   @apply cursor-move;
 }
 
+/* Nested grid collapse/expand transitions */
+.nested-grid {
+  transition: opacity 0.2s ease-out, max-height 0.3s ease-out;
+  overflow: hidden;
+}
+
+.collapsed .nested-grid {
+  opacity: 0;
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.collapse-toggle svg {
+  transition: transform 0.2s ease-out;
+}
+
 /* Gridstack custom resize icon - restore APItoolkit custom styling
    (overrides the default gridstack arrow icon with a dotted grid pattern) */
 .grid-stack-placeholder > .placeholder-content {
