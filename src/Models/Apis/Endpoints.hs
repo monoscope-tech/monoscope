@@ -389,8 +389,8 @@ getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpo
 
 -- | Update endpoint baseline values
 updateEndpointBaseline :: DB es => EndpointId -> BaselineState -> Double -> Double -> Double -> Double -> Double -> Double -> Double -> Double -> Int -> Eff es ()
-updateEndpointBaseline eid state errMean errStddev latMean latStddev latP95 latP99 volMean volStddev samples =
-  void $ PG.execute q (state, errMean, errStddev, latMean, latStddev, latP95, latP99, volMean, volStddev, samples, eid)
+updateEndpointBaseline eid bState errMean errStddev latMean latStddev latP95 latP99 volMean volStddev samples =
+  void $ PG.execute q (bState, errMean, errStddev, latMean, latStddev, latP95, latP99, volMean, volStddev, samples, eid)
   where
     q =
       [sql|

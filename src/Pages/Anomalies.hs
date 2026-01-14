@@ -22,6 +22,10 @@ module Pages.Anomalies (
   AIChatForm (..),
   aiChatPostH,
   aiChatHistoryGetH,
+  -- Error actions
+  ErrorAssignForm (..),
+  errorActionPostH,
+  errorAssignPostH,
 )
 where
 
@@ -48,6 +52,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDump
@@ -55,7 +60,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users (User (id))
+import Models.Users.Users (User (id), UserId)
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (emptyState_, resizer_, statBox_)
@@ -188,16 +193,21 @@ anomalyDetailCore pid firstM fetchIssue = do
         $ PageCtx baseBwconf
         $ toHtml ("Issue not found" :: Text)
     Just issue -> do
-      let bwconf =
+      errorM <-
+        issue.issueType & \case
+          Issues.RuntimeException -> Errors.getErrorLByHash pid issue.targetHash
+          _ -> pure Nothing
+      let isErrorRelated = issue.issueType `elem` [Issues.RuntimeException, Issues.ErrorEscalating, Issues.ErrorRegressed]
+          isResolved = maybe False (\e -> e.state == Errors.ESResolved) errorM
+          bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
+                  -- Add error-specific buttons for runtime error issues
+                  when isErrorRelated $ do
+                    errorResolveButton_ pid issue.targetHash isResolved
               }
-      errorM <-
-        issue.issueType & \case
-          Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
-          _ -> pure Nothing
       (trItem, spanRecs) <- case errorM of
         Just err -> do
           let targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
@@ -253,7 +263,7 @@ timeStatBox_ title timeStr
   | otherwise = pass
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Anomalies.ATError -> UTCTime -> Bool -> Html ()
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Errors.ErrorL -> UTCTime -> Bool -> Html ()
 anomalyDetailPage pid issue tr otellogs errM now isFirst = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
@@ -289,12 +299,12 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
             div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-              -- Stats (1 column each)
-              statBox_ (Just pid) Nothing "Affected Requests" "" "0" Nothing Nothing
-              statBox_ (Just pid) Nothing "Affected Clients" "" "0" Nothing Nothing
+              -- Stats (1 column each) 
               whenJust errM $ \err -> do
+                statBox_ (Just pid) Nothing "Affected Requests" "" (show err.occurrences) Nothing Nothing
+                statBox_ (Just pid) Nothing "Affected Clients" "" (show err.affectedUsers) Nothing Nothing
                 timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
-                timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
+                timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC (fromMaybe err.updatedAt err.lastOccurredAt)
               widget
             div_ [class_ "flex flex-col gap-4"] do
               div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
@@ -570,6 +580,12 @@ newtype AIChatForm = AIChatForm {query :: Text}
   deriving anyclass (FromForm)
 
 
+-- | Form for error assignment
+newtype ErrorAssignForm = ErrorAssignForm {assigneeId :: UserId}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
 -- | AI response structure from OpenAI
 data AIInvestigationResponse = AIInvestigationResponse
   { explanation :: Text
@@ -770,6 +786,47 @@ aiChatHistoryGetH pid issueId = do
   let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
   messages <- Issues.selectChatHistory convId
   addRespHeaders $ aiChatHistoryView_ pid messages
+
+
+-- =============================================================================
+-- Error-specific action handlers
+-- =============================================================================
+
+errorActionPostH :: Projects.ProjectId -> Text -> Text -> ATAuthCtx (RespHeaders (Html ()))
+errorActionPostH pid errorHash action =
+  case action of
+    "resolve" -> do 
+      _ <- Errors.updateErrorStateByProjectAndHash pid errorHash Errors.ESResolved
+      addSuccessToast "Error resolved" Nothing
+      addRespHeaders $ errorResolveButton_ pid errorHash True
+    "unresolve" -> do
+      _ <- Errors.updateErrorStateByProjectAndHash pid errorHash Errors.ESOngoing
+      addSuccessToast "Error unresolved" Nothing
+      addRespHeaders $ errorResolveButton_ pid errorHash False
+    _ -> do
+      addErrorToast "Unknown action" Nothing
+      addRespHeaders pass
+
+-- | Assign an error to a user
+errorAssignPostH :: Projects.ProjectId -> Text -> ErrorAssignForm -> ATAuthCtx (RespHeaders (Html ()))
+errorAssignPostH pid errorHash form =
+  withError pid errorHash "Error assigned" (`Errors.assignError` form.assigneeId) $
+    errorAssignButton_ pid errorHash (Just form.assigneeId)
+
+
+-- | Helper for error actions
+withError :: Projects.ProjectId -> Text -> Text -> (Errors.ErrorId -> ATAuthCtx Int64) -> Html () -> ATAuthCtx (RespHeaders (Html ()))
+withError pid errorHash successMsg action responseHtml = do
+  _ <- Sessions.sessionAndProject pid
+  errorM <- Errors.getErrorByHash pid errorHash
+  case errorM of
+    Nothing -> do
+      addErrorToast "Error not found" Nothing
+      addRespHeaders pass
+    Just err -> do
+      _ <- action err.id
+      addSuccessToast successMsg Nothing
+      addRespHeaders responseHtml
 
 
 -- | Render a single chat response (user question + AI answer)
@@ -1424,6 +1481,46 @@ anomalyArchiveButton pid aid archived = do
     do
       faSprite_ "archive" "regular" "w-4 h-4"
       if archived then "Unarchive" else "Archive"
+
+
+-- | Resolve/Unresolve error button
+errorResolveButton_ :: Projects.ProjectId -> Text -> Bool -> Html ()
+errorResolveButton_ pid errorHash isResolved = do
+  let endpoint = "/p/" <> pid.toText <> "/anomalies/errors/" <> errorHash <> "/actions/" <> if isResolved then "unresolve" else "resolve"
+  a_
+    [ class_
+        $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
+        <> (if isResolved then "bg-fillSuccess-weak text-textSuccess" else "btn-primary")
+    , term "data-tippy-content" $ if isResolved then "Reopen error" else "Resolve error"
+    , hxPost_ endpoint
+    , hxSwap_ "outerHTML"
+    ]
+    do
+      faSprite_ (if isResolved then "rotate-left" else "circle-check") "regular" "w-4 h-4"
+      if isResolved then "Resolved" else "Resolve"
+
+
+-- | Assign error button (dropdown)
+errorAssignButton_ :: Projects.ProjectId -> Text -> Maybe UserId -> Html ()
+errorAssignButton_ pid errorHash assigneeM = do
+  let isAssigned = isJust assigneeM
+  div_ [class_ "relative group/assign"] do
+    button_
+      [ class_
+          $ "inline-flex items-center gap-2 cursor-pointer py-2 px-3 rounded-xl "
+          <> (if isAssigned then "bg-fillBrand-weak text-textBrand" else "btn-primary")
+      , type_ "button"
+      ]
+      do
+        faSprite_ "user-plus" "regular" "w-4 h-4"
+        if isAssigned then "Assigned" else "Assign"
+    -- Dropdown will be populated with team members via HTMX if needed
+    div_
+      [ class_ "absolute right-0 top-full mt-1 bg-fill rounded-lg shadow-lg border border-strokeWeak hidden group-hover/assign:block min-w-[200px] z-10"
+      , id_ $ "assign-dropdown-" <> errorHash
+      ]
+      do
+        div_ [class_ "p-2 text-xs text-textWeak"] "Click to see assignees"
 
 
 issueTypeBadge :: Issues.IssueType -> Bool -> Html ()

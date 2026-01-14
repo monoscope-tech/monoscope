@@ -524,59 +524,56 @@ logsPatternExtraction scheduledTime pid = do
     limitVal = 250
     paginate :: Int -> UTCTime -> ATBackgroundCtx ()
     paginate offset startTime = do
-      otelEvents <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      otelEvents <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,''), context___trace_id, resource___service___name FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       unless (null otelEvents) do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        let (logs, summaries) = L.partition (\(k, _, _, _) -> k == "log") otelEvents
-        processPatterns "log" "log_pattern" (V.fromList [(i, body) | (_, i, body, _) <- logs]) pid scheduledTime startTime
-        processPatterns "summary" "summary_pattern" (V.fromList [(i, s) | (_, i, _, s) <- summaries]) pid scheduledTime startTime
+        let (logs, summaries) = L.partition (\(k, _, _, _, _, _) -> k == "log") otelEvents
+        processPatterns "log" "log_pattern" (V.fromList [(i, body) | (_, i, body, _, trId, serviceName) <- logs]) pid scheduledTime startTime
+        processPatterns "summary" "summary_pattern" (V.fromList [(i, s) | (_, i, _, s, _, _) <- summaries]) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
 
 -- | Generic pattern extraction for logs or summaries
-processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
+processPatterns :: Text -> Text -> V.Vector (Text, Text, Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- if kind == "summary" then coerce @[Only Text] @[Text] <$> PG.query (Query $ encodeUtf8 qq) pid else LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map ("",) existingPatterns
-        combined = known <> events
+    existingPatterns <- LogPatterns.getLogPatternTexts pid
+    let known = V.fromList $ map ("",False,) existingPatterns
+        combined = known <> ((\(dd,smp) -> (dd, True, smp)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     -- Only log if patterns were extracted
     Relude.when (V.length newPatterns > 0)
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
-    forM_ newPatterns \(patternTxt, ids) -> do
+    forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
       let q = [text|UPDATE otel_logs_and_spans SET $fieldName = ?  WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|]
       unless (V.null ids) $ do
         -- Update otel_logs_and_spans with pattern
         void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
-
         Relude.when (kind == "log" && not (T.null patternTxt)) $ do
           let patternHash = toXXHash patternTxt
-              sampleMsg = case V.find (/= "") (V.map snd events) of
-                Just msg -> Just (T.take 500 msg)
-                Nothing -> Nothing
-          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash Nothing Nothing sampleMsg
+          traceShowM ("Upserting log pattern" , pid, patternTxt, patternHash, sampleMsg)
+          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash Nothing Nothing (Just sampleMsg)
 
 
 -- | Process a batch of (id, content) pairs through Drain
-processBatch :: Bool -> V.Vector (Text, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+processBatch :: Bool -> V.Vector (Text,Bool, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree (logId, content) -> processNewLog isSummary logId content now tree) inTree batch
+  V.foldl' (\tree (logId, isSampleLog, content) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
 
 
-processNewLog :: Bool -> Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-processNewLog isSummary logId content now tree =
+processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+processNewLog isSummary logId isSampleLog content now tree =
   let tokens = Drain.generateDrainTokens content
    in if V.null tokens
         then tree
         else
           let tokenCount = V.length tokens
               firstToken = V.head tokens
-           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId content now
+           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId isSampleLog content now
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions

@@ -57,6 +57,7 @@ import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.Dashboards qualified as Dashboards
@@ -300,6 +301,9 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , aiChatPost :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
+  , -- Error-specific actions
+    errorActionPost :: mode :- "errors" :> Capture "errorHash" Text :> "actions" :> Capture "action" Text :> Post '[HTML] (RespHeaders (Html ()))
+  , errorAssignPost :: mode :- "errors" :> Capture "errorHash" Text :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorAssignForm :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -518,6 +522,9 @@ anomaliesServer pid =
     , anomalyHashGet = AnomalyList.anomalyDetailHashGetH pid
     , aiChatPost = AnomalyList.aiChatPostH pid
     , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
+    , -- Error-specific handlers
+      errorActionPost = AnomalyList.errorActionPostH pid
+    , errorAssignPost = AnomalyList.errorAssignPostH pid
     }
 
 

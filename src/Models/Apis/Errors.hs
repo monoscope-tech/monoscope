@@ -5,6 +5,7 @@ module Models.Apis.Errors (
   ErrorEvent (..),
   ErrorEventId,
   ATError (..),
+   ErrorL (..),
   -- Queries
   getErrors,
   getErrorById,
@@ -12,6 +13,8 @@ module Models.Apis.Errors (
   getActiveErrors,
   updateOccurrenceCounts,
   updateErrorState,
+  updateErrorStateByProjectAndHash,
+  getErrorLByHash,
   updateBaseline,
   resolveError,
   upsertErrorQueryAndParam,
@@ -162,6 +165,55 @@ data Error = Error
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Error
 
+-- error aggreted with number of occurrences and affected users 
+data ErrorL = ErrorL
+  {
+     id :: ErrorId
+  , projectId :: Projects.ProjectId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , errorType :: Text
+  , message :: Text
+  , stacktrace :: Text
+  , hash :: Text
+  , environment :: Maybe Text
+  , service :: Maybe Text
+  , runtime :: Maybe Text
+  , errorData :: ATError
+  , firstTraceId :: Maybe Text
+  , recentTraceId :: Maybe Text
+  , firstEventId :: Maybe ErrorEventId
+  , lastEventId :: Maybe ErrorEventId
+  , state :: ErrorState
+  , assigneeId :: Maybe Users.UserId
+  , assignedAt :: Maybe ZonedTime
+  , resolvedAt :: Maybe ZonedTime
+  , regressedAt :: Maybe ZonedTime
+  , occurrences1m :: Int
+  , occurrences5m :: Int
+  , occurrences1h :: Int
+  , occurrences24h :: Int
+  , quietMinutes :: Int
+  , resolutionThresholdMinutes :: Int
+  , baselineState :: BaselineState
+  , baselineSamples :: Int
+  , baselineErrorRateMean :: Maybe Double
+  , baselineErrorRateStddev :: Maybe Double
+  , baselineUpdatedAt :: Maybe ZonedTime
+  , isIgnored :: Bool
+  , ignoredUntil :: Maybe ZonedTime
+  , occurrences :: Int
+  , affectedUsers :: Int
+  , lastOccurredAt :: Maybe ZonedTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Error)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorL
 
 data ATError = ATError
   { projectId :: Maybe Projects.ProjectId
@@ -296,6 +348,29 @@ getErrorByHash pid hash = do
         WHERE project_id = ? AND hash = ?
       |]
 
+getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
+getErrorLByHash pid hash = do
+  results <- PG.query q (pid, hash)
+  return $ listToMaybe results
+  where
+    q =
+      [sql|
+        SELECT id, project_id, created_at, updated_at,
+               error_type, message, stacktrace, hash,
+               environment, service, runtime, error_data,
+               first_trace_id, recent_trace_id, first_event_id, last_event_id,
+               state, assignee_id, assigned_at, resolved_at, regressed_at,
+               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
+               quiet_minutes, resolution_threshold_minutes,
+               baseline_state, baseline_samples,
+               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
+               is_ignored, ignored_until,
+               (SELECT COUNT(*) FROM apis.error_events WHERE target_hash = e.hash) AS occurrences,
+               (SELECT COUNT(DISTINCT user_id) FROM apis.error_events WHERE target_hash = e.hash) AS affected_users,
+               (SELECT MAX(occurred_at) FROM apis.error_events WHERE target_hash = e.hash) AS last_occurred_at
+        FROM apis.errors e
+        WHERE project_id = ? AND hash = ?
+      |]
 
 -- | Get active (non-resolved) errors
 getActiveErrors :: DB es => Projects.ProjectId -> Eff es [Error]
@@ -350,6 +425,11 @@ updateErrorState eid newState = PG.execute q (errorStateToText newState, eid)
     q =
       [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE id = ? |]
 
+updateErrorStateByProjectAndHash :: DB es => Projects.ProjectId -> Text -> ErrorState -> Eff es Int64
+updateErrorStateByProjectAndHash pid hash newState = PG.execute q (errorStateToText newState, pid, hash)
+  where
+    q =
+      [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE project_id = ? AND hash = ? |]
 
 resolveError :: DB es => ErrorId -> Eff es Int64
 resolveError eid = PG.execute q (Only eid)
