@@ -630,8 +630,8 @@ renderStatContent widget chartId valueM = do
     , hxExt_ "forward-page-params"
     ]
     $ if hasData
-        then renderStatValue widget chartId valueM
-        else renderStatPlaceholder widget chartId
+      then renderStatValue widget chartId valueM
+      else renderStatPlaceholder widget chartId
 
 
 -- | Render placeholder with loading spinner for lazy-loaded stats

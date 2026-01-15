@@ -92,8 +92,8 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.THUtils (hashAssetFile)
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
+import Pkg.THUtils (hashAssetFile)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -2030,12 +2030,13 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
         sqlBlock_ "Main Query" qc.finalSqlQuery
         whenJust qc.finalSummarizeQuery $ sqlBlock_ "Summarize Query"
         whenJust qc.finalAlertQuery $ sqlBlock_ "Alert Query"
-        script_ """
+        script_
+          """
           document.querySelectorAll('.sql-preview-container pre code').forEach(el => {
             el.textContent = sqlFormatter.format(el.textContent, { language: 'postgresql' });
             hljs.highlightElement(el);
           });
-        """
+          """
   where
     sqlBlock_ :: Text -> Text -> Html ()
     sqlBlock_ label sql = div_ [class_ "space-y-1"] do
