@@ -769,8 +769,8 @@ typeCastMap = M.fromList [("toint", "integer"), ("tolong", "bigint"), ("tostring
 unaryFuncSQL :: Map Text (Text -> Text)
 unaryFuncSQL =
   M.fromList
-    [ ("isnull", \v -> v <> " IS NULL")
-    , ("isnotnull", \v -> v <> " IS NOT NULL")
+    [ ("isnull", (<> " IS NULL"))
+    , ("isnotnull", (<> " IS NOT NULL"))
     , ("isempty", \v -> "(" <> v <> " IS NULL OR " <> v <> " = '')")
     , ("isnotempty", \v -> "(" <> v <> " IS NOT NULL AND " <> v <> " != '')")
     ]

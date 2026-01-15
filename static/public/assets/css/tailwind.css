@@ -345,6 +345,11 @@ body, :host {
   .skeleton-glow {
     box-shadow: 0 0 10px rgba(26, 116, 168, 0.1);
   }
+
+  /* Dashboard grid loading states */
+  .grid-stack:not(.grid-stack-initialized) { visibility: hidden; }
+  .dashboard-skeleton { transition: opacity 0.2s; }
+  .dashboard-loaded .dashboard-skeleton { opacity: 0; pointer-events: none; }
 }
 
 /*
@@ -1198,10 +1203,14 @@ code, pre, .code, .monospace {
 
 /* Dashboard variable selectors */
 .dash-variable .tagify {
-  margin-top: -0.5rem;
   --tags-border-color: transparent;
   --tag-text-color: var(--color-textStrong);
 }
+
+.dash-variable .tagify--select {
+  cursor: pointer;
+}
+
 
 .dash-variable .tagify__tag {
   min-width: 100%;
@@ -1217,8 +1226,35 @@ code, pre, .code, .monospace {
   text-wrap-mode: nowrap !important;
 }
 
+/* Group widget collapsed state - header fills space and centers content */
+.grid-stack-item.collapsed .group-header {
+  flex: 1;
+}
+
+/* Group widget collapsed state - rotate chevron */
+.grid-stack-item.collapsed .collapse-toggle svg {
+  transform: rotate(180deg);
+}
+
 .grid-stack-handle, .nested-grid-stack-handle {
   @apply cursor-move;
+}
+
+/* Nested grid collapse/expand transitions */
+.nested-grid {
+  transition: opacity 0.2s ease-out, max-height 0.3s ease-out;
+  overflow: hidden;
+}
+
+.collapsed .nested-grid {
+  opacity: 0;
+  max-height: 0 !important;
+  padding: 0 !important;
+  margin: 0 !important;
+}
+
+.collapse-toggle svg {
+  transition: transform 0.2s ease-out;
 }
 
 /* Gridstack custom resize icon - restore APItoolkit custom styling
