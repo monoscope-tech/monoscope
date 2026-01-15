@@ -416,7 +416,12 @@ getEndpointByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
   where
     q =
       [sql|
-        SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description
+        SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description,
+               first_trace_id, recent_trace_id, service,
+               baseline_state, baseline_samples, baseline_updated_at,
+               baseline_error_rate_mean, baseline_error_rate_stddev,
+               baseline_latency_mean, baseline_latency_stddev, baseline_latency_p95, baseline_latency_p99,
+               baseline_volume_hourly_mean, baseline_volume_hourly_stddev
         FROM apis.endpoints
         WHERE project_id = ? AND hash = ?
       |]
@@ -428,7 +433,12 @@ getActiveEndpoints pid = PG.query q (Only pid)
   where
     q =
       [sql|
-        SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description
+        SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description,
+               first_trace_id, recent_trace_id, service,
+               baseline_state, baseline_samples, baseline_updated_at,
+               baseline_error_rate_mean, baseline_error_rate_stddev,
+               baseline_latency_mean, baseline_latency_stddev, baseline_latency_p95, baseline_latency_p99,
+               baseline_volume_hourly_mean, baseline_volume_hourly_stddev
         FROM apis.endpoints
         WHERE project_id = ?
       |]

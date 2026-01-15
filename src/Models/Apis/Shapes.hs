@@ -147,7 +147,7 @@ data ShapeForIssue = ShapeForIssue
 
 
 getShapeForIssue :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ShapeForIssue)
-getShapeForIssue pid hash = listToMaybe <$> PG.query q (Only hash)
+getShapeForIssue pid hash = listToMaybe <$> PG.query q (pid, hash)
   where
     q =
       [sql|
