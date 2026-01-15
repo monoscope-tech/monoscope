@@ -92,6 +92,7 @@ import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.THUtils (hashAssetFile)
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
@@ -106,6 +107,15 @@ import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+
+
+-- | Head content for dashboard pages - loads highlight.js and sql-formatter for SQL preview
+dashboardHeadContent_ :: Html ()
+dashboardHeadContent_ = do
+  link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql-formatter.min.js")] ("" :: Text)
 
 
 folderFromPath :: Maybe Text -> Text
@@ -251,7 +261,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     -- Variables section (pushed to the right)
     whenJust dash.variables \variables -> do
       div_ [class_ $ "flex gap-2 flex-wrap " <> if isJust dash.tabs then "ml-auto" else ""] do
-        forM_ variables \var -> fieldset_ [class_ "relative border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
+        forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
           legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
           let whitelist =
                 maybe
@@ -283,16 +293,22 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     script_
       [text|
   // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
-  window.interpolateVarTemplates = function() {
-    const params = new URLSearchParams(window.location.search);
-    document.querySelectorAll('[data-var-template]').forEach(el => {
-      let text = el.dataset.varTemplate;
-      params.forEach((value, key) => {
-        if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+  (function() {
+    let cachedSearch = '', cachedParams = null;
+    window.interpolateVarTemplates = function() {
+      if (window.location.search !== cachedSearch) {
+        cachedSearch = window.location.search;
+        cachedParams = new URLSearchParams(cachedSearch);
+      }
+      document.querySelectorAll('[data-var-template]').forEach(el => {
+        let text = el.dataset.varTemplate;
+        cachedParams.forEach((value, key) => {
+          if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+        });
+        el.textContent = text;
       });
-      el.textContent = text;
-    });
-  };
+    };
+  })();
 
   window.addEventListener('DOMContentLoaded', () => {
     const tagifyInstances = new Map();
@@ -565,13 +581,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           if (isCollapsed) {
             grid.update(parentWidget, { h: 1 });
           } else {
-            const nestedGrid = parentWidget.querySelector('.nested-grid');
-            const nestedInstance = nestedGrid?.gridstack;
-            if (nestedInstance) {
-              const items = nestedInstance.getGridItems();
-              const maxRow = items.length ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1))) : 1;
-              grid.update(parentWidget, { h: 1 + maxRow });
-            }
+            const nestedInstance = parentWidget.querySelector('.nested-grid')?.gridstack;
+            const items = nestedInstance?.getGridItems() || [];
+            const maxRow = items.length ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1))) : 1;
+            grid.update(parentWidget, { h: 1 + maxRow });
           }
           compactGrid(grid, mainGridEl);
         });
@@ -689,11 +702,11 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
     valueToText v = decodeUtf8 $ AE.encode v
 
 
--- Process a single widget recursively with pre-computed replacement maps for efficiency.
--- Preserves original query in rawQuery for editor display.
+-- Process a single widget recursively. Keeps sql/query with {{var-*}} templates intact
+-- so they can be interpolated at data fetch time with current URL params.
 processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> (Text -> Text, Text -> Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
 processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetBase = do
-  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
+  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query
 
   widget' <-
     if widget.eager == Just True || widget.wType == Widget.WTAnomalies
@@ -986,6 +999,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
               , pageTitleModalId = Just "pageTitleModalId"
               , config = appCtx.config
               , freeTierExceeded = freeTierExceeded
+              , headContent = Just dashboardHeadContent_
               , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
                   TimePicker.timepicker_ Nothing currentRange Nothing
                   TimePicker.refreshButton_
@@ -1654,6 +1668,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
               , pageTitle = "Dashboards"
               , freeTierExceeded = freeTierExceeded
               , config = appCtx.config
+              , headContent = Just dashboardHeadContent_
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
@@ -2011,10 +2026,16 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
       Left err -> div_ [class_ "p-3 space-y-2"] do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"
         pre_ [class_ "whitespace-pre-wrap break-all bg-fillError/10 p-2 rounded text-xs overflow-x-auto"] $ toHtml err
-      Right (_, qc) -> div_ [class_ "space-y-3 p-3 bg-fillWeaker rounded-lg font-mono text-xs"] do
+      Right (_, qc) -> div_ [class_ "space-y-3 p-3 bg-fillWeaker rounded-lg text-xs sql-preview-container"] do
         sqlBlock_ "Main Query" qc.finalSqlQuery
         whenJust qc.finalSummarizeQuery $ sqlBlock_ "Summarize Query"
         whenJust qc.finalAlertQuery $ sqlBlock_ "Alert Query"
+        script_ """
+          document.querySelectorAll('.sql-preview-container pre code').forEach(el => {
+            el.textContent = sqlFormatter.format(el.textContent, { language: 'postgresql' });
+            hljs.highlightElement(el);
+          });
+        """
   where
     sqlBlock_ :: Text -> Text -> Html ()
     sqlBlock_ label sql = div_ [class_ "space-y-1"] do
@@ -2025,7 +2046,7 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
           , term "_" [text| on click writeText(`${T.replace "`" "\\`" sql}`) to the navigator's clipboard then set my.innerText to 'Copied!' then wait 1.5s then set my.innerText to 'Copy' |]
           ]
           "Copy"
-      pre_ [class_ "whitespace-pre-wrap break-all bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ toHtml sql
+      pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
 
 
 -- | Find a tab by its slug, returns (index, tab) if found
@@ -2040,9 +2061,7 @@ findWidgetInDashboard wid dash = tabResult <|> rootResult
     match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
     -- Recursively search widget and its children
     findInWidget :: Widget.Widget -> Maybe Widget.Widget
-    findInWidget w
-      | match w = Just w
-      | otherwise = asum $ maybe [] (map findInWidget) w.children
+    findInWidget w = mfilter match (pure w) <|> asum (maybe [] (map findInWidget) w.children)
     tabResult = listToMaybe [(Just $ slugify t.name, w') | t <- fromMaybe [] dash.tabs, w <- t.widgets, w' <- maybeToList (findInWidget w)]
     rootResult = (Nothing,) <$> asum (map findInWidget dash.widgets)
 
@@ -2166,6 +2185,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
           , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
+          , headContent = Just dashboardHeadContent_
           , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_

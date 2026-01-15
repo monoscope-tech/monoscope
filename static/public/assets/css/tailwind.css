@@ -1203,10 +1203,14 @@ code, pre, .code, .monospace {
 
 /* Dashboard variable selectors */
 .dash-variable .tagify {
-  margin-top: -0.5rem;
   --tags-border-color: transparent;
   --tag-text-color: var(--color-textStrong);
 }
+
+.dash-variable .tagify--select {
+  cursor: pointer;
+}
+
 
 .dash-variable .tagify__tag {
   min-width: 100%;

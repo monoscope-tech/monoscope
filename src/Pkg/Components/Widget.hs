@@ -317,7 +317,7 @@ widgetHelper_ w' = case w.wType of
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content"]
+        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full [.grid-stack_&]:h-auto"]
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
@@ -508,7 +508,7 @@ renderTraceTable widget = do
           div_
             [ class_ "h-full overflow-auto p-3"
             , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
-            , hxTrigger_ "load"
+            , hxTrigger_ "load, update-query from:window"
             , hxTarget_ $ "#" <> tableId
             , hxSelect_ $ "#" <> tableId
             , hxSwap_ "outerHTML"
@@ -608,6 +608,54 @@ renderTable widget = do
     whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
 
 
+-- | Render stat widget content with HTMX lazy loading support
+-- Always includes HTMX attributes so widget can refresh on update-query events
+renderStatContent :: Widget -> Text -> Maybe Text -> Html ()
+renderStatContent widget chartId valueM = do
+  let statContentId = chartId <> "_stat"
+      hasData = widget.eager == Just True || isJust (widget.dataset >>= (.value))
+      paddingClass = "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)
+      -- Always use eager widget JSON for HTMX requests
+      eagerWidget = widget & #eager ?~ True
+      widgetJson = fromLazy $ AE.encode eagerWidget
+  -- Always include HTMX attributes for refresh capability
+  div_
+    [ id_ statContentId
+    , class_ paddingClass
+    , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
+    , hxTrigger_ $ if hasData then "update-query from:window" else "load, update-query from:window"
+    , hxTarget_ $ "#" <> statContentId
+    , hxSelect_ $ "#" <> statContentId
+    , hxSwap_ "outerHTML"
+    , hxExt_ "forward-page-params"
+    ]
+    $ if hasData
+        then renderStatValue widget chartId valueM
+        else renderStatPlaceholder widget chartId
+
+
+-- | Render placeholder with loading spinner for lazy-loaded stats
+renderStatPlaceholder :: Widget -> Text -> Html ()
+renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
+  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+    $ span_ [class_ "loading loading-spinner loading-sm"] ""
+  div_ [class_ "inline-flex gap-1 items-center text-sm"] do
+    whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+    toHtml $ maybeToMonoid widget.title
+    whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+
+
+-- | Render actual stat value content
+renderStatValue :: Widget -> Text -> Maybe Text -> Html ()
+renderStatValue widget chartId valueM = div_ [class_ "flex flex-col gap-1"] do
+  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+    $ whenJust valueM toHtml
+  div_ [class_ "inline-flex gap-1 items-center text-sm"] do
+    whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+    toHtml $ maybeToMonoid widget.title
+    whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+
+
 renderChart :: Widget -> Html ()
 renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ Utils.prettyPrintCount (round r) <> " rows/min"
@@ -627,14 +675,7 @@ renderChart widget = do
         , id_ $ chartId <> "_bordered"
         ]
         do
-          when isStat $ div_ [class_ $ "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)] do
-            div_ [class_ "flex flex-col gap-1"] do
-              strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
-                $ whenJust valueM toHtml
-              div_ [class_ "inline-flex gap-1 items-center text-sm"] do
-                whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
-                toHtml $ maybeToMonoid widget.title
-                whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+          when isStat $ renderStatContent widget chartId valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
             div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
             let theme = fromMaybe "default" widget.theme

@@ -89,7 +89,6 @@ tabs:
               | order by timestamp desc
               | limit 200
             unit: req/min
-            eager: true
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
@@ -102,7 +101,6 @@ tabs:
               | order by timestamp desc
               | limit 200
             unit: ms
-            eager: true
             layout: { w: 3, h: 2 }
 
           - type: 'timeseries_stat'
@@ -115,7 +113,6 @@ tabs:
               | order by timestamp desc
               | limit 200
             unit: '%'
-            eager: true
             alert_threshold: 5
             warning_threshold: 2
             layout: { w: 3, h: 2 }
@@ -126,7 +123,6 @@ tabs:
             icon: smile
             sql: "SELECT ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::float FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND (kind = 'server' OR name = 'apitoolkit-http-span' OR name = 'monoscope.http') AND duration IS NOT NULL {{time_filter}}"
             unit: '/1.0'
-            eager: true
             layout: { w: 3, h: 2 }
 
       # Secondary metrics row
@@ -141,7 +137,6 @@ tabs:
               resource.service.name != null
               | summarize dcount(resource.service.name)
             unit: services
-            eager: true
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
@@ -151,7 +146,6 @@ tabs:
               (kind == "server" or name == "apitoolkit-http-span" or name == "monoscope.http")
               | summarize count()
             unit: reqs
-            eager: true
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
@@ -161,7 +155,6 @@ tabs:
               attributes.db.system.name != null
               | summarize dcount(attributes.db.system.name)
             unit: systems
-            eager: true
             layout: { w: 3, h: 2 }
 
           - type: 'stat'
@@ -171,7 +164,6 @@ tabs:
               (kind == "server" or name == "apitoolkit-http-span") and name != null
               | summarize dcount(name)
             unit: endpoints
-            eager: true
             layout: { w: 3, h: 2 }
 
       # Services Table and Issues side by side
