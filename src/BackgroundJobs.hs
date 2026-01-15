@@ -23,6 +23,7 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
@@ -38,10 +39,12 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
@@ -64,7 +67,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
@@ -80,21 +83,13 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField)
+import Utils (DBField, toXXHash)
 
 
 data BgJobs
   = InviteUserToProject Users.UserId Projects.ProjectId Text Text
   | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
   | SendDiscordData Users.UserId Projects.ProjectId Text [Text] Text
-  | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
-    NewAnomaly
-      { projectId :: Projects.ProjectId
-      , createdAt :: ZonedTime
-      , anomalyType :: Text
-      , anomalyAction :: Text
-      , targetHashes :: [Text]
-      }
   | DailyReports Projects.ProjectId
   | WeeklyReports Projects.ProjectId
   | DailyJob
@@ -114,6 +109,23 @@ data BgJobs
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
+  | -- Error processing jobs
+    ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
+  | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
+  | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
+  | -- Log pattern processing jobs
+    LogPatternBaselineCalculation Projects.ProjectId -- Calculate baselines for log patterns
+  | LogPatternSpikeDetection Projects.ProjectId -- Detect log pattern volume spikes
+  | NewLogPatternDetected Projects.ProjectId Text -- projectId, pattern hash - notify about new pattern
+  | -- Endpoint anomaly detection jobs
+    EndpointBaselineCalculation Projects.ProjectId -- Calculate baselines for endpoints (latency, error rate, volume)
+  | EndpointLatencyDegradationDetection Projects.ProjectId -- Detect endpoint latency degradation
+  | EndpointErrorRateSpikeDetection Projects.ProjectId -- Detect endpoint error rate spikes
+  | EndpointVolumeRateChangeDetection Projects.ProjectId -- Detect endpoint volume changes (spike/drop)
+  | -- API change detection jobs (from SQL triggers)
+    NewEndpoint Projects.ProjectId Text -- projectId, endpoint hash - creates issue for new endpoint
+  | NewShape Projects.ProjectId Text -- projectId, shape hash - creates issue for new shape
+  | NewFieldChange Projects.ProjectId Text -- projectId, field hash - creates issue for field change
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -167,7 +179,6 @@ processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds authCtx
-    NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
@@ -352,7 +363,24 @@ processBackgroundJob authCtx bgJob =
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
-    QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
+    -- Error processing jobs
+    ErrorBaselineCalculation pid -> calculateErrorBaselines pid
+    ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
+    NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
+    -- Log pattern processing jobs
+    LogPatternBaselineCalculation pid -> calculateLogPatternBaselines pid
+    LogPatternSpikeDetection pid -> detectLogPatternSpikes pid authCtx
+    NewLogPatternDetected pid patternHash -> processNewLogPattern pid patternHash authCtx
+    -- Endpoint anomaly detection jobs
+    EndpointBaselineCalculation pid -> calculateEndpointBaselines pid
+    EndpointLatencyDegradationDetection pid -> detectEndpointLatencyDegradation pid authCtx
+    EndpointErrorRateSpikeDetection pid -> detectEndpointErrorRateSpike pid authCtx
+    EndpointVolumeRateChangeDetection pid -> detectEndpointVolumeRateChange pid authCtx
+    -- API change detection jobs
+    NewEndpoint pid hash -> processNewEndpoint pid hash authCtx
+    NewShape pid hash -> processNewShape pid hash authCtx
+    NewFieldChange pid hash -> processNewFieldChange pid hash authCtx
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -381,6 +409,21 @@ runHourlyJob scheduledTime hour = do
     forM_ projectBatches \batch -> do
       let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
       createJob conn "background_jobs" batchJob
+
+  -- Schedule baseline calculation and spike detection for active projects
+  liftIO $ withResource ctx.jobsPool \conn ->
+    forM_ activeProjects \pid -> do
+      -- Error baseline and spike detection
+      createJob conn "background_jobs" $ ErrorBaselineCalculation pid
+      createJob conn "background_jobs" $ ErrorSpikeDetection pid
+      -- Log pattern baseline and spike detection
+      createJob conn "background_jobs" $ LogPatternBaselineCalculation pid
+      createJob conn "background_jobs" $ LogPatternSpikeDetection pid
+      -- Endpoint baseline and anomaly detection
+      createJob conn "background_jobs" $ EndpointBaselineCalculation pid
+      createJob conn "background_jobs" $ EndpointLatencyDegradationDetection pid
+      createJob conn "background_jobs" $ EndpointErrorRateSpikeDetection pid
+      createJob conn "background_jobs" $ EndpointVolumeRateChangeDetection pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -481,52 +524,62 @@ logsPatternExtraction scheduledTime pid = do
     limitVal = 250
     paginate :: Int -> UTCTime -> ATBackgroundCtx ()
     paginate offset startTime = do
-      otelEvents <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,'') FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      otelEvents :: [(Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       unless (null otelEvents) do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        let (logs, summaries) = L.partition (\(k, _, _, _) -> k == "log") otelEvents
-        processPatterns "log" "log_pattern" (V.fromList [(i, body) | (_, i, body, _) <- logs]) pid scheduledTime startTime
-        processPatterns "summary" "summary_pattern" (V.fromList [(i, s) | (_, i, _, s) <- summaries]) pid scheduledTime startTime
+        let (logs, summaries) = L.partition (\(k, _, _, _, _, _, _) -> k == "log") otelEvents
+        processPatterns "log" "log_pattern" (V.fromList [(i, body, trId, serviceName, level) | (_, i, body, _, trId, serviceName, level) <- logs]) pid scheduledTime startTime
+        processPatterns "summary" "summary_pattern" (V.fromList [(i, s, trId, serviceName, level) | (_, i, _, s, trId, serviceName, level) <- summaries]) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
 
 -- | Generic pattern extraction for logs or summaries
-processPatterns :: Text -> Text -> V.Vector (Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
+-- events: (id, content, traceId, serviceName, level)
+processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
-    let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
-    existingPatterns <- coerce @[Only Text] @[Text] <$> PG.query (Query $ encodeUtf8 qq) pid
-    let known = V.fromList $ map ("",) existingPatterns
-        combined = known <> events
+    existingPatterns <- LogPatterns.getLogPatternTexts pid
+    let known = V.fromList $ map (\pat -> ("", False, pat, Nothing, Nothing, Nothing)) existingPatterns
+        -- Include level in content for pattern matching so different levels create different patterns
+        combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     -- Only log if patterns were extracted
     Relude.when (V.length newPatterns > 0)
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
-    forM_ newPatterns \(patternTxt, ids) -> do
+    forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
       let q = [text|UPDATE otel_logs_and_spans SET $fieldName = ?  WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|]
-      unless (V.null ids)
-        $ void
-        $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
+      unless (V.null ids) $ do
+        -- Update otel_logs_and_spans with pattern
+        void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
+        Relude.when (kind == "log" && not (T.null patternTxt)) $ do
+          let (serviceName, logLevel, traceId) = case V.head ids of
+                logId | logId /= "" -> case V.find (\(i, _, _, sName, lvl) -> i == logId) events of
+                  Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
+                  Nothing -> (Nothing, Nothing, Nothing)
+                _ -> (Nothing, Nothing, Nothing)
+          let patternHash = toXXHash patternTxt
+          traceShowM ("Upserting log pattern", pid, patternTxt, patternHash, sampleMsg)
+          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel traceId (Just sampleMsg)
 
 
--- | Process a batch of (id, content) pairs through Drain
-processBatch :: Bool -> V.Vector (Text, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+-- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain
+processBatch :: Bool -> V.Vector (Text, Bool, Text, Maybe Text, Maybe Text, Maybe Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree (logId, content) -> processNewLog isSummary logId content now tree) inTree batch
+  V.foldl' (\tree (logId, isSampleLog, content, _, _, _) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
 
 
-processNewLog :: Bool -> Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-processNewLog isSummary logId content now tree =
+processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+processNewLog _isSummary logId isSampleLog content now tree =
   let tokens = Drain.generateDrainTokens content
    in if V.null tokens
         then tree
         else
           let tokenCount = V.length tokens
               firstToken = V.head tokens
-           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId content now
+           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId isSampleLog content now
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
@@ -623,13 +676,13 @@ processOneMinuteErrors scheduledTime pid = do
 -- Log.logInfo "Completed 1-minute error processing" ()
 
 -- | Process and insert errors for a specific project
-processProjectErrors :: Projects.ProjectId -> V.Vector RequestDumps.ATError -> ATBackgroundCtx ()
+processProjectErrors :: Projects.ProjectId -> V.Vector Errors.ATError -> ATBackgroundCtx ()
 processProjectErrors pid errors = do
   -- Process each error, extracting HTTP fields if available
   let processedErrors = V.map processError errors
 
   -- Extract queries and params
-  let (_, queries, paramsList) = V.unzip3 processedErrors
+  let (queries, paramsList) = V.unzip processedErrors
 
   -- Bulk insert errors
   result <- try $ V.zipWithM_ PG.execute queries paramsList
@@ -638,14 +691,13 @@ processProjectErrors pid errors = do
     Left (e :: SomePostgreSqlException) ->
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
     Right _ ->
-      -- Only log if errors were actually inserted (reduces noise in tests)
       Relude.when (V.length errors > 0)
         $ Log.logInfo "Successfully inserted errors for project"
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
   where
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
-    processError :: RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
+    processError :: Errors.ATError -> (Query, [DBField])
     processError = RequestMessages.processErrors pid Nothing Nothing Nothing
 
 
@@ -1039,7 +1091,7 @@ sendReportForProject pid rType = do
                   slowQueriesCount = V.length slowDbQueries
                   slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
                   totalAnomalies = length anomalies'
-                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
+                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.NewEndpoint then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
                   runtimeErrorsBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral errTotal / fromIntegral totalAnomalies) * 99
                   apiChangesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral apiTotal / fromIntegral totalAnomalies) * 99
                   alertIssuesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral qTotal / fromIntegral totalAnomalies) * 99
@@ -1071,178 +1123,6 @@ sendReportForProject pid rType = do
 
 emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
 emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM (const pass)
-
-
--- FIXME: implement query alert email using postmark
--- sendEmail
---   (CI.original email)
---   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
---   [fmtTrim|
---     Hi {user.firstName},<br/>
---
---     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
---
---     <br/><br/>
---     Regards,
---     Apitoolkit team
---               |]
-
--- | Process new anomalies detected by database triggers
--- This job is created by the apis.new_anomaly_proc() stored procedure
--- when new entities (endpoints, shapes, fields, formats, errors) are inserted.
---
--- Anomaly Processing Strategy:
--- 1. API Changes (endpoint/shape/format) -> Group by endpoint into single issue
--- 2. Runtime Exceptions -> Create individual issues for each error
--- 3. All issues are queued for LLM enhancement if configured
--- 4. Notifications are sent based on project settings
-newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Text -> ATBackgroundCtx ()
-newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
-  authCtx <- ask @Config.AuthContext
-  let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
-  Log.logInfo "Processing new anomalies" ()
-  case anomalyType of
-    -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
-    -- This prevents notification spam when multiple related changes occur
-    Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
-    Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes
-    Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
-    -- Runtime exceptions get individual issues
-    -- Each unique error pattern gets its own issue for tracking
-    Anomalies.ATRuntimeException -> do
-      errors <- Anomalies.errorsByHashes pid targetHashes
-
-      -- Create one issue per error
-      forM_ errors \err -> do
-        issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
-        Issues.insertIssue issue
-        -- Queue enhancement job
-        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        -- Send notifications only if project exists and has alerts enabled
-        projectM <- Projects.projectById pid
-        whenJust projectM \project -> Relude.when project.errorAlerts do
-          users <- Projects.usersByProjectId pid
-          let issueId = UUID.toText issue.id.unUUIDId
-          forM_ project.notificationsChannel \case
-            Projects.NSlack ->
-              forM_ errors \err' -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
-            Projects.NDiscord ->
-              forM_ errors \err' -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
-            Projects.NPhone ->
-              forM_ errors \err' ->
-                sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title project.whatsappNumbers
-            Projects.NEmail ->
-              forM_ users \u -> do
-                let errosJ =
-                      ( \ee ->
-                          let e = ee.errorData
-                           in AE.object
-                                [ "root_error_message" AE..= e.rootErrorMessage
-                                , "error_type" AE..= e.errorType
-                                , "error_message" AE..= e.message
-                                , "stack_trace" AE..= e.stackTrace
-                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                                , "hash" AE..= e.hash
-                                , "tech" AE..= e.technology
-                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                                , "root_error_type" AE..= e.rootErrorType
-                                ]
-                      )
-                        <$> errors
-                    title = project.title
-                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                    templateVars =
-                      [aesonQQ|{
-                          "project_name": #{title},
-                          "errors_url": #{errors_url},
-                          "errors": #{errosJ}
-                     }|]
-                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
-    -- Ignore other anomaly types
-    _ -> pass
-
-
--- | Process API change anomalies (endpoint, shape, format) into unified APIChange issues
--- This function groups related anomalies by endpoint to prevent notification spam.
--- For example, if a new endpoint is added with 5 fields and 2 formats, instead of
--- creating 8 separate issues, we create 1 issue that encompasses all changes.
---
--- Grouping Strategy:
--- 1. All anomalies are grouped by their endpoint hash
--- 2. If an open issue exists for that endpoint, update it with new anomalies
--- 3. Otherwise, create a new issue containing all anomalies for that endpoint
-processAPIChangeAnomalies :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
-processAPIChangeAnomalies pid targetHashes = do
-  authCtx <- ask @Config.AuthContext
-
-  -- Get all anomalies
-  anomaliesList <- Anomalies.getAnomaliesVM pid targetHashes
-  let anomaliesVM = V.fromList anomaliesList
-
-  -- Group by endpoint hash to consolidate related changes
-  let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
-
-  -- Process each endpoint group
-  forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
-    -- Check for existing open issue to avoid duplicates
-    existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
-
-    case existingIssueM of
-      Just existingIssue -> do
-        -- Update existing issue with new anomaly data
-        let apiChangeData =
-              Issues.APIChangeData
-                { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
-                , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
-                , endpointHost = "Unknown"
-                , anomalyHashes = V.map (.targetHash) anomalies
-                , shapeChanges = V.empty -- Simplified for now
-                , formatChanges = V.empty -- Simplified for now
-                , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
-                , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
-                , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
-                }
-        Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
-      Nothing -> do
-        -- Create new issue
-        issue <- liftIO $ Issues.createAPIChangeIssue pid endpointHash anomalies
-        Issues.insertIssue issue
-
-        -- Queue enhancement job
-        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        pass
-
-  -- Send notifications
-  projectM <- Projects.projectById pid
-  whenJust projectM \project -> do
-    users <- Projects.usersByProjectId pid
-    let endpointInfo =
-          map
-            ( \(_, anoms) ->
-                let firstAnom = V.head anoms
-                 in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-            )
-            anomaliesByEndpoint
-    -- Only send notifications if we have valid endpoint info
-    Relude.when (project.endpointAlerts && not (null endpointInfo)) do
-      let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
-
-      forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
-        Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
-        Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-        Projects.NEmail -> do
-          forM_ users \u -> do
-            let templateVars =
-                  AE.object
-                    [ "user_name" AE..= u.firstName
-                    , "project_name" AE..= project.title
-                    , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
-                    , "endpoint_name" AE..= endpointInfo
-                    ]
-            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
 
 
 -- | Group anomalies by endpoint hash
@@ -1637,3 +1517,451 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
   where
     breached t = if triggerLessThan then t >= value else t <= value
     recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r
+
+
+calculateErrorBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
+calculateErrorBaselines pid = do
+  Log.logInfo "Calculating error baselines" pid
+  errors <- Errors.getActiveErrors pid
+
+  forM_ errors \err -> do
+    -- Get hourly stats from error_events over last 7 days (168 hours)
+    statsM <- Errors.getErrorEventStats err.id 168
+    case statsM of
+      Nothing -> pass
+      Just stats -> do
+        let newSamples = stats.totalHours
+            newMean = stats.hourlyMean
+            newStddev = stats.hourlyStddev
+            -- Establish baseline after 24 hours of data
+            newState = if newSamples >= 24 then BSEstablished else BSLearning
+        _ <- Errors.updateBaseline err.id newState newMean newStddev newSamples
+        pass
+
+  Log.logInfo "Finished calculating error baselines" (pid, length errors)
+
+
+-- | Detect error spikes and create issues
+-- Uses error_events table for current rate calculation
+detectErrorSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectErrorSpikes pid authCtx = do
+  Log.logInfo "Detecting error spikes" pid
+
+  -- Get all errors with their current hour counts in one query
+  errorsWithRates <- Errors.getErrorsWithCurrentRates pid
+
+  forM_ errorsWithRates \errRate -> do
+    -- Only check errors with established baselines
+    case (errRate.baselineState, errRate.baselineMean, errRate.baselineStddev) of
+      (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
+        let currentRate = fromIntegral errRate.currentHourCount :: Double
+            zScore = (currentRate - mean) / stddev
+            isSpike = zScore > 3.0 && currentRate > mean + 5
+
+        Relude.when isSpike $ do
+          Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
+
+          -- Get full error record for issue creation
+          errorM <- Errors.getErrorById errRate.errorId
+          whenJust errorM \err -> do
+            _ <- Errors.updateErrorState err.id Errors.ESEscalating
+            issue <- liftIO $ Issues.createErrorSpikeIssue pid err currentRate mean stddev
+            Issues.insertIssue issue
+            liftIO $ withResource authCtx.jobsPool \conn ->
+              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+            Log.logInfo "Created issue for error spike" (pid, err.id, issue.id)
+      _ -> pass -- Skip errors without established baseline
+  Log.logInfo "Finished error spike detection" pid
+
+
+-- | Process a new error and create an issue
+processNewError :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewError pid errorHash authCtx = do
+  Log.logInfo "Processing new error" (pid, errorHash)
+  errorM <- Errors.getErrorByHash pid errorHash
+  case errorM of
+    Nothing -> Log.logAttention "Error not found for new error processing" (pid, errorHash)
+    Just err -> do
+      -- Only create issue for truly new errors (state = 'new')
+      Relude.when (err.state == Errors.ESNew) $ do
+        -- Create a runtime exception issue
+        issue <- liftIO $ Issues.createNewErrorIssue pid err
+        Issues.insertIssue issue
+        -- Queue LLM enhancement
+        liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        -- Send notifications only if project exists and has alerts enabled
+        projectM <- Projects.projectById pid
+        whenJust projectM \project -> Relude.when project.errorAlerts do
+          users <- Projects.usersByProjectId pid
+          let issueId = UUID.toText issue.id.unUUIDId
+          forM_ project.notificationsChannel \case
+            Projects.NSlack -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
+            Projects.NDiscord -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
+            Projects.NPhone -> sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title project.whatsappNumbers
+            Projects.NEmail ->
+              forM_ users \u -> do
+                let e = err.errorData
+                    errorsJ =
+                      V.singleton
+                        $ AE.object
+                          [ "root_error_message" AE..= e.rootErrorMessage
+                          , "error_type" AE..= e.errorType
+                          , "error_message" AE..= e.message
+                          , "stack_trace" AE..= e.stackTrace
+                          , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                          , "hash" AE..= e.hash
+                          , "tech" AE..= e.technology
+                          , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                          , "root_error_type" AE..= e.rootErrorType
+                          ]
+                    title = project.title
+                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                    templateVars =
+                      [aesonQQ|{
+                          "project_name": #{title},
+                          "errors_url": #{errors_url},
+                          "errors": #{errorsJ}
+                     }|]
+                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+
+        Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
+
+
+-- ============================================================================
+-- Log Pattern Processing Jobs
+-- ============================================================================
+
+-- | Calculate baselines for log patterns
+-- Uses hourly counts from otel_logs_and_spans over the last 7 days
+calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
+calculateLogPatternBaselines pid = do
+  Log.logInfo "Calculating log pattern baselines" pid
+
+  -- Get all non-ignored patterns
+  patterns <- LogPatterns.getLogPatterns pid Nothing 1000 0
+
+  forM_ patterns \lp -> do
+    -- Get hourly stats from otel_logs_and_spans over last 7 days (168 hours)
+    statsM <- LogPatterns.getPatternStats pid lp.logPattern 168
+
+    case statsM of
+      Nothing -> pass
+      Just stats -> do
+        let newSamples = stats.totalHours
+            newMean = stats.hourlyMean
+            newStddev = stats.hourlyStddev
+            -- Establish baseline after 24 hours of data
+            newState = if newSamples >= 24 then BSEstablished else BSLearning
+        _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
+        pass
+
+  Log.logInfo "Finished calculating log pattern baselines" (pid, length patterns)
+
+
+-- | Detect log pattern volume spikes and create issues
+-- Uses otel_logs_and_spans table for current rate calculation
+detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectLogPatternSpikes pid authCtx = do
+  Log.logInfo "Detecting log pattern spikes" pid
+
+  -- Get all patterns with their current hour counts in one query
+  patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
+
+  forM_ patternsWithRates \lpRate -> do
+    -- Only check patterns with established baselines
+    case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
+      (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
+        let currentRate = fromIntegral lpRate.currentHourCount :: Double
+            zScore = (currentRate - mean) / stddev
+            -- Spike detection: >3 std devs AND at least 10 more events than baseline
+            isSpike = zScore > 3.0 && currentRate > mean + 10
+
+        Relude.when isSpike $ do
+          Log.logInfo "Log pattern spike detected" (lpRate.patternId, lpRate.logPattern, currentRate, mean, zScore)
+
+          -- Get full pattern record for issue creation
+          patternM <- LogPatterns.getLogPatternById lpRate.patternId
+          whenJust patternM \lp -> do
+            issue <- liftIO $ Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev "spike"
+            Issues.insertIssue issue
+            liftIO $ withResource authCtx.jobsPool \conn ->
+              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+            Log.logInfo "Created issue for log pattern spike" (pid, lp.id, issue.id)
+      _ -> pass -- Skip patterns without established baseline
+  Log.logInfo "Finished log pattern spike detection" pid
+
+
+-- | Process a new log pattern and create an issue
+processNewLogPattern :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewLogPattern pid patternHash authCtx = do
+  Log.logInfo "Processing new log pattern" (pid, patternHash)
+  totalEvents <- do
+    res <- PG.query [sql| SELECT count(5000) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
+    case res of
+      [Only cnt] -> return cnt
+      _ -> return 0
+  if totalEvents < 5000
+    then Log.logInfo "Skipping new endpoint issue creation due to low event volume" (pid, patternHash, totalEvents)
+    else do
+      patternM <- LogPatterns.getLogPatternByHash pid patternHash
+      whenJust patternM \lp -> do
+        Relude.when (lp.state == LogPatterns.LPSNew) $ do
+          issue <- liftIO $ Issues.createLogPatternIssue pid lp
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+
+
+calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
+calculateEndpointBaselines pid = do
+  Log.logInfo "Calculating endpoint baselines" pid
+  endpoints <- Endpoints.getActiveEndpoints pid
+
+  forM_ endpoints \ep -> do
+    -- Get hourly stats over last 7 days (168 hours)
+    statsM <- Endpoints.getEndpointStats pid ep.hash 168
+    case statsM of
+      Nothing -> pass
+      Just stats -> do
+        let newSamples = stats.totalHours
+            -- Establish baseline after 24 hours of data
+            newState = if newSamples >= 24 then BSEstablished else BSLearning
+        Endpoints.updateEndpointBaseline
+          ep.id
+          newState
+          stats.hourlyMeanErrors
+          stats.hourlyStddevErrors
+          stats.meanLatency
+          stats.stddevLatency
+          stats.p95Latency
+          stats.p99Latency
+          stats.hourlyMeanRequests
+          stats.hourlyStddevRequests
+          newSamples
+
+  Log.logInfo "Finished calculating endpoint baselines" (pid, length endpoints)
+
+
+detectEndpointLatencyDegradation :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectEndpointLatencyDegradation pid authCtx = do
+  Log.logInfo "Detecting endpoint latency degradation" pid
+
+  endpointsWithRates <- Endpoints.getEndpointsWithCurrentRates pid
+
+  forM_ endpointsWithRates \epRate -> do
+    -- Check P95 latency degradation
+    case (epRate.baselineLatencyP95, epRate.baselineLatencyStddev, epRate.currentHourLatencyP95) of
+      (Just baselineP95, Just stddev, Just currentP95) | stddev > 0 -> do
+        let zScore = (currentP95 - baselineP95) / stddev
+            -- Degradation: >3 std devs AND at least 50% increase
+            isDegraded = zScore > 3.0 && currentP95 > baselineP95 * 1.5
+        Relude.when isDegraded $ do
+          Log.logInfo "Endpoint latency degradation detected" (epRate.endpointHash, currentP95, baselineP95, zScore)
+          issue <- liftIO $ Issues.createEndpointLatencyDegradationIssue pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentP95 baselineP95 stddev "p95" V.empty
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          Log.logInfo "Created issue for endpoint latency degradation" (pid, epRate.endpointHash, issue.id)
+      _ -> pass
+
+  Log.logInfo "Finished endpoint latency degradation detection" pid
+
+
+detectEndpointErrorRateSpike :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectEndpointErrorRateSpike pid authCtx = do
+  Log.logInfo "Detecting endpoint error rate spikes" pid
+
+  endpointsWithRates <- Endpoints.getEndpointsWithCurrentRates pid
+
+  forM_ endpointsWithRates \epRate -> do
+    case (epRate.baselineErrorRateMean, epRate.baselineErrorRateStddev) of
+      (Just baselineMean, Just stddev) | stddev > 0 && epRate.currentHourRequests > 0 -> do
+        let currentErrorRate = fromIntegral epRate.currentHourErrors / fromIntegral epRate.currentHourRequests
+            zScore = (currentErrorRate - baselineMean) / stddev
+            -- Spike: >3 std devs AND error rate > 5% AND at least 5 errors
+            isSpike = zScore > 3.0 && currentErrorRate > 0.05 && epRate.currentHourErrors >= 5
+
+        Relude.when isSpike $ do
+          Log.logInfo "Endpoint error rate spike detected" (epRate.endpointHash, currentErrorRate, baselineMean, zScore)
+          issue <-
+            liftIO
+              $ Issues.createEndpointErrorRateSpikeIssue
+                pid
+                epRate.endpointHash
+                epRate.method
+                epRate.urlPath
+                (Just epRate.host)
+                currentErrorRate
+                baselineMean
+                stddev
+                epRate.currentHourErrors
+                epRate.currentHourRequests
+                V.empty
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          Log.logInfo "Created issue for endpoint error rate spike" (pid, epRate.endpointHash, issue.id)
+      _ -> pass
+
+  Log.logInfo "Finished endpoint error rate spike detection" pid
+
+
+detectEndpointVolumeRateChange :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectEndpointVolumeRateChange pid authCtx = do
+  Log.logInfo "Detecting endpoint volume rate changes" pid
+  endpointsWithRates <- Endpoints.getEndpointsWithCurrentRates pid
+  forM_ endpointsWithRates \epRate -> do
+    case (epRate.baselineVolumeHourlyMean, epRate.baselineVolumeHourlyStddev) of
+      (Just baselineMean, Just stddev) | stddev > 0 && baselineMean > 10 -> do
+        let currentRate = fromIntegral epRate.currentHourRequests
+            zScore = (currentRate - baselineMean) / stddev
+            absZScore = abs zScore
+            -- Significant change: >3 std devs in either direction
+            isSignificantChange = absZScore > 3.0
+            direction = if currentRate > baselineMean then "spike" else "drop"
+        Relude.when isSignificantChange $ do
+          Log.logInfo "Endpoint volume rate change detected" (epRate.endpointHash, currentRate, baselineMean, zScore, direction)
+          issue <-
+            liftIO
+              $ Issues.createEndpointVolumeRateChangeIssue
+                pid
+                epRate.endpointHash
+                epRate.method
+                epRate.urlPath
+                (Just epRate.host)
+                currentRate
+                baselineMean
+                stddev
+                direction
+
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+          Log.logInfo "Created issue for endpoint volume rate change" (pid, epRate.endpointHash, issue.id, direction)
+      _ -> pass
+
+  Log.logInfo "Finished endpoint volume rate change detection" pid
+
+
+processNewEndpoint :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewEndpoint pid hash authCtx = do
+  Log.logInfo "Processing new endpoint" (pid, hash)
+  totalEvents <- do
+    res <- PG.query [sql| SELECT count(5000) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
+    case res of
+      [Only cnt] -> return cnt
+      _ -> return 0
+  if totalEvents < 5000
+    then Log.logInfo "Skipping new endpoint issue creation due to low event volume" (pid, hash, totalEvents)
+    else do
+      projectM <- Projects.projectById pid
+      whenJust projectM \project -> do
+        endpointM <- Endpoints.getEndpointByHash pid hash
+        case endpointM of
+          Nothing -> Log.logAttention "Endpoint not found for new endpoint processing" (pid, hash)
+          Just ep -> do
+            issue <- liftIO $ Issues.createNewEndpointIssue pid ep.hash ep.method ep.urlPath ep.host
+            Issues.insertIssue issue
+            liftIO $ withResource authCtx.jobsPool \conn ->
+              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+            Log.logInfo "Created issue for new endpoint" (pid, hash, issue.id)
+            -- Send notifications only if project exists and has alerts enabled
+            Relude.when project.endpointAlerts $ do
+              users <- Projects.usersByProjectId pid
+              let issueId = UUID.toText issue.id.unUUIDId
+                  title = project.title
+              forM_ project.notificationsChannel \case
+                Projects.NSlack -> sendSlackAlert (EndpointAlert title ep.method ep.urlPath ep.hash) pid project.title Nothing
+                Projects.NDiscord -> sendDiscordAlert (EndpointAlert title ep.method ep.urlPath ep.hash) pid project.title Nothing
+                Projects.NPhone -> sendWhatsAppAlert (EndpointAlert title ep.method ep.urlPath ep.hash) pid project.title project.whatsappNumbers
+                Projects.NEmail ->
+                  forM_ users \u -> do
+                    let endpoint_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issueId
+                        endpoint_name = ep.method <> " " <> ep.urlPath
+                        firstName = u.firstName
+                        templateVars =
+                          [aesonQQ|{
+                              "user_name": #{firstName},
+                              "project_name": #{title},
+                              "anomaly_url": #{endpoint_url},
+                              "endpoint_name": #{endpoint_name}
+                         }|]
+                    sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+
+
+processNewShape :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewShape pid hash authCtx = do
+  Log.logInfo "Processing new shape" (pid, hash)
+  projectM <- Projects.projectById pid
+  whenJust projectM \project -> do
+    shapeM <- Shapes.getShapeForIssue pid hash
+    whenJust shapeM \shape -> do
+      endpointM <- Endpoints.getEndpointByHash pid shape.endpointHash
+      case endpointM of
+        Just endpoint | endpoint.baselineState == BSEstablished -> do
+          existingIssueM <- Issues.findOpenIssueForEndpoint pid hash
+          case existingIssueM of
+            Just issue -> do
+              Log.logInfo "Skipping new shape issue creation due to existing open issue for endpoint" (pid, hash, issue.id)
+              let Aeson rawIssueData = issue.issueData
+                  shapeData = AE.decode (AE.encode rawIssueData) :: Maybe Issues.NewShapeData
+              whenJust shapeData \sh -> do
+                let newData = sh{Issues.newShapesAfterIssue = V.snoc sh.newShapesAfterIssue hash}
+                Issues.updateIssueData issue.id (AE.toJSON newData)
+            Nothing -> do
+              issue <-
+                liftIO
+                  $ Issues.createNewShapeIssue
+                    pid
+                    shape.shapeHash
+                    shape.endpointHash
+                    shape.method
+                    shape.path
+                    shape.statusCode
+                    shape.exampleRequestPayload
+                    shape.exampleResponsePayload
+                    shape.newFields
+                    shape.deletedFields
+                    shape.modifiedFields
+                    shape.fieldHashes
+              Issues.insertIssue issue
+              liftIO $ withResource authCtx.jobsPool \conn ->
+                void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              Log.logInfo "Created issue for new shape" (pid, hash, issue.id)
+        _ -> pass
+
+
+processNewFieldChange :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewFieldChange pid hash authCtx = do
+  Log.logInfo "Processing new field change" (pid, hash)
+  pass -- Temporarily disabled field change issue creation
+
+-- fieldM <- Fields.getFieldForIssue hash
+
+-- case fieldM of
+--   Nothing -> Log.logAttention "Field not found for new field change processing" (pid, hash)
+--   Just fld -> do
+--     issue <-
+--       liftIO
+--         $ Issues.createFieldChangeIssue
+--           pid
+--           fld.fieldHash
+--           fld.endpointHash
+--           fld.method
+--           fld.path
+--           fld.keyPath
+--           fld.fieldCategory
+--           Nothing
+--           fld.fieldType
+--           "added"
+--     Issues.insertIssue issue
+
+--     liftIO $ withResource authCtx.jobsPool \conn ->
+--       void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+--     Log.logInfo "Created issue for new field change" (pid, hash, issue.id)

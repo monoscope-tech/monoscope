@@ -80,6 +80,8 @@ library
       Models.Apis.Monitors
       Models.Apis.Reports
       Models.Apis.RequestDumps
+      Models.Apis.Errors 
+      Models.Apis.LogPatterns
       Models.Apis.Shapes
       Models.Apis.Slack
       Models.Projects.Dashboards

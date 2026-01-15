@@ -1,0 +1,13 @@
+BEGIN;
+
+ALTER TABLE apis.endpoints
+ ADD COLUMN IF NOT EXISTS first_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS recent_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS service TEXT;
+
+ALTER TABLE apis.shapes
+ ADD COLUMN IF NOT EXISTS first_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS recent_trace_id TEXT,
+ ADD COLUMN IF NOT EXISTS service TEXT;
+
+COMMIT;
