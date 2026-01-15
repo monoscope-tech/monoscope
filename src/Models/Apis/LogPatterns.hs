@@ -173,18 +173,20 @@ acknowledgeLogPatterns uid patternHashes
       |]
 
 
-upsertLogPattern :: DB es => Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Int64
-upsertLogPattern pid pat patHash serviceName logLevel sampleMsg =
-  PG.execute q (pid, pat, patHash, serviceName, logLevel, sampleMsg)
+upsertLogPattern :: DB es => Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Int64
+upsertLogPattern pid pat patHash serviceName logLevel traceId sampleMsg =
+  PG.execute q (pid, pat, patHash, serviceName, logLevel, traceId, sampleMsg)
   where
     q =
       [sql|
-        INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, service_name, log_level, sample_message)
-        VALUES (?, ?, ?, ?, ?, ?)
+        INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, service_name, log_level, trace_id, sample_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (project_id, pattern_hash) DO UPDATE SET
           last_seen_at = NOW(),
           occurrence_count = apis.log_patterns.occurrence_count + 1,
-          sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message)
+          sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
+          service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
+          trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
       |]
 
 

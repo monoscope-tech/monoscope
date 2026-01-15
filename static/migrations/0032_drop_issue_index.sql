@@ -8,4 +8,5 @@ BEGIN;
   ALTER TABLE apis.errors
   ADD COLUMN first_trace_id TEXT,
   ADD COLUMN recent_trace_id TEXT;
+  ALTER TABLE apis.log_patterns ADD COLUMN trace_id TEXT;
 COMMIT;

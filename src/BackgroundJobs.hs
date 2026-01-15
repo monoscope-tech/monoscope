@@ -524,24 +524,25 @@ logsPatternExtraction scheduledTime pid = do
     limitVal = 250
     paginate :: Int -> UTCTime -> ATBackgroundCtx ()
     paginate offset startTime = do
-      otelEvents <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,''), context___trace_id, resource___service___name FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      otelEvents :: [(Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       unless (null otelEvents) do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        let (logs, summaries) = L.partition (\(k, _, _, _, _, _) -> k == "log") otelEvents
-        processPatterns "log" "log_pattern" (V.fromList [(i, body) | (_, i, body, _, trId, serviceName) <- logs]) pid scheduledTime startTime
-        processPatterns "summary" "summary_pattern" (V.fromList [(i, s) | (_, i, _, s, _, _) <- summaries]) pid scheduledTime startTime
+        let (logs, summaries) = L.partition (\(k, _, _, _, _, _, _) -> k == "log") otelEvents
+        processPatterns "log" "log_pattern" (V.fromList [(i, body, trId, serviceName, level) | (_, i, body, _, trId, serviceName, level) <- logs]) pid scheduledTime startTime
+        processPatterns "summary" "summary_pattern" (V.fromList [(i, s, trId, serviceName, level) | (_, i, _, s, trId, serviceName, level) <- summaries]) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
 
 -- | Generic pattern extraction for logs or summaries
-processPatterns :: Text -> Text -> V.Vector (Text, Text, Text, Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
+-- events: (id, content, traceId, serviceName, level)
+processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
-    let qq = [text| select $fieldName from otel_logs_and_spans where project_id= ? AND timestamp >= now() - interval '1 hour' and $fieldName is not null GROUP BY $fieldName ORDER BY count(*) desc limit 20|]
     existingPatterns <- LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map ("",False,) existingPatterns
-        combined = known <> ((\(dd,smp) -> (dd, True, smp)) <$> events)
+    let known = V.fromList $ map (\pat -> ("", False, pat, Nothing, Nothing, Nothing)) existingPatterns
+        -- Include level in content for pattern matching so different levels create different patterns
+        combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     -- Only log if patterns were extracted
@@ -554,19 +555,24 @@ processPatterns kind fieldName events pid scheduledTime since = do
         -- Update otel_logs_and_spans with pattern
         void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
         Relude.when (kind == "log" && not (T.null patternTxt)) $ do
+          let (serviceName, logLevel, traceId) = case V.head ids of
+                logId | logId /= "" -> case V.find (\(i, _, _, sName, lvl) -> i == logId) events of
+                  Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
+                  Nothing -> (Nothing, Nothing, Nothing)
+                _ -> (Nothing, Nothing, Nothing)
           let patternHash = toXXHash patternTxt
           traceShowM ("Upserting log pattern" , pid, patternTxt, patternHash, sampleMsg)
-          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash Nothing Nothing (Just sampleMsg)
+          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel traceId (Just sampleMsg)
 
 
--- | Process a batch of (id, content) pairs through Drain
-processBatch :: Bool -> V.Vector (Text,Bool, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+-- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain
+processBatch :: Bool -> V.Vector (Text, Bool, Text, Maybe Text, Maybe Text, Maybe Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree (logId, isSampleLog, content) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
+  V.foldl' (\tree (logId, isSampleLog, content, _, _, _) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
 
 
 processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-processNewLog isSummary logId isSampleLog content now tree =
+processNewLog _isSummary logId isSampleLog content now tree =
   let tokens = Drain.generateDrainTokens content
    in if V.null tokens
         then tree
@@ -1692,24 +1698,22 @@ detectLogPatternSpikes pid authCtx = do
 processNewLogPattern :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewLogPattern pid patternHash authCtx = do
   Log.logInfo "Processing new log pattern" (pid, patternHash)
-
-  -- Get the pattern by hash
-  patternM <- LogPatterns.getLogPatternByHash pid patternHash
-
-  case patternM of
-    Nothing -> Log.logAttention "Log pattern not found for new pattern processing" (pid, patternHash)
-    Just lp -> do
-      -- Only create issue for truly new patterns (state = 'new')
-      Relude.when (lp.state == LogPatterns.LPSNew) $ do
-        -- Create a new log pattern issue
-        issue <- liftIO $ Issues.createLogPatternIssue pid lp
-        Issues.insertIssue issue
-
-        -- Queue LLM enhancement
-        liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-
-        Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+  totalEvents <- do
+    res <- PG.query [sql| SELECT count(5000) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
+    case res of
+      [Only cnt] -> return cnt
+      _ -> return 0
+  if totalEvents < 5000
+    then Log.logInfo "Skipping new endpoint issue creation due to low event volume" (pid, patternHash, totalEvents)
+    else do
+       patternM <- LogPatterns.getLogPatternByHash pid patternHash
+       whenJust patternM \lp -> do
+         Relude.when (lp.state == LogPatterns.LPSNew) $ do
+           issue <- liftIO $ Issues.createLogPatternIssue pid lp
+           Issues.insertIssue issue
+           liftIO $ withResource authCtx.jobsPool \conn ->
+             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
 
 
 calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
