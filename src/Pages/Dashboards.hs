@@ -294,18 +294,23 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       [text|
   // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
   (function() {
-    let cachedSearch = '', cachedParams = null;
+    let cachedSearch = '', cachedParams = null, pending = false;
     window.interpolateVarTemplates = function() {
-      if (window.location.search !== cachedSearch) {
-        cachedSearch = window.location.search;
-        cachedParams = new URLSearchParams(cachedSearch);
-      }
-      document.querySelectorAll('[data-var-template]').forEach(el => {
-        let text = el.dataset.varTemplate;
-        cachedParams.forEach((value, key) => {
-          if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        if (window.location.search !== cachedSearch) {
+          cachedSearch = window.location.search;
+          cachedParams = new URLSearchParams(cachedSearch);
+        }
+        document.querySelectorAll('[data-var-template]').forEach(el => {
+          let text = el.dataset.varTemplate;
+          cachedParams.forEach((value, key) => {
+            if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+          });
+          el.textContent = text;
         });
-        el.textContent = text;
       });
     };
   })();
@@ -545,6 +550,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       });
 
       function compactGrid(grid, el) {
+        if (!el) return;
         const items = Array.from(el.querySelectorAll(':scope > .grid-stack-item')).sort((a, b) => (a.gridstackNode?.y || 0) - (b.gridstackNode?.y || 0));
         const rows = {};
         items.forEach(item => { const y = item.gridstackNode?.y || 0; (rows[y] = rows[y] || []).push(item); });
@@ -704,8 +710,8 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
 
 -- Process a single widget recursively. Keeps sql/query with {{var-*}} templates intact
 -- so they can be interpolated at data fetch time with current URL params.
-processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> (Text -> Text, Text -> Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
-processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetBase = do
+processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
+processWidget pid now timeRange allParams widgetBase = do
   let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query
 
   widget' <-
@@ -718,7 +724,7 @@ processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceh
     Nothing -> pure widget'
     Just childWidgets -> do
       let addDashboardId child = child & #_dashboardId %~ (<|> widget'._dashboardId)
-      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) . addDashboardId)
+      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams . addDashboardId)
       pure $ widget' & #children ?~ processedChildren
 
 
@@ -2001,16 +2007,13 @@ dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Tex
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-  let timeParams@(sinceStr, fromDStr, toDStr) = (Nothing, Nothing, Nothing)
+  let timeParams = (Nothing, Nothing, Nothing)
       paramsWithVarDefaults = addVariableDefaults [] dash.variables
   (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
   case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
-      let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-          replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD allParamsWithConstants now)
-          replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD allParamsWithConstants now)
-      processedWidget <- processWidget pid now timeParams allParamsWithConstants (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetToExpand
+      processedWidget <- processWidget pid now timeParams allParamsWithConstants widgetToExpand
       addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing Nothing (Just processedWidget) "edit"
 
 
@@ -2126,11 +2129,8 @@ mkWidgetProcessor
   -> [(Text, Maybe Text)]
   -> Widget.Widget
   -> ATAuthCtx Widget.Widget
-mkWidgetProcessor pid dashId now timeParams@(sinceStr, fromDStr, toDStr) paramsWithConstants =
-  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD paramsWithConstants now)
-      replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD paramsWithConstants now)
-   in fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants (replacePlaceholdersSQL, replacePlaceholdersKQL)
+mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
+  fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants
 
 
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
