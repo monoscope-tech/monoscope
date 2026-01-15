@@ -298,8 +298,8 @@ widgetHelper_ w' = case w.wType of
     isFullWidth = (== Just 12) $ w.layout >>= (.w)
     groupRequiredHeight = case w.wType of
       WTGroup ->
-        let children = fromMaybe [] w.children
-            maxRow = foldl' (\acc c -> max acc $ fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) 1 children
+        let childWidgets = fromMaybe [] w.children
+            maxRow = foldl' (\acc c -> max acc $ fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) 1 childWidgets
          in Just (1 + maxRow)
       _ -> Nothing
     -- For groups: full-width uses requiredHeight, partial-width uses max(yamlH, requiredHeight)
