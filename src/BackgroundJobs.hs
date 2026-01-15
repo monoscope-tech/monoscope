@@ -561,7 +561,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
                   Nothing -> (Nothing, Nothing, Nothing)
                 _ -> (Nothing, Nothing, Nothing)
           let patternHash = toXXHash patternTxt
-          traceShowM ("Upserting log pattern" , pid, patternTxt, patternHash, sampleMsg)
+          traceShowM ("Upserting log pattern", pid, patternTxt, patternHash, sampleMsg)
           void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel traceId (Just sampleMsg)
 
 
@@ -1706,14 +1706,14 @@ processNewLogPattern pid patternHash authCtx = do
   if totalEvents < 5000
     then Log.logInfo "Skipping new endpoint issue creation due to low event volume" (pid, patternHash, totalEvents)
     else do
-       patternM <- LogPatterns.getLogPatternByHash pid patternHash
-       whenJust patternM \lp -> do
-         Relude.when (lp.state == LogPatterns.LPSNew) $ do
-           issue <- liftIO $ Issues.createLogPatternIssue pid lp
-           Issues.insertIssue issue
-           liftIO $ withResource authCtx.jobsPool \conn ->
-             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+      patternM <- LogPatterns.getLogPatternByHash pid patternHash
+      whenJust patternM \lp -> do
+        Relude.when (lp.state == LogPatterns.LPSNew) $ do
+          issue <- liftIO $ Issues.createLogPatternIssue pid lp
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
 
 
 calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()

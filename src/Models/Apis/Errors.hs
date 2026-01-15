@@ -5,7 +5,7 @@ module Models.Apis.Errors (
   ErrorEvent (..),
   ErrorEventId,
   ATError (..),
-   ErrorL (..),
+  ErrorL (..),
   -- Queries
   getErrors,
   getErrorById,
@@ -165,10 +165,10 @@ data Error = Error
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Error
 
--- error aggreted with number of occurrences and affected users 
+
+-- error aggreted with number of occurrences and affected users
 data ErrorL = ErrorL
-  {
-     id :: ErrorId
+  { id :: ErrorId
   , projectId :: Projects.ProjectId
   , createdAt :: ZonedTime
   , updatedAt :: ZonedTime
@@ -214,6 +214,7 @@ data ErrorL = ErrorL
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorL
+
 
 data ATError = ATError
   { projectId :: Maybe Projects.ProjectId
@@ -348,6 +349,7 @@ getErrorByHash pid hash = do
         WHERE project_id = ? AND hash = ?
       |]
 
+
 getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
 getErrorLByHash pid hash = do
   results <- PG.query q (pid, hash)
@@ -371,6 +373,7 @@ getErrorLByHash pid hash = do
         FROM apis.errors e
         WHERE project_id = ? AND hash = ?
       |]
+
 
 -- | Get active (non-resolved) errors
 getActiveErrors :: DB es => Projects.ProjectId -> Eff es [Error]
@@ -425,11 +428,13 @@ updateErrorState eid newState = PG.execute q (errorStateToText newState, eid)
     q =
       [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE id = ? |]
 
+
 updateErrorStateByProjectAndHash :: DB es => Projects.ProjectId -> Text -> ErrorState -> Eff es Int64
 updateErrorStateByProjectAndHash pid hash newState = PG.execute q (errorStateToText newState, pid, hash)
   where
     q =
       [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE project_id = ? AND hash = ? |]
+
 
 resolveError :: DB es => ErrorId -> Eff es Int64
 resolveError eid = PG.execute q (Only eid)

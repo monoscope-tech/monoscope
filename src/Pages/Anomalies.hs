@@ -299,7 +299,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
             div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-              -- Stats (1 column each) 
+              -- Stats (1 column each)
               whenJust errM $ \err -> do
                 statBox_ (Just pid) Nothing "Affected Requests" "" (show err.occurrences) Nothing Nothing
                 statBox_ (Just pid) Nothing "Affected Clients" "" (show err.affectedUsers) Nothing Nothing
@@ -795,7 +795,7 @@ aiChatHistoryGetH pid issueId = do
 errorActionPostH :: Projects.ProjectId -> Text -> Text -> ATAuthCtx (RespHeaders (Html ()))
 errorActionPostH pid errorHash action =
   case action of
-    "resolve" -> do 
+    "resolve" -> do
       _ <- Errors.updateErrorStateByProjectAndHash pid errorHash Errors.ESResolved
       addSuccessToast "Error resolved" Nothing
       addRespHeaders $ errorResolveButton_ pid errorHash True
@@ -807,11 +807,12 @@ errorActionPostH pid errorHash action =
       addErrorToast "Unknown action" Nothing
       addRespHeaders pass
 
+
 -- | Assign an error to a user
 errorAssignPostH :: Projects.ProjectId -> Text -> ErrorAssignForm -> ATAuthCtx (RespHeaders (Html ()))
 errorAssignPostH pid errorHash form =
-  withError pid errorHash "Error assigned" (`Errors.assignError` form.assigneeId) $
-    errorAssignButton_ pid errorHash (Just form.assigneeId)
+  withError pid errorHash "Error assigned" (`Errors.assignError` form.assigneeId)
+    $ errorAssignButton_ pid errorHash (Just form.assigneeId)
 
 
 -- | Helper for error actions
