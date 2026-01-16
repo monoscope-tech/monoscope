@@ -1556,7 +1556,7 @@ detectErrorSpikes pid authCtx = do
       (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
         let currentRate = fromIntegral errRate.currentHourCount :: Double
             zScore = (currentRate - mean) / stddev
-            isSpike = zScore > 3.0 && currentRate > mean + 5
+            isSpike = abs zScore > 3.0 && currentRate > mean + 5
 
         Relude.when isSpike $ do
           Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
@@ -1676,7 +1676,7 @@ detectLogPatternSpikes pid authCtx = do
         let currentRate = fromIntegral lpRate.currentHourCount :: Double
             zScore = (currentRate - mean) / stddev
             -- Spike detection: >3 std devs AND at least 10 more events than baseline
-            isSpike = zScore > 3.0 && currentRate > mean + 10
+            isSpike = abs zScore > 3.0 && currentRate > mean + 10
 
         Relude.when isSpike $ do
           Log.logInfo "Log pattern spike detected" (lpRate.patternId, lpRate.logPattern, currentRate, mean, zScore)
@@ -1749,16 +1749,14 @@ calculateEndpointBaselines pid = do
 detectEndpointLatencyDegradation :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectEndpointLatencyDegradation pid authCtx = do
   Log.logInfo "Detecting endpoint latency degradation" pid
-
   endpointsWithRates <- Endpoints.getEndpointsWithCurrentRates pid
-
   forM_ endpointsWithRates \epRate -> do
     -- Check P95 latency degradation
     case (epRate.baselineLatencyP95, epRate.baselineLatencyStddev, epRate.currentHourLatencyP95) of
       (Just baselineP95, Just stddev, Just currentP95) | stddev > 0 -> do
         let zScore = (currentP95 - baselineP95) / stddev
-            -- Degradation: >3 std devs AND at least 50% increase
-            isDegraded = zScore > 3.0 && currentP95 > baselineP95 * 1.5
+            -- Degradation: >3 std devs (positive or negative) AND at least 50% increase
+            isDegraded = abs zScore > 3.0 && currentP95 > baselineP95 * 1.1
         Relude.when isDegraded $ do
           Log.logInfo "Endpoint latency degradation detected" (epRate.endpointHash, currentP95, baselineP95, zScore)
           issue <- liftIO $ Issues.createEndpointLatencyDegradationIssue pid epRate.endpointHash epRate.method epRate.urlPath (Just epRate.host) currentP95 baselineP95 stddev "p95" V.empty
@@ -1783,7 +1781,7 @@ detectEndpointErrorRateSpike pid authCtx = do
         let currentErrorRate = fromIntegral epRate.currentHourErrors / fromIntegral epRate.currentHourRequests
             zScore = (currentErrorRate - baselineMean) / stddev
             -- Spike: >3 std devs AND error rate > 5% AND at least 5 errors
-            isSpike = zScore > 3.0 && currentErrorRate > 0.05 && epRate.currentHourErrors >= 5
+            isSpike = abs zScore > 3.0 && currentErrorRate > 0.05 && epRate.currentHourErrors >= 5
 
         Relude.when isSpike $ do
           Log.logInfo "Endpoint error rate spike detected" (epRate.endpointHash, currentErrorRate, baselineMean, zScore)

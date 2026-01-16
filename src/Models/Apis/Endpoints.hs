@@ -312,7 +312,7 @@ getEndpointsWithCurrentRates pid = PG.query q (pid, pid)
             attributes->'http'->>'route' AS url_path,
             attributes___http___request___method AS method,
             COUNT(*) AS request_count,
-            COUNT(*) FILTER (WHERE status_code >= 500 OR status_code = 0) AS error_count,
+            COUNT(*) FILTER (WHERE attributes___http___response___status_code::int >= 500 OR attributes___http___response___status_code::int = 0) AS error_count,
             PERCENTILE_CONT(0.50) WITHIN GROUP (ORDER BY duration) AS p50_latency,
             PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration) AS p95_latency,
             PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY duration) AS p99_latency
@@ -360,7 +360,7 @@ getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpo
           SELECT
             DATE_TRUNC('hour', timestamp) AS hour,
             COUNT(*) AS request_count,
-            COUNT(*) FILTER (WHERE status_code >= 500 OR status_code = 0) AS error_count,
+            COUNT(*) FILTER (WHERE attributes___http___response___status_code::int >= 500 OR attributes___http___response___status_code::int = 0) AS error_count,
             AVG(duration) AS avg_latency,
             PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration) AS p95_latency,
             PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY duration) AS p99_latency
@@ -368,20 +368,21 @@ getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpo
           JOIN apis.endpoints e ON e.url_path = (ols.attributes->'http'->>'route')
             AND e.method = ols.attributes___http___request___method
           WHERE ols.project_id = ?
+            AND e.hash = ?
             AND ols.name = 'monoscope.http'
             AND ols.timestamp >= NOW() - MAKE_INTERVAL(hours => ?)
           GROUP BY DATE_TRUNC('hour', timestamp)
         )
         SELECT
           COUNT(*)::int AS total_hours,
-          COALESCE(AVG(request_count), 0) AS hourly_mean_requests,
-          COALESCE(STDDEV(request_count), 0) AS hourly_stddev_requests,
-          COALESCE(AVG(error_count::float / NULLIF(request_count, 0)), 0) AS hourly_mean_errors,
-          COALESCE(STDDEV(error_count::float / NULLIF(request_count, 0)), 0) AS hourly_stddev_errors,
-          COALESCE(AVG(avg_latency), 0) AS mean_latency,
-          COALESCE(STDDEV(avg_latency), 0) AS stddev_latency,
-          COALESCE(AVG(p95_latency), 0) AS p95_latency,
-          COALESCE(AVG(p99_latency), 0) AS p99_latency
+          COALESCE(AVG(request_count), 0)::float8 AS hourly_mean_requests,
+          COALESCE(STDDEV(request_count), 0)::float8 AS hourly_stddev_requests,
+          COALESCE(AVG(error_count::float / NULLIF(request_count, 0)), 0)::float8 AS hourly_mean_errors,
+          COALESCE(STDDEV(error_count::float / NULLIF(request_count, 0)), 0)::float8 AS hourly_stddev_errors,
+          COALESCE(AVG(avg_latency), 0)::float8 AS mean_latency,
+          COALESCE(STDDEV(avg_latency), 0)::float8 AS stddev_latency,
+          COALESCE(AVG(p95_latency), 0)::float8 AS p95_latency,
+          COALESCE(AVG(p99_latency), 0)::float8 AS p99_latency
         FROM hourly_stats
         HAVING COUNT(*) > 0
       |]

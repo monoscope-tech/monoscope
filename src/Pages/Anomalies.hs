@@ -78,7 +78,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
+import Utils (changeTypeFillColor, checkFreeTierExceeded, getDurationNSMS, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -1347,7 +1347,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
           div_ [class_ "flex items-center gap-2 text-sm"] do
             span_ [class_ "font-medium text-fillWarning-strong"] $ toHtml d.endpointMethod
             span_ [class_ "text-fillWarning-strong"] $ toHtml d.endpointPath
-          div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml $ d.percentile <> ": " <> show (round d.baselineLatencyMs :: Int) <> "ms → " <> show (round d.currentLatencyMs :: Int) <> "ms"
+          div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml (d.percentile <> ": " <> toText (getDurationNSMS (round d.baselineLatencyMs)) <> " → " <> toText (getDurationNSMS (round d.currentLatencyMs)))
       _ -> pass
     Issues.EndpointErrorRateSpike -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.EndpointErrorRateSpikeData) ->
