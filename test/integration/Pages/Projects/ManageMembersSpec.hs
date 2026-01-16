@@ -35,6 +35,8 @@ spec = aroundAll withTestResources do
     it "Create member" \tr -> do
       -- Update project to a paid plan to allow multiple members
       _ <- withPool tr.trPool $ PGT.execute [sql|UPDATE projects.projects SET payment_plan = 'PAID' WHERE id = ?|] (Only testPid)
+      -- Clean up any existing test members from other tests (keep only the original test user)
+      _ <- withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.project_members WHERE project_id = ? AND user_id != '00000000-0000-0000-0000-000000000001'|] (Only testPid)
       pass
       let member =
             ManageMembers.ManageMembersForm
