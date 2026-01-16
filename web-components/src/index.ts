@@ -1,3 +1,8 @@
+// Import query-editor first to ensure globalThis.monaco is set
+import './query-editor/query-editor';
+// Then import yaml-editor which registers YAML language on the global monaco instance
+import './yaml-editor';
+
 // Re-export everything from query-editor
 export * from './query-editor/query-editor';
 export * from './query-editor/query-builder';

@@ -3,6 +3,7 @@ import { customElement, state, query } from 'lit/decorators.js';
 import { repeat } from 'lit/directives/repeat.js';
 import 'monaco-editor/esm/vs/editor/contrib/suggest/browser/suggestController.js';
 import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+import { conf as yamlConf, language as yamlLanguage } from 'monaco-editor/esm/vs/basic-languages/yaml/yaml';
 import { groupBy, pick } from 'lodash';
 
 // Make monaco available globally for tests
@@ -389,6 +390,11 @@ monaco.editor.defineTheme('transparent-theme-dark', {
 monaco.languages.register({ id: 'aql' });
 monaco.languages.setMonarchTokensProvider('aql', language);
 monaco.languages.setLanguageConfiguration('aql', conf);
+
+// Register YAML language for yaml-editor component
+monaco.languages.register({ id: 'yaml', extensions: ['.yaml', '.yml'], aliases: ['YAML', 'yaml'] });
+monaco.languages.setMonarchTokensProvider('yaml', yamlLanguage);
+monaco.languages.setLanguageConfiguration('yaml', yamlConf);
 
 // Version counter for cancelling stale completion requests
 let completionVersion = 0;

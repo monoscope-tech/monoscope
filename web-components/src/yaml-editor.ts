@@ -1,6 +1,8 @@
 import { LitElement, html } from 'lit';
 import { customElement, query } from 'lit/decorators.js';
-import * as monaco from 'monaco-editor/esm/vs/editor/editor.api';
+
+// Use the global Monaco instance (set by query-editor which also registers YAML language)
+const monacoInstance = globalThis.monaco;
 
 declare global {
   interface Window {
@@ -36,7 +38,7 @@ export class YamlEditorComponent extends LitElement {
     const isDark = document.body.getAttribute('data-theme') === 'dark';
     const initialValue = this.getAttribute('data-initial-value') || '';
 
-    this.editor = monaco.editor.create(this.container, {
+    this.editor = monacoInstance.editor.create(this.container, {
       value: initialValue,
       language: 'yaml',
       theme: isDark ? 'vs-dark' : 'vs',

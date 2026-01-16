@@ -2388,7 +2388,7 @@ dashboardYamlGetH pid dashId = do
 
 -- | Render the yaml-editor component with initial content
 yamlEditorContent_ :: Text -> Html ()
-yamlEditorContent_ yamlText = term "yaml-editor" [class_ "h-full block", id_ "yaml-editor-instance", data_ "initial-value" yamlText] ""
+yamlEditorContent_ yamlText = term "yaml-editor" [class_ "h-full w-full block", id_ "yaml-editor-instance", data_ "initial-value" yamlText] ""
 
 
 -- | Save dashboard schema from YAML (validates and saves)

@@ -124,7 +124,7 @@ bodyWrapper bcfg child = do
 
         script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
-        -- Flag for widget initialization - set true after web-components loads
+        -- Flag for widget initialization - set to true after web-components loads
         script_ "window.widgetDepsReady = false;"
 
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
