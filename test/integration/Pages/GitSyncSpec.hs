@@ -189,7 +189,7 @@ createDash tr title tags = do
         , Dashboards.updatedAt = now
         , Dashboards.createdBy = Users.UserId UUID.nil
         , Dashboards.baseTemplate = Nothing
-        , Dashboards.schema = Just (def :: Dashboards.Dashboard){Dashboards.title = Just title, Dashboards.tags = Just tags}
+        , Dashboards.schema = Just $ (def :: Dashboards.Dashboard) & #title .~ Just title & #tags .~ Just tags
         , Dashboards.starredSince = Nothing
         , Dashboards.homepageSince = Nothing
         , Dashboards.tags = V.fromList tags
@@ -286,7 +286,7 @@ spec = do
           Right s -> (s.title, s.tags) `shouldBe` (Just "Test", Just ["prod"])
 
       it "serializes dashboard to YAML" \_ -> do
-        let schema = (def :: Dashboards.Dashboard){Dashboards.title = Just "My Dash", Dashboards.tags = Just ["a", "b"]}
+        let schema = (def :: Dashboards.Dashboard) & #title .~ Just "My Dash" & #tags .~ Just ["a", "b"]
         case GitSync.yamlToDashboard (GitSync.dashboardToYaml schema) of
           Left e -> fail $ toString e
           Right s -> s.title `shouldBe` Just "My Dash"

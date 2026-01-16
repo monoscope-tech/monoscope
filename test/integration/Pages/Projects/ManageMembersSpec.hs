@@ -45,7 +45,7 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
-        ManageMembers.ManageMembersPost (pid, p) -> do
+        ManageMembers.ManageMembersPost (_, p, _) -> do
           "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
         _ -> fail "Expected ManageMembersPost response"
 
@@ -60,7 +60,7 @@ spec = aroundAll withTestResources do
 
       -- Check if the member's permission is updated
       case pg of
-        ManageMembers.ManageMembersPost (pid, projMembers) -> do
+        ManageMembers.ManageMembersPost (_, projMembers, _) -> do
           let memberM = projMembers & V.toList & find (\pm -> pm.email == "example@gmail.com")
           isJust memberM `shouldBe` True
           let mem = memberM & Unsafe.fromJust
@@ -75,7 +75,7 @@ spec = aroundAll withTestResources do
       -- Check if the response contains the expected members
       -- Note: 2 members expected - the test user from setup + example@gmail.com
       case pg of
-        ManageMembers.ManageMembersGet (PageCtx _ (pid, projMembers)) -> do
+        ManageMembers.ManageMembersGet (PageCtx _ (_, projMembers, _)) -> do
           let emails = (.email) <$> projMembers
           "example@gmail.com" `shouldSatisfy` (`elem` emails)
           length projMembers `shouldBe` 2
@@ -92,7 +92,7 @@ spec = aroundAll withTestResources do
 
       -- Check if the member is deleted
       case pg of
-        ManageMembers.ManageMembersPost (pid, projMembers) -> do
+        ManageMembers.ManageMembersPost (_, projMembers, _) -> do
           let emails = (.email) <$> projMembers
           "example@gmail.com" `shouldNotSatisfy` (`elem` emails)
         _ -> fail "Expected ManageMembersPost response"
@@ -107,7 +107,7 @@ spec = aroundAll withTestResources do
         testServant tr $ ManageMembers.manageMembersPostH testPid Nothing member
       -- Check if the response contains the newly added member
       case pg of
-        ManageMembers.ManageMembersPost (pid, p) -> do
+        ManageMembers.ManageMembersPost (_, p, _) -> do
           "example@gmail.com" `shouldSatisfy` (`elem` (p <&> (.email)))
         _ -> fail "Expected ManageMembersPost response"
 
