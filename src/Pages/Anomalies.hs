@@ -78,7 +78,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (changeTypeFillColor, checkFreeTierExceeded, getDurationNSMS, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
+import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, getDurationNSMS, lookupValueText, methodFillColor, statusFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
