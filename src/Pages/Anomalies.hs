@@ -1155,6 +1155,12 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   -- Metadata row (method, endpoint, service, time)
   div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
     -- Method and endpoint (for API changes)
+    when (issue.issueType `elem` [Issues.NewShape, Issues.NewEndpoint, Issues.EndpointLatencyDegradation]) do
+      case AE.fromJSON (getAeson issue.issueData) of
+        AE.Success (d :: Issues.EndpointRelatedData) -> do
+          span_ [class_ "font-monospace"] $ toHtml d.endpointMethod
+          span_ [class_ "font-monospace"] $ toHtml d.endpointPath
+        _ -> pass
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
       div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
@@ -1163,30 +1169,30 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
     -- Statistics row (only for API changes)
-
-    let allChanges = getAeson issue.requestPayloads <> getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
-        countChange (!b, !i, !t) c = case c.changeType of
-          Anomalies.Breaking -> (b + 1, i, t + 1)
-          Anomalies.Incremental -> (b, i + 1, t + 1)
-          _ -> (b, i, t + 1)
-        (breakingChanges, incrementalChanges, totalChanges) = foldl' countChange (0, 0, 0) allChanges
-    div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
-        " total changes"
-      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
-        " breaking"
-        when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
-      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
-        " incremental"
-      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-textBrand"] $ toHtml $ show totalChanges
-        " payloads affected"
+    when (issue.issueType `elem` [Issues.NewShape]) do
+      let allChanges = getAeson issue.requestPayloads <> getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
+          countChange (!b, !i, !t) c = case c.changeType of
+            Anomalies.Breaking -> (b + 1, i, t + 1)
+            Anomalies.Incremental -> (b, i + 1, t + 1)
+            _ -> (b, i, t + 1)
+          (breakingChanges, incrementalChanges, totalChanges) = foldl' countChange (0, 0, 0) allChanges
+      div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
+          " total changes"
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
+          " breaking"
+          when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
+          " incremental"
+        div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+        span_ [class_ "text-textWeak"] do
+          strong_ [class_ "text-textBrand"] $ toHtml $ show totalChanges
+          " payloads affected"
 
   -- Issue-specific details
   case issue.issueType of
