@@ -93,6 +93,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
+import Pkg.THUtils (hashAssetFile)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -106,6 +107,15 @@ import Text.Slugify (slugify)
 import UnliftIO.Exception (try)
 import Utils
 import Web.FormUrlEncoded (FromForm)
+
+
+-- | Head content for dashboard pages - loads highlight.js and sql-formatter for SQL preview
+dashboardHeadContent_ :: Html ()
+dashboardHeadContent_ = do
+  link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql-formatter.min.js")] ("" :: Text)
 
 
 folderFromPath :: Maybe Text -> Text
@@ -282,6 +292,29 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
     script_
       [text|
+  // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
+  (function() {
+    let cachedSearch = '', cachedParams = null, pending = false;
+    window.interpolateVarTemplates = function() {
+      if (pending) return;
+      pending = true;
+      requestAnimationFrame(() => {
+        pending = false;
+        if (window.location.search !== cachedSearch) {
+          cachedSearch = window.location.search;
+          cachedParams = new URLSearchParams(cachedSearch);
+        }
+        document.querySelectorAll('[data-var-template]').forEach(el => {
+          let text = el.dataset.varTemplate;
+          cachedParams.forEach((value, key) => {
+            if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+          });
+          el.textContent = text;
+        });
+      });
+    };
+  })();
+
   window.addEventListener('DOMContentLoaded', () => {
     const tagifyInstances = new Map();
     document.querySelectorAll('.tagify-select-input').forEach(input => {
@@ -326,38 +359,44 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           console.error(`Error fetching data for ${input.name}:`, e);
         }
       });
+
+      window.interpolateVarTemplates();
     });
+
+    window.interpolateVarTemplates();
   });
     |]
   let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
       widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-5 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
     let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result `elem` [Nothing, Just []]]
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
       span_ $ toHtml $ "Constants with no data: " <> T.intercalate ", " emptyConstants
-    case dash.tabs of
-      Just tabs -> do
-        let activeTabIdx = case activeTabSlug of
-              Just slug -> maybe 0 fst (findTabBySlug tabs slug)
-              Nothing -> 0
-        -- Tab system with htmx lazy loading - only render active tab content
-        div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"] do
-          -- Only render the active tab's content (other tabs load via htmx)
-          case tabs !!? activeTabIdx of
-            Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
-            Nothing -> pass
-      Nothing -> do
-        -- Fall back to old behavior for dashboards without tabs
-        div_
-          [class_ "grid-stack -m-2"]
-          do
-            forM_ (dash :: Dashboards.Dashboard).widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
-            when (null (dash :: Dashboards.Dashboard).widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
-              faSprite_ "plus" "regular" "h-8 w-8"
-              span_ "Add a widget"
+    div_ [class_ "dashboard-grid-wrapper relative min-h-[400px]"] do
+      dashboardSkeleton_
+      case dash.tabs of
+        Just tabs -> do
+          let activeTabIdx = case activeTabSlug of
+                Just slug -> maybe 0 fst (findTabBySlug tabs slug)
+                Nothing -> 0
+          -- Tab system with htmx lazy loading - only render active tab content
+          div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"] do
+            -- Only render the active tab's content (other tabs load via htmx)
+            case tabs !!? activeTabIdx of
+              Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
+              Nothing -> pass
+        Nothing -> do
+          -- Fall back to old behavior for dashboards without tabs
+          div_
+            [class_ "grid-stack -m-2"]
+            do
+              forM_ (dash :: Dashboards.Dashboard).widgets (\w -> toHtml (w{Widget._projectId = Just pid}))
+              when (null (dash :: Dashboards.Dashboard).widgets) $ label_ [id_ "add_a_widget_label", class_ "grid-stack-item pb-8 cursor-pointer bg-fillBrand-weak border-2 border-strokeBrand-strong border-dashed text-strokeSelected rounded-sm rounded-lg flex flex-col gap-3 items-center justify-center *:right-0!  *:bottom-0! ", term "gs-w" "3", term "gs-h" "2", Lucid.for_ "page-data-drawer"] do
+                faSprite_ "plus" "regular" "h-8 w-8"
+                span_ "Add a widget"
 
     -- Add hidden element for the auto-refresh handler
     div_ [id_ "dashboard-refresh-handler", class_ "hidden"] ""
@@ -388,48 +427,100 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           });
         };
 
-        // Function to initialize grids (called on page load and after htmx swaps)
         function initializeGrids() {
+          document.querySelectorAll('.dashboard-grid-wrapper').forEach(wrapper => {
+            if (!wrapper._skeletonTimeout && !wrapper.classList.contains('dashboard-loaded')) {
+              wrapper._skeletonTimeout = setTimeout(() => wrapper.classList.add('dashboard-loaded'), 5000);
+            }
+          });
           const gridInstances = [];
           document.querySelectorAll('.grid-stack').forEach(gridEl => {
             if (!gridEl.classList.contains('grid-stack-initialized')) {
-              const grid = GridStack.init({
-                column: 12,
-                acceptWidgets: true,
-                cellHeight: '5rem',
-                marginTop: '0.05rem',
-                marginLeft: '0.5rem',
-                marginRight: '0.5rem',
-                marginBottom: '2rem',
-                handleClass: 'grid-stack-handle',
-                styleInHead: true,
-                staticGrid: false,
-              }, gridEl);
+              const wrapper = gridEl.closest('.dashboard-grid-wrapper');
+              try {
+                const grid = GridStack.init({
+                  column: 12,
+                  acceptWidgets: true,
+                  cellHeight: '5rem',
+                  margin: '1rem 0.5rem 1rem 0.5rem',
+                  handleClass: 'grid-stack-handle',
+                  styleInHead: true,
+                  staticGrid: false,
+                  float: false,
+                  animate: true,
+                }, gridEl);
 
-              grid.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
-              gridEl.classList.add('grid-stack-initialized');
-              gridInstances.push(grid);
-              // Set global gridStackInstance to the current grid
-              window.gridStackInstance = grid;
+                grid.on('removed change', debounce(() => {
+                  const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
+                  if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
+                  htmx.trigger(document.body, 'widget-order-changed');
+                }, 500));
+                gridEl.classList.add('grid-stack-initialized');
+                gridInstances.push(grid);
+                window.gridStackInstance = grid;
+              } finally {
+                if (wrapper) {
+                  wrapper.classList.add('dashboard-loaded');
+                  if (wrapper._skeletonTimeout) clearTimeout(wrapper._skeletonTimeout);
+                }
+                window.interpolateVarTemplates();
+              }
             }
           });
 
           // Initialize nested grids
           document.querySelectorAll('.nested-grid').forEach(nestedEl => {
             if (!nestedEl.classList.contains('grid-stack-initialized')) {
+              const parentWidget = nestedEl.closest('.grid-stack-item');
+              // Store original YAML height for partial-width groups
+              if (parentWidget) {
+                parentWidget.dataset.originalH = parentWidget.getAttribute('gs-h') || '0';
+              }
+
               const nestedInstance = GridStack.init({
                 column: 12,
                 acceptWidgets: true,
-                cellHeight: '4.9rem',
-                marginTop: '0.01rem',
-                marginLeft: '0.5rem',
-                marginRight: '0.5rem',
-                marginBottom: '1rem',
+                cellHeight: '5rem',
+                margin: '1rem 0.5rem 1rem 0.5rem',
                 handleClass: 'nested-grid-stack-handle',
                 styleInHead: true,
                 staticGrid: false,
+                animate: true,
               }, nestedEl);
-              nestedInstance.on('removed change', debounce(() => htmx.trigger(document.body, 'widget-order-changed'), 200));
+
+              // Auto-fit group to children
+              function autoFitGroupToChildren() {
+                const items = nestedInstance.getGridItems();
+                const node = parentWidget?.gridstackNode;
+                if (!node) return;
+
+                // Don't resize if group is collapsed
+                if (parentWidget.classList.contains('collapsed')) return;
+
+                const isFullWidth = node.w === 12;
+                const maxRow = items.length
+                  ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1)))
+                  : 1;
+
+                const requiredHeight = 1 + maxRow;  // 1 for header + content
+                const yamlHeight = parseInt(parentWidget.dataset.originalH) || requiredHeight;
+
+                // Full-width: always auto-fit. Partial-width: max of YAML and required
+                const targetHeight = isFullWidth ? requiredHeight : Math.max(yamlHeight, requiredHeight);
+
+                if (node.h !== targetHeight && window.gridStackInstance) {
+                  window.gridStackInstance.update(parentWidget, { h: targetHeight });
+                }
+              }
+
+              nestedInstance.on('change added removed', autoFitGroupToChildren);
+              requestAnimationFrame(autoFitGroupToChildren);
+              nestedInstance.on('removed change', debounce(() => {
+                const collapsingWidget = nestedEl.closest('[data-collapse-action]');
+                if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
+                htmx.trigger(document.body, 'widget-order-changed');
+              }, 500));
+
               nestedEl.classList.add('grid-stack-initialized');
             }
           });
@@ -442,6 +533,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         document.body.addEventListener('htmx:afterSettle', function(e) {
           if (e.detail.target && e.detail.target.id === 'dashboard-tabs-content') {
             initializeGrids();
+            window.interpolateVarTemplates();
           }
         });
       });
@@ -455,6 +547,53 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             gridEl.gridstack.removeWidget(widgetEl, true);
           }
         }
+      });
+
+      function compactGrid(grid, el) {
+        if (!el) return;
+        const items = Array.from(el.querySelectorAll(':scope > .grid-stack-item')).sort((a, b) => (a.gridstackNode?.y || 0) - (b.gridstackNode?.y || 0));
+        const rows = {};
+        items.forEach(item => { const y = item.gridstackNode?.y || 0; (rows[y] = rows[y] || []).push(item); });
+        let nextY = 0, needsUpdate = false;
+        const updates = [];
+        Object.keys(rows).map(Number).sort((a, b) => a - b).forEach(y => {
+          rows[y].forEach(item => {
+            if (item.gridstackNode?.y !== nextY) { updates.push({ item, y: nextY }); needsUpdate = true; }
+          });
+          nextY += Math.max(...rows[y].map(item => item.gridstackNode?.h || 1));
+        });
+        if (needsUpdate) {
+          grid.batchUpdate();
+          updates.forEach(({ item, y }) => grid.update(item, { y }));
+          grid.batchUpdate(false);
+        }
+      }
+
+      // Delegated handler for collapse toggle
+      document.addEventListener('click', function(e) {
+        const collapseBtn = e.target.closest('.collapse-toggle');
+        if (!collapseBtn) return;
+        const parentWidget = collapseBtn.closest('.grid-stack-item');
+        const grid = window.gridStackInstance;
+        if (!parentWidget || !grid) return;
+
+        // Use requestAnimationFrame for smoother animation after class toggle
+        requestAnimationFrame(() => {
+          const isCollapsed = parentWidget.classList.contains('collapsed');
+          const mainGridEl = document.querySelector('.grid-stack:not(.nested-grid)');
+
+          parentWidget.dataset.collapseAction = 'true';
+
+          if (isCollapsed) {
+            grid.update(parentWidget, { h: 1 });
+          } else {
+            const nestedInstance = parentWidget.querySelector('.nested-grid')?.gridstack;
+            const items = nestedInstance?.getGridItems() || [];
+            const maxRow = items.length ? Math.max(1, ...items.map(item => (item.gridstackNode?.y || 0) + (item.gridstackNode?.h || 1))) : 1;
+            grid.update(parentWidget, { h: 1 + maxRow });
+          }
+          compactGrid(grid, mainGridEl);
+        });
       });
       |]
 
@@ -569,11 +708,11 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
     valueToText v = decodeUtf8 $ AE.encode v
 
 
--- Process a single widget recursively with pre-computed replacement maps for efficiency.
--- Preserves original query in rawQuery for editor display.
-processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> (Text -> Text, Text -> Text) -> Widget.Widget -> ATAuthCtx Widget.Widget
-processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetBase = do
-  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query & #sql . _Just %~ replacePlaceholdersSQL & #query %~ fmap replacePlaceholdersKQL
+-- Process a single widget recursively. Keeps sql/query with {{var-*}} templates intact
+-- so they can be interpolated at data fetch time with current URL params.
+processWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
+processWidget pid now timeRange allParams widgetBase = do
+  let widget = widgetBase & #_projectId %~ (<|> Just pid) & #rawQuery .~ widgetBase.query
 
   widget' <-
     if widget.eager == Just True || widget.wType == Widget.WTAnomalies
@@ -585,7 +724,7 @@ processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceh
     Nothing -> pure widget'
     Just childWidgets -> do
       let addDashboardId child = child & #_dashboardId %~ (<|> widget'._dashboardId)
-      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams (replacePlaceholdersSQL, replacePlaceholdersKQL) . addDashboardId)
+      processedChildren <- pooledForConcurrently childWidgets (processWidget pid now timeRange allParams . addDashboardId)
       pure $ widget' & #children ?~ processedChildren
 
 
@@ -866,6 +1005,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
               , pageTitleModalId = Just "pageTitleModalId"
               , config = appCtx.config
               , freeTierExceeded = freeTierExceeded
+              , headContent = Just dashboardHeadContent_
               , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
                   TimePicker.timepicker_ Nothing currentRange Nothing
                   TimePicker.refreshButton_
@@ -1534,6 +1674,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
               , pageTitle = "Dashboards"
               , freeTierExceeded = freeTierExceeded
               , config = appCtx.config
+              , headContent = Just dashboardHeadContent_
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
                   faSprite_ "plus" "regular" "h-4 w-4"
                   "New Dashboard"
@@ -1610,7 +1751,7 @@ dashboardsPostH pid form = do
       addRespHeaders DashboardNoContent
 
 
--- -- Template Haskell splice to generate the list of dashboards by reading the dashboards folder in filesystem
+-- TH splice: reads all dashboard YAML files from static/public/dashboards at compile time
 dashboardTemplates :: [Dashboards.Dashboard]
 dashboardTemplates = $(Dashboards.readDashboardsFromDirectory "static/public/dashboards")
 
@@ -1866,16 +2007,13 @@ dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Tex
 dashboardWidgetExpandGetH pid dashId widgetId = do
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
-  let timeParams@(sinceStr, fromDStr, toDStr) = (Nothing, Nothing, Nothing)
+  let timeParams = (Nothing, Nothing, Nothing)
       paramsWithVarDefaults = addVariableDefaults [] dash.variables
   (_, allParamsWithConstants) <- processConstantsAndExtendParams pid now timeParams paramsWithVarDefaults (fromMaybe [] dash.constants)
   case snd <$> findWidgetInDashboard widgetId dash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
-      let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-          replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD allParamsWithConstants now)
-          replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD allParamsWithConstants now)
-      processedWidget <- processWidget pid now timeParams allParamsWithConstants (replacePlaceholdersSQL, replacePlaceholdersKQL) widgetToExpand
+      processedWidget <- processWidget pid now timeParams allParamsWithConstants widgetToExpand
       addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing Nothing (Just processedWidget) "edit"
 
 
@@ -1891,10 +2029,17 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
       Left err -> div_ [class_ "p-3 space-y-2"] do
         div_ [class_ "text-textError text-xs font-medium"] "Parse Error"
         pre_ [class_ "whitespace-pre-wrap break-all bg-fillError/10 p-2 rounded text-xs overflow-x-auto"] $ toHtml err
-      Right (_, qc) -> div_ [class_ "space-y-3 p-3 bg-fillWeaker rounded-lg font-mono text-xs"] do
+      Right (_, qc) -> div_ [class_ "space-y-3 p-3 bg-fillWeaker rounded-lg text-xs sql-preview-container"] do
         sqlBlock_ "Main Query" qc.finalSqlQuery
         whenJust qc.finalSummarizeQuery $ sqlBlock_ "Summarize Query"
         whenJust qc.finalAlertQuery $ sqlBlock_ "Alert Query"
+        script_
+          """
+          document.querySelectorAll('.sql-preview-container pre code').forEach(el => {
+            el.textContent = sqlFormatter.format(el.textContent, { language: 'postgresql' });
+            hljs.highlightElement(el);
+          });
+          """
   where
     sqlBlock_ :: Text -> Text -> Html ()
     sqlBlock_ label sql = div_ [class_ "space-y-1"] do
@@ -1905,7 +2050,7 @@ widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
           , term "_" [text| on click writeText(`${T.replace "`" "\\`" sql}`) to the navigator's clipboard then set my.innerText to 'Copied!' then wait 1.5s then set my.innerText to 'Copy' |]
           ]
           "Copy"
-      pre_ [class_ "whitespace-pre-wrap break-all bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ toHtml sql
+      pre_ [class_ "bg-fillWeak p-2 rounded overflow-x-auto max-h-48"] $ code_ [class_ "language-sql text-xs !bg-transparent"] $ toHtml sql
 
 
 -- | Find a tab by its slug, returns (index, tab) if found
@@ -1920,9 +2065,7 @@ findWidgetInDashboard wid dash = tabResult <|> rootResult
     match w = w.id == Just wid || maybeToMonoid (slugify <$> w.title) == wid
     -- Recursively search widget and its children
     findInWidget :: Widget.Widget -> Maybe Widget.Widget
-    findInWidget w
-      | match w = Just w
-      | otherwise = asum $ map findInWidget (fromMaybe [] w.children)
+    findInWidget w = mfilter match (pure w) <|> asum (maybe [] (map findInWidget) w.children)
     tabResult = listToMaybe [(Just $ slugify t.name, w') | t <- fromMaybe [] dash.tabs, w <- t.widgets, w' <- maybeToList (findInWidget w)]
     rootResult = (Nothing,) <$> asum (map findInWidget dash.widgets)
 
@@ -1986,11 +2129,8 @@ mkWidgetProcessor
   -> [(Text, Maybe Text)]
   -> Widget.Widget
   -> ATAuthCtx Widget.Widget
-mkWidgetProcessor pid dashId now timeParams@(sinceStr, fromDStr, toDStr) paramsWithConstants =
-  let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
-      replacePlaceholdersSQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText fromD toD paramsWithConstants now)
-      replacePlaceholdersKQL = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresetsKQL pid.toText fromD toD paramsWithConstants now)
-   in fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants (replacePlaceholdersSQL, replacePlaceholdersKQL)
+mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
+  fmap (#_dashboardId ?~ dashId.toText) . processWidget pid now timeParams paramsWithConstants
 
 
 -- | Handler for dashboard with tab in path: /p/{pid}/dashboards/{dash_id}/tab/{tab_slug}
@@ -2046,6 +2186,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
           , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
+          , headContent = Just dashboardHeadContent_
           , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
@@ -2107,6 +2248,19 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
             , hxSwapOob_ "true"
             ]
             ""
+
+
+-- | Skeleton loader shown while GridStack initializes
+dashboardSkeleton_ :: Html ()
+dashboardSkeleton_ = div_ [class_ "dashboard-skeleton absolute inset-0 z-10 bg-bgBase flex flex-col items-center justify-center"] do
+  span_ [class_ "loading loading-spinner loading-lg text-fillBrand-strong"] ""
+  p_ [class_ "text-sm text-textWeak mt-3"] "Loading dashboard..."
+  div_ [class_ "grid grid-cols-12 gap-4 mt-8 w-full max-w-4xl px-8"] do
+    div_ [class_ "col-span-8 h-32 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-32 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
 
 
 -- | Render a single tab content panel

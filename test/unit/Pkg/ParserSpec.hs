@@ -91,7 +91,7 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
       let (query, _) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize count() / 5.0 by bin_auto(timestamp)"
       let expected =
             [text|
-      SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, ((count(*)::float / 5.0))::float AS arith_, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
+      SELECT extract(epoch from time_bucket('6 hours', timestamp))::integer, (COALESCE((count(*)::float / NULLIF(5.0, 0)), 0))::float AS arith_, count(*) OVER() as _total_count FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY time_bucket('6 hours', timestamp) ORDER BY time_bucket('6 hours', timestamp) DESC |]
       normT query `shouldBe` normT expected
 
     it "query a metric" do

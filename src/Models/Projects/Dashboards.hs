@@ -65,6 +65,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
+import System.FilePath ((</>))
 import System.Types (DB)
 
 
@@ -191,17 +192,20 @@ insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
       )
 
 
+-- | Read dashboard YAML files from directory at compile time via TH
 readDashboardsFromDirectory :: FilePath -> Q Exp
 readDashboardsFromDirectory dir = do
   files <- runIO $ listDirectory dir
   let files' = sort $ filter (".yaml" `L.isSuffixOf`) files
+  mapM_ (THS.addDependentFile . (dir </>)) files'
   dashboards <- runIO $ catMaybes <$> mapM (readDashboardFile dir) files'
   THS.lift dashboards
 
 
+-- | Read single dashboard YAML file
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
-  let filePath = dir ++ "/" ++ file
+  let filePath = dir </> file
   result <- try $ readFileBS filePath :: IO (Either SomeException BS.ByteString)
   case result of
     Left err -> do

@@ -80,6 +80,8 @@ data WidgetType
   | WTTable
   | WTTraces
   | WTFlamegraph
+  | WTServiceMap -- Service dependency graph visualization
+  | WTHeatmap -- Latency distribution heatmap
   deriving stock (Enum, Eq, Generic, Show, THS.Lift)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "WT", DAE.CamelToSnake]] WidgetType
@@ -149,6 +151,7 @@ data Widget = Widget
   , warningThreshold :: Maybe Double
   , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
+  , description :: Maybe Text -- Help text shown in info icon tooltip
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -269,36 +272,52 @@ widget_ = widgetHelper_
 
 widgetHelper_ :: Widget -> Html ()
 widgetHelper_ w' = case w.wType of
-  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
+  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
     unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
-  WTGroup -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "h-full flex flex-col gap-4"] do
-    div_ [class_ $ "group/h gap-1 leading-none flex justify-between items-center " <> gridStackHandleClass] do
-      div_ [class_ "inline-flex gap-1 items-center"] do
-        span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
-        whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-        span_ [class_ "text-sm"] $ toHtml $ maybeToMonoid w.title
-    div_ [class_ "grid-stack nested-grid  h-full -mx-2"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
-  WTTable -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderTable w
+  WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
+    -- Header: auto height (no flex), group-header class for CSS targeting when collapsed
+    div_ [class_ $ "group-header py-2 px-4 flex items-center justify-between " <> gridStackHandleClass] do
+      div_ [class_ "inline-flex gap-2 items-center group/h"] do
+        span_ [class_ "hidden group-hover/h:inline-flex cursor-move"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
+        whenJust w.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-5 h-5"
+        span_ ([class_ "text-lg font-medium"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) w.title) $ toHtml $ maybeToMonoid w.title
+        whenJust w.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
+      -- Collapse chevron: only for full-width groups
+      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
+    -- Nested grid: flex-1 fills remaining space
+    div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
+  WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ renderTable w
   WTLogs -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Logs widget coming soon"
-  WTTraces -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ renderTraceTable w
+  WTTraces -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ renderTraceTable w
   WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
   where
     w = w' & #id %~ maybe (slugify <$> w'.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
-    layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w)), ("h", (.h))]
-    attrs = concat [maybe [] (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= layoutField) | (name, layoutField) <- layoutFields]
+    isFullWidth = (== Just 12) $ w.layout >>= (.w)
+    groupRequiredHeight = case w.wType of
+      WTGroup ->
+        let childWidgets = fromMaybe [] w.children
+            maxRow = foldl' (\acc c -> max acc $ fromMaybe 0 (c.layout >>= (.y)) + fromMaybe 1 (c.layout >>= (.h))) 1 childWidgets
+         in Just (1 + maxRow)
+      _ -> Nothing
+    -- For groups: full-width uses requiredHeight, partial-width uses max(yamlH, requiredHeight)
+    effectiveHeight = case groupRequiredHeight of
+      Just reqH -> Just $ if isFullWidth then reqH else maybe reqH (max reqH) (w.layout >>= (.h))
+      Nothing -> w.layout >>= (.h)
+    layoutFields = [("x", (.x)), ("y", (.y)), ("w", (.w))] :: [(Text, Layout -> Maybe Int)]
+    attrs =
+      foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
+        <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
     paddingBtm
       | w.standalone == Just True = ""
-      | w._isNested == Just True && w.wType `elem` [WTTimeseriesStat, WTStat] = ""
-      | otherwise = bool " pb-8 " " standalone pb-4 " (w._isNested == Just True)
-    -- Serialize the widget to JSON for easy copying
+      | otherwise = ""
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full"]
+        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full [.grid-stack_&]:h-auto"]
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
@@ -308,10 +327,11 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ "text-sm text-textWeak flex items-center gap-1"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-      toHtml $ maybeToMonoid title
+      span_ (foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ toHtml $ maybeToMonoid title
+      whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
-    span_ [class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] $ toHtml $ maybeToMonoid subValueM
+    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do
@@ -488,7 +508,7 @@ renderTraceTable widget = do
           div_
             [ class_ "h-full overflow-auto p-3"
             , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
-            , hxTrigger_ "load"
+            , hxTrigger_ "load, update-query from:window"
             , hxTarget_ $ "#" <> tableId
             , hxSelect_ $ "#" <> tableId
             , hxSwap_ "outerHTML"
@@ -588,6 +608,54 @@ renderTable widget = do
     whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
 
 
+-- | Render stat widget content with HTMX lazy loading support
+-- Always includes HTMX attributes so widget can refresh on update-query events
+renderStatContent :: Widget -> Text -> Maybe Text -> Html ()
+renderStatContent widget chartId valueM = do
+  let statContentId = chartId <> "_stat"
+      hasData = widget.eager == Just True || isJust (widget.dataset >>= (.value))
+      paddingClass = "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)
+      -- Always use eager widget JSON for HTMX requests
+      eagerWidget = widget & #eager ?~ True
+      widgetJson = fromLazy $ AE.encode eagerWidget
+  -- Always include HTMX attributes for refresh capability
+  div_
+    [ id_ statContentId
+    , class_ paddingClass
+    , hxGet_ $ "/p/" <> maybe "" (.toText) widget._projectId <> "/widget?widgetJSON=" <> decodeUtf8 (urlEncode True widgetJson)
+    , hxTrigger_ $ if hasData then "update-query from:window" else "load, update-query from:window"
+    , hxTarget_ $ "#" <> statContentId
+    , hxSelect_ $ "#" <> statContentId
+    , hxSwap_ "outerHTML"
+    , hxExt_ "forward-page-params"
+    ]
+    $ if hasData
+      then renderStatValue widget chartId valueM
+      else renderStatPlaceholder widget chartId
+
+
+-- | Render placeholder with loading spinner for lazy-loaded stats
+renderStatPlaceholder :: Widget -> Text -> Html ()
+renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
+  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+    $ span_ [class_ "loading loading-spinner loading-sm"] ""
+  div_ [class_ "inline-flex gap-1 items-center text-sm"] do
+    whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+    toHtml $ maybeToMonoid widget.title
+    whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+
+
+-- | Render actual stat value content
+renderStatValue :: Widget -> Text -> Maybe Text -> Html ()
+renderStatValue widget chartId valueM = div_ [class_ "flex flex-col gap-1"] do
+  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+    $ whenJust valueM toHtml
+  div_ [class_ "inline-flex gap-1 items-center text-sm"] do
+    whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
+    toHtml $ maybeToMonoid widget.title
+    whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+
+
 renderChart :: Widget -> Html ()
 renderChart widget = do
   let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ Utils.prettyPrintCount (round r) <> " rows/min"
@@ -607,14 +675,7 @@ renderChart widget = do
         , id_ $ chartId <> "_bordered"
         ]
         do
-          when isStat $ div_ [class_ $ "px-3 flex flex-col " <> bool "py-3 " "py-2 " (widget._isNested == Just True)] do
-            div_ [class_ "flex flex-col gap-1"] do
-              strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
-                $ whenJust valueM toHtml
-              div_ [class_ "inline-flex gap-1 items-center text-sm"] do
-                whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
-                toHtml $ maybeToMonoid widget.title
-                Utils.faSprite_ "circle-info" "regular" "w-4 h-4 text-iconNeutral"
+          when isStat $ renderStatContent widget chartId valueM
           unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
             div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
             let theme = fromMaybe "default" widget.theme
@@ -943,6 +1004,8 @@ mapWidgetTypeToChartType WTTimeseries = "bar"
 mapWidgetTypeToChartType WTTimeseriesLine = "line"
 mapWidgetTypeToChartType WTTimeseriesStat = "line"
 mapWidgetTypeToChartType WTDistribution = "bar"
+mapWidgetTypeToChartType WTServiceMap = "graph" -- ECharts force-directed graph
+mapWidgetTypeToChartType WTHeatmap = "heatmap" -- ECharts heatmap
 mapWidgetTypeToChartType _ = "bar"
 
 
