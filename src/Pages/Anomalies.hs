@@ -31,7 +31,6 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
-import Deriving.Aeson qualified as DAE
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -42,6 +41,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Deriving.Aeson qualified as DAE
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -53,11 +53,11 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Shapes qualified as Shapes
 import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDump
+import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -1225,11 +1225,11 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
     -- Method and endpoint (for API changes)
     case AE.fromJSON (getAeson issue.issueData) of
-        AE.Success (d :: IssueEndpointInfo) -> do
-          div_ [class_ "flex items-center gap-2"] do
-            span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
-            span_ [class_ "monospace bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml d.endpointPath
-        _ -> pass
+      AE.Success (d :: IssueEndpointInfo) -> do
+        div_ [class_ "flex items-center gap-2"] do
+          span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+          span_ [class_ "monospace bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml d.endpointPath
+      _ -> pass
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
       div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
@@ -1283,15 +1283,15 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     Issues.NewEndpoint -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.NewEndpointData) ->
         let shapeCount = V.length d.initialShapes
-        in div_ [class_ "mb-4 p-3 bg-fillInformation-weak border border-strokeInformation-weak rounded-lg"] do
-          div_ [class_ "flex items-center justify-between"] do
-            div_ [class_ "flex items-center gap-3"] do
-              div_ [class_ "flex items-center gap-1.5 text-sm"] do
-                faSprite_ "square-dashed" "regular" "h-3.5 w-3.5 text-fillInformation-strong"
-                span_ [class_ "font-medium text-fillInformation-strong"] $ toHtml $ show shapeCount <> " shape" <> (if shapeCount == 1 then "" else "s")
-              div_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
-                faSprite_ "server" "regular" "h-3 w-3"
-                span_ [] $ toHtml d.endpointHost
+         in div_ [class_ "mb-4 p-3 bg-fillInformation-weak border border-strokeInformation-weak rounded-lg"] do
+              div_ [class_ "flex items-center justify-between"] do
+                div_ [class_ "flex items-center gap-3"] do
+                  div_ [class_ "flex items-center gap-1.5 text-sm"] do
+                    faSprite_ "square-dashed" "regular" "h-3.5 w-3.5 text-fillInformation-strong"
+                    span_ [class_ "font-medium text-fillInformation-strong"] $ toHtml $ show shapeCount <> " shape" <> (if shapeCount == 1 then "" else "s")
+                  div_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+                    faSprite_ "server" "regular" "h-3 w-3"
+                    span_ [] $ toHtml d.endpointHost
       _ -> pass
     Issues.NewShape -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.NewShapeData) -> do
@@ -1384,7 +1384,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
           AE.Success (d :: Issues.LogPatternRateChangeData) -> Just $ "log_pattern=\"" <> d.logPattern <> "\""
           _ -> Nothing
         _ -> Nothing
-      logsUrl = (\q -> "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q) <$> logsQuery 
+      logsUrl = (\q -> "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q) <$> logsQuery
 
   div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
     whenJust logsUrl \url ->
