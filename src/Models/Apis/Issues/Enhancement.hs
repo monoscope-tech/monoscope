@@ -292,17 +292,8 @@ updateIssueClassification issueId isCritical breakingCount incrementalCount = do
 -- | Generate a simple title for issue types that don't need LLM
 simpleTitle :: Issues.Issue -> Maybe Text
 simpleTitle issue = case issue.issueType of
-  Issues.NewEndpoint ->
-    case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (d :: Issues.NewEndpointData) ->
-        Just $ "New endpoint discovered: " <> d.endpointMethod <> " " <> d.endpointPath
-      _ -> Just "New endpoint discovered"
-  Issues.NewShape ->
-    case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (d :: Issues.NewShapeData) ->
-        let changes = V.length d.newFields + V.length d.deletedFields + V.length d.modifiedFields
-         in Just $ "New response shape detected on " <> d.endpointMethod <> " " <> d.endpointPath <> " (" <> toText (show changes) <> " field changes)"
-      _ -> Just "New response shape detected"
+  Issues.NewEndpoint -> Just $ "New endpoint detected"
+  Issues.NewShape -> Just $ "New response shape detected"
   Issues.FieldChange ->
     case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.FieldChangeData) ->
@@ -312,7 +303,7 @@ simpleTitle issue = case issue.issueType of
     case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.LogPatternData) ->
         let level = fromMaybe "LOG" d.logLevel
-         in Just $ "New " <> level <> " pattern detected" <> maybe "" (" in " <>) d.serviceName
+         in Just $ "New " <> level <> " pattern detected"
       _ -> Just "New log pattern detected"
   Issues.ErrorEscalating ->
     case AE.fromJSON (getAeson issue.issueData) of

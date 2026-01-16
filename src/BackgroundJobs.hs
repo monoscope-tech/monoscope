@@ -1867,8 +1867,6 @@ processNewEndpoint pid hash authCtx = do
           Just ep -> do
             issue <- liftIO $ Issues.createNewEndpointIssue pid ep.hash ep.method ep.urlPath ep.host
             Issues.insertIssue issue
-            liftIO $ withResource authCtx.jobsPool \conn ->
-              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
             Log.logInfo "Created issue for new endpoint" (pid, hash, issue.id)
             -- Send notifications only if project exists and has alerts enabled
             Relude.when project.endpointAlerts $ do
@@ -1930,8 +1928,7 @@ processNewShape pid hash authCtx = do
                     shape.modifiedFields
                     shape.fieldHashes
               Issues.insertIssue issue
-              liftIO $ withResource authCtx.jobsPool \conn ->
-                void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              -- llm enhancement job is not needed
               Log.logInfo "Created issue for new shape" (pid, hash, issue.id)
         _ -> pass
 

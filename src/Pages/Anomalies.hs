@@ -31,6 +31,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
+import Deriving.Aeson qualified as DAE
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -52,6 +53,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Shapes qualified as Shapes
 import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Issues qualified as Issues
@@ -85,6 +87,15 @@ newtype AnomalyBulkForm = AnomalyBulk
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
+
+
+-- | Helper type to extract common endpoint fields from any issue data type
+data IssueEndpointInfo = IssueEndpointInfo
+  { endpointMethod :: Text
+  , endpointPath :: Text
+  }
+  deriving stock (Generic)
+  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] IssueEndpointInfo
 
 
 acknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
@@ -208,21 +219,58 @@ anomalyDetailCore pid firstM fetchIssue = do
                   when isErrorRelated $ do
                     errorResolveButton_ pid issue.targetHash isResolved
               }
+      -- Helper to fetch trace and spans given a trace ID
+      let fetchTraceData traceIdM timeHint = case traceIdM of
+            Just traceId -> do
+              trM <- Telemetry.getTraceDetails pid traceId timeHint now
+              case trM of
+                Just traceItem -> do
+                  spanRecords' <- Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
+                  pure (Just traceItem, V.fromList spanRecords')
+                Nothing -> pure (Nothing, V.empty)
+            Nothing -> pure (Nothing, V.empty)
+
       (trItem, spanRecs) <- case errorM of
         Just err -> do
           let targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
               targetTme = maybe (zonedTimeToUTC err.updatedAt) (const $ zonedTimeToUTC err.createdAt) firstM
-          case targetTIdM of
-            Just x -> do
-              trM <- Telemetry.getTraceDetails pid x (Just targetTme) now
-              case trM of
-                Just traceItem -> do
-                  spanRecords' <-
-                    Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
-                  pure (Just traceItem, V.fromList spanRecords')
-                Nothing -> pure (Nothing, V.empty)
-            Nothing -> pure (Nothing, V.empty)
-        Nothing -> pure (Nothing, V.empty)
+          fetchTraceData targetTIdM (Just targetTme)
+        Nothing -> case issue.issueType of
+          Issues.NewShape -> do
+            shapeM <- Shapes.getShapeByHash pid issue.targetHash
+            case shapeM of
+              Just shape -> do
+                let targetTIdM = maybe shape.recentTraceId (const shape.firstTraceId) firstM
+                fetchTraceData targetTIdM (Just $ shape.createdAt)
+              Nothing -> pure (Nothing, V.empty)
+          Issues.NewEndpoint -> do
+            endpointM <- Endpoints.getEndpointByHash pid issue.targetHash
+            case endpointM of
+              Just endpoint -> do
+                let targetTIdM = maybe endpoint.recentTraceId (const endpoint.firstTraceId) firstM
+                fetchTraceData targetTIdM (Just endpoint.createdAt)
+              Nothing -> pure (Nothing, V.empty)
+          Issues.EndpointLatencyDegradation -> do
+            case AE.fromJSON (getAeson issue.issueData) of
+              AE.Success (d :: Issues.EndpointLatencyDegradationData) -> do
+                let targetTIdM = d.sampleTraceIds V.!? 0
+                fetchTraceData targetTIdM (Just d.detectedAt)
+              _ -> pure (Nothing, V.empty)
+          Issues.EndpointErrorRateSpike -> do
+            endpointM <- Endpoints.getEndpointByHash pid issue.targetHash
+            case endpointM of
+              Just endpoint -> do
+                let targetTIdM = maybe endpoint.recentTraceId (const endpoint.firstTraceId) firstM
+                fetchTraceData targetTIdM (Just endpoint.createdAt)
+              Nothing -> pure (Nothing, V.empty)
+          Issues.EndpointVolumeRateChange -> do
+            endpointM <- Endpoints.getEndpointByHash pid issue.targetHash
+            case endpointM of
+              Just endpoint -> do
+                let targetTIdM = maybe endpoint.recentTraceId (const endpoint.firstTraceId) firstM
+                fetchTraceData targetTIdM (Just endpoint.createdAt)
+              Nothing -> pure (Nothing, V.empty)
+          _ -> pure (Nothing, V.empty)
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
 
 
@@ -278,18 +326,19 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
           _ -> pass
       h3_ [class_ "text-textStrong text-2xl font-semibold"] $ toHtml issue.title
       p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
-    let widget =
+    let widget title q =
           div_ [class_ "col-span-4"]
             $ Widget.widget_
             $ (def :: Widget.Widget)
               { Widget.standalone = Just True
               , Widget.id = Just $ issueId <> "-timeline"
+              , Widget.naked = Just True
               , Widget.wType = Widget.WTTimeseries
-              , Widget.title = Just "Error trends"
+              , Widget.title = Just title
               , Widget.showTooltip = Just True
               , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
               , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-              , Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code"
+              , Widget.query = Just q
               , Widget._projectId = Just issue.projectId
               , Widget.hideLegend = Just True
               }
@@ -305,7 +354,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 statBox_ (Just pid) Nothing "Affected Clients" "" (show err.affectedUsers) Nothing Nothing
                 timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
                 timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC (fromMaybe err.updatedAt err.lastOccurredAt)
-              widget
+              widget "Error trend" "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code"
             div_ [class_ "flex flex-col gap-4"] do
               div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
                 div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
@@ -363,17 +412,27 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
       Issues.NewEndpoint ->
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.NewEndpointData) -> do
-            div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-              statBox_ (Just pid) Nothing "Method" "" d.endpointMethod Nothing Nothing
-              statBox_ (Just pid) Nothing "Path" "" d.endpointPath Nothing Nothing
-              statBox_ (Just pid) Nothing "Host" "" d.endpointHost Nothing Nothing
+            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+              span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+                faSprite_ "server" "regular" "h-3 w-3"
+                toHtml d.endpointHost
+            -- Stats and chart
+            div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
               timeStatBox_ "First Seen" $ prettyTimeAuto now d.firstSeenAt
+              widget "Request trend" $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
           _ -> pass
       Issues.NewShape ->
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.NewShapeData) -> do
+            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+
             div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-              statBox_ (Just pid) Nothing "Endpoint" "" (d.endpointMethod <> " " <> d.endpointPath) Nothing Nothing
               statBox_ (Just pid) Nothing "Status Code" "" (show d.statusCode) Nothing Nothing
               statBox_ (Just pid) Nothing "New Fields" "" (show $ V.length d.newFields) Nothing Nothing
               statBox_ (Just pid) Nothing "Deleted Fields" "" (show $ V.length d.deletedFields) Nothing Nothing
@@ -487,8 +546,11 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
       Issues.EndpointLatencyDegradation ->
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.EndpointLatencyDegradationData) -> do
+            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
             div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-              statBox_ (Just pid) Nothing "Endpoint" "" (d.endpointMethod <> " " <> d.endpointPath) Nothing Nothing
               statBox_ (Just pid) Nothing "Percentile" "" d.percentile Nothing Nothing
               statBox_ (Just pid) Nothing "Current Latency" "" (show (round d.currentLatencyMs :: Int) <> "ms") Nothing Nothing
               statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineLatencyMs :: Int) <> "ms") Nothing Nothing
@@ -498,8 +560,12 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
       Issues.EndpointErrorRateSpike ->
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.EndpointErrorRateSpikeData) -> do
+            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+
             div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-              statBox_ (Just pid) Nothing "Endpoint" "" (d.endpointMethod <> " " <> d.endpointPath) Nothing Nothing
               statBox_ (Just pid) Nothing "Error Rate" "" (show (round (d.currentErrorRate * 100) :: Int) <> "%") Nothing Nothing
               statBox_ (Just pid) Nothing "Errors" "" (show d.errorCount <> "/" <> show d.totalRequests) Nothing Nothing
               statBox_ (Just pid) Nothing "Baseline" "" (show (round (d.baselineErrorRate * 100) :: Int) <> "%") Nothing Nothing
@@ -514,8 +580,11 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
       Issues.EndpointVolumeRateChange ->
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.EndpointVolumeRateChangeData) -> do
+            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
             div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-              statBox_ (Just pid) Nothing "Endpoint" "" (d.endpointMethod <> " " <> d.endpointPath) Nothing Nothing
               statBox_ (Just pid) Nothing "Direction" "" d.changeDirection Nothing Nothing
               statBox_ (Just pid) Nothing "Current Rate" "" (show (round d.currentRatePerHour :: Int) <> "/hr") Nothing Nothing
               statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineRatePerHour :: Int) <> "/hr") Nothing Nothing
@@ -1155,11 +1224,11 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   -- Metadata row (method, endpoint, service, time)
   div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
     -- Method and endpoint (for API changes)
-    when (issue.issueType `elem` [Issues.NewShape, Issues.NewEndpoint, Issues.EndpointLatencyDegradation]) do
-      case AE.fromJSON (getAeson issue.issueData) of
-        AE.Success (d :: Issues.EndpointRelatedData) -> do
-          span_ [class_ "font-monospace"] $ toHtml d.endpointMethod
-          span_ [class_ "font-monospace"] $ toHtml d.endpointPath
+    case AE.fromJSON (getAeson issue.issueData) of
+        AE.Success (d :: IssueEndpointInfo) -> do
+          div_ [class_ "flex items-center gap-2"] do
+            span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+            span_ [class_ "monospace bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml d.endpointPath
         _ -> pass
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
@@ -1213,11 +1282,16 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       _ -> pass
     Issues.NewEndpoint -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.NewEndpointData) ->
-        div_ [class_ "mb-4 p-3 bg-fillInformation-weak border border-strokeInformation-weak rounded-lg"] do
-          div_ [class_ "flex items-center gap-2 text-sm"] do
-            span_ [class_ "font-medium text-fillInformation-strong"] $ toHtml d.endpointMethod
-            span_ [class_ "text-fillInformation-strong"] $ toHtml d.endpointPath
-          div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml $ "Host: " <> d.endpointHost
+        let shapeCount = V.length d.initialShapes
+        in div_ [class_ "mb-4 p-3 bg-fillInformation-weak border border-strokeInformation-weak rounded-lg"] do
+          div_ [class_ "flex items-center justify-between"] do
+            div_ [class_ "flex items-center gap-3"] do
+              div_ [class_ "flex items-center gap-1.5 text-sm"] do
+                faSprite_ "square-dashed" "regular" "h-3.5 w-3.5 text-fillInformation-strong"
+                span_ [class_ "font-medium text-fillInformation-strong"] $ toHtml $ show shapeCount <> " shape" <> (if shapeCount == 1 then "" else "s")
+              div_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+                faSprite_ "server" "regular" "h-3 w-3"
+                span_ [] $ toHtml d.endpointHost
       _ -> pass
     Issues.NewShape -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.NewShapeData) -> do
@@ -1241,12 +1315,10 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       _ -> pass
     Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.LogPatternData) ->
-        div_ [class_ "border border-strokeWeak rounded-lg group/lp mb-4"] do
+        div_ [class_ "border border-strokeWeak rounded-lg mb-4"] do
           label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
-            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lp-input:checked]/lp:rotate-90"
             toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
-            input_ [class_ "lp-input w-0 h-0 opacity-0", type_ "checkbox"]
-          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
+          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
       _ -> pass
     Issues.ErrorEscalating -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.ErrorEscalatingData) ->
@@ -1298,10 +1370,27 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
 
   -- Action buttons
+  let logsQuery = case issue.issueType of
+        Issues.NewEndpoint -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.NewEndpointData) -> Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\""
+          _ -> Nothing
+        Issues.NewShape -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.NewShapeData) -> Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\""
+          _ -> Nothing
+        Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternData) -> Just $ "log_pattern=\"" <> d.logPattern <> "\""
+          _ -> Nothing
+        Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternRateChangeData) -> Just $ "log_pattern=\"" <> d.logPattern <> "\""
+          _ -> Nothing
+        _ -> Nothing
+      logsUrl = (\q -> "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q) <$> logsQuery 
+
   div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
-    button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
-      faSprite_ "eye" "regular" "w-4 h-4"
-      span_ [class_ "leading-none"] "view related logs"
+    whenJust logsUrl \url ->
+      a_ [href_ url, class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
+        faSprite_ "eye" "regular" "w-4 h-4"
+        span_ [class_ "leading-none"] "View related logs"
     button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
       faSprite_ "code" "regular" "w-4 h-4"
       span_ [class_ "leading-none"] "View Full Schema"
@@ -1534,20 +1623,20 @@ issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
 issueTypeBadge issueType critical = badge cls icon txt
   where
     (cls, icon, txt) = case issueType of
-      Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
+      Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "Error")
       Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
-      Issues.NewEndpoint -> ("bg-fillInformation-strong", "plus-circle", "NEW ENDPOINT")
+      Issues.NewEndpoint -> ("bg-fillInformation-strong", "plus-circle", "Info")
       Issues.NewShape
-        | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING CHANGE")
-        | otherwise -> ("bg-fillInformation-strong", "shapes", "NEW SHAPE")
+        | critical -> ("bg-fillError-strong", "exclamation-triangle", "Breaking")
+        | otherwise -> ("bg-fillInformation-strong", "shapes", "Info")
       Issues.FieldChange
-        | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING CHANGE")
-        | otherwise -> ("bg-fillWarning-strong", "pen-to-square", "FIELD CHANGE")
-      Issues.LogPattern -> ("bg-fillInformation-strong", "file-lines", "LOG PATTERN")
-      Issues.ErrorEscalating -> ("bg-fillError-strong", "arrow-trend-up", "ESCALATING")
-      Issues.ErrorRegressed -> ("bg-fillError-strong", "rotate-left", "REGRESSED")
+        | critical -> ("bg-fillError-strong", "exclamation-triangle", "Breaking")
+        | otherwise -> ("bg-fillWarning-strong", "pen-to-square", "Incremental")
+      Issues.LogPattern -> ("bg-fillInformation-strong", "file-lines", "Info")
+      Issues.ErrorEscalating -> ("bg-fillError-strong", "arrow-trend-up", "E")
+      Issues.ErrorRegressed -> ("bg-fillError-strong", "rotate-left", "Alert")
       Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "chart-line", "RATE CHANGE")
-      Issues.EndpointLatencyDegradation -> ("bg-fillWarning-strong", "clock", "LATENCY")
-      Issues.EndpointErrorRateSpike -> ("bg-fillError-strong", "chart-line-up", "ERROR SPIKE")
-      Issues.EndpointVolumeRateChange -> ("bg-fillWarning-strong", "arrows-up-down", "TRAFFIC")
+      Issues.EndpointLatencyDegradation -> ("bg-fillWarning-strong", "clock", "Alert")
+      Issues.EndpointErrorRateSpike -> ("bg-fillError-strong", "chart-line-up", "Alert")
+      Issues.EndpointVolumeRateChange -> ("bg-fillWarning-strong", "arrows-up-down", "Alert")
     badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t

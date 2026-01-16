@@ -6,6 +6,7 @@ module Models.Apis.Shapes (
   ShapeForIssue (..),
   bulkInsertShapes,
   getShapeForIssue,
+  getShapeByHash,
 )
 where
 
@@ -166,4 +167,19 @@ getShapeForIssue pid hash = listToMaybe <$> PG.query q (pid, hash)
         FROM apis.shapes s
         LEFT JOIN apis.endpoints e ON e.hash = s.endpoint_hash
         WHERE s.project_id = ? AND s.hash = ?
+      |]
+
+
+getShapeByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Shape)
+getShapeByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
+  where
+    q =
+      [sql|
+        SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash,
+               query_params_keypaths, request_body_keypaths, response_body_keypaths,
+               request_headers_keypaths, response_headers_keypaths, field_hashes,
+               hash, status_code, response_description, request_description,
+               example_request_payload, example_response_payload, first_trace_id, recent_trace_id, service
+        FROM apis.shapes
+        WHERE project_id = ? AND hash = ?
       |]
