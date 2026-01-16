@@ -17,6 +17,7 @@
   # - {name: System.Directory, as: Dir, importStyle: qualified, qualifiedStyle: post, asRequired: true}
 
 - arguments:
+  - "-XMultilineStrings"
   - "-XConstraintKinds"
   - "-XDeriveGeneric"
   - "-XGeneralizedNewtypeDeriving"

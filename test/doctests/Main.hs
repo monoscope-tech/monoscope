@@ -6,10 +6,11 @@ import Test.DocTest (doctest)
 main :: IO ()
 main = do
   args <- getArgs
-  let extensions = 
+  let extensions =
         [ "-XGHC2021"
         , "-XBlockArguments"
         , "-XDataKinds"
+        , "-XMultilineStrings"
         , "-XDerivingVia"
         , "-XDeriveAnyClass"
         , "-XDerivingStrategies"
