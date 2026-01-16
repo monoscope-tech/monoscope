@@ -257,10 +257,14 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
       enabled: 0,
       maxItems: 50,
       fuzzySearch: true,
+      position: 'input',
+      place: 'parent',
       caseSensitive: false,
       mapValueTo: 'name',
       searchKeys: ['value', 'name'],
-      appendTarget: function () { return this.DOM.scope; },
+      // appendTarget: function () {
+      //   return this.DOM.scope;
+      // },
     },
   };
   const element = typeof selectorOrElement === 'string' ? document.querySelector(selectorOrElement) : selectorOrElement;
