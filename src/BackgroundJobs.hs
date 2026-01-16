@@ -1704,7 +1704,7 @@ processNewLogPattern pid patternHash authCtx = do
       [Only cnt] -> return cnt
       _ -> return 0
   if totalEvents < 5000
-    then Log.logInfo "Skipping new endpoint issue creation due to low event volume" (pid, patternHash, totalEvents)
+    then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
     else do
       patternM <- LogPatterns.getLogPatternByHash pid patternHash
       whenJust patternM \lp -> do
