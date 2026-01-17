@@ -141,27 +141,25 @@ export class LogList extends LitElement {
     type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(new Error(error));
   }
 
-  private workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
+  private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
+    // Use early fetch promise if available (set by server-rendered script in head)
+    const earlyPromise = (window as any).logDataPromise;
+    if (earlyPromise) {
+      (window as any).logDataPromise = null;
+      const data = await earlyPromise;
+      if (!data.error) {
+        const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount } = data;
+        const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, queryResultCount) : [];
+        return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount, hasMore: logsData?.length > 0 } };
+      }
+    }
+    // Fallback to worker
     if (!this.worker) throw new Error('Worker not initialized');
-
     const id = ++this.workerReqId;
     return new Promise((resolve, reject) => {
       this.workerCallbacks.set(id, { resolve, reject });
-      this.worker!.postMessage({
-        type: 'fetch',
-        url,
-        colIdxMap: this.colIdxMap,
-        expandedTraces: this.expandedTraces,
-        flipDirection: this.flipDirection,
-        id,
-      });
-      setTimeout(() => {
-        if (this.workerCallbacks.has(id)) {
-          console.warn('[Worker] Request timeout:', id);
-          this.workerCallbacks.delete(id);
-          reject(new Error('Worker request timeout'));
-        }
-      }, 120000);
+      this.worker!.postMessage({ type: 'fetch', url, colIdxMap: this.colIdxMap, expandedTraces: this.expandedTraces, flipDirection: this.flipDirection, id });
+      setTimeout(() => { if (this.workerCallbacks.has(id)) { this.workerCallbacks.delete(id); reject(new Error('Worker timeout')); } }, 120000);
     });
   }
 
@@ -1524,19 +1522,24 @@ export class LogList extends LitElement {
         }
         return rowData._latencyCache.content;
       case 'summary':
-        // Cache rendered summary directly on the row data
-        if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
+        const isVirtualParent = type === 'virtual-parent';
+        if (!isVirtualParent && (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines)) {
           const summaryArray = this.parseSummaryData(dataArr);
-          rowData._summaryCache = {
-            content: this.renderSummaryElements(summaryArray, this.wrapLines),
-            wrapLines: this.wrapLines,
-          };
+          rowData._summaryCache = { content: this.renderSummaryElements(summaryArray, this.wrapLines), wrapLines: this.wrapLines };
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
           ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : isVirtualParent
+          ? 'border border-dashed border-strokeWeak bg-fillWeaker text-textWeak fill-textWeak'
           : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+        const summaryContent = isVirtualParent
+          ? html`<span class="text-textWeak text-xs italic flex items-center gap-1" title="Parent ID: ${rowData.missingParentId}">
+              ${faSprite('clock', 'regular', 'w-3 h-3')} Parent span pending
+              <span class="font-mono text-[10px]">(${rowData.missingParentId?.slice(0, 12)}...)</span>
+            </span>`
+          : rowData._summaryCache.content;
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1575,9 +1578,7 @@ export class LogList extends LitElement {
                 </div>
               `
             : nothing}
-          <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>
-            ${rowData._summaryCache.content}
-          </div>
+          <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>${summaryContent}</div>
         </div>`;
       case 'service':
         let serviceData = lookupVecValue<string>(dataArr, this.colIdxMap, key);

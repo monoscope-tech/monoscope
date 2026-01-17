@@ -9,7 +9,7 @@ export function generateId() {
   return Math.random().toString(36).substring(2, 15);
 }
 
-export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean) {
+export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean, queryResultCount: number = data.length) {
   // Inline pick
   const keys = [
     'trace_id',
@@ -29,7 +29,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
   });
 
   // Map spans
-  const mapped = data.map((span) => {
+  const mapped = data.map((span, index) => {
     span[idx.trace_id] ||= generateId();
     span[idx.latency_breakdown] ||= generateId();
     const isLog = span[idx.kind] === 'log';
@@ -44,6 +44,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
         parent: isLog ? span[idx.latency_breakdown] : span[idx.parent_span_id],
         data: span,
         type: isLog ? 'log' : 'span',
+        isQueryResult: index < queryResultCount,
       },
       timestamp: new Date(span[idx.timestamp]),
       startTime: span[idx.start_time_ns],
@@ -72,11 +73,37 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
         { minStart: Infinity, duration: 0, trace_start_time: null }
       );
 
-      // Build tree
+      // Build tree - separate true roots, query results, and orphaned children
       const roots: APTEvent[] = [];
+      const orphansByParent = new Map<string, APTEvent[]>();
       spanMap.forEach((span) => {
-        const parent = span.parent && spanMap.get(span.parent);
-        (parent ? parent.children : roots).push(span);
+        if (!span.parent) {
+          roots.push(span);
+        } else {
+          const parent = spanMap.get(span.parent);
+          if (parent) {
+            parent.children.push(span);
+          } else if (span.isQueryResult) {
+            roots.push(span);
+          } else {
+            orphansByParent.set(span.parent, [...(orphansByParent.get(span.parent) ?? []), span]);
+          }
+        }
+      });
+      // Create virtual parent nodes for orphan groups
+      orphansByParent.forEach((orphans, parentId) => {
+        const earliest = orphans.reduce((a, b) => ((a.startNs || 0) < (b.startNs || 0) ? a : b));
+        roots.push({
+          id: `virtual-${parentId}`,
+          startNs: Math.min(...orphans.map((o) => o.startNs ?? Infinity), 0),
+          hasErrors: orphans.some((o) => o.hasErrors),
+          duration: Math.max(...orphans.map((o) => o.duration || 0)),
+          children: orphans,
+          parent: null,
+          data: earliest.data, // Use earliest child's data for timestamp/service columns
+          type: 'virtual-parent',
+          missingParentId: parentId,
+        });
       });
 
       // Sort all children by startNs (execution order) instead of timestamp

@@ -86,8 +86,10 @@ export interface APTEvent {
   children: APTEvent[];
   parent: string | null;
   data: any[];
-  type: 'span' | 'log';
+  type: 'span' | 'log' | 'virtual-parent';
   timestamp?: string;
+  missingParentId?: string;
+  isQueryResult?: boolean;
 }
 
 export type TraceData = Omit<Trace, 'spans'> & { spans: Map<string, APTEvent>; minStart: number; trace_start_time: Date | null };
