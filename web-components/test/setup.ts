@@ -1,6 +1,10 @@
 // This file will be executed before running tests
 import { beforeAll, vi } from 'vitest';
 
+// Mock document.queryCommandSupported and execCommand for Monaco Editor clipboard support
+document.queryCommandSupported = vi.fn(() => false);
+document.execCommand = vi.fn(() => false);
+
 // Mock CSS.escape for Monaco Editor's CSS class name generation
 (globalThis as any).CSS = {
   escape: (str: string) => str.replace(/[!"#$%&'()*+,.\/:;<=>?@[\\\]^`{|}~]/g, '\\$&')
@@ -33,13 +37,14 @@ Object.defineProperty(window, 'matchMedia', {
 
 // Mock Worker for Monaco Editor since we don't need actual workers in tests
 globalThis.Worker = class Worker {
-  constructor(url: string | URL) {
-    // Mock worker implementation
-  }
+  constructor(url: string | URL) {}
   postMessage() {}
   terminate() {}
+  addEventListener() {}
+  removeEventListener() {}
   onmessage = null;
   onerror = null;
+  onmessageerror = null;
 } as any;
 
 // Setup Monaco environment for tests
