@@ -1524,19 +1524,24 @@ export class LogList extends LitElement {
         }
         return rowData._latencyCache.content;
       case 'summary':
-        // Cache rendered summary directly on the row data
-        if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
+        const isVirtualParent = type === 'virtual-parent';
+        if (!isVirtualParent && (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines)) {
           const summaryArray = this.parseSummaryData(dataArr);
-          rowData._summaryCache = {
-            content: this.renderSummaryElements(summaryArray, this.wrapLines),
-            wrapLines: this.wrapLines,
-          };
+          rowData._summaryCache = { content: this.renderSummaryElements(summaryArray, this.wrapLines), wrapLines: this.wrapLines };
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
           ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
+          : isVirtualParent
+          ? 'border border-dashed border-strokeWeak bg-fillWeaker text-textWeak fill-textWeak'
           : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
+        const summaryContent = isVirtualParent
+          ? html`<span class="text-textWeak text-xs italic flex items-center gap-1">
+              ${faSprite('clock', 'regular', 'w-3 h-3')} Parent span pending
+              <span class="font-mono text-[10px]">(${rowData.missingParentId?.slice(0, 12)}...)</span>
+            </span>`
+          : rowData._summaryCache.content;
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1575,9 +1580,7 @@ export class LogList extends LitElement {
                 </div>
               `
             : nothing}
-          <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>
-            ${rowData._summaryCache.content}
-          </div>
+          <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>${summaryContent}</div>
         </div>`;
       case 'service':
         let serviceData = lookupVecValue<string>(dataArr, this.colIdxMap, key);

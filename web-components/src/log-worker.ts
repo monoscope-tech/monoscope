@@ -20,20 +20,20 @@ self.onmessage = async (e: MessageEvent) => {
       return;
     }
 
-    const { logsData, serviceColors, nextUrl, recentUrl, cols, count } = data;
+    const { logsData, serviceColors, nextUrl, recentUrl, cols, count, queryResultCount } = data;
 
     if (!Array.isArray(logsData) || logsData.length === 0) {
       self.postMessage({
         type: 'success',
         tree: [],
-        meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, hasMore: logsData.length !== 0 },
+        meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, queryResultCount, hasMore: logsData.length !== 0 },
         id,
       });
       return;
     }
 
     // Use the colIdxMap from the server response, not the one from the message
-    const tree = groupSpans(logsData, data.colIdxMap, expandedTraces, flipDirection);
+    const tree = groupSpans(logsData, data.colIdxMap, expandedTraces, flipDirection, queryResultCount);
 
     if (tree.length === 0) {
       console.error('[Worker] Tree is empty after processing', logsData.length, 'items');
@@ -42,7 +42,7 @@ self.onmessage = async (e: MessageEvent) => {
     self.postMessage({
       type: 'success',
       tree,
-      meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, hasMore: true },
+      meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, queryResultCount, hasMore: true },
       id,
     });
   } catch (error) {
