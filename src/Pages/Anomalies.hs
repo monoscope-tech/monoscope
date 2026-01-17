@@ -98,6 +98,62 @@ data IssueEndpointInfo = IssueEndpointInfo
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] IssueEndpointInfo
 
 
+-- | Card style variants for anomaly metric cards
+data CardStyle = CardNeutral | CardHighlight | CardWarning | CardError | CardInfo
+  deriving (Eq)
+
+
+-- | Metric card data for anomaly displays
+data MetricCard = MetricCard
+  { label :: Text
+  , icon :: Text
+  , value :: Html ()
+  , style :: CardStyle
+  , arrowIcon :: Maybe Text
+  }
+
+
+-- | Get CSS classes for a card style
+cardStyleClasses :: CardStyle -> (Text, Text, Text)
+cardStyleClasses = \case
+  CardNeutral -> ("border-strokeWeak", "", "text-textWeak")
+  CardHighlight -> ("border-strokeInformation-weak", "bg-fillInformation-weak", "text-fillInformation-strong")
+  CardWarning -> ("border-strokeWarning-weak", "bg-fillWarning-weak", "text-fillWarning-strong")
+  CardError -> ("border-strokeError-weak", "bg-fillError-weak", "text-fillError-strong")
+  CardInfo -> ("border-strokeInformation-weak", "bg-fillInformation-weak", "text-fillInformation-strong")
+
+
+-- | Render a single metric card
+renderMetricCard :: MetricCard -> Html ()
+renderMetricCard card = do
+  let (borderClass, bgClass, iconColorClass) = cardStyleClasses card.style
+      valueColorClass = case card.style of
+        CardNeutral -> "text-textStrong"
+        _ -> iconColorClass
+  div_ [class_ $ "rounded-lg border p-4 " <> borderClass <> " " <> bgClass] do
+    div_ [class_ "flex items-center justify-between mb-2"] do
+      span_ [class_ "text-xs text-textWeak uppercase tracking-wide"] $ toHtml card.label
+      faSprite_ card.icon "regular" $ "w-4 h-4 " <> iconColorClass
+    div_ [class_ $ "flex items-center gap-1 " <> valueColorClass] do
+      span_ [class_ "text-xl font-bold"] card.value
+      whenJust card.arrowIcon $ \arrow ->
+        faSprite_ arrow "regular" "w-4 h-4"
+
+
+-- | Render the full anomaly metrics section with cards and alert box
+anomalyMetricsSection :: [MetricCard] -> CardStyle -> Text -> Text -> Html ()
+anomalyMetricsSection cards alertStyle alertTitle alertMessage = do
+  let (_, alertBgClass, alertIconClass) = cardStyleClasses alertStyle
+  div_ [class_ "mb-4"] do
+    div_ [class_ "grid grid-cols-4 gap-3"] do
+      forM_ cards renderMetricCard
+    div_ [class_ $ "mt-3 p-4 rounded-lg flex items-start gap-3 " <> alertBgClass] do
+      faSprite_ "circle-exclamation" "regular" $ "w-5 h-5 flex-shrink-0 mt-0.5 " <> alertIconClass
+      div_ [] do
+        div_ [class_ "font-semibold text-textStrong text-sm"] $ toHtml alertTitle
+        div_ [class_ "text-sm text-textWeak mt-1"] $ toHtml alertMessage
+
+
 acknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
 acknowledgeAnomalyGetH pid aid hostM = do
   (sess, project) <- Sessions.sessionAndProject pid
@@ -1343,31 +1399,43 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       _ -> pass
     Issues.EndpointLatencyDegradation -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.EndpointLatencyDegradationData) ->
-        div_ [class_ "mb-4 p-3 bg-fillWarning-weak border border-strokeWarning-weak rounded-lg"] do
-          div_ [class_ "flex items-center gap-2 text-sm"] do
-            span_ [class_ "font-medium text-fillWarning-strong"] $ toHtml d.endpointMethod
-            span_ [class_ "text-fillWarning-strong"] $ toHtml d.endpointPath
-          div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml (d.percentile <> ": " <> toText (getDurationNSMS (round d.baselineLatencyMs)) <> " → " <> toText (getDurationNSMS (round d.currentLatencyMs)))
+        let cards =
+              [ MetricCard "Percentile" "chart-line" (toHtml d.percentile) CardNeutral Nothing
+              , MetricCard "Baseline" "clock" (toHtml $ getDurationNSMS (round d.baselineLatencyMs)) CardNeutral Nothing
+              , MetricCard "Current" "chart-line" (toHtml $ getDurationNSMS (round d.currentLatencyMs)) CardHighlight Nothing
+              , MetricCard "Change" "circle-exclamation" (toHtml $ "+" <> show (round d.degradationPercent :: Int) <> "%") CardWarning (Just "arrow-up")
+              ]
+         in anomalyMetricsSection cards CardWarning "Performance Degradation Detected" issue.recommendedAction
       _ -> pass
     Issues.EndpointErrorRateSpike -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.EndpointErrorRateSpikeData) ->
-        div_ [class_ "mb-4 p-3 bg-fillError-weak border border-strokeError-weak rounded-lg"] do
-          div_ [class_ "flex items-center gap-2 text-sm"] do
-            span_ [class_ "font-medium text-fillError-strong"] $ toHtml d.endpointMethod
-            span_ [class_ "text-fillError-strong"] $ toHtml d.endpointPath
-          div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml $ show (round (d.currentErrorRate * 100) :: Int) <> "% error rate (" <> show d.errorCount <> " errors)"
+        let cards =
+              [ MetricCard "Error Rate" "percent" (toHtml $ show (round (d.currentErrorRate * 100) :: Int) <> "%") CardNeutral Nothing
+              , MetricCard "Baseline" "clock" (toHtml $ show (round (d.baselineErrorRate * 100) :: Int) <> "%") CardNeutral Nothing
+              , MetricCard "Errors" "hashtag" (toHtml $ show d.errorCount <> "/" <> show d.totalRequests) CardNeutral Nothing
+              , MetricCard "Spike" "circle-exclamation" (toHtml $ "+" <> show (round d.spikePercent :: Int) <> "%") CardError (Just "arrow-up")
+              ]
+         in anomalyMetricsSection cards CardError "Error Rate Spike Detected" issue.recommendedAction
       _ -> pass
     Issues.EndpointVolumeRateChange -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.EndpointVolumeRateChangeData) ->
-        div_ [class_ $ "mb-4 p-3 rounded-lg border " <> if d.changeDirection == "drop" then "bg-fillWarning-weak border-strokeWarning-weak" else "bg-fillInformation-weak border-strokeInformation-weak"] do
-          div_ [class_ "flex items-center gap-2 text-sm"] do
-            span_ [class_ "font-medium text-textStrong"] $ toHtml d.endpointMethod
-            span_ [class_ "text-textStrong"] $ toHtml d.endpointPath
-          div_ [class_ "text-xs text-textWeak mt-1"] $ toHtml $ "Traffic " <> d.changeDirection <> ": " <> show (round d.changePercent :: Int) <> "%"
+        let isDrop = d.changeDirection == "drop"
+            cardStyle = if isDrop then CardWarning else CardInfo
+            arrowIcon = if isDrop then "arrow-down" else "arrow-up"
+            changeSign = if isDrop then "" else "+"
+            alertTitle = if isDrop then "Traffic Drop Detected" else "Traffic Surge Detected"
+            cards =
+              [ MetricCard "Direction" arrowIcon (span_ [class_ "capitalize"] $ toHtml d.changeDirection) cardStyle Nothing
+              , MetricCard "Current" "gauge-high" (toHtml $ show (round d.currentRatePerHour :: Int) <> "/hr") CardNeutral Nothing
+              , MetricCard "Baseline" "clock" (toHtml $ show (round d.baselineRatePerHour :: Int) <> "/hr") CardNeutral Nothing
+              , MetricCard "Change" "circle-exclamation" (toHtml $ changeSign <> show (round (abs d.changePercent) :: Int) <> "%") cardStyle (Just arrowIcon)
+              ]
+         in anomalyMetricsSection cards cardStyle alertTitle issue.recommendedAction
       _ -> pass
 
-  -- Recommended action
-  div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
+  -- Recommended action (only show for issue types that don't have built-in alert boxes)
+  unless (issue.issueType `elem` [Issues.EndpointLatencyDegradation, Issues.EndpointErrorRateSpike, Issues.EndpointVolumeRateChange]) do
+    div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
 
   -- Action buttons
   let logsQuery = case issue.issueType of
@@ -1391,9 +1459,11 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       a_ [href_ url, class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
         faSprite_ "eye" "regular" "w-4 h-4"
         span_ [class_ "leading-none"] "View related logs"
-    button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
-      faSprite_ "code" "regular" "w-4 h-4"
-      span_ [class_ "leading-none"] "View Full Schema"
+    -- View Full Schema button (only for schema-related issue types)
+    when (issue.issueType `elem` [Issues.NewEndpoint, Issues.NewShape, Issues.FieldChange]) do
+      button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
+        faSprite_ "code" "regular" "w-4 h-4"
+        span_ [class_ "leading-none"] "View Full Schema"
     -- Acknowledge button
     let isAcknowledged = isJust issue.acknowledgedAt
     let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowledge" else "/acknowledge"
