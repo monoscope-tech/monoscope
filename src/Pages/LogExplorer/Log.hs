@@ -426,7 +426,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       -- Also preload the chart data request
       chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
       headContent = Just $ do
-        link_ [rel_ "preload", href_ preloadUrl, term "as" "fetch"]
+        script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
         link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
 
   let bwconf =

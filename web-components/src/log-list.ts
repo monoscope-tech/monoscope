@@ -141,27 +141,25 @@ export class LogList extends LitElement {
     type === 'success' ? cb.resolve({ tree, meta }) : cb.reject(new Error(error));
   }
 
-  private workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
+  private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
+    // Use early fetch promise if available (set by server-rendered script in head)
+    const earlyPromise = (window as any).logDataPromise;
+    if (earlyPromise) {
+      (window as any).logDataPromise = null;
+      const data = await earlyPromise;
+      if (!data.error) {
+        const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount } = data;
+        const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, queryResultCount) : [];
+        return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount, hasMore: logsData?.length > 0 } };
+      }
+    }
+    // Fallback to worker
     if (!this.worker) throw new Error('Worker not initialized');
-
     const id = ++this.workerReqId;
     return new Promise((resolve, reject) => {
       this.workerCallbacks.set(id, { resolve, reject });
-      this.worker!.postMessage({
-        type: 'fetch',
-        url,
-        colIdxMap: this.colIdxMap,
-        expandedTraces: this.expandedTraces,
-        flipDirection: this.flipDirection,
-        id,
-      });
-      setTimeout(() => {
-        if (this.workerCallbacks.has(id)) {
-          console.warn('[Worker] Request timeout:', id);
-          this.workerCallbacks.delete(id);
-          reject(new Error('Worker request timeout'));
-        }
-      }, 120000);
+      this.worker!.postMessage({ type: 'fetch', url, colIdxMap: this.colIdxMap, expandedTraces: this.expandedTraces, flipDirection: this.flipDirection, id });
+      setTimeout(() => { if (this.workerCallbacks.has(id)) { this.workerCallbacks.delete(id); reject(new Error('Worker timeout')); } }, 120000);
     });
   }
 
