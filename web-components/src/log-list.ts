@@ -1535,7 +1535,7 @@ export class LogList extends LitElement {
           ? 'border border-dashed border-strokeWeak bg-fillWeaker text-textWeak fill-textWeak'
           : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         const summaryContent = isVirtualParent
-          ? html`<span class="text-textWeak text-xs italic flex items-center gap-1">
+          ? html`<span class="text-textWeak text-xs italic flex items-center gap-1" title="Parent ID: ${rowData.missingParentId}">
               ${faSprite('clock', 'regular', 'w-3 h-3')} Parent span pending
               <span class="font-mono text-[10px]">(${rowData.missingParentId?.slice(0, 12)}...)</span>
             </span>`

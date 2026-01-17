@@ -86,9 +86,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
           } else if (span.isQueryResult) {
             roots.push(span);
           } else {
-            const existing = orphansByParent.get(span.parent);
-            if (existing) existing.push(span);
-            else orphansByParent.set(span.parent, [span]);
+            orphansByParent.set(span.parent, [...(orphansByParent.get(span.parent) ?? []), span]);
           }
         }
       });
@@ -97,7 +95,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
         const earliest = orphans.reduce((a, b) => ((a.startNs || 0) < (b.startNs || 0) ? a : b));
         roots.push({
           id: `virtual-${parentId}`,
-          startNs: Math.min(...orphans.map((o) => o.startNs || Infinity)) || 0,
+          startNs: Math.min(...orphans.map((o) => o.startNs ?? Infinity), 0),
           hasErrors: orphans.some((o) => o.hasErrors),
           duration: Math.max(...orphans.map((o) => o.duration || 0)),
           children: orphans,

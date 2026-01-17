@@ -560,8 +560,7 @@ instance ToHtml LogsGet where
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
   toHtml (LogsPatternList pid patterns skip tg) = toHtml $ patternList patterns pid skip (skip > 0) tg
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
-  toHtml (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count queryResultCount) =
-    span_ [] $ toHtml (decodeUtf8 $ AE.encode $ AE.toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count queryResultCount) :: Text)
+  toHtml x@LogsGetJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
   toHtmlRaw = toHtml
 
 
