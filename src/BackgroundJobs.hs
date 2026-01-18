@@ -18,7 +18,7 @@ import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
+import Data.Time.LocalTime (LocalTime (localDay), zonedTimeToUTC, ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -1638,7 +1638,7 @@ processNewError pid errorHash authCtx = do
 calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
-  now <- liftIO getCurrentTime
+  now <- Time.currentTime
   -- Get all non-ignored patterns
   patterns <- LogPatterns.getLogPatterns pid Nothing 1000 0
   forM_ patterns \lp -> do
@@ -1718,7 +1718,7 @@ calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateEndpointBaselines pid = do
   Log.logInfo "Calculating endpoint baselines" pid
   endpoints <- Endpoints.getActiveEndpoints pid
-  now <- liftIO getCurrentTime
+  now <- Time.currentTime
 
   forM_ endpoints \ep -> do
     -- Get hourly stats over last 7 days (168 hours)
