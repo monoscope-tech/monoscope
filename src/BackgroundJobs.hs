@@ -1638,22 +1638,20 @@ processNewError pid errorHash authCtx = do
 calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
-
+  now <- liftIO getCurrentTime
   -- Get all non-ignored patterns
   patterns <- LogPatterns.getLogPatterns pid Nothing 1000 0
-
   forM_ patterns \lp -> do
     -- Get hourly stats from otel_logs_and_spans over last 7 days (168 hours)
     statsM <- LogPatterns.getPatternStats pid lp.logPattern 168
-
     case statsM of
       Nothing -> pass
       Just stats -> do
         let newSamples = stats.totalHours
             newMean = stats.hourlyMean
             newStddev = stats.hourlyStddev
-            -- Establish baseline after 24 hours of data
-            newState = if newSamples >= 24 then BSEstablished else BSLearning
+            patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / (24 * 60 * 60)
+            newState = if newMean > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning
         _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
         pass
 
@@ -1720,6 +1718,7 @@ calculateEndpointBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateEndpointBaselines pid = do
   Log.logInfo "Calculating endpoint baselines" pid
   endpoints <- Endpoints.getActiveEndpoints pid
+  now <- liftIO getCurrentTime
 
   forM_ endpoints \ep -> do
     -- Get hourly stats over last 7 days (168 hours)
@@ -1728,8 +1727,8 @@ calculateEndpointBaselines pid = do
       Nothing -> pass
       Just stats -> do
         let newSamples = stats.totalHours
-            -- Establish baseline after 24 hours of data
-            newState = if newSamples >= 24 then BSEstablished else BSLearning
+            endpointAgeDays = diffUTCTime now ep.createdAt / (24 * 60 * 60)
+            newState = if stats.hourlyMeanRequests > 100 || (endpointAgeDays >= 14 && stats.hourlyMeanRequests > 0) then BSEstablished else BSLearning
         Endpoints.updateEndpointBaseline
           ep.id
           newState
