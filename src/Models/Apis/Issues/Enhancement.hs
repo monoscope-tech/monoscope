@@ -133,6 +133,8 @@ buildTitlePrompt issue =
                     <> "Actual value: "
                     <> toText (show alertData.actualValue)
                 _ -> "Generate a concise title for this query alert."
+        -- Other issue types should use simpleTitle, but provide fallback for exhaustiveness
+        _ -> "Generate a concise title for this issue: " <> issue.title
 
       systemPrompt =
         unlines
@@ -196,6 +198,8 @@ buildDescriptionPrompt issue =
                 <> "Triggered at: "
                 <> toText (show alertData.triggeredAt)
             _ -> "Describe this query alert."
+        -- Other issue types should use simpleDescription, but provide fallback for exhaustiveness
+        _ -> "Describe this issue and provide recommended actions: " <> issue.title
 
       systemPrompt =
         unlines
@@ -254,6 +258,8 @@ buildCriticalityPrompt issue =
           "Runtime exception: " <> issue.title
         Issues.QueryAlert ->
           "Query alert: " <> issue.title
+        -- Other issue types should use simpleCriticality, but provide fallback for exhaustiveness
+        _ -> "Issue: " <> issue.title
 
       systemPrompt =
         unlines

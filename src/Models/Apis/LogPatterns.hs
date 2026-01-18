@@ -174,8 +174,8 @@ acknowledgeLogPatterns uid patternHashes
 
 
 upsertLogPattern :: DB es => Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Int64
-upsertLogPattern pid pat patHash serviceName logLevel traceId sampleMsg =
-  PG.execute q (pid, pat, patHash, serviceName, logLevel, traceId, sampleMsg)
+upsertLogPattern pid pat patHash serviceName logLevel trId sampleMsg =
+  PG.execute q (pid, pat, patHash, serviceName, logLevel, trId, sampleMsg)
   where
     q =
       [sql|

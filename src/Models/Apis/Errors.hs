@@ -690,6 +690,20 @@ data StackFrame = StackFrame
   deriving anyclass (NFData)
 
 
+-- | Parse a stack trace into a list of stack frames based on runtime
+--
+-- >>> length $ parseStackTrace "nodejs" "at processTicksAndRejections (node:internal/process/task_queues:95:5)\nat handleRequest (/app/src/server.js:42:15)"
+-- 2
+--
+-- >>> map sfFunction $ parseStackTrace "python" "File \"/app/main.py\", line 10, in main\nFile \"/app/utils.py\", line 5, in helper"
+-- ["main","helper"]
+--
+-- >>> map sfIsInApp $ parseStackTrace "nodejs" "at handleRequest (/app/src/server.js:42:15)\nat processTicksAndRejections (node:internal/process/task_queues:95:5)"
+-- [True,False]
+--
+-- >>> map sfFunction $ parseStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
+-- ["doWork","doDispatch"]
+--
 parseStackTrace :: Text -> Text -> [StackFrame]
 parseStackTrace mSdk stackText =
   let lns = filter (not . T.null . T.strip) $ T.lines stackText
@@ -1080,6 +1094,19 @@ parseGenericFrame line =
 
 -- | Normalize a stack trace for fingerprinting
 -- Returns a list of normalized frame strings suitable for hashing
+--
+-- >>> normalizeStackTrace "nodejs" "at handleRequest (/app/src/server.js:42:15)\nat processTicksAndRejections (node:internal/process/task_queues:95:5)"
+-- "server|handleRequest"
+--
+-- >>> normalizeStackTrace "python" "File \"/app/main.py\", line 10, in main\nFile \"/app/utils.py\", line 5, in helper"
+-- "main|main\nutils|helper"
+--
+-- >>> normalizeStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat com.example.Service.process(Service.java:50)"
+-- "com.example.MyClass|doWork\ncom.example.Service|process"
+--
+-- >>> normalizeStackTrace "unknown" "some random frame info"
+-- "some random frame info|some"
+--
 normalizeStackTrace :: Text -> Text -> Text
 normalizeStackTrace runtime stackText =
   let frames = parseStackTrace runtime stackText
@@ -1118,6 +1145,19 @@ normalizeStackTrace runtime stackText =
 
 -- | Normalize an error message for fingerprinting
 -- Limits to first 2 non-empty lines and replaces variable content
+--
+-- >>> normalizeMessage "Connection refused to 192.168.1.100:5432"
+-- "Connection refused to {ipv4}{port}"
+--
+-- >>> normalizeMessage "User c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd not found"
+-- "User {uuid} not found"
+--
+-- >>> normalizeMessage "Error 404: Resource 12345 not available\n\nDetails here\nMore info"
+-- "Error {integer}: Resource {integer} not available Details here"
+--
+-- >>> normalizeMessage "   Trimmed message   "
+-- "Trimmed message"
+--
 normalizeMessage :: Text -> Text
 normalizeMessage msg =
   let lns = take 2 $ filter (not . T.null . T.strip) $ T.lines msg
@@ -1132,6 +1172,27 @@ normalizeMessage msg =
 -- 1. Stack trace (if has meaningful in-app frames)
 -- 2. Exception type + message
 -- 3. Message only
+--
+-- With stack trace - uses projectId, exceptionType, and normalized stack:
+-- >>> computeErrorFingerprint "proj1" (Just "svc") (Just "span") "nodejs" "TypeError" "msg" "at handler (/app/index.js:10:5)"
+-- "7090116541995986264"
+--
+-- Without stack trace but with exception type - uses projectId, service, span, type, and message:
+-- >>> computeErrorFingerprint "proj1" (Just "user-service") (Just "/api/users") "nodejs" "ValidationError" "Invalid email format" ""
+-- "1283749781654932840"
+--
+-- Without stack trace or exception type - uses projectId, service, span, and message only:
+-- >>> computeErrorFingerprint "proj1" (Just "api") (Just "/health") "nodejs" "" "Connection refused to 192.168.1.1:5432" ""
+-- "14595802078498498993"
+--
+-- Same error from different IPs produces same fingerprint (IP normalized):
+-- >>> computeErrorFingerprint "proj1" (Just "db") Nothing "python" "" "Connection refused to 10.0.0.1:5432" "" == computeErrorFingerprint "proj1" (Just "db") Nothing "python" "" "Connection refused to 172.16.0.50:5432" ""
+-- True
+--
+-- Same stack trace produces same fingerprint regardless of message:
+-- >>> computeErrorFingerprint "proj1" Nothing Nothing "nodejs" "Error" "message 1" "at handler (/app/index.js:10:5)" == computeErrorFingerprint "proj1" Nothing Nothing "nodejs" "Error" "different message" "at handler (/app/index.js:10:5)"
+-- True
+--
 computeErrorFingerprint :: Text -> Maybe Text -> Maybe Text -> Text -> Text -> Text -> Text -> Text
 computeErrorFingerprint projectIdText mService spanName runtime exceptionType message stackTrace =
   let

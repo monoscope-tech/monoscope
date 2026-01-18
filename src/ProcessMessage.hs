@@ -292,7 +292,7 @@ processSpanToEntities pjc otelSpan dumpId =
       !outgoing = otelSpan.kind == Just "client"
 
       -- Extract trace ID from context for linking
-      !traceId = otelSpan.context >>= Telemetry.trace_id
+      !trId = otelSpan.context >>= Telemetry.trace_id
 
       -- Extract service name from resource
       !serviceName = Telemetry.atMapText "service.name" (unAesonTextMaybe otelSpan.resource)
@@ -319,8 +319,8 @@ processSpanToEntities pjc otelSpan dumpId =
                 , hash = endpointHash
                 , outgoing = outgoing
                 , description = ""
-                , firstTraceId = traceId
-                , recentTraceId = traceId
+                , firstTraceId = trId
+                , recentTraceId = trId
                 , service = serviceName
                 , baselineState = def
                 , baselineSamples = 0
@@ -363,8 +363,8 @@ processSpanToEntities pjc otelSpan dumpId =
                 , requestDescription = ""
                 , exampleRequestPayload = requestBody
                 , exampleResponsePayload = responseBody
-                , firstTraceId = traceId
-                , recentTraceId = traceId
+                , firstTraceId = trId
+                , recentTraceId = trId
                 , service = serviceName
                 }
 
