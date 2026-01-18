@@ -414,15 +414,15 @@ runHourlyJob scheduledTime hour = do
   liftIO $ withResource ctx.jobsPool \conn ->
     forM_ activeProjects \pid -> do
       -- Error baseline and spike detection
-      createJob conn "background_jobs" $ ErrorBaselineCalculation pid
-      createJob conn "background_jobs" $ ErrorSpikeDetection pid
+      _ <- createJob conn "background_jobs" $ ErrorBaselineCalculation pid
+      _ <- createJob conn "background_jobs" $ ErrorSpikeDetection pid
       -- Log pattern baseline and spike detection
-      createJob conn "background_jobs" $ LogPatternBaselineCalculation pid
-      createJob conn "background_jobs" $ LogPatternSpikeDetection pid
+      _ <- createJob conn "background_jobs" $ LogPatternBaselineCalculation pid
+      _ <- createJob conn "background_jobs" $ LogPatternSpikeDetection pid
       -- Endpoint baseline and anomaly detection
-      createJob conn "background_jobs" $ EndpointBaselineCalculation pid
-      createJob conn "background_jobs" $ EndpointLatencyDegradationDetection pid
-      createJob conn "background_jobs" $ EndpointErrorRateSpikeDetection pid
+      _ <- createJob conn "background_jobs" $ EndpointBaselineCalculation pid
+      _ <- createJob conn "background_jobs" $ EndpointLatencyDegradationDetection pid
+      _ <- createJob conn "background_jobs" $ EndpointErrorRateSpikeDetection pid
       createJob conn "background_jobs" $ EndpointVolumeRateChangeDetection pid
 
   -- Cleanup expired query cache entries
@@ -555,14 +555,13 @@ processPatterns kind fieldName events pid scheduledTime since = do
         -- Update otel_logs_and_spans with pattern
         void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
         Relude.when (kind == "log" && not (T.null patternTxt)) $ do
-          let (serviceName, logLevel, traceId) = case V.head ids of
+          let (serviceName, logLevel, logTraceId) = case V.head ids of
                 logId | logId /= "" -> case V.find (\(i, _, _, sName, lvl) -> i == logId) events of
                   Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
                   Nothing -> (Nothing, Nothing, Nothing)
                 _ -> (Nothing, Nothing, Nothing)
           let patternHash = toXXHash patternTxt
-          traceShowM ("Upserting log pattern", pid, patternTxt, patternHash, sampleMsg)
-          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel traceId (Just sampleMsg)
+          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg)
 
 
 -- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain

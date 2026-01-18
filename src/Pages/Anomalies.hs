@@ -277,8 +277,8 @@ anomalyDetailCore pid firstM fetchIssue = do
               }
       -- Helper to fetch trace and spans given a trace ID
       let fetchTraceData traceIdM timeHint = case traceIdM of
-            Just traceId -> do
-              trM <- Telemetry.getTraceDetails pid traceId timeHint now
+            Just trId -> do
+              trM <- Telemetry.getTraceDetails pid trId timeHint now
               case trM of
                 Just traceItem -> do
                   spanRecords' <- Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
