@@ -703,7 +703,6 @@ data StackFrame = StackFrame
 --
 -- >>> map sfFunction $ parseStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
 -- ["doWork","doDispatch"]
---
 parseStackTrace :: Text -> Text -> [StackFrame]
 parseStackTrace mSdk stackText =
   let lns = filter (not . T.null . T.strip) $ T.lines stackText
@@ -1106,7 +1105,6 @@ parseGenericFrame line =
 --
 -- >>> normalizeStackTrace "unknown" "some random frame info"
 -- "some random frame info|some"
---
 normalizeStackTrace :: Text -> Text -> Text
 normalizeStackTrace runtime stackText =
   let frames = parseStackTrace runtime stackText
@@ -1157,7 +1155,6 @@ normalizeStackTrace runtime stackText =
 --
 -- >>> normalizeMessage "   Trimmed message   "
 -- "Trimmed message"
---
 normalizeMessage :: Text -> Text
 normalizeMessage msg =
   let lns = take 2 $ filter (not . T.null . T.strip) $ T.lines msg
@@ -1192,7 +1189,6 @@ normalizeMessage msg =
 -- Same stack trace produces same fingerprint regardless of message:
 -- >>> computeErrorFingerprint "proj1" Nothing Nothing "nodejs" "Error" "message 1" "at handler (/app/index.js:10:5)" == computeErrorFingerprint "proj1" Nothing Nothing "nodejs" "Error" "different message" "at handler (/app/index.js:10:5)"
 -- True
---
 computeErrorFingerprint :: Text -> Maybe Text -> Maybe Text -> Text -> Text -> Text -> Text -> Text
 computeErrorFingerprint projectIdText mService spanName runtime exceptionType message stackTrace =
   let
