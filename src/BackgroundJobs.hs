@@ -18,7 +18,7 @@ import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (LocalTime (localDay), zonedTimeToUTC, ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime)
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
