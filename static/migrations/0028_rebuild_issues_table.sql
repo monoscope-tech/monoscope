@@ -36,6 +36,7 @@ CREATE TABLE apis.issues (
     request_payloads    JSONB NOT NULL DEFAULT '[]'::jsonb,
     response_payloads   JSONB NOT NULL DEFAULT '[]'::jsonb,
     archived_at         TIMESTAMPTZ,
+    resolved_at         TIMESTAMPTZ,
     llm_enhanced_at     TIMESTAMPTZ,
     llm_enhancement_version INT,
     -- Flexible category-specific data

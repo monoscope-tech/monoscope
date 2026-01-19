@@ -1104,7 +1104,7 @@ parseGenericFrame line =
 -- "com.example.MyClass|doWork\ncom.example.Service|process"
 --
 -- >>> normalizeStackTrace "unknown" "some random frame info"
--- "some random frame info|some"
+-- "some"
 normalizeStackTrace :: Text -> Text -> Text
 normalizeStackTrace runtime stackText =
   let frames = parseStackTrace runtime stackText
@@ -1172,15 +1172,15 @@ normalizeMessage msg =
 --
 -- With stack trace - uses projectId, exceptionType, and normalized stack:
 -- >>> computeErrorFingerprint "proj1" (Just "svc") (Just "span") "nodejs" "TypeError" "msg" "at handler (/app/index.js:10:5)"
--- "7090116541995986264"
+-- "269748a1"
 --
 -- Without stack trace but with exception type - uses projectId, service, span, type, and message:
 -- >>> computeErrorFingerprint "proj1" (Just "user-service") (Just "/api/users") "nodejs" "ValidationError" "Invalid email format" ""
--- "1283749781654932840"
+-- "af0aa163"
 --
 -- Without stack trace or exception type - uses projectId, service, span, and message only:
 -- >>> computeErrorFingerprint "proj1" (Just "api") (Just "/health") "nodejs" "" "Connection refused to 192.168.1.1:5432" ""
--- "14595802078498498993"
+-- "44e50418"
 --
 -- Same error from different IPs produces same fingerprint (IP normalized):
 -- >>> computeErrorFingerprint "proj1" (Just "db") Nothing "python" "" "Connection refused to 10.0.0.1:5432" "" == computeErrorFingerprint "proj1" (Just "db") Nothing "python" "" "Connection refused to 172.16.0.50:5432" ""

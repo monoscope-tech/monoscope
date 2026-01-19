@@ -10,7 +10,7 @@ BEGIN
   END IF;
   job_tag := TG_ARGV[0];
   INSERT INTO background_jobs (run_at, status, payload)
-  VALUES (now(),'queued',jsonb_build_object('tag', job_tag,'projectId', NEW.project_id,'hash', NEW.hash));
+  VALUES (now(),'queued',jsonb_build_object('tag', job_tag,'contents', jsonb_build_array(NEW.project_id, NEW.hash)));
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
@@ -18,6 +18,7 @@ $$ LANGUAGE plpgsql;
 DROP TRIGGER IF EXISTS fields_created_anomaly ON apis.fields;
 DROP TRIGGER IF EXISTS endpoint_created_anomaly ON apis.endpoints;
 DROP TRIGGER IF EXISTS shapes_created_anomaly ON apis.shapes;
+DROP TRIGGER IF EXISTS format_created_anomaly ON apis.formats;
 
 CREATE TRIGGER endpoint_created_new AFTER INSERT ON apis.endpoints FOR EACH ROW EXECUTE FUNCTION apis.api_change_detected_proc('NewEndpoint');
 CREATE TRIGGER shape_created_new AFTER INSERT ON apis.shapes FOR EACH ROW EXECUTE FUNCTION apis.api_change_detected_proc('NewShape');

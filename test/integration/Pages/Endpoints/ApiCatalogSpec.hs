@@ -175,7 +175,7 @@ spec = aroundAll withTestResources do
       issuesCount <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM apis.issues
-        WHERE project_id = ? AND issue_type = 'api_change'
+        WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO (V.Vector (Only Int))
 
       case issuesCount of
@@ -209,7 +209,7 @@ spec = aroundAll withTestResources do
       _ <- withPool tr.trPool $ DBT.execute [sql|
         UPDATE apis.issues 
         SET acknowledged_at = NOW(), acknowledged_by = ?
-        WHERE project_id = ? AND issue_type = 'api_change'
+        WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Users.UserId UUID.nil, testPid)
       
       -- Test active filter

@@ -104,7 +104,7 @@ spec = aroundAll withTestResources do
 
       -- Check that API change issue was created for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [Only Issues.IssueId]
       length apiChangeIssues `shouldBe` 1
       
@@ -116,7 +116,7 @@ spec = aroundAll withTestResources do
     it "should acknowledge endpoint anomaly" \tr -> do
       -- Find the API change issue for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [Only Issues.IssueId]
       length apiChangeIssues `shouldBe` 1
       issueId <- case apiChangeIssues of
@@ -178,7 +178,7 @@ spec = aroundAll withTestResources do
 
       -- Verify issues exist in the database (they may be acknowledged from previous test)
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [(Issues.IssueId, Text)]
 
       -- There should be at least one API change issue in the database
@@ -199,7 +199,7 @@ spec = aroundAll withTestResources do
 
       -- Find and acknowledge the API change issues
       apiChangeIssuesForAck <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [Only Issues.IssueId]
 
       length apiChangeIssuesForAck `shouldSatisfy` (>= 1)
