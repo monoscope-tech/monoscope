@@ -608,8 +608,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "w-px h-4 bg-strokeWeak"] ""
             div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
               statBox_ (Just pid) Nothing "Percentile" "" d.percentile Nothing Nothing
-              statBox_ (Just pid) Nothing "Current Latency" "" (show (round d.currentLatencyMs :: Int) <> "ms") Nothing Nothing
-              statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineLatencyMs :: Int) <> "ms") Nothing Nothing
+              statBox_ (Just pid) Nothing "Current Latency" "" (toText $ getDurationNSMS (round d.currentLatencyMs)) Nothing Nothing
+              statBox_ (Just pid) Nothing "Baseline" "" (toText $ getDurationNSMS (round d.baselineLatencyMs)) Nothing Nothing
             div_ [class_ "p-4 bg-fillWarning-weak rounded-lg border border-strokeWarning-weak mb-4"] do
               span_ [class_ "text-sm text-fillWarning-strong font-medium"] $ toHtml $ "Latency increased by " <> show (round d.degradationPercent :: Int) <> "% (z-score: " <> show (round d.zScore :: Int) <> ")"
           _ -> pass
@@ -1468,8 +1468,8 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     let isAcknowledged = isJust issue.acknowledgedAt
     let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowledge" else "/acknowledge"
     button_
-      [ class_ $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <> if isAcknowledged then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80" else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
-      , hxGet_ acknowledgeEndpoint
+      [ class_ ("inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <> if isAcknowledged then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80" else "bg-fillBrand-strong text-white hover:bg-fillBrand-weak")
+      , hxPost_ acknowledgeEndpoint
       , hxSwap_ "outerHTML"
       , hxTarget_ "closest .itemsListItem"
       ]
