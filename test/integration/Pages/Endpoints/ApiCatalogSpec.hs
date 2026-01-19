@@ -164,9 +164,11 @@ spec = aroundAll withTestResources do
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
-      -- Run only NewAnomaly jobs to create issues from anomalies
+      -- Run only API change jobs to create issues from anomalies
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{} -> True
+        BackgroundJobs.NewEndpoint{} -> True
+        BackgroundJobs.NewShape{} -> True
+        BackgroundJobs.NewFieldChange{} -> True
         _ -> False
 
       -- Verify issues were created
