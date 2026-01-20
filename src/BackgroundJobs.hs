@@ -44,6 +44,7 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
+
 -- import Models.Apis.LogPatterns qualified as LogPatterns  -- Removed for errors-feature branch
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
@@ -545,8 +546,9 @@ processPatterns kind fieldName events pid scheduledTime since = do
       unless (V.null ids) $ do
         -- Update otel_logs_and_spans with pattern
         void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
-        -- Note: LogPatterns.upsertLogPattern removed for errors-feature branch
 
+
+-- Note: LogPatterns.upsertLogPattern removed for errors-feature branch
 
 -- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain
 processBatch :: Bool -> V.Vector (Text, Bool, Text, Maybe Text, Maybe Text, Maybe Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
