@@ -90,14 +90,13 @@ import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnum (..), WrappedEnumSC (..))
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Relude hiding (ask)
-import RequestMessages (replaceAllFormats)
 import System.Config (AuthContext)
 import System.Config qualified as SysConfig
 import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (lookupValueText, toXXHash)
+import Utils (lookupValueText, toXXHash, replaceAllFormats)
 
 
 -- Helper function to get nested value from a map using dot notation

@@ -12,7 +12,7 @@ import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
 import Relude
-import RequestMessages (replaceAllFormats)
+import Utils (replaceAllFormats)
 
 
 data LogGroup = LogGroup

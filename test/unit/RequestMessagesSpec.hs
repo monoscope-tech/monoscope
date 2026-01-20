@@ -7,6 +7,7 @@ import Relude
 import RequestMessages qualified
 import Test.Hspec
 import NeatInterpolation (text)
+import Utils qualified
 
 
 spec :: Spec
@@ -364,133 +365,133 @@ spec = do
       
   describe "replaceAllFormats" do
     it "should replace UUIDs and hashes" do
-      RequestMessages.replaceAllFormats "123" `shouldBe` "{integer}"
-      RequestMessages.replaceAllFormats "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd" `shouldBe` "{uuid}"
-      RequestMessages.replaceAllFormats "550e8400-e29b-41d4-a716-446655440000" `shouldBe` "{uuid}"
-      RequestMessages.replaceAllFormats "507f1f77bcf86cd799439011" `shouldBe` "{uuid}"
+      Utils.replaceAllFormats "123" `shouldBe` "{integer}"
+      Utils.replaceAllFormats "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd" `shouldBe` "{uuid}"
+      Utils.replaceAllFormats "550e8400-e29b-41d4-a716-446655440000" `shouldBe` "{uuid}"
+      Utils.replaceAllFormats "507f1f77bcf86cd799439011" `shouldBe` "{uuid}"
       
     it "should replace hash formats" do
-      RequestMessages.replaceAllFormats "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" `shouldBe` "{sha256}"
-      RequestMessages.replaceAllFormats "356a192b7913b04c54574d18c28d46e6395428ab" `shouldBe` "{sha1}"
-      RequestMessages.replaceAllFormats "5d41402abc4b2a76b9719d911017c592" `shouldBe` "{md5}"
+      Utils.replaceAllFormats "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855" `shouldBe` "{sha256}"
+      Utils.replaceAllFormats "356a192b7913b04c54574d18c28d46e6395428ab" `shouldBe` "{sha1}"
+      Utils.replaceAllFormats "5d41402abc4b2a76b9719d911017c592" `shouldBe` "{md5}"
       
     it "should replace mixed content" do
-      RequestMessages.replaceAllFormats "User 123 accessed endpoint c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd" `shouldBe` "User {integer} accessed endpoint {uuid}"
-      RequestMessages.replaceAllFormats "Error at 192.168.0.1:8080 with status 404" `shouldBe` "Error at {ipv4}{port} with status {integer}"
+      Utils.replaceAllFormats "User 123 accessed endpoint c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd" `shouldBe` "User {integer} accessed endpoint {uuid}"
+      Utils.replaceAllFormats "Error at 192.168.0.1:8080 with status 404" `shouldBe` "Error at {ipv4}{port} with status {integer}"
       
     it "should replace ports" do
-      RequestMessages.replaceAllFormats "Server on :8080" `shouldBe` "Server on {port}"
-      RequestMessages.replaceAllFormats "localhost:3000" `shouldBe` "localhost{port}"
-      RequestMessages.replaceAllFormats "api.com:443" `shouldBe` "api.com{port}"
-      RequestMessages.replaceAllFormats ":22" `shouldBe` "{port}"
+      Utils.replaceAllFormats "Server on :8080" `shouldBe` "Server on {port}"
+      Utils.replaceAllFormats "localhost:3000" `shouldBe` "localhost{port}"
+      Utils.replaceAllFormats "api.com:443" `shouldBe` "api.com{port}"
+      Utils.replaceAllFormats ":22" `shouldBe` "{port}"
       
     it "should replace multiple IP addresses and ports" do
-      RequestMessages.replaceAllFormats "Connected to 10.0.0.1:443 and 192.168.1.100:22" `shouldBe` "Connected to {ipv4}{port} and {ipv4}{port}"
+      Utils.replaceAllFormats "Connected to 10.0.0.1:443 and 192.168.1.100:22" `shouldBe` "Connected to {ipv4}{port} and {ipv4}{port}"
       
     it "should replace multiple integers" do
-      RequestMessages.replaceAllFormats "Responses: 200, 301, 404, 500" `shouldBe` "Responses: {integer}, {integer}, {integer}, {integer}"
+      Utils.replaceAllFormats "Responses: 200, 301, 404, 500" `shouldBe` "Responses: {integer}, {integer}, {integer}, {integer}"
       
     it "should replace complex paths" do
-      RequestMessages.replaceAllFormats "GET /api/v2/users/123/orders/456 returned 200" `shouldBe` "GET /api/v{integer}/users/{integer}/orders/{integer} returned {integer}"
+      Utils.replaceAllFormats "GET /api/v2/users/123/orders/456 returned 200" `shouldBe` "GET /api/v{integer}/users/{integer}/orders/{integer} returned {integer}"
       
     it "should replace mixed formats in single line" do
-      RequestMessages.replaceAllFormats "User 550e8400-e29b-41d4-a716-446655440000 connected from 192.168.1.50:9876" `shouldBe` "User {uuid} connected from {ipv4}{port}"
-      RequestMessages.replaceAllFormats "Hash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3, Status: 403, Port: :8443" `shouldBe` "Hash: {sha1}, Status: {integer}, Port: {port}"
+      Utils.replaceAllFormats "User 550e8400-e29b-41d4-a716-446655440000 connected from 192.168.1.50:9876" `shouldBe` "User {uuid} connected from {ipv4}{port}"
+      Utils.replaceAllFormats "Hash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3, Status: 403, Port: :8443" `shouldBe` "Hash: {sha1}, Status: {integer}, Port: {port}"
 
     it "should handle various mixed patterns" do
-      RequestMessages.replaceAllFormats "Mixed: 192.168.1.1 123 :80 404" `shouldBe` "Mixed: {ipv4} {integer} {port} {integer}"
-      RequestMessages.replaceAllFormats "0xDEADBEEF" `shouldBe` "{hex}"
-      RequestMessages.replaceAllFormats "Values: 999, 1000, 1001" `shouldBe` "Values: {integer}, {integer}, {integer}"
+      Utils.replaceAllFormats "Mixed: 192.168.1.1 123 :80 404" `shouldBe` "Mixed: {ipv4} {integer} {port} {integer}"
+      Utils.replaceAllFormats "0xDEADBEEF" `shouldBe` "{hex}"
+      Utils.replaceAllFormats "Values: 999, 1000, 1001" `shouldBe` "Values: {integer}, {integer}, {integer}"
       
     it "should replace IP addresses" do
-      RequestMessages.replaceAllFormats "10.0.0.1" `shouldBe` "{ipv4}"
-      RequestMessages.replaceAllFormats "172.16.0.1" `shouldBe` "{ipv4}"
-      RequestMessages.replaceAllFormats "192.168.1.1" `shouldBe` "{ipv4}"
-      RequestMessages.replaceAllFormats "255.255.255.0" `shouldBe` "{ipv4}"
+      Utils.replaceAllFormats "10.0.0.1" `shouldBe` "{ipv4}"
+      Utils.replaceAllFormats "172.16.0.1" `shouldBe` "{ipv4}"
+      Utils.replaceAllFormats "192.168.1.1" `shouldBe` "{ipv4}"
+      Utils.replaceAllFormats "255.255.255.0" `shouldBe` "{ipv4}"
       
     it "should handle multiple formats in text" do
-      RequestMessages.replaceAllFormats "Multiple formats: 123 abc def456789 :9000" `shouldBe` "Multiple formats: {integer} abc def{integer} {port}"
-      RequestMessages.replaceAllFormats "Log entry 404 at 10.0.0.1:8080" `shouldBe` "Log entry {integer} at {ipv4}{port}"
+      Utils.replaceAllFormats "Multiple formats: 123 abc def456789 :9000" `shouldBe` "Multiple formats: {integer} abc def{integer} {port}"
+      Utils.replaceAllFormats "Log entry 404 at 10.0.0.1:8080" `shouldBe` "Log entry {integer} at {ipv4}{port}"
       
     it "should handle real-world error messages" do
-      RequestMessages.replaceAllFormats "Connection timeout to 192.168.1.100:3306 after 30000ms" `shouldBe` "Connection timeout to {ipv4}{port} after {integer}ms"
-      RequestMessages.replaceAllFormats "Failed to connect to database at localhost:5432" `shouldBe` "Failed to connect to database at localhost{port}"
-      RequestMessages.replaceAllFormats "Error: Invalid UUID c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd in request" `shouldBe` "Error: Invalid UUID {uuid} in request"
-      RequestMessages.replaceAllFormats "Authentication failed for user@example.com from IP 10.0.0.5" `shouldBe` "Authentication failed for {email} from IP {ipv4}"
-      RequestMessages.replaceAllFormats "Request ID: 507f1f77bcf86cd799439011 failed with status 500" `shouldBe` "Request ID: {uuid} failed with status {integer}"
+      Utils.replaceAllFormats "Connection timeout to 192.168.1.100:3306 after 30000ms" `shouldBe` "Connection timeout to {ipv4}{port} after {integer}ms"
+      Utils.replaceAllFormats "Failed to connect to database at localhost:5432" `shouldBe` "Failed to connect to database at localhost{port}"
+      Utils.replaceAllFormats "Error: Invalid UUID c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd in request" `shouldBe` "Error: Invalid UUID {uuid} in request"
+      Utils.replaceAllFormats "Authentication failed for user@example.com from IP 10.0.0.5" `shouldBe` "Authentication failed for {email} from IP {ipv4}"
+      Utils.replaceAllFormats "Request ID: 507f1f77bcf86cd799439011 failed with status 500" `shouldBe` "Request ID: {uuid} failed with status {integer}"
       
     it "should handle log lines with timestamps" do
-      RequestMessages.replaceAllFormats "2023-10-14 10:29:38 ERROR: Connection refused" `shouldBe` "{YYYY-MM-DD HH:MM:SS} ERROR: Connection refused"
-      RequestMessages.replaceAllFormats "[2023-10-14T10:29:38.123Z] INFO: Server started on port 8080" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] INFO: Server started on port {integer}"
-      RequestMessages.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "{Mon DD, YYYY} - User {integer} logged in from {ipv4}"
+      Utils.replaceAllFormats "2023-10-14 10:29:38 ERROR: Connection refused" `shouldBe` "{YYYY-MM-DD HH:MM:SS} ERROR: Connection refused"
+      Utils.replaceAllFormats "[2023-10-14T10:29:38.123Z] INFO: Server started on port 8080" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] INFO: Server started on port {integer}"
+      Utils.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "{Mon DD, YYYY} - User {integer} logged in from {ipv4}"
       
     it "should handle file paths in error messages" do
-      RequestMessages.replaceAllFormats "File not found: /usr/local/app/config.json" `shouldBe` "File not found: /usr/local/app/config.json"
-      RequestMessages.replaceAllFormats "Error reading C:\\Users\\Admin\\data.txt" `shouldBe` "Error reading C:\\Users\\Admin\\data.txt"
-      RequestMessages.replaceAllFormats "Module failed at /app/src/main.js:42:15" `shouldBe` "Module failed at /app/src/main.js{port}{port}"
+      Utils.replaceAllFormats "File not found: /usr/local/app/config.json" `shouldBe` "File not found: /usr/local/app/config.json"
+      Utils.replaceAllFormats "Error reading C:\\Users\\Admin\\data.txt" `shouldBe` "Error reading C:\\Users\\Admin\\data.txt"
+      Utils.replaceAllFormats "Module failed at /app/src/main.js:42:15" `shouldBe` "Module failed at /app/src/main.js{port}{port}"
       
     it "should handle mixed identifiers" do
-      RequestMessages.replaceAllFormats "Thread-42 processing session_abc123def456 for user 789" `shouldBe` "Thread-{integer} processing session_abc{integer}def{integer} for user {integer}"
-      RequestMessages.replaceAllFormats "pid:1234 tid:5678 processing request" `shouldBe` "pid{port} tid{port} processing request"
-      RequestMessages.replaceAllFormats "Transaction 0xDEADBEEF failed with hash a94a8fe5ccb19ba61c4c0873d391e987982fbbd3" `shouldBe` "Transaction {hex} failed with hash {sha1}"
+      Utils.replaceAllFormats "Thread-42 processing session_abc123def456 for user 789" `shouldBe` "Thread-{integer} processing session_abc{integer}def{integer} for user {integer}"
+      Utils.replaceAllFormats "pid:1234 tid:5678 processing request" `shouldBe` "pid{port} tid{port} processing request"
+      Utils.replaceAllFormats "Transaction 0xDEADBEEF failed with hash a94a8fe5ccb19ba61c4c0873d391e987982fbbd3" `shouldBe` "Transaction {hex} failed with hash {sha1}"
       
     it "should handle database connection strings" do
-      RequestMessages.replaceAllFormats "postgres://user:pass@localhost:5432/mydb" `shouldBe` "postgres://user:pass@localhost{port}/mydb"
-      RequestMessages.replaceAllFormats "mongodb://10.0.0.1:27017/database" `shouldBe` "mongodb://{ipv4}{port}/database"
-      RequestMessages.replaceAllFormats "redis://192.168.1.10:6379/0" `shouldBe` "redis://{ipv4}{port}/{integer}"
+      Utils.replaceAllFormats "postgres://user:pass@localhost:5432/mydb" `shouldBe` "postgres://user:pass@localhost{port}/mydb"
+      Utils.replaceAllFormats "mongodb://10.0.0.1:27017/database" `shouldBe` "mongodb://{ipv4}{port}/database"
+      Utils.replaceAllFormats "redis://192.168.1.10:6379/0" `shouldBe` "redis://{ipv4}{port}/{integer}"
       
     it "should handle API endpoints" do
-      RequestMessages.replaceAllFormats "GET /api/v2/users/123/orders/456" `shouldBe` "GET /api/v{integer}/users/{integer}/orders/{integer}"
-      RequestMessages.replaceAllFormats "POST /api/users/550e8400-e29b-41d4-a716-446655440000/profile" `shouldBe` "POST /api/users/{uuid}/profile"
-      RequestMessages.replaceAllFormats "DELETE /api/sessions/session_xyz789abc123" `shouldBe` "DELETE /api/sessions/session_xyz{integer}abc{integer}"
+      Utils.replaceAllFormats "GET /api/v2/users/123/orders/456" `shouldBe` "GET /api/v{integer}/users/{integer}/orders/{integer}"
+      Utils.replaceAllFormats "POST /api/users/550e8400-e29b-41d4-a716-446655440000/profile" `shouldBe` "POST /api/users/{uuid}/profile"
+      Utils.replaceAllFormats "DELETE /api/sessions/session_xyz789abc123" `shouldBe` "DELETE /api/sessions/session_xyz{integer}abc{integer}"
       
     it "should handle JSON-like structures" do
-      RequestMessages.replaceAllFormats "{\"user_id\": 12345, \"ip\": \"192.168.1.1\", \"timestamp\": 1634567890}" `shouldBe` "{\"user_id\": {integer}, \"ip\": \"{ipv4}\", \"timestamp\": {integer}}" -- epoch_s pattern requires exact match
-      RequestMessages.replaceAllFormats "data={id:c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd,port:8080}" `shouldBe` "data={id:{uuid},port{port}}" -- :8080 matches port pattern
+      Utils.replaceAllFormats "{\"user_id\": 12345, \"ip\": \"192.168.1.1\", \"timestamp\": 1634567890}" `shouldBe` "{\"user_id\": {integer}, \"ip\": \"{ipv4}\", \"timestamp\": {integer}}" -- epoch_s pattern requires exact match
+      Utils.replaceAllFormats "data={id:c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd,port:8080}" `shouldBe` "data={id:{uuid},port{port}}" -- :8080 matches port pattern
       
     it "should handle network errors" do
-      RequestMessages.replaceAllFormats "EHOSTUNREACH: 10.0.0.1:443" `shouldBe` "EHOSTUNREACH: {ipv4}{port}"
-      RequestMessages.replaceAllFormats "Connection reset by peer 192.168.100.50:22" `shouldBe` "Connection reset by peer {ipv4}{port}"
-      RequestMessages.replaceAllFormats "Timeout connecting to host api.example.com on port 443" `shouldBe` "Timeout connecting to host api.example.com on port {integer}"
+      Utils.replaceAllFormats "EHOSTUNREACH: 10.0.0.1:443" `shouldBe` "EHOSTUNREACH: {ipv4}{port}"
+      Utils.replaceAllFormats "Connection reset by peer 192.168.100.50:22" `shouldBe` "Connection reset by peer {ipv4}{port}"
+      Utils.replaceAllFormats "Timeout connecting to host api.example.com on port 443" `shouldBe` "Timeout connecting to host api.example.com on port {integer}"
       
     it "should handle security-related messages" do
-      RequestMessages.replaceAllFormats "Invalid JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U" `shouldBe` "Invalid JWT: {jwt}"
-      RequestMessages.replaceAllFormats "Unauthorized access from IP 10.20.30.40 to /admin" `shouldBe` "Unauthorized access from IP {ipv4} to /admin"
-      RequestMessages.replaceAllFormats "Failed login attempt for user@example.com from 192.168.1.100" `shouldBe` "Failed login attempt for {email} from {ipv4}"
+      Utils.replaceAllFormats "Invalid JWT: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U" `shouldBe` "Invalid JWT: {jwt}"
+      Utils.replaceAllFormats "Unauthorized access from IP 10.20.30.40 to /admin" `shouldBe` "Unauthorized access from IP {ipv4} to /admin"
+      Utils.replaceAllFormats "Failed login attempt for user@example.com from 192.168.1.100" `shouldBe` "Failed login attempt for {email} from {ipv4}"
       
     it "should preserve non-matching text" do
-      RequestMessages.replaceAllFormats "This is plain text with no patterns" `shouldBe` "This is plain text with no patterns"
-      RequestMessages.replaceAllFormats "Error: Something went wrong!" `shouldBe` "Error: Something went wrong!"
-      RequestMessages.replaceAllFormats "Hello, world! Testing 1-2-3" `shouldBe` "Hello, world! Testing {integer}-{integer}-{integer}"
+      Utils.replaceAllFormats "This is plain text with no patterns" `shouldBe` "This is plain text with no patterns"
+      Utils.replaceAllFormats "Error: Something went wrong!" `shouldBe` "Error: Something went wrong!"
+      Utils.replaceAllFormats "Hello, world! Testing 1-2-3" `shouldBe` "Hello, world! Testing {integer}-{integer}-{integer}"
       
     it "should handle edge cases in replacement" do
-      RequestMessages.replaceAllFormats "" `shouldBe` ""
-      RequestMessages.replaceAllFormats "123456789012345" `shouldBe` "{integer}"
-      RequestMessages.replaceAllFormats "123.456.789.012" `shouldBe` "{float}.{float}"
-      RequestMessages.replaceAllFormats "::::::" `shouldBe` "::::::"
-      RequestMessages.replaceAllFormats "0x0x0x0x" `shouldBe` "{hex}x{hex}x"
+      Utils.replaceAllFormats "" `shouldBe` ""
+      Utils.replaceAllFormats "123456789012345" `shouldBe` "{integer}"
+      Utils.replaceAllFormats "123.456.789.012" `shouldBe` "{float}.{float}"
+      Utils.replaceAllFormats "::::::" `shouldBe` "::::::"
+      Utils.replaceAllFormats "0x0x0x0x" `shouldBe` "{hex}x{hex}x"
       
     it "should handle kubernetes and docker patterns" do
-      RequestMessages.replaceAllFormats "pod-abc123def-xyz789" `shouldBe` "pod-abc{integer}def-xyz{integer}"
-      RequestMessages.replaceAllFormats "container-550e8400-e29b-41d4-a716-446655440000" `shouldBe` "container-{uuid}"
-      RequestMessages.replaceAllFormats "node-192.168.1.100:30000" `shouldBe` "node-{ipv4}{port}"
-      RequestMessages.replaceAllFormats "deployment-v1.2.3-20231014" `shouldBe` "deployment-v{float}.{integer}-{integer}"
+      Utils.replaceAllFormats "pod-abc123def-xyz789" `shouldBe` "pod-abc{integer}def-xyz{integer}"
+      Utils.replaceAllFormats "container-550e8400-e29b-41d4-a716-446655440000" `shouldBe` "container-{uuid}"
+      Utils.replaceAllFormats "node-192.168.1.100:30000" `shouldBe` "node-{ipv4}{port}"
+      Utils.replaceAllFormats "deployment-v1.2.3-20231014" `shouldBe` "deployment-v{float}.{integer}-{integer}"
       
     it "should handle cloud provider identifiers" do
-      RequestMessages.replaceAllFormats "arn:aws:s3:::my-bucket/path/to/file.txt" `shouldBe` "arn:aws:s{integer}:::my-bucket/path/to/file.txt"
-      RequestMessages.replaceAllFormats "i-0a1b2c3d4e5f67890" `shouldBe` "i-{integer}a{integer}b{integer}c{integer}d{integer}e{integer}f{integer}"
-      RequestMessages.replaceAllFormats "subnet-12345678" `shouldBe` "subnet-{integer}"
-      RequestMessages.replaceAllFormats "vpc-abc123def456" `shouldBe` "vpc-abc{integer}def{integer}"
+      Utils.replaceAllFormats "arn:aws:s3:::my-bucket/path/to/file.txt" `shouldBe` "arn:aws:s{integer}:::my-bucket/path/to/file.txt"
+      Utils.replaceAllFormats "i-0a1b2c3d4e5f67890" `shouldBe` "i-{integer}a{integer}b{integer}c{integer}d{integer}e{integer}f{integer}"
+      Utils.replaceAllFormats "subnet-12345678" `shouldBe` "subnet-{integer}"
+      Utils.replaceAllFormats "vpc-abc123def456" `shouldBe` "vpc-abc{integer}def{integer}"
       
     it "should handle performance metrics" do
-      RequestMessages.replaceAllFormats "Response time: 123.456ms" `shouldBe` "Response time: {float}ms"
-      RequestMessages.replaceAllFormats "CPU usage: 85.5%" `shouldBe` "CPU usage: {float}%"
-      RequestMessages.replaceAllFormats "Memory: 4096MB/8192MB" `shouldBe` "Memory: {integer}MB/{integer}MB"
-      RequestMessages.replaceAllFormats "Requests/sec: 10000" `shouldBe` "Requests/sec: {integer}"
+      Utils.replaceAllFormats "Response time: 123.456ms" `shouldBe` "Response time: {float}ms"
+      Utils.replaceAllFormats "CPU usage: 85.5%" `shouldBe` "CPU usage: {float}%"
+      Utils.replaceAllFormats "Memory: 4096MB/8192MB" `shouldBe` "Memory: {integer}MB/{integer}MB"
+      Utils.replaceAllFormats "Requests/sec: 10000" `shouldBe` "Requests/sec: {integer}"
       
     it "should handle complex nested patterns" do
-      RequestMessages.replaceAllFormats "[2023-10-14T10:29:38Z] [ERROR] Connection to db-master.region.rds.amazonaws.com:5432 failed: timeout after 30000ms" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] [ERROR] Connection to db-master.region.rds.amazonaws.com{port} failed: timeout after {integer}ms"
-      RequestMessages.replaceAllFormats "User c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd from 192.168.1.100 accessed /api/v2/data/12345 at 1634567890" `shouldBe` "User {uuid} from {ipv4} accessed /api/v{integer}/data/{integer} at {integer}"
+      Utils.replaceAllFormats "[2023-10-14T10:29:38Z] [ERROR] Connection to db-master.region.rds.amazonaws.com:5432 failed: timeout after 30000ms" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] [ERROR] Connection to db-master.region.rds.amazonaws.com{port} failed: timeout after {integer}ms"
+      Utils.replaceAllFormats "User c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd from 192.168.1.100 accessed /api/v2/data/12345 at 1634567890" `shouldBe` "User {uuid} from {ipv4} accessed /api/v{integer}/data/{integer} at {integer}"
 
 -- describe "requestMessageEndpoint" do
 --   it "should be able to convert simple request message to series on insert db commands" do

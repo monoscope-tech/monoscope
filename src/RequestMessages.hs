@@ -8,7 +8,8 @@
 -- >>> import Data.Aeson.QQ (aesonQQ)
 -- >>> import qualified Data.Aeson as AE
 -- >>> import qualified Data.Vector as V
--- >>> import RequestMessages (redactJSON, dedupFields, replaceAllFormats)
+-- >>> import RequestMessages (redactJSON, dedupFields)
+-- >>> import Utils (replaceAllFormats)
 
 module RequestMessages (
   RequestMessage (..),
@@ -20,7 +21,6 @@ module RequestMessages (
   sortVector,
   ensureUrlParams,
   processErrors,
-  replaceAllFormats,
   dedupFields,
 )
 where
@@ -57,7 +57,7 @@ import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
-import Utils (DBField (), toXXHash)
+import Utils (DBField (), toXXHash, replaceAllFormats)
 
 
 -- $setup
@@ -365,146 +365,6 @@ commonFormatPatterns =
   , ([re|^[+-]?[0-9]+\.[0-9]+$|], "{float}")
   , ([re|^[0-9]+$|], "{integer}")
   ]
-
-
--- | Replaces all format patterns in the input text with their format names
--- This function applies all regex patterns and replaces matches until no more replacements are made
---
--- >>> map replaceAllFormats ["123", "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd", "550e8400-e29b-41d4-a716-446655440000", "507f1f77bcf86cd799439011"]
--- ["{integer}","{uuid}","{uuid}","{uuid}"]
---
--- >>> map replaceAllFormats ["e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", "356a192b7913b04c54574d18c28d46e6395428ab", "5d41402abc4b2a76b9719d911017c592"]
--- ["{sha256}","{sha1}","{md5}"]
---
--- >>> replaceAllFormats "User 123 accessed endpoint c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
--- "User {integer} accessed endpoint {uuid}"
---
--- >>> replaceAllFormats "Error at 192.168.0.1:8080 with status 404"
--- "Error at {ipv4}{port} with status {integer}"
---
--- >>> map replaceAllFormats ["Server on :8080", "localhost:3000", "api.com:443", ":22"]
--- ["Server on {port}","localhost{port}","api.com{port}","{port}"]
---
--- >>> replaceAllFormats "Connected to 10.0.0.1:443 and 192.168.1.100:22"
--- "Connected to {ipv4}{port} and {ipv4}{port}"
---
--- >>> replaceAllFormats "Responses: 200, 301, 404, 500"
--- "Responses: {integer}, {integer}, {integer}, {integer}"
---
--- >>> replaceAllFormats "GET /api/v2/users/123/orders/456 returned 200"
--- "GET /api/v{integer}/users/{integer}/orders/{integer} returned {integer}"
---
--- >>> replaceAllFormats "User 550e8400-e29b-41d4-a716-446655440000 connected from 192.168.1.50:9876"
--- "User {uuid} connected from {ipv4}{port}"
---
--- >>> replaceAllFormats "Hash: a94a8fe5ccb19ba61c4c0873d391e987982fbbd3, Status: 403, Port: :8443"
--- "Hash: {sha1}, Status: {integer}, Port: {port}"
---
--- >>> replaceAllFormats "Processing request 123456 at 2023-10-15:3000"
--- "Processing request {integer} at {integer}-{integer}-{integer}{port}"
---
--- >>> map replaceAllFormats ["Mixed: 192.168.1.1 123 :80 404", "0xDEADBEEF", "Values: 999, 1000, 1001"]
--- ["Mixed: {ipv4} {integer} {port} {integer}","{hex}","Values: {integer}, {integer}, {integer}"]
---
--- >>> map replaceAllFormats ["10.0.0.1", "172.16.0.1", "192.168.1.1", "255.255.255.0"]
--- ["{ipv4}","{ipv4}","{ipv4}","{ipv4}"]
---
--- >>> map replaceAllFormats ["Multiple formats: 123 abc def456789 :9000", "Log entry 404 at 10.0.0.1:8080"]
--- ["Multiple formats: {integer} abc def{integer} {port}","Log entry {integer} at {ipv4}{port}"]
-replaceAllFormats :: Text -> Text
-replaceAllFormats input = restorePlaceholders $ processPatterns input formatPatternsForReplacement
-  where
-    -- Process patterns sequentially with (*=~/)
-    -- Use special Unicode characters as temporary placeholders to prevent re-matching
-    processPatterns :: Text -> [SearchReplace RE Text] -> Text
-    processPatterns txt [] = txt
-    processPatterns txt (sr : rest) =
-      let newTxt = txt *=~/ sr
-       in processPatterns newTxt rest
-
-    -- Restore the Unicode placeholders to the final format
-    restorePlaceholders :: Text -> Text
-    restorePlaceholders txt =
-      txt
-        *=~/ [ed|〖×UUID×〗///{uuid}|]
-        *=~/ [ed|〖×SHA-TWO-FIVE-SIX×〗///{sha256}|]
-        *=~/ [ed|〖×SHA-ONE×〗///{sha1}|]
-        *=~/ [ed|〖×MD-FIVE×〗///{md5}|]
-        *=~/ [ed|〖×IPV-FOUR×〗///{ipv4}|]
-        *=~/ [ed|〖×PORT×〗///{port}|]
-        *=~/ [ed|〖×HEX×〗///{hex}|]
-        *=~/ [ed|〖×INTEGER×〗///{integer}|]
-
-    -- Use a subset of patterns that should be replaced in text
-    -- Using Unicode characters with no alphanumeric content that won't match any patterns
-    formatPatternsForReplacement :: [SearchReplace RE Text]
-    formatPatternsForReplacement =
-      [ -- UUIDs and hashes first (most specific)
-        [ed|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}///〖×UUID×〗|]
-      , [ed|[a-fA-F0-9]{64}///〖×SHA-TWO-FIVE-SIX×〗|]
-      , [ed|[a-fA-F0-9]{40}///〖×SHA-ONE×〗|]
-      , [ed|[a-fA-F0-9]{32}///〖×MD-FIVE×〗|]
-      , [ed|[0-9a-fA-F]{24}///〖×UUID×〗|]
-      , -- Visa 13 or 16 digits
-        [ed|5[1-5][0-9]{14}///{credit_card}|]
-      , -- Mastercard
-        [ed|3[47][0-9]{13}///{credit_card}|]
-      , -- Amex
-        [ed|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+///{jwt}|]
-      , -- JWT
-        -- IBAN (moved before base64)
-        [ed|[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}///{iban}|]
-      , -- Date patterns (before file paths to avoid conflicts)
-        [ed|(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} [+\-][0-9]{4}///{rfc2822}|]
-      , [ed|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?///{YYYY-MM-DDThh:mm:ss.sTZD}|]
-      , -- ISO 8601
-        [ed|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}///{YYYY-MM-DD HH:MM:SS}|]
-      , -- MySQL datetime
-        [ed|[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{MM/DD/YYYY HH:MM:SS}|]
-      , -- US datetime
-        [ed|[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{MM-DD-YYYY HH:MM:SS}|]
-      , [ed|[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{DD.MM.YYYY HH:MM:SS}|]
-      , -- European datetime
-        [ed|(0[1-9]|[12][0-9]|3[01])[/](0[1-9]|1[012])[/](19|20)[0-9][0-9]///{dd/mm/yyyy}|]
-      , -- European date
-        [ed|(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)[0-9][0-9]///{dd-mm-yyyy}|]
-      , [ed|(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)[0-9][0-9]///{dd.mm.yyyy}|]
-      , [ed|(0[1-9]|1[012])[/](0[1-9]|[12][0-9]|3[01])[/](19|20)[0-9][0-9]///{mm/dd/yyyy}|]
-      , -- US date
-        [ed|(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]///{mm-dd-yyyy}|]
-      , [ed|(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]///{mm.dd.yyyy}|]
-      , -- Note: Removed [0-9]{4}-[0-9]{2}-[0-9]{2} pattern to avoid matching dates followed by ports (e.g. 2023-10-15:3000)
-        -- The more specific datetime pattern [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} handles actual dates with times
-        [ed|[0-9]{4}/[0-9]{2}/[0-9]{2}///{YYYY/MM/DD}|]
-      , -- Compact date
-        [ed|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}///{Mon DD, YYYY}|]
-      , -- Long month
-        [ed|[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}///{DD-Mon-YYYY}|]
-      , -- Oracle date
-        -- Time patterns
-        [ed|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}///{HH:MM:SS.mmm}|]
-      , -- Time with milliseconds
-        [ed|[0-9]{2}:[0-9]{2}:[0-9]{2}///{HH:MM:SS}|]
-      , -- Time only
-        [ed|[0-9]{1,2}:[0-9]{2} (AM|PM|am|pm)///{H:MM AM/PM}|]
-      , -- Personal identifiers
-        [ed|[0-9]{3}-[0-9]{2}-[0-9]{4}///{ssn}|]
-      , [ed|\+1 \([0-9]{3}\) [0-9]{3}-[0-9]{4}///{phone}|]
-      , -- Network patterns
-        [ed|(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)///〖×IPV-FOUR×〗|]
-      , [ed|:[0-9]{1,5}///〖×PORT×〗|]
-      , [ed|https?://[^\s]+///{url}|]
-      , [ed|([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}///{ipv6}|]
-      , [ed|([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}///{mac}|]
-      , [ed|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}///{email}|]
-      , -- Hex numbers (must come before general integers)
-        [ed|0x[0-9A-Fa-f]+///〖×HEX×〗|]
-      , --- float
-        [ed|[+-]?[0-9]+\.[0-9]+///{float}|]
-      , -- Numbers (including HTTP status codes)
-        [ed|[0-9]+///〖×INTEGER×〗|]
-      ]
-
 
 -- valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text
