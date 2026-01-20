@@ -57,7 +57,7 @@ import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
-import Utils (DBField (), toXXHash, replaceAllFormats)
+import Utils (DBField (), replaceAllFormats, toXXHash)
 
 
 -- $setup
@@ -365,6 +365,7 @@ commonFormatPatterns =
   , ([re|^[+-]?[0-9]+\.[0-9]+$|], "{float}")
   , ([re|^[0-9]+$|], "{integer}")
   ]
+
 
 -- valueToFormatStr will take a string and try to find a format which matches that string best.
 -- At the moment it takes a text and returns a generic mask that represents the format of that text

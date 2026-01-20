@@ -96,7 +96,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (lookupValueText, toXXHash, replaceAllFormats)
+import Utils (lookupValueText, replaceAllFormats, toXXHash)
 
 
 -- Helper function to get nested value from a map using dot notation
