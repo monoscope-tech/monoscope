@@ -190,10 +190,17 @@ data ATError = ATError
   , technology :: Maybe SDKTypes
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
-  , spanId :: Maybe Text
-  , traceId :: Maybe Text
   , serviceName :: Maybe Text
-  , stack :: Maybe Text
+  , environment :: Maybe Text
+  , runtime :: Maybe Text
+  , traceId :: Maybe Text
+  , spanId :: Maybe Text
+  , parentSpanId :: Maybe Text
+  , endpointHash :: Maybe Text
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userIp :: Maybe Text
+  , sessionId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
@@ -547,7 +554,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanI
       q =
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
              WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL AND id::text != ALL(?)
-             ORDER BY timestamp DESC LIMIT 2000;
+             ORDER BY timestamp DESC;
            |]
   results <- PG.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)
   pure $ mapMaybe valueToVector results

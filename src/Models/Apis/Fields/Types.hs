@@ -9,10 +9,12 @@ module Models.Apis.Fields.Types (
   FacetSummary (..),
   FacetValue (..),
   FacetData (..),
+  FieldForIssue (..),
   parseFieldCategoryEnum,
   parseFieldTypes,
   fieldTypeToText,
   bulkInsertFields,
+  getFieldForIssue,
   -- Formats
   Format (..),
   FormatId,
@@ -29,7 +31,7 @@ import Data.Time (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -319,3 +321,38 @@ data SwFormat = SwFormat
   deriving anyclass (AE.ToJSON)
   deriving (FromField) via Aeson SwFormat
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwFormat
+
+
+-- | Field data needed for creating issues
+data FieldForIssue = FieldForIssue
+  { fieldHash :: Text
+  , endpointHash :: Text
+  , method :: Text
+  , path :: Text
+  , keyPath :: Text
+  , fieldCategory :: Text
+  , fieldType :: Text
+  , format :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow)
+
+
+getFieldForIssue :: DB es => Text -> Eff es (Maybe FieldForIssue)
+getFieldForIssue hash = listToMaybe <$> PG.query q (Only hash)
+  where
+    q =
+      [sql|
+        SELECT
+          f.hash,
+          f.endpoint_hash,
+          COALESCE(e.method, 'UNKNOWN'),
+          COALESCE(e.url_path, '/'),
+          f.key_path,
+          f.field_category::TEXT,
+          f.field_type::TEXT,
+          f.format
+        FROM apis.fields f
+        LEFT JOIN apis.endpoints e ON e.hash = f.endpoint_hash
+        WHERE f.hash = ?
+      |]

@@ -46,4 +46,5 @@ cabal.project.local
 stack-work
 tests.log
 tests_optimized.log
+.claude
 .playwright-mcp/

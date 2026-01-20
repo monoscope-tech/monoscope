@@ -94,15 +94,17 @@ spec = aroundAll withTestResources do
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
-      -- Run only NewAnomaly jobs (which create issues from anomalies)
+      -- Run only API change jobs (which create issues from anomalies)
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{} -> True
+        BackgroundJobs.NewEndpoint{} -> True
+        BackgroundJobs.NewShape{} -> True
+        BackgroundJobs.NewFieldChange{} -> True
         _ -> False
       createRequestDumps tr testPid 10
 
       -- Check that API change issue was created for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [Only Issues.IssueId]
       length apiChangeIssues `shouldBe` 1
       
@@ -114,7 +116,7 @@ spec = aroundAll withTestResources do
     it "should acknowledge endpoint anomaly" \tr -> do
       -- Find the API change issue for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [Only Issues.IssueId]
       length apiChangeIssues `shouldBe` 1
       issueId <- case apiChangeIssues of
@@ -126,7 +128,8 @@ spec = aroundAll withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs2
 
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
+        BackgroundJobs.NewShape{} -> True
+        BackgroundJobs.NewFieldChange{} -> True
         _ -> False
 
       -- Acknowledge the endpoint anomaly directly using Issues module
@@ -144,7 +147,7 @@ spec = aroundAll withTestResources do
         AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
-          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) tbl.rows
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.NewEndpoint) tbl.rows
           V.length acknowledgedApiChangeIssues `shouldSatisfy` (> 0)
         _ -> error "Unexpected response"
 
@@ -164,17 +167,18 @@ spec = aroundAll withTestResources do
       processMessagesAndBackgroundJobs tr msgs
       createRequestDumps tr testPid 10
 
-      -- Get pending jobs and run only NewAnomaly jobs for shapes and fields
+      -- Get pending jobs and run only shape/field jobs
       pendingJobs3 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs3
 
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
+        BackgroundJobs.NewShape{} -> True
+        BackgroundJobs.NewFieldChange{} -> True
         _ -> False
 
       -- Verify issues exist in the database (they may be acknowledged from previous test)
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id, endpoint_hash FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [(Issues.IssueId, Text)]
 
       -- There should be at least one API change issue in the database
@@ -189,12 +193,13 @@ spec = aroundAll withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs4
 
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
+        BackgroundJobs.NewShape{} -> True
+        BackgroundJobs.NewFieldChange{} -> True
         _ -> False
 
       -- Find and acknowledge the API change issues
       apiChangeIssuesForAck <- withResource tr.trPool \conn -> PGS.query conn [sql|
-        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'api_change'
+        SELECT id FROM apis.issues WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO [Only Issues.IssueId]
 
       length apiChangeIssuesForAck `shouldSatisfy` (>= 1)
@@ -212,19 +217,19 @@ spec = aroundAll withTestResources do
       let msgs = [("m4", toStrict $ AE.encode reqMsg4)]
       processMessagesAndBackgroundJobs tr msgs
 
-      -- Get and run format anomaly jobs
+      -- Get and run format anomaly jobs (format changes are handled as field changes)
       pendingJobs5 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs5
 
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
+        BackgroundJobs.NewFieldChange{} -> True
         _ -> False
 
       -- Get updated anomaly list
       anomalies <- getAnomalies tr
-      let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.FieldChange) anomalies
 
-      -- In the new Issues system, format anomalies are part of API changes
+      -- In the new Issues system, format anomalies are part of field changes
       length formatApiChangeIssues `shouldSatisfy` (>= 1)
       length anomalies `shouldSatisfy` (> 0)
 
@@ -233,10 +238,10 @@ spec = aroundAll withTestResources do
         AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
-          -- Acknowledged anomalies should include API changes
-          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) tbl.rows
+          -- Acknowledged anomalies should include new endpoint issues
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.NewEndpoint) tbl.rows
 
-          -- We acknowledged at least one API change issue in the previous test
+          -- We acknowledged at least one new endpoint issue in the previous test
           length acknowledgedApiChangeIssues `shouldSatisfy` (>= 1)
           length tbl.rows `shouldSatisfy` (> 0)
         _ -> error "Unexpected response"

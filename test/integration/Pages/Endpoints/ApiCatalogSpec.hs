@@ -164,16 +164,18 @@ spec = aroundAll withTestResources do
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
-      -- Run only NewAnomaly jobs to create issues from anomalies
+      -- Run only API change jobs to create issues from anomalies
       _ <- runBackgroundJobsWhere tr.trATCtx $ \case
-        BackgroundJobs.NewAnomaly{} -> True
+        BackgroundJobs.NewEndpoint{} -> True
+        BackgroundJobs.NewShape{} -> True
+        BackgroundJobs.NewFieldChange{} -> True
         _ -> False
 
       -- Verify issues were created
       issuesCount <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
         FROM apis.issues
-        WHERE project_id = ? AND issue_type = 'api_change'
+        WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Only testPid) :: IO (V.Vector (Only Int))
 
       case issuesCount of
@@ -207,7 +209,7 @@ spec = aroundAll withTestResources do
       _ <- withPool tr.trPool $ DBT.execute [sql|
         UPDATE apis.issues 
         SET acknowledged_at = NOW(), acknowledged_by = ?
-        WHERE project_id = ? AND issue_type = 'api_change'
+        WHERE project_id = ? AND issue_type = 'new_endpoint'
       |] (Users.UserId UUID.nil, testPid)
       
       -- Test active filter
