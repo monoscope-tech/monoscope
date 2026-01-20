@@ -50,8 +50,10 @@ module Models.Apis.Issues (
   createQueryAlertIssue,
   createNewErrorIssue,
   createErrorSpikeIssue,
+  createLogPatternIssue,
   createErrorEscalatingIssue,
   createErrorRegressedIssue,
+  createLogPatternRateChangeIssue,
   createEndpointLatencyDegradationIssue,
   createEndpointErrorRateSpikeIssue,
   createEndpointVolumeRateChangeIssue,
@@ -102,7 +104,7 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Errors qualified as Errors
--- import Models.Apis.LogPatterns qualified as LogPatterns  -- Removed for errors-feature branch
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -875,6 +877,78 @@ createErrorRegressedIssue projectId err resolvedAtTime quietMins prevOccurrences
     ("Previously resolved error has returned after " <> T.pack (show quietMins) <> " minutes. The original fix may be incomplete.")
     "n/a"
     regressedData
+
+
+-- | Create an issue for a new log pattern
+createLogPatternIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> IO Issue
+createLogPatternIssue projectId lp = do
+  now <- getCurrentTime
+  let logPatternData =
+        LogPatternData
+          { patternHash = lp.patternHash
+          , logPattern = lp.logPattern
+          , sampleMessage = lp.sampleMessage
+          , logLevel = lp.logLevel
+          , serviceName = lp.serviceName
+          , firstSeenAt = now
+          , occurrenceCount = fromIntegral lp.occurrenceCount
+          }
+      severity = case lp.logLevel of
+        Just "error" -> "critical"
+        Just "warning" -> "warning"
+        _ -> "info"
+  mkIssue
+    projectId
+    LogPattern
+    lp.patternHash
+    lp.patternHash
+    lp.serviceName
+    (lp.logLevel == Just "error")
+    severity
+    ("New Log Pattern: " <> T.take 100 lp.logPattern)
+    "A new log pattern has been detected. Review to ensure it's expected behavior."
+    "n/a"
+    logPatternData
+
+
+-- | Create an issue for a log pattern rate change
+createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> IO Issue
+createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
+  now <- getCurrentTime
+  let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
+      changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
+      rateChangeData =
+        LogPatternRateChangeData
+          { patternHash = lp.patternHash
+          , logPattern = lp.logPattern
+          , sampleMessage = lp.sampleMessage
+          , logLevel = lp.logLevel
+          , serviceName = lp.serviceName
+          , currentRatePerHour = currentRate
+          , baselineMean = baselineMean
+          , baselineStddev = baselineStddev
+          , zScore = zScoreVal
+          , changePercent = changePercentVal
+          , changeDirection = direction
+          , detectedAt = now
+          }
+      severity = case (direction, lp.logLevel) of
+        ("spike", Just "error") -> "critical"
+        ("spike", _) -> "warning"
+        ("drop", _) -> "info"
+        _ -> "info"
+  mkIssue
+    projectId
+    LogPatternRateChange
+    lp.patternHash
+    lp.patternHash
+    lp.serviceName
+    (direction == "spike" && lp.logLevel == Just "error")
+    severity
+    ("Log Pattern " <> T.toTitle direction <> ": " <> T.take 60 lp.logPattern <> " (" <> T.pack (show (round changePercentVal :: Int)) <> "%)")
+    ("Log pattern volume " <> direction <> " detected. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr (" <> T.pack (show (round zScoreVal :: Int)) <> " std devs).")
+    "n/a"
+    rateChangeData
 
 
 -- | Create an issue for endpoint latency degradation

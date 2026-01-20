@@ -18,6 +18,7 @@ import RequestMessages (replaceAllFormats)
 data LogGroup = LogGroup
   { template :: V.Vector Text
   , templateStr :: Text
+  , exampleLog :: Text
   , logIds :: V.Vector Text
   , frequency :: Int
   , firstSeen :: UTCTime
@@ -88,6 +89,7 @@ createLogGroup templateTokens templateString logId now =
     { template = templateTokens
     , templateStr = templateString
     , logIds = V.singleton logId
+    , exampleLog = templateString
     , frequency = 1
     , firstSeen = now
     , lastSeen = now
@@ -105,9 +107,9 @@ calculateSimilarity tokens1 tokens2
        in fromIntegral matches / fromIntegral total
 
 
-updateTreeWithLog :: DrainTree -> Int -> Text -> V.Vector Text -> Text -> Text -> UTCTime -> DrainTree
-updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now =
-  let (updatedChildren, wasUpdated) = updateOrCreateLevelOne (children tree) tokenCount firstToken tokensVec logId logContent now (config tree)
+updateTreeWithLog :: DrainTree -> Int -> Text -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainTree
+updateTreeWithLog tree tokenCount firstToken tokensVec logId isSampleLog logContent now =
+  let (updatedChildren, wasUpdated) = updateOrCreateLevelOne (children tree) tokenCount firstToken tokensVec logId isSampleLog logContent now (config tree)
       newTotalLogs = totalLogs tree + 1
       newTotalPatterns = if wasUpdated then totalPatterns tree else totalPatterns tree + 1
    in tree
@@ -117,12 +119,12 @@ updateTreeWithLog tree tokenCount firstToken tokensVec logId logContent now =
         }
 
 
-updateOrCreateLevelOne :: V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelOne, Bool)
-updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId logContent now config =
+updateOrCreateLevelOne :: V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelOne, Bool)
+updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId isSampleLog logContent now config =
   case V.findIndex (\level -> tokenCount level == targetCount) levelOnes of
     Just index ->
       let existingLevel = levelOnes V.! index
-          (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existingLevel) firstToken tokensVec logId logContent now config
+          (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existingLevel) firstToken tokensVec logId isSampleLog logContent now config
           updatedLevel = existingLevel{nodes = updatedChildren}
           updatedLevelOnes = levelOnes V.// [(index, updatedLevel)]
        in (updatedLevelOnes, wasUpdated)
@@ -134,12 +136,12 @@ updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId logConte
        in (updatedLevelOnes, False)
 
 
-updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelTwo, Bool)
-updateOrCreateLevelTwo levelTwos targetToken tokensVec logId logContent now config =
+updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelTwo, Bool)
+updateOrCreateLevelTwo levelTwos targetToken tokensVec logId isSampleLog logContent now config =
   case V.findIndex (\level -> firstToken level == targetToken) levelTwos of
     Just index ->
       let existingLevel = levelTwos V.! index
-          (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existingLevel) tokensVec logId logContent now config
+          (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existingLevel) tokensVec logId isSampleLog logContent now config
           updatedLevel = existingLevel{logGroups = updatedLogGroups}
           updatedLevelTwos = levelTwos V.// [(index, updatedLevel)]
        in (updatedLevelTwos, wasUpdated)
@@ -166,15 +168,15 @@ leastRecentlyUsedIndex logGroups =
     & maybe 0 fst
 
 
-updateOrCreateLogGroup :: V.Vector LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool)
-updateOrCreateLogGroup logGroups tokensVec logId logContent now config =
+updateOrCreateLogGroup :: V.Vector LogGroup -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool)
+updateOrCreateLogGroup logGroups tokensVec logId isSampleLog logContent now config =
   case findBestMatch logGroups tokensVec (similarityThreshold config) of
     Just (index, bestGroup) ->
       let updatedTemplate =
             if V.length tokensVec == V.length (template bestGroup)
               then mergeTemplates (template bestGroup) tokensVec (wildcardToken config)
               else template bestGroup
-          updatedGroup = updateLogGroupWithTemplate bestGroup updatedTemplate logId logContent now
+          updatedGroup = updateLogGroupWithTemplate bestGroup updatedTemplate logId isSampleLog logContent now
           updatedGroups = logGroups V.// [(index, updatedGroup)]
        in (updatedGroups, True)
     Nothing ->
@@ -213,23 +215,24 @@ mergeTemplates template1 template2 wildcardToken =
 
 
 -- Update log group with new template and log information
-updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Text -> UTCTime -> LogGroup
-updateLogGroupWithTemplate group' newTemplate logId originalLog now =
+updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> LogGroup
+updateLogGroupWithTemplate group' newTemplate logId isSampleLog originalLog now =
   group'
     { template = newTemplate
     , templateStr = unwords $ V.toList newTemplate
+    , exampleLog = if isSampleLog then originalLog else exampleLog group'
     , logIds = V.cons logId (logIds group')
     , frequency = frequency group' + 1
     , lastSeen = now
     }
 
 
-getAllLogGroups :: DrainTree -> V.Vector (Text, V.Vector Text)
+getAllLogGroups :: DrainTree -> V.Vector (Text, Text, V.Vector Text)
 getAllLogGroups tree =
   let levelOnes = children tree
       levelTwos = V.concatMap nodes levelOnes
       allLogGroups = V.concatMap logGroups levelTwos
-   in V.map (\grp -> (templateStr grp, logIds grp)) allLogGroups
+   in V.map (\grp -> (grp.exampleLog, templateStr grp, logIds grp)) allLogGroups
 
 
 looksLikeJson :: T.Text -> Bool
