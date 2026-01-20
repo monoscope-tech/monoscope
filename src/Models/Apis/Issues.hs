@@ -23,6 +23,16 @@ module Models.Apis.Issues (
   APIChangeData (..),
   RuntimeExceptionData (..),
   QueryAlertData (..),
+  LogPatternData (..),
+  ErrorEscalatingData (..),
+  ErrorRegressedData (..),
+  LogPatternRateChangeData (..),
+  EndpointLatencyDegradationData (..),
+  EndpointErrorRateSpikeData (..),
+  EndpointVolumeRateChangeData (..),
+  NewEndpointData (..),
+  NewShapeData (..),
+  FieldChangeData (..),
 
   -- * Database Operations
   insertIssue,
@@ -34,11 +44,23 @@ module Models.Apis.Issues (
   updateIssueCriticality,
   acknowledgeIssue,
   selectIssueByHash,
+  updateIssueData,
 
   -- * Conversion Functions
-  createAPIChangeIssue,
-  createRuntimeExceptionIssue,
   createQueryAlertIssue,
+  createNewErrorIssue,
+  createErrorSpikeIssue,
+  createLogPatternIssue,
+  createErrorEscalatingIssue,
+  createErrorRegressedIssue,
+  createLogPatternRateChangeIssue,
+  createEndpointLatencyDegradationIssue,
+  createEndpointErrorRateSpikeIssue,
+  createEndpointVolumeRateChangeIssue,
+  createNewEndpointIssue,
+  createNewShapeIssue,
+  createFieldChangeIssue,
+  findOpenShapeIssueForStatusCode,
 
   -- * Utilities
   issueIdText,
@@ -81,6 +103,8 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Errors qualified as Errors
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -101,29 +125,54 @@ issueIdText = idToText
 
 -- | Issue types
 data IssueType
-  = APIChange
+  = NewEndpoint
+  | NewShape
+  | FieldChange
   | RuntimeException
   | QueryAlert
+  | LogPattern
+  | ErrorEscalating
+  | ErrorRegressed
+  | LogPatternRateChange
+  | EndpointLatencyDegradation
+  | EndpointErrorRateSpike
+  | EndpointVolumeRateChange
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] IssueType
 
 
-instance Default IssueType where
-  def = APIChange
-
-
 issueTypeToText :: IssueType -> Text
-issueTypeToText APIChange = "api_change" -- Maps to anomaly_type 'shape' in DB
+issueTypeToText NewEndpoint = "new_endpoint"
+issueTypeToText NewShape = "new_shape"
+issueTypeToText FieldChange = "field_change"
 issueTypeToText RuntimeException = "runtime_exception"
 issueTypeToText QueryAlert = "query_alert"
+issueTypeToText LogPattern = "log_pattern"
+issueTypeToText ErrorEscalating = "error_escalating"
+issueTypeToText ErrorRegressed = "error_regressed"
+issueTypeToText LogPatternRateChange = "log_pattern_rate_change"
+issueTypeToText EndpointLatencyDegradation = "endpoint_latency_degradation"
+issueTypeToText EndpointErrorRateSpike = "endpoint_error_rate_spike"
+issueTypeToText EndpointVolumeRateChange = "endpoint_volume_rate_change"
 
 
 parseIssueType :: Text -> Maybe IssueType
-parseIssueType "api_change" = Just APIChange
-parseIssueType "shape" = Just APIChange -- Handle DB anomaly_type
+parseIssueType "new_endpoint" = Just NewEndpoint
+parseIssueType "new_shape" = Just NewShape
+parseIssueType "field_change" = Just FieldChange
+parseIssueType "shape" = Just NewShape -- Handle DB anomaly_type
+parseIssueType "endpoint" = Just NewEndpoint -- Handle DB anomaly_type
+parseIssueType "field" = Just FieldChange -- Handle DB anomaly_type
 parseIssueType "runtime_exception" = Just RuntimeException
 parseIssueType "query_alert" = Just QueryAlert
+parseIssueType "log_pattern" = Just LogPattern
+parseIssueType "error_escalating" = Just ErrorEscalating
+parseIssueType "error_regressed" = Just ErrorRegressed
+parseIssueType "log_pattern_rate_change" = Just LogPatternRateChange
+parseIssueType "endpoint_latency_degradation" = Just EndpointLatencyDegradation
+parseIssueType "endpoint_error_rate_spike" = Just EndpointErrorRateSpike
+parseIssueType "endpoint_volume_rate_change" = Just EndpointVolumeRateChange
 parseIssueType _ = Nothing
 
 
@@ -190,6 +239,200 @@ data QueryAlertData = QueryAlertData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryAlertData
 
 
+-- | Log Pattern issue data (new pattern detected)
+data LogPatternData = LogPatternData
+  { patternHash :: Text
+  , logPattern :: Text
+  , sampleMessage :: Maybe Text
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , firstSeenAt :: UTCTime
+  , occurrenceCount :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson LogPatternData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternData
+
+
+-- | Error Escalating issue data (error rate increasing over time)
+data ErrorEscalatingData = ErrorEscalatingData
+  { errorHash :: Text
+  , errorType :: Text
+  , errorMessage :: Text
+  , serviceName :: Maybe Text
+  , currentState :: Text -- "escalating"
+  , previousState :: Text -- "new" or "ongoing"
+  , occurrences1h :: Int
+  , occurrences24h :: Int
+  , escalationRate :: Double -- rate of increase (e.g., 2.5x)
+  , escalationWindow :: Text -- "1h", "6h", "24h"
+  , firstSeenAt :: UTCTime
+  , lastSeenAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson ErrorEscalatingData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorEscalatingData
+
+
+-- | Error Regressed issue data (previously resolved error returned)
+data ErrorRegressedData = ErrorRegressedData
+  { errorHash :: Text
+  , errorType :: Text
+  , errorMessage :: Text
+  , serviceName :: Maybe Text
+  , resolvedAt :: UTCTime -- when it was previously resolved
+  , regressedAt :: UTCTime -- when it came back
+  , quietPeriodMinutes :: Int -- how long it was quiet
+  , previousOccurrences :: Int -- count before resolution
+  , newOccurrences :: Int -- count since regression
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson ErrorRegressedData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorRegressedData
+
+
+-- | Log Pattern Rate Change issue data (volume spike/drop)
+data LogPatternRateChangeData = LogPatternRateChangeData
+  { patternHash :: Text
+  , logPattern :: Text
+  , sampleMessage :: Maybe Text
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , currentRatePerHour :: Double
+  , baselineMean :: Double
+  , baselineStddev :: Double
+  , zScore :: Double -- standard deviations from baseline
+  , changePercent :: Double -- percentage change from baseline
+  , changeDirection :: Text -- "spike" or "drop"
+  , detectedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson LogPatternRateChangeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternRateChangeData
+
+
+-- | Endpoint Latency Degradation issue data
+data EndpointLatencyDegradationData = EndpointLatencyDegradationData
+  { endpointHash :: Text
+  , endpointMethod :: Text
+  , endpointPath :: Text
+  , serviceName :: Maybe Text
+  , currentLatencyMs :: Double -- current p50/p95/p99
+  , baselineLatencyMs :: Double -- baseline p50/p95/p99
+  , baselineStddev :: Double
+  , zScore :: Double
+  , degradationPercent :: Double -- percentage increase
+  , percentile :: Text -- "p50", "p95", "p99"
+  , sampleTraceIds :: V.Vector Text -- example traces for investigation
+  , detectedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson EndpointLatencyDegradationData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] EndpointLatencyDegradationData
+
+
+-- | Endpoint Error Rate Spike issue data
+data EndpointErrorRateSpikeData = EndpointErrorRateSpikeData
+  { endpointHash :: Text
+  , endpointMethod :: Text
+  , endpointPath :: Text
+  , serviceName :: Maybe Text
+  , currentErrorRate :: Double -- current error rate (0.0 - 1.0)
+  , baselineErrorRate :: Double -- baseline error rate
+  , baselineStddev :: Double
+  , zScore :: Double
+  , spikePercent :: Double -- percentage increase
+  , errorCount :: Int -- number of errors in window
+  , totalRequests :: Int -- total requests in window
+  , topErrorTypes :: V.Vector Text -- most common error types
+  , detectedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson EndpointErrorRateSpikeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] EndpointErrorRateSpikeData
+
+
+-- | Endpoint Volume Rate Change issue data (traffic spike or drop)
+data EndpointVolumeRateChangeData = EndpointVolumeRateChangeData
+  { endpointHash :: Text
+  , endpointMethod :: Text
+  , endpointPath :: Text
+  , serviceName :: Maybe Text
+  , currentRatePerHour :: Double -- current requests/hour
+  , baselineRatePerHour :: Double -- baseline requests/hour
+  , baselineStddev :: Double
+  , zScore :: Double
+  , changePercent :: Double -- percentage change
+  , changeDirection :: Text -- "spike" or "drop"
+  , detectedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson EndpointVolumeRateChangeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] EndpointVolumeRateChangeData
+
+
+-- | New Endpoint issue data
+data NewEndpointData = NewEndpointData
+  { endpointHash :: Text
+  , endpointMethod :: Text
+  , endpointPath :: Text
+  , endpointHost :: Text
+  , firstSeenAt :: UTCTime
+  , initialShapes :: V.Vector Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson NewEndpointData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewEndpointData
+
+
+-- | New Shape issue data
+data NewShapeData = NewShapeData
+  { shapeHash :: Text
+  , endpointHash :: Text
+  , endpointMethod :: Text
+  , endpointPath :: Text
+  , statusCode :: Int
+  , exampleRequestPayload :: AE.Value
+  , exampleResponsePayload :: AE.Value
+  , newFields :: V.Vector Text
+  , deletedFields :: V.Vector Text
+  , modifiedFields :: V.Vector Text
+  , fieldHashes :: V.Vector Text
+  , firstSeenAt :: UTCTime
+  , newShapesAfterIssue :: V.Vector Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson NewShapeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] NewShapeData
+
+
+-- | Field Change issue data (for individual field changes)
+data FieldChangeData = FieldChangeData
+  { fieldHash :: Text
+  , endpointHash :: Text
+  , endpointMethod :: Text
+  , endpointPath :: Text
+  , keyPath :: Text
+  , fieldCategory :: Text
+  , previousType :: Maybe Text
+  , newType :: Text
+  , changeType :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson FieldChangeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FieldChangeData
+
+
 -- | Main Issue type
 data Issue = Issue
   { id :: IssueId
@@ -197,30 +440,23 @@ data Issue = Issue
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
-  , endpointHash :: Text -- For API changes, empty for others
-  -- Status fields
+  , sourceType :: Text
+  , targetHash :: Text
+  , endpointHash :: Text
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
-  , -- Issue details
-    title :: Text
-  , service :: Text
+  , title :: Text
+  , service :: Maybe Text
+  , environment :: Maybe Text
   , critical :: Bool
   , severity :: Text -- "critical", "warning", "info"
-  -- Impact metrics
-  , affectedRequests :: Int
-  , affectedClients :: Int
-  , errorRate :: Maybe Double
-  , -- Actions
-    recommendedAction :: Text
+  , recommendedAction :: Text
   , migrationComplexity :: Text -- "low", "medium", "high", "n/a"
-  -- Data payload (polymorphic based on issueType)
   , issueData :: Aeson AE.Value
-  , -- Payload changes tracking (for API changes)
-    requestPayloads :: Aeson [PayloadChange]
+  , requestPayloads :: Aeson [PayloadChange]
   , responsePayloads :: Aeson [PayloadChange]
-  , -- LLM enhancement tracking
-    llmEnhancedAt :: Maybe UTCTime
+  , llmEnhancedAt :: Maybe UTCTime
   , llmEnhancementVersion :: Maybe Int
   }
   deriving stock (Generic, Show)
@@ -235,18 +471,18 @@ instance Default Issue where
       , createdAt = error "createdAt must be set"
       , updatedAt = error "updatedAt must be set"
       , projectId = def
-      , issueType = def
+      , issueType = error "issueType must be set"
+      , sourceType = ""
+      , targetHash = ""
       , endpointHash = ""
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
       , title = ""
-      , service = ""
+      , service = Nothing
+      , environment = Nothing
       , critical = False
       , severity = "info"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = ""
       , migrationComplexity = "low"
       , issueData = Aeson AE.Null
@@ -269,7 +505,7 @@ data IssueL = IssueL
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
   , title :: Text
-  , service :: Text
+  , service :: Maybe Text
   , critical :: Bool
   , severity :: Text -- Computed in query
   , affectedRequests :: Int -- Will be converted from affected_payloads in query
@@ -300,24 +536,18 @@ insertIssue issue = void $ PG.execute q issue
     q =
       [sql|
 INSERT INTO apis.issues (
-  id, created_at, updated_at, project_id, issue_type, endpoint_hash,
+  id, created_at, updated_at, project_id, issue_type, source_type, target_hash, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
-  title, service, critical, severity,
-  affected_requests, affected_clients, error_rate,
+  title, service, environment, critical, severity,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (project_id, endpoint_hash)
-  WHERE issue_type = 'api_change'
-    AND acknowledged_at IS NULL
-    AND archived_at IS NULL
-    AND endpoint_hash != ''
+ON CONFLICT (project_id, target_hash, issue_type)
+  WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
-  affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
-  affected_clients = GREATEST(issues.affected_clients, EXCLUDED.affected_clients),
-  issue_data = issues.issue_data || EXCLUDED.issue_data
+  issue_data = EXCLUDED.issue_data
     |]
 
 
@@ -351,7 +581,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     q =
       [text|
       SELECT id, created_at, updated_at, project_id, issue_type::text, endpoint_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
-        CASE WHEN critical THEN 'critical' ELSE 'info' END, affected_requests, affected_clients, NULL::double precision,
+        CASE WHEN critical THEN 'critical' ELSE 'info' END, 0::int, 0::int, NULL::double precision,
         recommended_action, migration_complexity, issue_data, request_payloads, response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
       FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
     |]
@@ -360,7 +590,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "api_change" :: Text, endpointHash)
+findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "new-endpoint" :: Text, endpointHash)
   where
     q =
       [sql|
@@ -374,6 +604,22 @@ findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "ap
     |]
 
 
+findOpenShapeIssueForStatusCode :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe Issue)
+findOpenShapeIssueForStatusCode pid endpointHash statusCode = listToMaybe <$> PG.query q (pid, "new-shape" :: Text, endpointHash, statusCode)
+  where
+    q =
+      [sql|
+      SELECT * FROM apis.issues
+      WHERE project_id = ? 
+        AND issue_type = ?
+        AND endpoint_hash = ?
+        AND (issue_data->>'status_code')::int = ?
+        AND acknowledged_at IS NULL
+        AND archived_at IS NULL
+      LIMIT 1
+    |]
+
+
 -- | Update issue with new anomaly data
 updateIssueWithNewAnomaly :: DB es => IssueId -> APIChangeData -> Eff es ()
 updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, issueId)
@@ -381,9 +627,8 @@ updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, 
     q =
       [sql|
       UPDATE apis.issues
-      SET 
+      SET
         issue_data = issue_data || ?::jsonb,
-        affected_requests = affected_requests + 1,
         updated_at = NOW()
       WHERE id = ?
     |]
@@ -433,96 +678,49 @@ acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
     |]
 
 
--- | Create API Change issue from anomalies
-createAPIChangeIssue :: Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> IO Issue
-createAPIChangeIssue projectId endpointHash anomalies = do
+-- | Derive source type from issue type
+issueTypeToSourceType :: IssueType -> Text
+issueTypeToSourceType NewEndpoint = "endpoint"
+issueTypeToSourceType NewShape = "shape"
+issueTypeToSourceType FieldChange = "shape"
+issueTypeToSourceType RuntimeException = "error"
+issueTypeToSourceType QueryAlert = "query"
+issueTypeToSourceType LogPattern = "log_pattern"
+issueTypeToSourceType ErrorEscalating = "error"
+issueTypeToSourceType ErrorRegressed = "error"
+issueTypeToSourceType LogPatternRateChange = "log_pattern"
+issueTypeToSourceType EndpointLatencyDegradation = "endpoint"
+issueTypeToSourceType EndpointErrorRateSpike = "endpoint"
+issueTypeToSourceType EndpointVolumeRateChange = "endpoint"
+
+
+-- | Helper to create an issue with common defaults
+mkIssue :: AE.ToJSON a => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> IO Issue
+mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
   issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
-
-  let firstAnomaly = V.head anomalies
-      apiChangeData =
-        APIChangeData
-          { endpointMethod = fromMaybe "UNKNOWN" firstAnomaly.endpointMethod
-          , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
-          , endpointHost = "Unknown"
-          , anomalyHashes = V.map (.targetHash) anomalies
-          , shapeChanges = V.empty -- Simplified for now
-          , formatChanges = V.empty -- Simplified for now
-          , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
-          , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
-          , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
-          }
-
-      breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
-      isCritical = breakingChanges > 0
-
+  zonedNow <- utcToLocalZonedTime now
   pure
     Issue
       { id = issueId
-      , createdAt = firstAnomaly.createdAt
-      , updatedAt = firstAnomaly.updatedAt
+      , createdAt = zonedNow
+      , updatedAt = zonedNow
       , projectId = projectId
-      , issueType = APIChange
+      , issueType = issueType
+      , sourceType = issueTypeToSourceType issueType
+      , targetHash = targetHash
       , endpointHash = endpointHash
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
-      , title = "API structure has changed"
-      , service = Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
-      , critical = isCritical
-      , severity = if isCritical then "critical" else "warning"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
-      , recommendedAction = "Review the API changes and update your integration accordingly."
-      , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
-      , issueData = Aeson $ AE.toJSON apiChangeData
-      , requestPayloads = Aeson [] -- Will be populated during enhancement
-      , responsePayloads = Aeson [] -- Will be populated during enhancement
-      , llmEnhancedAt = Nothing
-      , llmEnhancementVersion = Nothing
-      }
-
-
--- | Create Runtime Exception issue
-createRuntimeExceptionIssue :: Projects.ProjectId -> RequestDumps.ATError -> IO Issue
-createRuntimeExceptionIssue projectId atError = do
-  issueId <- UUIDId <$> UUID4.nextRandom
-  errorZonedTime <- utcToLocalZonedTime atError.when
-
-  let exceptionData =
-        RuntimeExceptionData
-          { errorType = atError.errorType
-          , errorMessage = atError.message
-          , stackTrace = atError.stackTrace
-          , requestPath = atError.requestPath
-          , requestMethod = atError.requestMethod
-          , occurrenceCount = 1
-          , firstSeen = atError.when
-          , lastSeen = atError.when
-          }
-
-  pure
-    Issue
-      { id = issueId
-      , createdAt = errorZonedTime
-      , updatedAt = errorZonedTime
-      , projectId = projectId
-      , issueType = RuntimeException
-      , endpointHash = fromMaybe "" atError.hash
-      , acknowledgedAt = Nothing
-      , acknowledgedBy = Nothing
-      , archivedAt = Nothing
-      , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
-      , service = fromMaybe "unknown-service" atError.serviceName
-      , critical = True
-      , severity = "critical"
-      , affectedRequests = 1
-      , affectedClients = 0
-      , errorRate = Nothing
-      , recommendedAction = "Investigate the error and implement a fix."
-      , migrationComplexity = "n/a"
-      , issueData = Aeson $ AE.toJSON exceptionData
+      , title = title
+      , service = service
+      , environment = Nothing
+      , critical = critical
+      , severity = severity
+      , recommendedAction = recommendedAction
+      , migrationComplexity = migrationComplexity
+      , issueData = Aeson $ AE.toJSON issueData
       , requestPayloads = Aeson []
       , responsePayloads = Aeson []
       , llmEnhancedAt = Nothing
@@ -533,10 +731,7 @@ createRuntimeExceptionIssue projectId atError = do
 -- | Create Query Alert issue
 createQueryAlertIssue :: Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> IO Issue
 createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thresholdType = do
-  issueId <- UUIDId <$> UUID4.nextRandom
   now <- getCurrentTime
-  zonedNow <- utcToLocalZonedTime now
-
   let alertData =
         QueryAlertData
           { queryId = queryId
@@ -547,33 +742,441 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
           , thresholdType = thresholdType
           , triggeredAt = now
           }
+  mkIssue
+    projectId
+    QueryAlert
+    ""
+    ""
+    (Just "Monitoring")
+    True
+    "warning"
+    (queryName <> " threshold " <> thresholdType <> " " <> show threshold)
+    "Review the query results and take appropriate action."
+    "n/a"
+    alertData
 
-  pure
-    Issue
-      { id = issueId
-      , createdAt = zonedNow
-      , updatedAt = zonedNow
-      , projectId = projectId
-      , issueType = QueryAlert
-      , endpointHash = ""
-      , acknowledgedAt = Nothing
-      , acknowledgedBy = Nothing
-      , archivedAt = Nothing
-      , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
-      , service = "Monitoring"
-      , critical = True
-      , severity = "warning"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
-      , recommendedAction = "Review the query results and take appropriate action."
-      , migrationComplexity = "n/a"
-      , issueData = Aeson $ AE.toJSON alertData
-      , requestPayloads = Aeson []
-      , responsePayloads = Aeson []
-      , llmEnhancedAt = Nothing
-      , llmEnhancementVersion = Nothing
-      }
+
+-- | Create issue for a new error
+createNewErrorIssue :: Projects.ProjectId -> Errors.Error -> IO Issue
+createNewErrorIssue projectId err = do
+  now <- getCurrentTime
+  let exceptionData =
+        RuntimeExceptionData
+          { errorType = err.errorType
+          , errorMessage = err.message
+          , stackTrace = err.stacktrace
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = 1
+          , firstSeen = now
+          , lastSeen = now
+          }
+  mkIssue
+    projectId
+    RuntimeException
+    err.hash
+    err.hash
+    err.service
+    True
+    "critical"
+    ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
+    "Investigate the new error and implement a fix."
+    "n/a"
+    exceptionData
+
+
+-- | Create issue for an error spike
+createErrorSpikeIssue :: Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> IO Issue
+createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
+  now <- getCurrentTime
+  let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
+      increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
+      exceptionData =
+        RuntimeExceptionData
+          { errorType = err.errorType
+          , errorMessage = err.message
+          , stackTrace = err.stacktrace
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = round currentRate
+          , firstSeen = now
+          , lastSeen = now
+          }
+  mkIssue
+    projectId
+    RuntimeException
+    err.hash
+    err.hash
+    err.service
+    True
+    "critical"
+    ("Error Spike: " <> err.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)")
+    ("Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes.")
+    "n/a"
+    exceptionData
+
+
+-- | Create an issue for a new log pattern
+createLogPatternIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> IO Issue
+createLogPatternIssue projectId lp = do
+  now <- getCurrentTime
+  let logPatternData =
+        LogPatternData
+          { patternHash = lp.patternHash
+          , logPattern = lp.logPattern
+          , sampleMessage = lp.sampleMessage
+          , logLevel = lp.logLevel
+          , serviceName = lp.serviceName
+          , firstSeenAt = now
+          , occurrenceCount = fromIntegral lp.occurrenceCount
+          }
+      severity = case lp.logLevel of
+        Just "error" -> "critical"
+        Just "warning" -> "warning"
+        _ -> "info"
+  mkIssue
+    projectId
+    LogPattern
+    lp.patternHash
+    lp.patternHash
+    lp.serviceName
+    (lp.logLevel == Just "error")
+    severity
+    ("New Log Pattern: " <> T.take 100 lp.logPattern)
+    "A new log pattern has been detected. Review to ensure it's expected behavior."
+    "n/a"
+    logPatternData
+
+
+-- | Create an issue for an escalating error
+createErrorEscalatingIssue :: Projects.ProjectId -> Errors.Error -> Text -> Double -> Text -> IO Issue
+createErrorEscalatingIssue projectId err prevState escalationRate escalationWindow = do
+  now <- getCurrentTime
+  let escalatingData =
+        ErrorEscalatingData
+          { errorHash = err.hash
+          , errorType = err.errorType
+          , errorMessage = err.message
+          , serviceName = err.service
+          , currentState = "escalating"
+          , previousState = prevState
+          , occurrences1h = err.occurrences1h
+          , occurrences24h = err.occurrences24h
+          , escalationRate = escalationRate
+          , escalationWindow = escalationWindow
+          , firstSeenAt = now
+          , lastSeenAt = now
+          }
+  mkIssue
+    projectId
+    ErrorEscalating
+    err.hash
+    err.hash
+    err.service
+    True
+    "critical"
+    ("Error Escalating: " <> err.errorType <> " (" <> T.pack (show (round (escalationRate * 100) :: Int)) <> "% increase)")
+    ("Error rate is escalating (" <> T.pack (show escalationRate) <> "x over " <> escalationWindow <> "). Investigate immediately.")
+    "n/a"
+    escalatingData
+
+
+-- | Create an issue for a regressed error
+createErrorRegressedIssue :: Projects.ProjectId -> Errors.Error -> UTCTime -> Int -> Int -> IO Issue
+createErrorRegressedIssue projectId err resolvedAtTime quietMins prevOccurrences = do
+  now <- getCurrentTime
+  let regressedData =
+        ErrorRegressedData
+          { errorHash = err.hash
+          , errorType = err.errorType
+          , errorMessage = err.message
+          , serviceName = err.service
+          , resolvedAt = resolvedAtTime
+          , regressedAt = now
+          , quietPeriodMinutes = quietMins
+          , previousOccurrences = prevOccurrences
+          , newOccurrences = 1
+          }
+  mkIssue
+    projectId
+    ErrorRegressed
+    err.hash
+    err.hash
+    err.service
+    True
+    "critical"
+    ("Error Regressed: " <> err.errorType <> " (after " <> T.pack (show quietMins) <> " min quiet)")
+    ("Previously resolved error has returned after " <> T.pack (show quietMins) <> " minutes. The original fix may be incomplete.")
+    "n/a"
+    regressedData
+
+
+-- | Create an issue for a log pattern rate change
+createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> IO Issue
+createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
+  now <- getCurrentTime
+  let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
+      changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
+      rateChangeData =
+        LogPatternRateChangeData
+          { patternHash = lp.patternHash
+          , logPattern = lp.logPattern
+          , sampleMessage = lp.sampleMessage
+          , logLevel = lp.logLevel
+          , serviceName = lp.serviceName
+          , currentRatePerHour = currentRate
+          , baselineMean = baselineMean
+          , baselineStddev = baselineStddev
+          , zScore = zScoreVal
+          , changePercent = changePercentVal
+          , changeDirection = direction
+          , detectedAt = now
+          }
+      severity = case (direction, lp.logLevel) of
+        ("spike", Just "error") -> "critical"
+        ("spike", _) -> "warning"
+        ("drop", _) -> "info"
+        _ -> "info"
+  mkIssue
+    projectId
+    LogPatternRateChange
+    lp.patternHash
+    lp.patternHash
+    lp.serviceName
+    (direction == "spike" && lp.logLevel == Just "error")
+    severity
+    ("Log Pattern " <> T.toTitle direction <> ": " <> T.take 60 lp.logPattern <> " (" <> T.pack (show (round changePercentVal :: Int)) <> "%)")
+    ("Log pattern volume " <> direction <> " detected. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr (" <> T.pack (show (round zScoreVal :: Int)) <> " std devs).")
+    "n/a"
+    rateChangeData
+
+
+-- | Create an issue for endpoint latency degradation
+createEndpointLatencyDegradationIssue :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Double -> Double -> Double -> Text -> V.Vector Text -> IO Issue
+createEndpointLatencyDegradationIssue projectId epHash method path serviceName currentLatency baselineLatency baselineStddev percentile traceIds = do
+  now <- getCurrentTime
+  let degradationPct = if baselineLatency > 0 then ((currentLatency / baselineLatency) - 1) * 100 else 0
+      zScoreVal = if baselineStddev > 0 then (currentLatency - baselineLatency) / baselineStddev else 0
+      latencyData =
+        EndpointLatencyDegradationData
+          { endpointHash = epHash
+          , endpointMethod = method
+          , endpointPath = path
+          , serviceName = serviceName
+          , currentLatencyMs = currentLatency
+          , baselineLatencyMs = baselineLatency
+          , baselineStddev = baselineStddev
+          , zScore = zScoreVal
+          , degradationPercent = degradationPct
+          , percentile = percentile
+          , sampleTraceIds = traceIds
+          , detectedAt = now
+          }
+      severity = if degradationPct > 100 then "critical" else if degradationPct > 50 then "warning" else "info"
+  mkIssue
+    projectId
+    EndpointLatencyDegradation
+    epHash
+    epHash
+    serviceName
+    (degradationPct > 100)
+    severity
+    ("Latency Degradation: " <> method <> " " <> path <> " (" <> percentile <> " +" <> T.pack (show (round degradationPct :: Int)) <> "%)")
+    ("Endpoint " <> percentile <> " latency increased from " <> T.pack (show (round baselineLatency :: Int)) <> "ms to " <> T.pack (show (round currentLatency :: Int)) <> "ms. Check recent deployments and dependencies.")
+    "n/a"
+    latencyData
+
+
+-- | Create an issue for endpoint error rate spike
+createEndpointErrorRateSpikeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Double -> Double -> Double -> Int -> Int -> V.Vector Text -> IO Issue
+createEndpointErrorRateSpikeIssue projectId epHash method path serviceName currentRate baselineRate baselineStddev errorCount totalReqs topErrors = do
+  now <- getCurrentTime
+  let zScoreVal = if baselineStddev > 0 then (currentRate - baselineRate) / baselineStddev else 0
+      spikePct = if baselineRate > 0 then ((currentRate / baselineRate) - 1) * 100 else currentRate * 100
+      errorRateData =
+        EndpointErrorRateSpikeData
+          { endpointHash = epHash
+          , endpointMethod = method
+          , endpointPath = path
+          , serviceName = serviceName
+          , currentErrorRate = currentRate
+          , baselineErrorRate = baselineRate
+          , baselineStddev = baselineStddev
+          , zScore = zScoreVal
+          , spikePercent = spikePct
+          , errorCount = errorCount
+          , totalRequests = totalReqs
+          , topErrorTypes = topErrors
+          , detectedAt = now
+          }
+      severity = if currentRate > 0.1 then "critical" else if currentRate > 0.05 then "warning" else "info"
+  mkIssue
+    projectId
+    EndpointErrorRateSpike
+    epHash
+    epHash
+    serviceName
+    (currentRate > 0.1)
+    severity
+    ("Error Rate Spike: " <> method <> " " <> path <> " (" <> T.pack (show (round (currentRate * 100) :: Int)) <> "% errors)")
+    ("Error rate spiked from " <> T.pack (show (round (baselineRate * 100) :: Int)) <> "% to " <> T.pack (show (round (currentRate * 100) :: Int)) <> "% (" <> T.pack (show errorCount) <> "/" <> T.pack (show totalReqs) <> " requests failed).")
+    "n/a"
+    errorRateData
+
+
+-- | Create an issue for endpoint volume rate change
+createEndpointVolumeRateChangeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Double -> Double -> Double -> Text -> IO Issue
+createEndpointVolumeRateChangeIssue projectId epHash method path serviceName currentRate baselineRate baselineStddev direction = do
+  now <- getCurrentTime
+  let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineRate) / baselineStddev else 0
+      changePct = if baselineRate > 0 then abs ((currentRate / baselineRate) - 1) * 100 else 0
+      volumeData =
+        EndpointVolumeRateChangeData
+          { endpointHash = epHash
+          , endpointMethod = method
+          , endpointPath = path
+          , serviceName = serviceName
+          , currentRatePerHour = currentRate
+          , baselineRatePerHour = baselineRate
+          , baselineStddev = baselineStddev
+          , zScore = zScoreVal
+          , changePercent = changePct
+          , changeDirection = direction
+          , detectedAt = now
+          }
+      severity = case (direction, changePct) of
+        ("drop", pct) | pct > 80 -> "critical"
+        ("drop", pct) | pct > 50 -> "warning"
+        ("spike", pct) | pct > 200 -> "warning"
+        _ -> "info"
+  mkIssue
+    projectId
+    EndpointVolumeRateChange
+    epHash
+    epHash
+    serviceName
+    (direction == "drop" && changePct > 80)
+    severity
+    ("Traffic " <> T.toTitle direction <> ": " <> method <> " " <> path <> " (" <> T.pack (show (round changePct :: Int)) <> "%)")
+    ("Endpoint traffic " <> direction <> " detected. Current: " <> T.pack (show (round currentRate :: Int)) <> " req/hr, Baseline: " <> T.pack (show (round baselineRate :: Int)) <> " req/hr.")
+    "n/a"
+    volumeData
+
+
+-- | Create an issue for a new endpoint
+createNewEndpointIssue :: Projects.ProjectId -> Text -> Text -> Text -> Text -> IO Issue
+createNewEndpointIssue projectId epHash method path host = do
+  now <- getCurrentTime
+  let endpointData =
+        NewEndpointData
+          { endpointHash = epHash
+          , endpointMethod = method
+          , endpointPath = path
+          , endpointHost = host
+          , firstSeenAt = now
+          , initialShapes = V.empty
+          }
+  mkIssue
+    projectId
+    NewEndpoint
+    epHash
+    epHash
+    (Just host)
+    False
+    "info"
+    "New Endpoint detected"
+    "A new API endpoint has been detected. Review to ensure it matches your API specification."
+    "n/a"
+    endpointData
+
+
+-- | Create an issue for a new shape
+createNewShapeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Int -> AE.Value -> AE.Value -> V.Vector Text -> V.Vector Text -> V.Vector Text -> V.Vector Text -> IO Issue
+createNewShapeIssue projectId shHash epHash method path statusCode reqPayload respPayload newFlds deletedFlds modifiedFlds fldHashes = do
+  now <- getCurrentTime
+  let shapeData =
+        NewShapeData
+          { shapeHash = shHash
+          , endpointHash = epHash
+          , endpointMethod = method
+          , endpointPath = path
+          , statusCode = statusCode
+          , exampleRequestPayload = reqPayload
+          , exampleResponsePayload = respPayload
+          , newFields = newFlds
+          , deletedFields = deletedFlds
+          , modifiedFields = modifiedFlds
+          , fieldHashes = fldHashes
+          , firstSeenAt = now
+          , newShapesAfterIssue = V.empty
+          }
+      hasBreakingChanges = not (V.null deletedFlds) || not (V.null modifiedFlds)
+      changeCount = V.length newFlds + V.length deletedFlds + V.length modifiedFlds
+      severity = if hasBreakingChanges then "critical" else "warning"
+      complexity = if V.length deletedFlds > 5 then "high" else if hasBreakingChanges then "medium" else "low"
+      action =
+        if hasBreakingChanges
+          then "Breaking API changes detected: " <> T.pack (show (V.length deletedFlds)) <> " deleted, " <> T.pack (show (V.length modifiedFlds)) <> " modified fields. Update clients immediately."
+          else "New API shape detected with " <> T.pack (show (V.length newFlds)) <> " new fields. Review for compatibility."
+  mkIssue
+    projectId
+    NewShape
+    shHash
+    epHash
+    Nothing
+    hasBreakingChanges
+    severity
+    ("New Shape: " <> method <> " " <> path <> " (" <> T.pack (show statusCode) <> ") - " <> T.pack (show changeCount) <> " field changes")
+    action
+    complexity
+    shapeData
+
+
+-- | Create an issue for a field change
+createFieldChangeIssue :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Text -> IO Issue
+createFieldChangeIssue projectId fldHash epHash method path keyPath category prevType newType changeType = do
+  let fieldData =
+        FieldChangeData
+          { fieldHash = fldHash
+          , endpointHash = epHash
+          , endpointMethod = method
+          , endpointPath = path
+          , keyPath = keyPath
+          , fieldCategory = category
+          , previousType = prevType
+          , newType = newType
+          , changeType = changeType
+          }
+      isBreaking = changeType `elem` ["removed", "type_changed"]
+      titlePrefix = case changeType of
+        "added" -> "New Field"
+        "removed" -> "Removed Field"
+        "type_changed" -> "Field Type Changed"
+        "format_changed" -> "Field Format Changed"
+        _ -> "Field Changed"
+  mkIssue
+    projectId
+    FieldChange
+    fldHash
+    epHash
+    Nothing
+    isBreaking
+    (if isBreaking then "critical" else "info")
+    (titlePrefix <> ": " <> keyPath <> " in " <> method <> " " <> path)
+    ""
+    (if isBreaking then "medium" else "low")
+    fieldData
+
+
+updateIssueData :: DB es => IssueId -> AE.Value -> Eff es ()
+updateIssueData issueId newData = void $ PG.execute q (Aeson newData, issueId)
+  where
+    q =
+      [sql|
+      UPDATE apis.issues
+      SET issue_data = ?
+      WHERE  id = ?
+    |]
 
 
 -- | Conversation type for AI chats
