@@ -73,6 +73,7 @@ library
       Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
+      Models.Apis.Errors
       Models.Apis.Fields.Facets
       Models.Apis.Fields.Types
       Models.Apis.Issues
