@@ -3,7 +3,10 @@ module Models.Apis.Shapes (
   ShapeWithFields (..),
   SwShape (..),
   ShapeId,
+  ShapeForIssue (..),
   bulkInsertShapes,
+  getShapeForIssue,
+  getShapeByHash,
 )
 where
 
@@ -12,7 +15,7 @@ import Data.Default (Default)
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -60,6 +63,11 @@ data Shape = Shape
   , statusCode :: Int
   , responseDescription :: Text
   , requestDescription :: Text
+  , exampleRequestPayload :: AE.Value
+  , exampleResponsePayload :: AE.Value
+  , firstTraceId :: Maybe Text
+  , recentTraceId :: Maybe Text
+  , service :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -72,10 +80,10 @@ bulkInsertShapes :: DB es => V.Vector Shape -> Eff es ()
 bulkInsertShapes shapes = void $ PG.executeMany q $ V.toList rowsToInsert
   where
     q =
-      [sql| 
+      [sql|
         INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING|]
+            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description, example_request_payload, example_response_payload, first_trace_id, recent_trace_id, service)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING|]
     rowsToInsert =
       V.map
         ( \shape ->
@@ -89,8 +97,13 @@ bulkInsertShapes shapes = void $ PG.executeMany q $ V.toList rowsToInsert
             , shape.fieldHashes
             , shape.hash
             , fromIntegral shape.statusCode
-            , ""
-            , ""
+            , shape.requestDescription
+            , shape.responseDescription
+            , shape.exampleRequestPayload
+            , shape.exampleResponsePayload
+            , shape.firstTraceId
+            , shape.recentTraceId
+            , shape.service
             )
         )
         shapes
@@ -114,3 +127,59 @@ data SwShape = SwShape
   deriving anyclass (AE.ToJSON)
   deriving (FromField) via Aeson SwShape
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwShape
+
+
+-- | Shape data needed for creating issues
+data ShapeForIssue = ShapeForIssue
+  { shapeHash :: Text
+  , endpointHash :: Text
+  , method :: Text
+  , path :: Text
+  , statusCode :: Int
+  , exampleRequestPayload :: AE.Value
+  , exampleResponsePayload :: AE.Value
+  , newFields :: V.Vector Text
+  , deletedFields :: V.Vector Text
+  , modifiedFields :: V.Vector Text
+  , fieldHashes :: V.Vector Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow)
+
+
+getShapeForIssue :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ShapeForIssue)
+getShapeForIssue pid hash = listToMaybe <$> PG.query q (pid, hash)
+  where
+    q =
+      [sql|
+        SELECT
+          s.hash,
+          s.endpoint_hash,
+          COALESCE(e.method, 'UNKNOWN'),
+          COALESCE(e.url_path, '/'),
+          s.status_code,
+          COALESCE(s.example_request_payload, '{}'::jsonb),
+          COALESCE(s.example_response_payload, '{}'::jsonb),
+          COALESCE(s.new_unique_fields, '{}'::TEXT[]),
+          COALESCE(s.deleted_fields, '{}'::TEXT[]),
+          COALESCE(s.updated_field_formats, '{}'::TEXT[]),
+          COALESCE(s.field_hashes, '{}'::TEXT[])
+        FROM apis.shapes s
+        LEFT JOIN apis.endpoints e ON e.hash = s.endpoint_hash
+        WHERE s.project_id = ? AND s.hash = ?
+      |]
+
+
+getShapeByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Shape)
+getShapeByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
+  where
+    q =
+      [sql|
+        SELECT id, created_at, updated_at, approved_on, project_id, endpoint_hash,
+               query_params_keypaths, request_body_keypaths, response_body_keypaths,
+               request_headers_keypaths, response_headers_keypaths, field_hashes,
+               hash, status_code, response_description, request_description,
+               example_request_payload, example_response_payload, first_trace_id, recent_trace_id, service
+        FROM apis.shapes
+        WHERE project_id = ? AND hash = ?
+      |]
