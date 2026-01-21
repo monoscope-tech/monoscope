@@ -1530,8 +1530,8 @@ calculateErrorBaselines pid = do
       Nothing -> pass
       Just stats -> do
         let newSamples = stats.totalHours
-            newMean = stats.hourlyMean
-            newStddev = stats.hourlyStddev
+            newMean = stats.hourlyMedian
+            newStddev = stats.hourlyMADScaled
             -- Establish baseline after 24 hours of data
             newState = if newSamples >= 24 then BSEstablished else BSLearning
         _ <- Errors.updateBaseline err.id newState newMean newStddev newSamples
@@ -1647,8 +1647,8 @@ calculateLogPatternBaselines pid = do
       Nothing -> pass
       Just stats -> do
         let newSamples = stats.totalHours
-            newMean = stats.hourlyMean
-            newStddev = stats.hourlyStddev
+            newMean = stats.hourlyMedian
+            newStddev = stats.hourlyMADScaled
             patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / (24 * 60 * 60)
             newState = if newMean > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning
         _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
@@ -1727,18 +1727,18 @@ calculateEndpointBaselines pid = do
       Just stats -> do
         let newSamples = stats.totalHours
             endpointAgeDays = diffUTCTime now ep.createdAt / (24 * 60 * 60)
-            newState = if stats.hourlyMeanRequests > 100 || (endpointAgeDays >= 14 && stats.hourlyMeanRequests > 0) then BSEstablished else BSLearning
+            newState = if stats.hourlyMedianRequests > 100 || (endpointAgeDays >= 14 && stats.hourlyMADRequestsScaled > 0) then BSEstablished else BSLearning
         Endpoints.updateEndpointBaseline
           ep.id
           newState
-          stats.hourlyMeanErrors
-          stats.hourlyStddevErrors
-          stats.meanLatency
-          stats.stddevLatency
+          stats.hourlyMedianErrors
+          stats.hourlyMADErrorsScaled
+          stats.medianLatency
+          stats.madLatencyScaled
           stats.p95Latency
           stats.p99Latency
-          stats.hourlyMeanRequests
-          stats.hourlyStddevRequests
+          stats.hourlyMedianRequests
+          stats.hourlyMADRequestsScaled
           newSamples
 
   Log.logInfo "Finished calculating endpoint baselines" (pid, length endpoints)

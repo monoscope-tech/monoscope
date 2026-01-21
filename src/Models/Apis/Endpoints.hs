@@ -286,14 +286,15 @@ data EndpointWithCurrentRates = EndpointWithCurrentRates
 
 
 -- | Endpoint stats for baseline calculation
+-- Using median + MAD instead of mean + stddev for robustness against outliers/spikes
 data EndpointStats = EndpointStats
   { totalHours :: Int
-  , hourlyMeanRequests :: Double
-  , hourlyStddevRequests :: Double
-  , hourlyMeanErrors :: Double
-  , hourlyStddevErrors :: Double
-  , meanLatency :: Double
-  , stddevLatency :: Double
+  , hourlyMedianRequests :: Double -- Actually stores median for robustness
+  , hourlyMADRequestsScaled :: Double -- Actually stores MAD * 1.4826 (scaled to be comparable to stddev)
+  , hourlyMedianErrors :: Double -- Actually stores median error rate
+  , hourlyMADErrorsScaled :: Double -- Actually stores MAD * 1.4826 for error rate
+  , medianLatency :: Double -- Median latency
+  , madLatencyScaled :: Double -- MAD * 1.4826 for latency
   , p95Latency :: Double
   , p99Latency :: Double
   }
@@ -351,6 +352,7 @@ getEndpointsWithCurrentRates pid = PG.query q (pid, pid)
 
 
 -- | Get endpoint stats for baseline calculation over N hours
+-- Returns median and MAD (Median Absolute Deviation) for robust baseline calculation
 getEndpointStats :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe EndpointStats)
 getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpointHash, hours)
   where
@@ -360,7 +362,7 @@ getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpo
           SELECT
             DATE_TRUNC('hour', timestamp) AS hour,
             COUNT(*) AS request_count,
-            COUNT(*) FILTER (WHERE attributes___http___response___status_code::int >= 500 OR attributes___http___response___status_code::int = 0) AS error_count,
+            COUNT(*) FILTER (WHERE attributes___http___response___status_code::int >= 500 OR attributes___http___response___status_code::int = 0)::float / NULLIF(COUNT(*), 0) AS error_rate,
             AVG(duration) AS avg_latency,
             PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY duration) AS p95_latency,
             PERCENTILE_CONT(0.99) WITHIN GROUP (ORDER BY duration) AS p99_latency
@@ -372,19 +374,37 @@ getEndpointStats pid endpointHash hours = listToMaybe <$> PG.query q (pid, endpo
             AND ols.name = 'monoscope.http'
             AND ols.timestamp >= NOW() - MAKE_INTERVAL(hours => ?)
           GROUP BY DATE_TRUNC('hour', timestamp)
+        ),
+        -- Median calculations
+        medians AS (
+          SELECT
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY request_count) AS median_requests,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY error_rate) AS median_error_rate,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY avg_latency) AS median_latency,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p95_latency) AS median_p95,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY p99_latency) AS median_p99
+          FROM hourly_stats
+        ),
+        -- MAD calculations (median absolute deviation)
+        mads AS (
+          SELECT
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hs.request_count - m.median_requests)) AS mad_requests,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hs.error_rate - m.median_error_rate)) AS mad_error_rate,
+            PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hs.avg_latency - m.median_latency)) AS mad_latency
+          FROM hourly_stats hs, medians m
         )
         SELECT
-          COUNT(*)::int AS total_hours,
-          COALESCE(AVG(request_count), 0)::float8 AS hourly_mean_requests,
-          COALESCE(STDDEV(request_count), 0)::float8 AS hourly_stddev_requests,
-          COALESCE(AVG(error_count::float / NULLIF(request_count, 0)), 0)::float8 AS hourly_mean_errors,
-          COALESCE(STDDEV(error_count::float / NULLIF(request_count, 0)), 0)::float8 AS hourly_stddev_errors,
-          COALESCE(AVG(avg_latency), 0)::float8 AS mean_latency,
-          COALESCE(STDDEV(avg_latency), 0)::float8 AS stddev_latency,
-          COALESCE(AVG(p95_latency), 0)::float8 AS p95_latency,
-          COALESCE(AVG(p99_latency), 0)::float8 AS p99_latency
-        FROM hourly_stats
-        HAVING COUNT(*) > 0
+          (SELECT COUNT(*)::int FROM hourly_stats) AS total_hours,
+          COALESCE(m.median_requests, 0)::float8 AS hourly_median_requests,
+          COALESCE(mad.mad_requests * 1.4826, 0)::float8 AS hourly_mad_requests_scaled,
+          COALESCE(m.median_error_rate, 0)::float8 AS hourly_median_errors,
+          COALESCE(mad.mad_error_rate * 1.4826, 0)::float8 AS hourly_mad_errors_scaled,
+          COALESCE(m.median_latency, 0)::float8 AS median_latency,
+          COALESCE(mad.mad_latency * 1.4826, 0)::float8 AS mad_latency_scaled,
+          COALESCE(m.median_p95, 0)::float8 AS p95_latency,
+          COALESCE(m.median_p99, 0)::float8 AS p99_latency
+        FROM medians m, mads mad
+        WHERE (SELECT COUNT(*) FROM hourly_stats) > 0
       |]
 
 

@@ -221,9 +221,10 @@ updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
 
 
 -- | Stats for a log pattern from otel_logs_and_spans
+-- Using median + MAD instead of mean + stddev for robustness against outliers/spikes
 data PatternStats = PatternStats
-  { hourlyMean :: Double
-  , hourlyStddev :: Double
+  { hourlyMedian :: Double -- Actually stores median for robustness
+  , hourlyMADScaled :: Double -- Actually stores MAD * 1.4826 (scaled to be comparable to stddev)
   , totalHours :: Int
   , totalEvents :: Int
   }
@@ -232,6 +233,7 @@ data PatternStats = PatternStats
 
 
 -- | Get pattern stats from otel_logs_and_spans
+-- Returns median and MAD (Median Absolute Deviation) for robust baseline calculation
 getPatternStats :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe PatternStats)
 getPatternStats pid pattern' hoursBack = do
   results <- PG.query q (pid, pattern', hoursBack)
@@ -248,13 +250,21 @@ getPatternStats pid pattern' hoursBack = do
             AND log_pattern = ?
             AND timestamp >= NOW() - INTERVAL '1 hour' * ?
           GROUP BY date_trunc('hour', timestamp)
+        ),
+        median_calc AS (
+          SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
+          FROM hourly_counts
+        ),
+        mad_calc AS (
+          SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
+          FROM hourly_counts hc, median_calc mc
         )
         SELECT
-          COALESCE(AVG(event_count), 0)::FLOAT AS hourly_mean,
-          COALESCE(STDDEV(event_count), 0)::FLOAT AS hourly_stddev,
-          COUNT(*)::INT AS total_hours,
-          COALESCE(SUM(event_count), 0)::INT AS total_events
-        FROM hourly_counts
+          COALESCE(mc.median_val, 0)::FLOAT AS hourly_median,
+          COALESCE(mad.mad_val * 1.4826, 0)::FLOAT AS hourly_mad_scaled,
+          (SELECT COUNT(*)::INT FROM hourly_counts) AS total_hours,
+          (SELECT COALESCE(SUM(event_count), 0)::INT FROM hourly_counts) AS total_events
+        FROM median_calc mc, mad_calc mad
       |]
 
 
