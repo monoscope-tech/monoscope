@@ -1515,7 +1515,7 @@ renderPayloadChange isResponse change =
             "Breaking"
         Anomalies.Incremental ->
           span_ [class_ "badge bg-fillInformation-strong"] do
-            faSprite_ "info" "regular" "w-3 h-3 mr-1"
+            faSprite_ "circle-info" "regular" "w-3 h-3 mr-1 text-white"
             "Incremental"
         Anomalies.Safe ->
           span_ [class_ "badge bg-fillSuccess-strong"] do
