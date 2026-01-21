@@ -368,12 +368,14 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 touch:opacity-100 tap-target transition-opacity"
               , title_ "Expand widget"
               , data_ "tippy-content" "Expand widget"
+              , data_ "expand-btn" wId
               , term
                   "_"
                   [text| on pointerdown or click
             add .pointer-events-none to me
             set :icon to my.querySelector('svg')
             if :icon then add .animate-spin to :icon end
+            js(wId) { const url = new URL(window.location); url.searchParams.set('expand', wId); history.replaceState({}, '', url); } end
             set #global-data-drawer.checked to true
             then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
             then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`

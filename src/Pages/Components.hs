@@ -100,6 +100,7 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
             else
               remove .overflow-hidden from <body/>
               if my._focusTrapCleanup then call my._focusTrapCleanup() end
+              js { const url = new URL(window.location); if (url.searchParams.has('expand')) { url.searchParams.delete('expand'); history.replaceState({}, '', url); } } end
             end
       |]
     ]
@@ -500,13 +501,13 @@ modal_ modalId btnTrigger contentHtml = do
     ]
     do
       label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
-      div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
+      div_ [class_ "modal-box relative w-auto flex flex-col gap-5 max-w-5xl"] do
         modalCloseButton_ modalId
         div_ contentHtml
 
 
 modalCloseButton_ :: Monad m => Text -> HtmlT m ()
-modalCloseButton_ modalId = label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
+modalCloseButton_ modalId = label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost !absolute right-2 top-2 tap-target"] "✕"
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()
