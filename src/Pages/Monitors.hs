@@ -300,8 +300,8 @@ monitorsPageContent_ pid monitors = do
         a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] "Create Alert"
     unless (V.null monitors) do
       div_ [class_ "flex gap-4 mb-4"] do
-        div_ [class_ "badge badge-lg badge-ghost"] $ toHtml $ "Active: " <> show (V.length activeMonitors)
-        div_ [class_ "badge badge-lg badge-ghost"] $ toHtml $ "Inactive: " <> show (V.length inactiveMonitors)
+        div_ [class_ "badge badge-lg badge-ghost tabular-nums"] $ toHtml $ "Active: " <> show (V.length activeMonitors)
+        div_ [class_ "badge badge-lg badge-ghost tabular-nums"] $ toHtml $ "Inactive: " <> show (V.length inactiveMonitors)
       div_ [id_ "alertsListContainer"] do
         queryMonitors_ monitors
 
@@ -352,12 +352,16 @@ frequencySelect_ defaultMins isByos selectCls = fieldset_ [class_ "fieldset flex
     mkOpt (m, l) = option_ ([value_ (show m <> "m")] <> [disabled_ "" | not isByos && m < 5] <> [selected_ "" | m == defaultMins]) ("Every " <> toHtml l)
 
 
-collapsibleSection_ :: Text -> Text -> Text -> Maybe Text -> Html () -> Html ()
-collapsibleSection_ icon iconKind title subtitleM content =
+collapsibleSection_ :: Text -> Maybe Text -> Html () -> Html ()
+collapsibleSection_ title subtitleM content =
   details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    summary_ [class_ "p-3 cursor-pointer hover:bg-fillWeak transition-colors"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ icon iconKind "w-4 h-4 text-iconNeutral"
-        span_ [class_ "font-medium text-sm"] $ toHtml title
-        whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
-    div_ [class_ "p-4 pt-0 border-t border-strokeWeak mt-2"] content
+    summary_
+      [ class_ "p-4 cursor-pointer list-none flex items-center justify-between gap-2"
+      , [__|on click toggle .rotate-180 on the next <svg/> in me|]
+      ]
+      do
+        div_ [class_ "flex items-center gap-2"] do
+          span_ [class_ "font-medium text-sm"] $ toHtml title
+          whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
+        faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral transition-transform duration-150"
+    div_ [class_ "px-4 pb-4"] content

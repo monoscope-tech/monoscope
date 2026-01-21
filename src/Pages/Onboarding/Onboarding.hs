@@ -51,7 +51,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
-import Utils (faSprite_, insertIfNotExist, lookupValueText, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
 
@@ -232,12 +232,13 @@ instance ToHtml OnboardingConfPost where
 data OnboardingPhoneEmailsPost = OnboardingPhoneEmailsPost
   { projectId :: Projects.ProjectId
   , emails :: V.Vector Text
+  , enableFreetier :: Bool
   }
   deriving stock (Generic, Show)
 
 
 instance ToHtml OnboardingPhoneEmailsPost where
-  toHtml (OnboardingPhoneEmailsPost pid emails) = toHtmlRaw $ inviteTeamMemberModal pid emails
+  toHtml (OnboardingPhoneEmailsPost pid emails enableFreetier) = toHtmlRaw $ inviteTeamMemberModal pid emails enableFreetier
   toHtmlRaw = toHtml
 
 
@@ -265,7 +266,9 @@ getNextStep _ = "Info"
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
 phoneEmailPostH pid form = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let phone = form.phoneNumber
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+      phone = form.phoneNumber
       emails = form.emails
       notifs = if phone /= "" then map (.toText) (V.toList project.notificationsChannel) <> ["phone"] else map (.toText) (V.toList project.notificationsChannel)
       notifs' = if emails /= [] then notifs <> ["email"] else notifs
@@ -276,7 +279,7 @@ phoneEmailPostH pid form = do
   projectMembers <- Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
   _ <- PG.execute q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
-  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails')
+  addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails') envCfg.enableFreetier
 
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
@@ -626,7 +629,7 @@ integrationsPage pid apikey =
 
                 div_ [class_ "relative p-8"] do
                   div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
-                    $ span_ [class_ "loading loading-dots loading-md"] ""
+                    $ loadingIndicator_ LdMD LdDots
                   div_
                     [ id_ $ "fw-content-" <> lang
                     , hxGet_ $ "/proxy/docs/sdks/" <> thd3 (frameworks Unsafe.!! 0)
@@ -872,13 +875,11 @@ onboardingConfigBody pid loca func = do
           button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
 
-inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Html ()
-inviteTeamMemberModal pid emails = do
+inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Bool -> Html ()
+inviteTeamMemberModal pid emails enableFreetier = do
   div_ [id_ "invite-modal-container"] $ do
-    input_ [type_ "checkbox", id_ "inviteModal", class_ "modal-toggle", checked_]
-    div_ [class_ "modal p-8 backdrop-blur-md bg-black/30", role_ "dialog"] do
-      universalIndicator
-      div_ [class_ "modal-box bg-bgRaised flex flex-col gap-4"] $ do
+    div_ [class_ "modal modal-open p-8", role_ "dialog", id_ "inviteModal"] do
+      div_ [class_ "modal-box bg-bgRaised flex flex-col gap-4", style_ "animation: none !important;"] $ do
         div_ [class_ "p-3 bg-fillSuccess-weak rounded-full w-max border-strokeSuccess-weak gap-2 inline-flex"]
           $ faSprite_ "circle-check" "regular" "h-6 w-6 text-iconSuccess"
         span_ [class_ " text-textStrong text-2xl "] "We've sent you a test notification"
@@ -887,7 +888,7 @@ inviteTeamMemberModal pid emails = do
         div_ [class_ "flex-col gap-4 flex"] $ do
           div_ [class_ "flex-col gap-5 flex"] $ do
             div_ [class_ "w-full text-textWeak"] "The users below will be added to your project as team members"
-            div_ [class_ "bg-fillInfo-weak border border-strokeInfo-weak rounded-lg p-3 flex items-start gap-2"] do
+            when enableFreetier $ div_ [class_ "bg-fillInfo-weak border border-strokeInfo-weak rounded-lg p-3 flex items-start gap-2"] do
               faSprite_ "circle-info" "regular" "w-4 h-4 text-textInfo flex-shrink-0 mt-0.5"
               p_ [class_ "text-sm text-textWeak"] "If you select the Free plan, additional team members will be invited but disabled until you upgrade."
             div_ [class_ "w-full gap-4 flex flex-col"] $ do
@@ -912,7 +913,8 @@ inviteTeamMemberModal pid emails = do
                         inviteMemberItem email
         div_ [class_ "modal-action w-full flex items-center justify-start gap-4 mt-2"] do
           button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onpointerdown_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
-          label_ [class_ "text-textBrand underline cursor-pointer", Lucid.for_ "inviteModal"] "Back"
+          button_ [class_ "text-textBrand underline cursor-pointer", type_ "button", [__|on click remove .modal-open from #inviteModal|]] "Back"
+      label_ [class_ "modal-backdrop", [__|on click remove .modal-open from #inviteModal|]] ""
 
 
 functionalities :: [(Text, Text)]
@@ -1009,7 +1011,7 @@ faQ question answer =
 universalIndicator :: Html ()
 universalIndicator =
   div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-9999", id_ "loadingIndicator"] do
-    span_ [class_ "loading loading-dots loading-lg"] ""
+    loadingIndicator_ LdLG LdDots
 
 
 -- | Proxy handler for fetching documentation from monoscope.tech

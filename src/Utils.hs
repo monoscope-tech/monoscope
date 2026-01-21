@@ -11,6 +11,10 @@ module Utils (
   parseTime,
   DBField (..),
   faSprite_,
+  LoadingSize (..),
+  LoadingType (..),
+  loadingIndicator_,
+  loadingIndicatorWith_,
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
@@ -60,7 +64,6 @@ import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
@@ -75,6 +78,7 @@ import Effectful qualified
 import Effectful.PostgreSQL (WithConnection)
 import Fmt (commaizeF, fmt)
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -130,6 +134,33 @@ faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes]
       "regular" -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
       "solid" -> $(hashFile "/public/assets/svgs/fa-sprites/solid.svg")
       _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
+
+
+-- | Type-safe loading indicator size
+data LoadingSize = LdXS | LdSM | LdMD | LdLG deriving (Eq, Show)
+
+
+-- | Type-safe loading indicator type
+data LoadingType = LdDots | LdSpinner | LdRing deriving (Eq, Show)
+
+
+loadingSizeClass :: LoadingSize -> Text
+loadingSizeClass = \case LdXS -> "xs"; LdSM -> "sm"; LdMD -> "md"; LdLG -> "lg"
+
+
+loadingTypeClass :: LoadingType -> Text
+loadingTypeClass = \case LdDots -> "dots"; LdSpinner -> "spinner"; LdRing -> "ring"
+
+
+-- | Accessible loading indicator with screen reader support
+-- Tailwind safelist: class_ "loading loading-dots loading-spinner loading-ring loading-xs loading-sm loading-md loading-lg"
+loadingIndicator_ :: Monad m => LoadingSize -> LoadingType -> HtmlT m ()
+loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
+
+
+-- | Loading indicator with extra classes for custom styling
+loadingIndicatorWith_ :: Monad m => LoadingSize -> LoadingType -> Text -> HtmlT m ()
+loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> loadingTypeClass typ <> " loading-" <> loadingSizeClass size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
 
 
 deleteParam :: Text -> Text -> Text
@@ -342,14 +373,14 @@ jsonValueToHtmlTree val pathM = do
 
 
 unwrapJsonPrimValue :: Bool -> AE.Value -> Text
-unwrapJsonPrimValue _ (AE.Bool True) = "true"
-unwrapJsonPrimValue _ (AE.Bool False) = "false"
-unwrapJsonPrimValue False (AE.String v) = "\"" <> toText v <> "\""
-unwrapJsonPrimValue True (AE.String v) = toText v
-unwrapJsonPrimValue _ (AE.Number v) = toText @String $ show v
-unwrapJsonPrimValue _ AE.Null = "null"
-unwrapJsonPrimValue _ (AE.Object _) = "{..}"
-unwrapJsonPrimValue _ (AE.Array items) = "[" <> toText (show (length items)) <> "]"
+unwrapJsonPrimValue stripped = \case
+  AE.Bool True -> "true"
+  AE.Bool False -> "false"
+  AE.String v -> if stripped then toText v else "\"" <> toText v <> "\""
+  AE.Number v -> toText @String $ show v
+  AE.Null -> "null"
+  AE.Object _ -> "{..}"
+  AE.Array items -> "[" <> toText (show (length items)) <> "]"
 
 
 lookupVecText :: V.Vector AE.Value -> Int -> Maybe Text
@@ -466,18 +497,11 @@ serviceColors =
 
 
 getServiceColors :: V.Vector Text -> HashMap Text Text
-getServiceColors services = go services HM.empty []
+getServiceColors = V.foldl' assign HM.empty
   where
-    go :: V.Vector Text -> HashMap Text Text -> [Text] -> HashMap Text Text
-    go svcs assignedColors usedColors
-      | V.null svcs = assignedColors
-      | otherwise =
-          let service = V.head svcs
-              availableColors' = filter (`L.notElem` usedColors) (V.toList serviceColors)
-              availableColors = if null availableColors' then V.toList serviceColors else availableColors'
-              colorIdx = sum (map ord $ toString $ toXXHash service) `mod` length availableColors
-              selectedColor = availableColors L.!! colorIdx
-           in go (V.tail svcs) (HM.insert service selectedColor assignedColors) (selectedColor : usedColors)
+    assign colors service =
+      let colorIdx = fromIntegral (xxHash (encodeUtf8 service)) `mod` V.length serviceColors
+       in HM.insert service (serviceColors V.! colorIdx) colors
 
 
 toXXHash :: Text -> Text

@@ -71,6 +71,7 @@ import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
@@ -88,7 +89,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (paymentPlanPicker)
+import Pages.Components (modalCloseButton_, paymentPlanPicker)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
@@ -201,7 +202,7 @@ projectCard_ project = do
           unless (V.null project.usersDisplayImages) do
             div_ [class_ "flex -space-x-2"] do
               project.usersDisplayImages & V.toList & take 3 & mapM_ \imgSrc ->
-                img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-base-100", src_ imgSrc, alt_ "User avatar"]
+                img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-base-100", src_ imgSrc, alt_ "User avatar", term "loading" "lazy", term "decoding" "async"]
               when (V.length project.usersDisplayImages > 3) do
                 span_ [class_ "flex items-center justify-center h-6 w-6 rounded-full bg-fillWeak text-textWeak text-xs ring-2 ring-base-100"] do
                   toHtml ("+" <> show (V.length project.usersDisplayImages - 3))
@@ -712,7 +713,7 @@ memberCell members = do
   div_ [class_ "inline-block flex -space-x-2"] do
     forM_ members $ \m -> do
       div_ [class_ "inline-block mx-0.5", term "data-tippy-content" m.memberName]
-        $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar"]
+        $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar", term "loading" "lazy", term "decoding" "async"]
 
 
 notifsCell :: ProjectMembers.TeamVM -> Html ()
@@ -798,7 +799,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
         card_ (faSprite_ "users" "regular" "h-4 w-4" >> "Members" >> span_ [class_ "text-textWeak font-normal"] ("(" <> show (V.length team.members) <> ")"))
           $ div_ [class_ "mt-3 divide-y divide-strokeWeak"]
           $ forM_ team.members \m ->
-            div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ m.memberAvatar, class_ "w-8 h-8 rounded-full border border-strokeWeak"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml m.memberName) >> div_ [class_ "text-xs text-textWeak"] (toHtml m.memberEmail))
+            div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ m.memberAvatar, class_ "w-8 h-8 rounded-full border border-strokeWeak", term "loading" "lazy", term "decoding" "async"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml m.memberName) >> div_ [class_ "text-xs text-textWeak"] (toHtml m.memberEmail))
         card_ (faSprite_ "bell" "regular" "h-4 w-4" >> "Notifications") $ div_ [class_ "mt-3 space-y-3"] do
           notifRow_ "envelope" "regular" "Email" $ V.toList team.notify_emails
           notifRow_ "slack" "solid" "Slack" $ V.toList $ V.map (resolveChannel slackChannels) team.slack_channels
@@ -896,7 +897,7 @@ memberRowWithStatus pid idx prM = do
         option_ ([value_ "admin"] <> [selected_ "" | prM.permission == ProjectMembers.PAdmin]) "Admin"
         option_ ([value_ "edit"] <> [selected_ "" | prM.permission == ProjectMembers.PEdit]) "Editor"
         option_ ([value_ "view"] <> [selected_ "" | prM.permission == ProjectMembers.PView]) "Viewer"
-      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
+      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
@@ -1427,7 +1428,7 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
     label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
     div_ [class_ "modal-box w-full max-w-2xl flex flex-col"] do
-      label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-3 top-3"] "✕"
+      modalCloseButton_ modalId
       form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{...getTagValues(`$prefix`)}|], hxTarget_ "#main-content", hxSwap_ "outerHTML", class_ "flex flex-col h-full"] do
         whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
 

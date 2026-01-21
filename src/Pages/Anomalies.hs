@@ -247,7 +247,7 @@ timeStatBox_ title timeStr
       div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
         div_ [class_ "flex flex-col gap-1"] do
           span_ [class_ "font-bold text-textStrong"] do
-            span_ [class_ "text-4xl"] $ toHtml num
+            span_ [class_ "text-4xl tabular-nums"] $ toHtml num
             span_ [class_ "text-sm text-textWeak"] $ toHtml $ " " <> unwords (map abbreviateUnit rest)
           div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] $ p_ [] $ toHtml title
   | otherwise = pass
@@ -398,7 +398,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
 
             when (V.null withSessionIds)
               $ div_ [class_ "flex flex-col gap-4"] do
-                emptyState_ "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide"
+                emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide"
 
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
@@ -955,7 +955,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       span_ [class_ "text-textWeak"] do
         strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
         " breaking"
-        when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
+        when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs tabular-nums ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
       div_ [class_ "w-px h-4 bg-strokeWeak"] ""
       span_ [class_ "text-textWeak"] do
         strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges

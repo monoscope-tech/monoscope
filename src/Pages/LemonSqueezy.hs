@@ -165,11 +165,11 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
 
       div_ [class_ "grid grid-cols-2 gap-4"] do
         div_ [class_ "flex flex-col gap-2"] do
-          div_ [class_ "text-4xl font-bold text-textStrong"] $ toHtml $ formatNumberWithCommas reqs
+          div_ [class_ "text-4xl font-bold text-textStrong tabular-nums"] $ toHtml $ formatNumberWithCommas reqs
           div_ [class_ "text-textWeak text-sm"] "Total Requests Made"
           div_ [class_ "text-textWeak text-xs"] "*Calculation may not be up-to-date"
         div_ [class_ "flex flex-col gap-2"] do
-          div_ [class_ "text-4xl font-bold text-textStrong"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
+          div_ [class_ "text-4xl font-bold text-textStrong tabular-nums"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
           div_ [class_ "text-textWeak text-sm"] "Estimated Cost"
           div_ [class_ "text-textWeak text-xs"] "*Based on current usage"
 
@@ -193,7 +193,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
           span_ [class_ "rounded-lg text-textWeak bg-fillWeak border border-strokeWeak py-1 px-2.5 text-xs w-max"] "Active"
         div_ [class_ "flex items-baseline gap-1"] do
           span_ [class_ "text-textStrong text-xl"] "$"
-          span_ [class_ "text-4xl text-textStrong font-bold"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Bring your own storage" then "199" else "29"
+          span_ [class_ "text-4xl text-textStrong font-bold tabular-nums"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Bring your own storage" then "199" else "29"
           span_ [class_ "text-textWeak text-sm ml-1"] "/month"
 
       div_ [class_ "border-t border-strokeWeak pt-4"] do
