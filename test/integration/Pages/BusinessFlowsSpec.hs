@@ -123,7 +123,7 @@ onboardingTests = do
               }
       (_, postResult) <- testServant tr $ Onboarding.phoneEmailPostH testPid notifForm
       case postResult of
-        Onboarding.OnboardingPhoneEmailsPost pid emails -> do
+        Onboarding.OnboardingPhoneEmailsPost pid emails _ -> do
           pid `shouldBe` testPid
           V.length emails `shouldSatisfy` (> 0) -- Should include at least the submitted emails
       (_, result) <- testServant tr $ Onboarding.onboardingGetH testPid (Just "NotifChannel")

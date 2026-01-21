@@ -35,7 +35,7 @@ spec = aroundAll withTestResources do
         testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
-        Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount -> do
+        Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount _ -> do
           -- For empty case
           V.length requestVecs `shouldBe` 0
           resultCount `shouldBe` 0
@@ -70,7 +70,7 @@ spec = aroundAll withTestResources do
         testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
-        Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount -> do
+        Log.LogsGetJson requestVecs serviceColors nextUrl resetUrl recentUrl cols colIdxMap resultCount _ -> do
           -- Verify we got results
           V.length requestVecs `shouldBe` 202  -- Should return all 202 test messages (under the 500 limit)
           resultCount `shouldSatisfy` (>= 202)  -- At least our 202 test messages (might include data from other tests)
