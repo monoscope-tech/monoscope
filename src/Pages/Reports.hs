@@ -34,7 +34,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (checkFreeTierExceeded, faSprite_, getDurationNSMS, prettyPrintCount)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, getDurationNSMS, loadingIndicatorWith_, prettyPrintCount)
 
 
 data PerformanceReport = PerformanceReport
@@ -237,7 +237,7 @@ singleReportPage pid report =
                       div_ [class_ "flex w-full items-center justify-between"] do
                         div_ [class_ "flex text-sm items-center gap-3"] do
                           span_ [class_ "text-textWeak"] "Total events"
-                          span_ [class_ "font-semibold"] $ toHtml $ prettyPrintCount (fromIntegral v.events.total)
+                          span_ [class_ "font-semibold tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral v.events.total)
                         span_ [class_ $ "text-xs" <> (if v.events.change < 0 then " text-textError" else " text-textSuccess")] $ show v.events.change <> "% from last period"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
@@ -246,7 +246,7 @@ singleReportPage pid report =
                       div_ [class_ "flex w-full items-center justify-between"] do
                         div_ [class_ "flex text-sm items-center gap-3"] do
                           span_ [class_ "text-textWeak"] "Error trend"
-                          span_ [class_ "font-semibold"] $ toHtml $ prettyPrintCount (fromIntegral v.errors.total)
+                          span_ [class_ "font-semibold tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral v.errors.total)
                         span_ [class_ $ "text-xs" <> (if v.errors.change >= 0 then " text-textError" else " text-textSuccess ")] $ show v.errors.change <> "% from last week"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
@@ -309,8 +309,8 @@ singleReportPage pid report =
                           tbody_ [class_ "text-sm"] $ forM_ v.slowDbQueries $ \queryStat -> do
                             tr_ [class_ "p"] do
                               td_ [class_ "p-2 text-textStrong max-w-96 truncate ellipsis"] $ toHtml queryStat.query
-                              td_ [class_ "p-2"] $ toHtml $ getDurationNSMS (round queryStat.averageDuration)
-                              td_ [class_ "p-2"] $ toHtml $ prettyPrintCount (fromIntegral queryStat.totalEvents)
+                              td_ [class_ "p-2 tabular-nums"] $ toHtml $ getDurationNSMS (round queryStat.averageDuration)
+                              td_ [class_ "p-2 tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral queryStat.totalEvents)
                 Nothing -> pass
       Nothing -> do
         h3_ [] "Report Not Found"
@@ -340,7 +340,7 @@ reportsPage pid reports nextUrl daily weekly =
             , hxTrigger_ "intersect once"
             ]
             $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
-              span_ [class_ "loading loading-dots text-sm text-textWeak"] pass
+              loadingIndicatorWith_ LdSM LdDots "text-textWeak"
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
@@ -374,10 +374,10 @@ renderEndpointRow endpoint = tr_ [class_ ""] do
   td_ [class_ "p-2 text-textWeak w-96 flex gap-4 items-center "] do
     span_ [class_ $ "cbadge-sm badge-" <> endpoint.method] $ toHtml endpoint.method
     span_ [class_ "flex-shrink-0 text-textStrong"] $ toHtml endpoint.urlPath
-  td_ [class_ "p-2"] $ toHtml $ prettyPrintCount endpoint.requestCount
-  td_ [class_ $ "p-2 " <> if endpoint.requestDiffPct < 0 then "text-textError" else "text-textSuccess"] $ toHtml $ show endpoint.requestDiffPct <> "%"
-  td_ [class_ "p-2"] $ toHtml $ getDurationNSMS endpoint.averageDuration
-  td_ [class_ $ "p-2 " <> if endpoint.durationDiffPct <= 0 then "text-textSuccess" else "text-textError"] $ toHtml $ show (durationDiffPct endpoint) <> "%"
+  td_ [class_ "p-2 tabular-nums"] $ toHtml $ prettyPrintCount endpoint.requestCount
+  td_ [class_ $ "p-2 tabular-nums " <> if endpoint.requestDiffPct < 0 then "text-textError" else "text-textSuccess"] $ toHtml $ show endpoint.requestDiffPct <> "%"
+  td_ [class_ "p-2 tabular-nums"] $ toHtml $ getDurationNSMS endpoint.averageDuration
+  td_ [class_ $ "p-2 tabular-nums " <> if endpoint.durationDiffPct <= 0 then "text-textSuccess" else "text-textError"] $ toHtml $ show (durationDiffPct endpoint) <> "%"
 
 
 renderEndpointsTable :: [PerformanceReport] -> Html ()
@@ -402,17 +402,17 @@ categoryCard category total avDur changeDur changeCount = do
       div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Total events"] $ do
         span_ [class_ "w-12 border-t border-t-strokeWeak self-end"] pass
         span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
-        div_ [class_ "text-sm text-textStrong"] $ toHtml (prettyPrintCount (fromIntegral total))
+        div_ [class_ "text-sm text-textStrong tabular-nums"] $ toHtml (prettyPrintCount (fromIntegral total))
         div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeCount < 0 then " text-textError" else " text-textSuccess")] $ do
           faSprite_ (if changeCount < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [] $ toHtml $ show changeCount <> "%"
+          span_ [class_ "tabular-nums"] $ toHtml $ show changeCount <> "%"
       div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Average duration"] $ do
         span_ [class_ "w-12 border-t border-t-strokeWeak self-start"] pass
         span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
-        div_ [class_ "text-sm text-textStrong"] $ toHtml (getDurationNSMS $ round avDur)
+        div_ [class_ "text-sm text-textStrong tabular-nums"] $ toHtml (getDurationNSMS $ round avDur)
         div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeDur < 0 then " text-textSuccess" else " text-textError")] $ do
           faSprite_ (if changeDur < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [] $ toHtml $ show changeDur <> "%"
+          span_ [class_ "tabular-nums"] $ toHtml $ show changeDur <> "%"
 
 
 getFaSprite :: Text -> Text

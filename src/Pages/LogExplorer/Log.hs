@@ -46,7 +46,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, levelFillColor, listToIndexHashMap, lookupVecIntByKey, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecIntByKey, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -320,7 +320,7 @@ renderFacets facetSummary = do
                             unless (T.null colorClass) $ span_ [class_ $ colorClass <> " shrink-0 w-0.5 h-3 rounded-sm"] ""
                             span_ [class_ "facet-value truncate text-xs", term "data-tippy-content" val] (toHtml val)
 
-                          span_ [class_ "facet-count text-xs text-textWeak shrink-0"] $ toHtml $ prettyPrintCount count
+                          span_ [class_ "facet-count text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ prettyPrintCount count
                   -- Render visible values
                   forM_ visibleValues \(_, value) -> renderFacetValue value
 
@@ -627,7 +627,7 @@ virtualTable pid initialFetchUrl = do
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
   section_ [class_ "mx-auto pt-2 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
-    template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
+    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
 
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
       termRaw "session-replay" [id_ "sessionReplay", class_ "shrink-1 flex flex-col", term "projectId" page.pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
@@ -778,7 +778,7 @@ apiLogsPage page = do
           div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
             whenJust page.showTrace \trIdAndTimestamp -> do
               let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
-              span_ [class_ "loading loading-dots loading-md"] ""
+              loadingIndicator_ LdMD LdDots
               div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
           -- Logs view section (also within the scrollable container)

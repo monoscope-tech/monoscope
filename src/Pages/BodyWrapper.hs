@@ -5,6 +5,7 @@ import Data.Default (Default)
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -17,7 +18,7 @@ import Pkg.THUtils
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (faSprite_, freeTierLimitExceededBanner)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicator_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -89,6 +90,28 @@ bodyWrapper bcfg child = do
         link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
         meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
         meta_ [name_ "theme-color", content_ "#ffffff"]
+
+        -- Resource hints for faster loading
+        link_ [rel_ "preconnect", href_ "https://www.gravatar.com"]
+        link_ [rel_ "preconnect", href_ "https://ui-avatars.com"]
+        link_ [rel_ "dns-prefetch", href_ "https://cdn.jsdelivr.net"]
+        link_ [rel_ "dns-prefetch", href_ "https://unpkg.com"]
+
+        -- Preload critical CSS
+        link_ [rel_ "preload", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css"), term "as" "style"]
+
+        -- View Transitions API (Chrome 111+, graceful fallback for others)
+        meta_ [name_ "view-transition", content_ "same-origin"]
+        style_
+          """
+          @supports (view-transition-name: root) {
+            ::view-transition-old(root) { animation: vt-fade-out 150ms ease-out; }
+            ::view-transition-new(root) { animation: vt-fade-in 150ms ease-in; }
+          }
+          @keyframes vt-fade-out { from { opacity: 1; } to { opacity: 0; } }
+          @keyframes vt-fade-in { from { opacity: 0; } to { opacity: 1; } }
+          """
+
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css"), type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]
@@ -200,58 +223,107 @@ bodyWrapper bcfg child = do
         var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
         document.addEventListener('DOMContentLoaded', function(){
           // htmx.config.useTemplateFragments = true
-          // Lazy tooltip initialization for better performance
-          function initTooltips() {
-            document.querySelectorAll('[data-tippy-content]:not([data-tippy-initialized])').forEach(element => {
-              element.setAttribute('data-tippy-initialized', 'true');
-              
-              // Add mouseenter listener only once per element
-              element.addEventListener('mouseenter', function() {
-                if (!element._tippy) {
-                  const instance = tippy(element, {
-                    delay: [100, 0],
-                    duration: 0,
-                    updateDuration: 0,
-                    animateFill: false,
-                    moveTransition: '',
-                    animation: false,
-                    touch: false,
-                    followCursor: false,
-                    flipOnUpdate: false,
-                    lazy: true,
-                    popperOptions: {
-                        strategy: 'absolute',  // Required for scrolling containers
-                        
-                        modifiers: [
-                          {
-                            name: 'computeStyles',
-                            options: {
-                              gpuAcceleration: true,  // Still use GPU acceleration!
-                              adaptive: false,         // Reduce style recalculations
-                            },
-                          },
-                        ],
-                      },
-                  });
-                  // Show tooltip immediately on first hover
-                  instance.show();
-                }
-              }, { once: true }); // Listener removes itself after first trigger
+          // Tooltip warmth tracking - skip delay when moving between tooltips
+          let tooltipWarmTimeout;
+          let isTooltipWarm = false;
+
+          // Event delegation for tooltips - single listener, no querySelectorAll per afterSettle
+          document.body.addEventListener('mouseover', function(e) {
+            const element = e.target.closest('[data-tippy-content]');
+            if (!element || element._tippy) return;
+
+            const instance = tippy(element, {
+              delay: [isTooltipWarm ? 0 : 100, 0],
+              duration: 0,
+              updateDuration: 0,
+              animateFill: false,
+              moveTransition: '',
+              animation: false,
+              touch: false,
+              followCursor: false,
+              flipOnUpdate: false,
+              lazy: true,
+              onShow() {
+                isTooltipWarm = true;
+                clearTimeout(tooltipWarmTimeout);
+              },
+              onHide() {
+                tooltipWarmTimeout = setTimeout(() => { isTooltipWarm = false; }, 300);
+              },
+              popperOptions: {
+                strategy: 'absolute',
+                modifiers: [{
+                  name: 'computeStyles',
+                  options: { gpuAcceleration: true, adaptive: false },
+                }],
+              },
+            });
+            instance.show();
+          });
+
+          // Clear tooltip warmth timeout on page unload and HTMX navigation to prevent memory leak
+          window.addEventListener('beforeunload', () => clearTimeout(tooltipWarmTimeout));
+          document.body.addEventListener('htmx:beforeSwap', () => clearTimeout(tooltipWarmTimeout));
+
+          // Animate stat values on HTMX content swap for delightful updates
+          document.body.addEventListener('htmx:afterSwap', (e) => {
+            e.target.querySelectorAll('.stat-value[data-value]').forEach(el => {
+              const newVal = parseFloat(el.dataset.value);
+              if (!isNaN(newVal) && typeof window.animateStatValue === 'function') {
+                window.animateStatValue(el, newVal, 400);
+              }
+            });
+          });
+
+          // Add aria-busy during HTMX requests for screen reader feedback
+          document.body.addEventListener('htmx:beforeRequest', (e) => {
+            e.target.setAttribute('aria-busy', 'true');
+          });
+          document.body.addEventListener('htmx:afterRequest', (e) => {
+            e.target.removeAttribute('aria-busy');
+          });
+
+          // Progress bar for HTMX requests
+          const progressBar = document.getElementById('htmx-progress');
+          if (progressBar) {
+            document.body.addEventListener('htmx:beforeRequest', () => {
+              progressBar.classList.remove('htmx-settling');
+              progressBar.classList.add('htmx-request');
+            });
+            document.body.addEventListener('htmx:afterRequest', () => {
+              progressBar.classList.remove('htmx-request');
+              progressBar.classList.add('htmx-settling');
             });
           }
-          
-          // Initialize tooltips for current elements
-          initTooltips();
-          
-          // Re-initialize for dynamically added content (afterSettle fires after DOM is fully settled)
-          document.body.addEventListener('htmx:afterSettle', initTooltips);
-          
+
+          // Cmd+Enter / Ctrl+Enter form submission for textareas
+          document.addEventListener('keydown', function(e) {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
+              const form = e.target.closest('form');
+              if (form) {
+                e.preventDefault();
+                form.requestSubmit();
+              }
+            }
+          });
+
           var notyf = new Notyf({
               duration: 5000,
               position: {x: 'right', y: 'top'},
           });
-          document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
-          document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
+          const toastAnnouncer = document.getElementById('toast-announcer');
+          document.body.addEventListener("successToast", (e)=> {
+            e.detail.value.map(v => {
+              notyf.success(v);
+              if (toastAnnouncer) toastAnnouncer.textContent = v;
+            });
+          });
+          document.body.addEventListener("errorToast", (e)=> {
+            e.detail.value.map(v => {
+              notyf.error(v);
+              if (toastAnnouncer) toastAnnouncer.textContent = 'Error: ' + v;
+            });
+          });
         });
         
     function filterByField(event, operation) {
@@ -316,6 +388,8 @@ bodyWrapper bcfg child = do
           behavior Copy(content)
                on click if 'clipboard' in window.navigator then
                     call navigator.clipboard.writeText(content's innerText)
+                    add .copy-success to me then
+                    wait 1500ms then remove .copy-success from me then
                     send successToast(value:['Value copied to the Clipboard']) to <body/>
                     halt
               end
@@ -323,6 +397,12 @@ bodyWrapper bcfg child = do
     |]
 
     body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-ext" "multi-swap,preload,response-targets", term "preload" "mouseover"] do
+      -- Skip to main content link for keyboard users (accessibility)
+      a_ [class_ "sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100000] focus:bg-bgRaised focus:px-4 focus:py-2 focus:rounded-lg focus:text-textBrand focus:shadow-lg focus:ring-2 focus:ring-strokeFocus", href_ "#main-content"] "Skip to main content"
+      -- ARIA live region for toast announcements (screen reader accessibility)
+      div_ [id_ "toast-announcer", Aria.live_ "polite", Aria.atomic_ "true", class_ "sr-only"] ""
+      -- HTMX progress bar for long operations
+      div_ [id_ "htmx-progress", class_ "htmx-progress"] ""
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-fillWeak overflow-y-auto inset-0 h-full max-h-full"
@@ -356,14 +436,14 @@ bodyWrapper bcfg child = do
                     (currUser.email == "hello@apitoolkit.io")
                     loginBanner
                   unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                  section_ [class_ "overflow-y-auto h-full grow"] do
+                  section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                       else child
                   div_ [class_ "h-0 shrink"] do
                     Components.drawer_ "global-data-drawer" Nothing Nothing ""
-                    template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
+                    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
                     -- Modal for copying widgets to other dashboards
                     Components.modal_ "dashboards-modal" "" do
                       -- Hidden fields to store widget and dashboard IDs
@@ -404,13 +484,16 @@ bodyWrapper bcfg child = do
           }
 
           
-          // Dark mode toggle function
+          // Dark mode toggle function - disables transitions during theme switch
           function toggleDarkMode() {
             const currentTheme = document.body.getAttribute('data-theme');
             const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            // Disable transitions during theme switch to prevent flash
+            document.documentElement.classList.add('no-transition');
             document.body.setAttribute('data-theme', newTheme);
             setCookie('theme', newTheme, 365);
-            
+
             // Update all toggle states
             const toggle = document.getElementById('dark-mode-toggle');
             const swapToggle = document.getElementById('dark-mode-toggle-swap');
@@ -424,8 +507,30 @@ bodyWrapper bcfg child = do
             if (navbarToggle) {
               navbarToggle.checked = newTheme === 'dark';
             }
+
+            // Re-enable transitions after paint
+            requestAnimationFrame(() => {
+              document.documentElement.classList.remove('no-transition');
+            });
           }
           
+          // System theme detection - respect OS preference if user hasn't manually set
+          (function() {
+            const savedTheme = getCookie('theme');
+            if (!savedTheme) {
+              const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+              document.body.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+            }
+            // Watch for OS theme changes (only if user hasn't manually set)
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+              if (!getCookie('theme')) {
+                document.documentElement.classList.add('no-transition');
+                document.body.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+                requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
+              }
+            });
+          })();
+
           // Initialize toggle state on page load
           window.addEventListener('DOMContentLoaded', function() {
             // Set initial toggle state based on data-theme attribute
@@ -513,25 +618,27 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex"] do
         -- Full logos (shown when sidebar is expanded)
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      label_ [class_ "cursor-pointer text-strokeStrong"] do
+      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle set @aria-expanded to (event.target.checked ? 'false' : 'true')|]] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
         [ class_ "flex flex-row border border-strokeWeak bg-fillWeaker text-textStrong hover:bg-fillWeaker gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
+        , Aria.haspopup_ "listbox"
+        , Aria.label_ $ "Switch project, current: " <> project.title
         ]
         do
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" "w-4"
-      div_ [tabindex_ "0", class_ "dropdown-content z-40"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
+      div_ [tabindex_ "0", class_ "dropdown-content z-40", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
     nav_ [class_ "mt-5 flex flex-col gap-2.5 text-textWeak"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
@@ -583,38 +690,42 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
 
     -- Dark mode toggle
     div_
-      [ class_ "hover:bg-fillBrand-weak px-2 py-1 rounded-lg"
+      [ class_ "hover:bg-fillBrand-weak px-2 py-1 rounded-lg tap-target"
+      , Aria.label_ "Toggle dark mode"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Toggle dark mode"
       ]
       $ do
         -- Regular toggle with icons (visible when sidebar is expanded)
-        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center justify-center"] $ do
+        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center justify-center", Aria.label_ "Toggle dark mode"] $ do
           faSprite_ "sun-bright" "regular" "h-5 w-5 text-textBrand"
           input_
             [ type_ "checkbox"
             , class_ "toggle theme-controller"
             , id_ "dark-mode-toggle"
+            , Aria.label_ "Toggle dark mode"
             , onclick_ "toggleDarkMode()"
             ]
           faSprite_ "moon-stars" "regular" "h-5 w-5 text-textBrand"
 
         -- Swap rotate icon (visible when sidebar is collapsed)
-        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden"] $ do
+        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden tap-target", Aria.label_ "Toggle dark mode"] $ do
           input_
             [ type_ "checkbox"
             , class_ "theme-controller"
             , id_ "dark-mode-toggle-swap"
+            , Aria.label_ "Toggle dark mode"
             , onclick_ "toggleDarkMode()"
             ]
           -- Sun icon (shown in light mode)
-          span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-6 w-6"
+          span_ [class_ "swap-off", Aria.label_ "Light mode"] $ faSprite_ "sun-bright" "regular" "h-6 w-6"
           -- Moon icon (shown in dark mode)
-          span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
+          span_ [class_ "swap-on", Aria.label_ "Dark mode"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
     a_
-      [ class_ "hover:bg-fillBrand-weak"
+      [ class_ "hover:bg-fillBrand-weak tap-target"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Logout"
+      , Aria.label_ "Logout"
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
@@ -649,12 +760,12 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
 alerts_ :: Html ()
 alerts_ = do
   template_ [id_ "successToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-success w-96 cursor-pointer", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
-      faSprite_ "circle-info" "solid" "stroke-current shrink-0 w-6 h-6"
+    div_ [role_ "alert", class_ "alert alert-success w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+      faSprite_ "circle-check" "solid" "stroke-current shrink-0 w-6 h-6"
       span_ [class_ "title"] "Something succeeded"
   template_ [id_ "errorToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-error w-96 cursor-pointer", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
-      faSprite_ "circle-info" "solid" "stroke-current shrink-0 w-6 h-6"
+    div_ [role_ "alert", class_ "alert alert-error w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+      faSprite_ "circle-exclamation" "solid" "stroke-current shrink-0 w-6 h-6"
       span_ [class_ "title"] "Something failed"
   section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 space-y-3", id_ "toastsParent"] ""
   script_
@@ -693,7 +804,7 @@ settingsWrapper pid current pageHtml = do
     nav_ [class_ "w-72 h-full p-4 pt-8 border-r border-r-strokWeak"] do
       h1_ [class_ "text-xl pl-3 font-semibold"] "Settings"
       ul_ [class_ "flex flex-col mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
-    main_ [class_ "w-full h-full overflow-y-auto"] do
+    main_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
       pageHtml
 
 

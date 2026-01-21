@@ -111,10 +111,158 @@ window.updateGroupByButtonText = (_e, self) => {
     v = ed?.getValue().toLowerCase() || '',
     field = el.dataset.field || el.closest('[data-field-path]')?.dataset.fieldPath,
     span = el.querySelector('span')
-  
+
   if (span && field && ed) {
     const isGrouped = ['summarize', 'by', field.toLowerCase()].every(s => v.includes(s))
     span.textContent = isGrouped ? 'Remove group by' : 'Group by'
+  }
+}
+
+/**
+ * Animate a stat value from its current value to a new value
+ * @param {HTMLElement} el - The element containing the number
+ * @param {number} newValue - The target value
+ * @param {number} duration - Animation duration in ms (default 500)
+ */
+window.animateStatValue = (el, newValue, duration = 500) => {
+  if (!el) return
+  if (el._animationFrameId) cancelAnimationFrame(el._animationFrameId)
+  const currentText = el.textContent.replace(/[^0-9.-]/g, '')
+  const startValue = parseFloat(currentText) || 0
+  const startTime = performance.now()
+
+  // Add pulse animation class
+  el.classList.add('stat-updated')
+  setTimeout(() => el.classList.remove('stat-updated'), 1000)
+
+  const animate = (currentTime) => {
+    const elapsed = currentTime - startTime
+    const progress = Math.min(elapsed / duration, 1)
+    // Ease out cubic
+    const eased = 1 - Math.pow(1 - progress, 3)
+    const currentValue = startValue + (newValue - startValue) * eased
+
+    // Format with commas
+    el.textContent = Math.round(currentValue).toLocaleString()
+
+    if (progress < 1) el._animationFrameId = requestAnimationFrame(animate)
+    else el._animationFrameId = null
+  }
+
+  el._animationFrameId = requestAnimationFrame(animate)
+}
+
+/**
+ * Add entrance animation to dynamically loaded content
+ * @param {HTMLElement} container - The container to animate children of
+ */
+window.animateContentEntrance = (container) => {
+  if (!container) return
+  container.classList.add('animate-fadeIn')
+  container.addEventListener('animationend', () => container.classList.remove('animate-fadeIn'), { once: true })
+}
+
+/**
+ * Update URL query parameter without page reload
+ * @param {string} key - Parameter key
+ * @param {string} value - Parameter value
+ */
+window.updateUrlState = (key, value) => {
+  const url = new URL(window.location.href)
+  if (value === null || value === undefined || value === '') {
+    url.searchParams.delete(key)
+  } else {
+    url.searchParams.set(key, value)
+  }
+  history.replaceState(null, '', url.toString())
+}
+
+/**
+ * Create a focus trap within an element (for modals/drawers)
+ * @param {HTMLElement} container - The element to trap focus within
+ * @returns {Function} - Cleanup function to remove the trap
+ */
+window.createFocusTrap = (container) => {
+  const focusableSelectors = 'button, [href], input:not([type="hidden"]), select, textarea, [tabindex]:not([tabindex="-1"])'
+
+  const handleKeydown = (e) => {
+    if (e.key !== 'Tab') return
+
+    const focusables = [...container.querySelectorAll(focusableSelectors)].filter(el => !el.disabled && el.offsetParent !== null)
+    if (focusables.length === 0) return
+
+    const first = focusables[0]
+    const last = focusables[focusables.length - 1]
+
+    if (e.shiftKey && document.activeElement === first) {
+      e.preventDefault()
+      last.focus()
+    } else if (!e.shiftKey && document.activeElement === last) {
+      e.preventDefault()
+      first.focus()
+    }
+  }
+
+  container.addEventListener('keydown', handleKeydown)
+  return () => container.removeEventListener('keydown', handleKeydown)
+}
+
+/**
+ * Show a success checkmark animation at element position
+ * @param {HTMLElement} el - Element to show success near
+ */
+window.showSuccessAt = (el) => {
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  const check = document.createElement('span')
+  check.textContent = '✓'
+  check.className = 'fixed text-fillSuccess-strong text-xl success-pop pointer-events-none z-[99999]'
+  check.style.cssText = `left: ${rect.right + 8}px; top: ${rect.top + rect.height / 2 - 10}px;`
+  document.body.appendChild(check)
+  setTimeout(() => check.remove(), 1000)
+}
+
+/**
+ * Highlight an element briefly (for drawing attention)
+ * @param {HTMLElement} el - Element to highlight
+ */
+window.highlightElement = (el) => {
+  if (!el) return
+  el.classList.add('stat-updated')
+  setTimeout(() => el.classList.remove('stat-updated'), 1500)
+}
+
+/**
+ * Smoothly scroll element into view with offset for fixed headers
+ * @param {HTMLElement} el - Element to scroll to
+ * @param {number} offset - Offset from top (default 80 for navbar)
+ */
+window.scrollToElement = (el, offset = 80) => {
+  if (!el) return
+  const top = el.getBoundingClientRect().top + window.scrollY - offset
+  window.scrollTo({ top, behavior: 'smooth' })
+}
+
+/**
+ * Copy text to clipboard with visual feedback
+ * @param {string} text - Text to copy
+ * @param {HTMLElement} triggerEl - Element that triggered the copy (for feedback)
+ */
+window.copyToClipboard = async (text, triggerEl) => {
+  try {
+    await navigator.clipboard.writeText(text)
+    if (triggerEl) {
+      triggerEl.classList.add('copy-success')
+      setTimeout(() => triggerEl.classList.remove('copy-success'), 1500)
+    }
+    return true
+  } catch (err) {
+    console.error('Copy failed:', err)
+    if (triggerEl) {
+      triggerEl.classList.add('copy-failed')
+      setTimeout(() => triggerEl.classList.remove('copy-failed'), 1500)
+    }
+    return false
   }
 }
 

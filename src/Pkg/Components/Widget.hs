@@ -15,6 +15,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -284,7 +285,7 @@ widgetHelper_ w' = case w.wType of
         span_ ([class_ "text-lg font-medium"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) w.title) $ toHtml $ maybeToMonoid w.title
         whenJust w.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
       -- Collapse chevron: only for full-width groups
-      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
+      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
     div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
   WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ renderTable w
@@ -344,7 +345,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
           visibilityClass = case widget.alertStatus of
             Just "alerting" -> ""
             Just "warning" -> ""
-            _ -> "opacity-0 group-hover/wgt:opacity-100"
+            _ -> "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50"
       span_
         [ class_ $ "p-1 transition-opacity " <> visibilityClass
         , data_ "tippy-content" tooltip
@@ -356,7 +357,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     whenJust expandBtnFn \fn ->
       button_
         [ term "_" fn
-        , class_ "p-2 cursor-pointer"
+        , class_ "p-2 cursor-pointer tap-target"
         , data_ "tippy-content" "Expand widget"
         ]
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
@@ -364,15 +365,20 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       $ let pid = maybeToMonoid (widget._projectId <&> (.toText))
             dashId = maybeToMonoid widget._dashboardId
          in button_
-              [ class_ "p-2 cursor-pointer hidden group-hover/wgt:block"
+              [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 touch:opacity-100 tap-target transition-opacity"
               , title_ "Expand widget"
               , data_ "tippy-content" "Expand widget"
               , term
                   "_"
-                  [text| on pointerdown or click 
+                  [text| on pointerdown or click
+            add .pointer-events-none to me
+            set :icon to my.querySelector('svg')
+            if :icon then add .animate-spin to :icon end
             set #global-data-drawer.checked to true
             then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
             then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`
+            then if :icon then remove .animate-spin from :icon end
+            then remove .pointer-events-none from me
             then set #global-data-drawer-content.innerHTML to it
             then htmx.process(#global-data-drawer-content)
             then _hyperscript.processNode(#global-data-drawer-content)
@@ -381,7 +387,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               ]
               $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     details_ [class_ "dropdown dropdown-end"] do
-      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"]
+      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"]
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
       ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
@@ -540,7 +546,7 @@ renderTraceTable widget = do
                       tbody_ []
                         $ tr_ []
                         $ td_ [colspan_ "100", class_ "text-center py-8"]
-                        $ span_ [class_ "loading loading-spinner loading-sm"] ""
+                        $ loadingIndicator_ LdSM LdSpinner
       script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
 
 
@@ -602,7 +608,7 @@ renderTable widget = do
                       tbody_ []
                         $ tr_ []
                         $ td_ [colspan_ "100", class_ "text-center py-8"]
-                        $ span_ [class_ "loading loading-spinner loading-sm"] ""
+                        $ loadingIndicator_ LdSM LdSpinner
 
     -- Add row click handler script if needed
     whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
@@ -638,7 +644,7 @@ renderStatContent widget chartId valueM = do
 renderStatPlaceholder :: Widget -> Text -> Html ()
 renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
   strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
-    $ span_ [class_ "loading loading-spinner loading-sm"] ""
+    $ loadingIndicator_ LdSM LdSpinner
   div_ [class_ "inline-flex gap-1 items-center text-sm"] do
     whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
     toHtml $ maybeToMonoid widget.title

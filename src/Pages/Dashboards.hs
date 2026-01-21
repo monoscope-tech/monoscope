@@ -64,6 +64,7 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
@@ -657,7 +658,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
     div_ [class_ "modal w-screen", role_ "dialog"] do
       label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
       div_ [class_ "modal-box min-w-80 max-w-md flex flex-col gap-4"] do
-        label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "X"
+        Components.modalCloseButton_ modalId
         h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
         p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
         whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
@@ -1092,7 +1093,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
     ]
     ""
 
-  div_ [class_ "flex justify-between items-center mb-4"] do
+  div_ [class_ "flex justify-between items-center mb-6"] do
     div_ [class_ "flex justify-between"] do
       unless isNewWidget
         $ div_ [class_ "tabs tabs-box tabs-outline"] do
@@ -1108,18 +1109,18 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
           mkTab "Edit" (effectiveActiveTab == "edit")
           mkTab "Alerts" (effectiveActiveTab == "alerts")
-      when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
+      when isNewWidget $ h3_ [class_ "text-lg font-semibold text-textStrong"] "Add a new widget"
 
-    div_ [class_ "flex items-center gap-2"] do
+    div_ [class_ "flex items-center gap-3"] do
       TimePicker.timepicker_ Nothing currentRange (Just "widget")
       TimePicker.refreshButton_
-      span_ [class_ "text-fillDisabled"] "|"
+      div_ [class_ "w-px h-5 bg-strokeWeak"] ""
       if isNewWidget
-        then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
-        else button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
+        then button_ [class_ "btn btn-primary btn-sm shadow-sm !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
+        else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
+      label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
 
-  div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
+  div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak mb-6"] do
     script_ [text| var widgetJSON = ${widgetJSON}; |]
     div_
       [ id_ widgetPreviewId
@@ -1137,16 +1138,14 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
                set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
                trigger 'update-widget' on me |]
       ]
-      ""
+      Components.chartSkeleton_
   div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
-    div_ [class_ "space-y-7"] do
-      -- Select your visualization section removed to avoid circular dependencies
-
+    div_ [class_ "space-y-8"] do
       div_ [class_ "space-y-4"] do
-        div_ [class_ "flex gap-3"] do
-          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
-          strong_ [class_ "text-lg font-semibold"] "Configure Query"
-        div_ [class_ "px-5 flex flex-col gap-2"] do
+        div_ [class_ "flex items-start gap-3"] do
+          span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] "1"
+          strong_ [class_ "text-base font-semibold text-textStrong"] "Configure Query"
+        div_ [class_ "pl-10 flex flex-col gap-3"] do
           logQueryBox_
             LogQueryBoxConfig
               { pid = pid
@@ -1166,9 +1165,8 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , alert = False
               , patternSelected = Nothing
               }
-          -- Debug: Show SQL preview (unobtrusive)
-          details_ [class_ "mt-2 text-xs text-textWeak"] do
-            summary_ [class_ "cursor-pointer hover:text-textStrong select-none"] "Show generated SQL"
+          details_ [class_ "text-xs text-textWeak"] do
+            summary_ [class_ "cursor-pointer hover:text-textStrong select-none transition-colors"] "Show generated SQL"
             div_
               [ id_ $ widPrefix <> "-sql-preview"
               , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview"
@@ -1176,15 +1174,15 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , hxTrigger_ "toggle from:closest details"
               , hxSwap_ "innerHTML"
               ]
-              $ span_ [class_ "loading loading-spinner loading-xs"] ""
+              $ loadingIndicator_ LdXS LdSpinner
 
       div_ [class_ "space-y-4"] do
-        div_ [class_ "flex gap-3"] do
-          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
-          strong_ [class_ "text-lg font-semibold"] "Give your graph a title"
-        div_ [class_ "space-x-8 px-5"]
+        div_ [class_ "flex items-start gap-3"] do
+          span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] "2"
+          strong_ [class_ "text-base font-semibold text-textStrong"] "Give your graph a title"
+        div_ [class_ "pl-10"]
           $ input_
-            [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent widget-title-input"
+            [ class_ "input input-bordered w-full"
             , id_ widgetTitleInputId
             , placeholder_ "Throughput"
             , required_ "required"
@@ -1216,7 +1214,7 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
     , hxPost_ alertEndpoint
     , hxSwap_ "none"
     , hxTrigger_ "submit"
-    , class_ "space-y-4"
+    , class_ "space-y-6"
     ]
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
@@ -1230,21 +1228,20 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
             _ -> "timeseries"
         ]
 
-      div_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-lg"] do
+      label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer"] do
         div_ [] do
           h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
           p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
         input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary"] <> [checked_ | hasAlert]
 
-      -- Alert thresholds
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
-        h4_ [class_ "font-medium text-textStrong mb-3"] "Thresholds"
+        h4_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
         div_ [class_ "grid grid-cols-2 gap-4"] do
           Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [] widget.alertThreshold
           Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [] widget.warningThreshold
         Alerts.directionSelect_ False "select-bordered w-full"
-        div_ [class_ "mt-3"] do
-          label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Show threshold lines"
+        fieldset_ [class_ "fieldset"] do
+          label_ [class_ "label text-xs"] "Show threshold lines"
           select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
             let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
                 isOnBreach = widget.showThresholdLines == Just "on_breach"
@@ -1253,17 +1250,14 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
             option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
             option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
-      -- Recovery thresholds (collapsible)
-      Alerts.collapsibleSection_ "rotate-left" "regular" "Recovery thresholds" (Just "(prevents flapping)") do
+      Alerts.collapsibleSection_ "Recovery thresholds" (Just "(prevents flapping)") do
         p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
         div_ [class_ "grid grid-cols-2 gap-4"] do
           Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
           Alerts.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-bordered w-full" Nothing
 
-      -- Check interval
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] $ Alerts.frequencySelect_ 5 True "select-bordered w-full"
 
-      -- Alert title
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
         label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Alert title"
         input_
@@ -1275,8 +1269,7 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
           , value_ $ fromMaybe (fromMaybe "Widget Alert" widget.title <> " - Threshold Alert") Nothing
           ]
 
-      -- Submit button
-      div_ [class_ "flex justify-end gap-2 pt-2"] do
+      div_ [class_ "flex justify-end gap-3 pt-4"] do
         when hasAlert do
           button_
             [ type_ "button"
@@ -1518,7 +1511,7 @@ dashboardsGet_ dg = do
           p_ [class_ "text-xs text-textWeak w-full overflow-ellipsis truncate", id_ "dItemDescription"] "Get started from a blank slate"
         div_ [class_ "pt-5"]
           $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
-          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview"]
+          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
         let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
         script_
           [text|
@@ -1615,6 +1608,7 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
       toHtml tag
       a_
         [ class_ "cursor-pointer"
+        , Aria.label_ $ "Remove filter: " <> tag
         , hxGet_ $ removeTag tag
         , hxTarget_ "#dashboardsTableContainer"
         , hxSelect_ "#dashboardsTableContainer"
@@ -2253,7 +2247,7 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 -- | Skeleton loader shown while GridStack initializes
 dashboardSkeleton_ :: Html ()
 dashboardSkeleton_ = div_ [class_ "dashboard-skeleton absolute inset-0 z-10 bg-bgBase flex flex-col items-center justify-center"] do
-  span_ [class_ "loading loading-spinner loading-lg text-fillBrand-strong"] ""
+  loadingIndicatorWith_ LdLG LdSpinner "text-fillBrand-strong"
   p_ [class_ "text-sm text-textWeak mt-3"] "Loading dashboard..."
   div_ [class_ "grid grid-cols-12 gap-4 mt-8 w-full max-w-4xl px-8"] do
     div_ [class_ "col-span-8 h-32 rounded-lg skeleton-shimmer"] ""
@@ -2331,10 +2325,10 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
 dashboardActions_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
 dashboardActions_ pid dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
   span_ [class_ "text-fillDisabled mr-2"] "|"
-  Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+  Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
   yamlEditorDrawer_ pid dashId
   div_ [class_ "dropdown dropdown-end"] do
-    div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+    div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
     ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
       li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
       whenJust tabSlugM $ \_ -> li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
@@ -2362,9 +2356,9 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
           button_ [class_ "btn btn-outline btn-sm", [__|on click call yamlEditorExport()|]] do
             faSprite_ "download" "regular" "w-3 h-3 mr-1"
             "Export"
-          label_ [class_ "btn btn-ghost btn-sm", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
+          label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
       div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ yamlUrl, hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
-        div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ span_ [class_ "loading loading-dots loading-md"] ""
+        div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ LdMD LdDots
       div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do
         div_ [id_ "yaml-status", class_ "text-sm"] ""
         button_ [class_ "btn btn-primary", hxPut_ yamlUrl, hxTarget_ "#yaml-status", hxVals_ "js:{yaml: window.yamlEditor?.getValue() || ''}"] "Save Changes"
