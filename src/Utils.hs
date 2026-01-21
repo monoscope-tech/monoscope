@@ -142,6 +142,7 @@ faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes]
 loadingIndicator_ :: Monad m => Text -> Text -> HtmlT m ()
 loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
 
+
 -- | Loading indicator with extra classes for custom styling
 loadingIndicatorWith_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
 loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> typ <> " loading-" <> size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
