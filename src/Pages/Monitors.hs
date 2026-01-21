@@ -353,11 +353,15 @@ frequencySelect_ defaultMins isByos selectCls = fieldset_ [class_ "fieldset flex
 
 
 collapsibleSection_ :: Text -> Text -> Text -> Maybe Text -> Html () -> Html ()
-collapsibleSection_ icon iconKind title subtitleM content =
+collapsibleSection_ _icon _iconKind title subtitleM content =
   details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    summary_ [class_ "p-3 cursor-pointer hover:bg-fillWeak transition-colors"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ icon iconKind "w-4 h-4 text-iconNeutral"
-        span_ [class_ "font-medium text-sm"] $ toHtml title
-        whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
-    div_ [class_ "p-4 pt-0 border-t border-strokeWeak mt-2"] content
+    summary_
+      [ class_ "p-4 cursor-pointer list-none flex items-center justify-between gap-2"
+      , [__|on click toggle .rotate-180 on the next <svg/> in me|]
+      ]
+      do
+        div_ [class_ "flex items-center gap-2"] do
+          span_ [class_ "font-medium text-sm"] $ toHtml title
+          whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
+        faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral transition-transform duration-150"
+    div_ [class_ "px-4 pb-4"] content

@@ -1093,7 +1093,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
     ]
     ""
 
-  div_ [class_ "flex justify-between items-center mb-4"] do
+  div_ [class_ "flex justify-between items-center mb-6"] do
     div_ [class_ "flex justify-between"] do
       unless isNewWidget
         $ div_ [class_ "tabs tabs-box tabs-outline"] do
@@ -1109,18 +1109,18 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
           mkTab "Edit" (effectiveActiveTab == "edit")
           mkTab "Alerts" (effectiveActiveTab == "alerts")
-      when isNewWidget $ h3_ [class_ "text-lg font-normal"] "Add a new widget"
+      when isNewWidget $ h3_ [class_ "text-lg font-semibold text-textStrong"] "Add a new widget"
 
-    div_ [class_ "flex items-center gap-2"] do
+    div_ [class_ "flex items-center gap-3"] do
       TimePicker.timepicker_ Nothing currentRange (Just "widget")
       TimePicker.refreshButton_
-      span_ [class_ "text-fillDisabled"] "|"
+      div_ [class_ "w-px h-5 bg-strokeWeak"] ""
       if isNewWidget
-        then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
-        else button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
+        then button_ [class_ "btn btn-primary btn-sm shadow-sm !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
+        else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
+      label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
 
-  div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
+  div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak mb-6"] do
     script_ [text| var widgetJSON = ${widgetJSON}; |]
     div_
       [ id_ widgetPreviewId
@@ -1140,14 +1140,12 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
       ]
       Components.chartSkeleton_
   div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
-    div_ [class_ "space-y-7"] do
-      -- Select your visualization section removed to avoid circular dependencies
-
+    div_ [class_ "space-y-8"] do
       div_ [class_ "space-y-4"] do
-        div_ [class_ "flex gap-3"] do
-          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "1"
-          strong_ [class_ "text-lg font-semibold"] "Configure Query"
-        div_ [class_ "px-5 flex flex-col gap-2"] do
+        div_ [class_ "flex items-start gap-3"] do
+          span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] "1"
+          strong_ [class_ "text-base font-semibold text-textStrong"] "Configure Query"
+        div_ [class_ "pl-10 flex flex-col gap-3"] do
           logQueryBox_
             LogQueryBoxConfig
               { pid = pid
@@ -1167,9 +1165,8 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , alert = False
               , patternSelected = Nothing
               }
-          -- Debug: Show SQL preview (unobtrusive)
-          details_ [class_ "mt-2 text-xs text-textWeak"] do
-            summary_ [class_ "cursor-pointer hover:text-textStrong select-none"] "Show generated SQL"
+          details_ [class_ "text-xs text-textWeak"] do
+            summary_ [class_ "cursor-pointer hover:text-textStrong select-none transition-colors"] "Show generated SQL"
             div_
               [ id_ $ widPrefix <> "-sql-preview"
               , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview"
@@ -1180,12 +1177,12 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               $ span_ [class_ "loading loading-spinner loading-xs"] ""
 
       div_ [class_ "space-y-4"] do
-        div_ [class_ "flex gap-3"] do
-          span_ [class_ "inline-block rounded-full bg-fillWeak px-3 py-1 leading-none"] "2"
-          strong_ [class_ "text-lg font-semibold"] "Give your graph a title"
-        div_ [class_ "space-x-8 px-5"]
+        div_ [class_ "flex items-start gap-3"] do
+          span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] "2"
+          strong_ [class_ "text-base font-semibold text-textStrong"] "Give your graph a title"
+        div_ [class_ "pl-10"]
           $ input_
-            [ class_ "p-3 border border-strokeWeak w-full rounded-lg bg-transparent widget-title-input"
+            [ class_ "input input-bordered w-full"
             , id_ widgetTitleInputId
             , placeholder_ "Throughput"
             , required_ "required"
@@ -1217,7 +1214,7 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
     , hxPost_ alertEndpoint
     , hxSwap_ "none"
     , hxTrigger_ "submit"
-    , class_ "space-y-4"
+    , class_ "space-y-6"
     ]
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
@@ -1231,21 +1228,20 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
             _ -> "timeseries"
         ]
 
-      div_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-lg"] do
+      label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer"] do
         div_ [] do
           h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
           p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
         input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary"] <> [checked_ | hasAlert]
 
-      -- Alert thresholds
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
-        h4_ [class_ "font-medium text-textStrong mb-3"] "Thresholds"
+        h4_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
         div_ [class_ "grid grid-cols-2 gap-4"] do
           Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [] widget.alertThreshold
           Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [] widget.warningThreshold
         Alerts.directionSelect_ False "select-bordered w-full"
-        div_ [class_ "mt-3"] do
-          label_ [class_ "text-xs font-medium text-textStrong block mb-1"] "Show threshold lines"
+        fieldset_ [class_ "fieldset"] do
+          label_ [class_ "label text-xs"] "Show threshold lines"
           select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
             let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
                 isOnBreach = widget.showThresholdLines == Just "on_breach"
@@ -1254,17 +1250,14 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
             option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
             option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
-      -- Recovery thresholds (collapsible)
       Alerts.collapsibleSection_ "rotate-left" "regular" "Recovery thresholds" (Just "(prevents flapping)") do
         p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
         div_ [class_ "grid grid-cols-2 gap-4"] do
           Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
           Alerts.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-bordered w-full" Nothing
 
-      -- Check interval
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] $ Alerts.frequencySelect_ 5 True "select-bordered w-full"
 
-      -- Alert title
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
         label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Alert title"
         input_
@@ -1276,8 +1269,7 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
           , value_ $ fromMaybe (fromMaybe "Widget Alert" widget.title <> " - Threshold Alert") Nothing
           ]
 
-      -- Submit button
-      div_ [class_ "flex justify-end gap-2 pt-2"] do
+      div_ [class_ "flex justify-end gap-3 pt-4"] do
         when hasAlert do
           button_
             [ type_ "button"
