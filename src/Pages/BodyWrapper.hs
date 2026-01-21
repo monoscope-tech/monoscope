@@ -261,8 +261,9 @@ bodyWrapper bcfg child = do
             instance.show();
           });
 
-          // Clear tooltip warmth timeout on page unload to prevent memory leak
+          // Clear tooltip warmth timeout on page unload and HTMX navigation to prevent memory leak
           window.addEventListener('beforeunload', () => clearTimeout(tooltipWarmTimeout));
+          document.body.addEventListener('htmx:beforeSwap', () => clearTimeout(tooltipWarmTimeout));
 
           // Animate stat values on HTMX content swap for delightful updates
           document.body.addEventListener('htmx:afterSwap', (e) => {

@@ -357,14 +357,14 @@ jsonValueToHtmlTree val pathM = do
 
 
 unwrapJsonPrimValue :: Bool -> AE.Value -> Text
-unwrapJsonPrimValue _ (AE.Bool True) = "true"
-unwrapJsonPrimValue _ (AE.Bool False) = "false"
-unwrapJsonPrimValue False (AE.String v) = "\"" <> toText v <> "\""
-unwrapJsonPrimValue True (AE.String v) = toText v
-unwrapJsonPrimValue _ (AE.Number v) = toText @String $ show v
-unwrapJsonPrimValue _ AE.Null = "null"
-unwrapJsonPrimValue _ (AE.Object _) = "{..}"
-unwrapJsonPrimValue _ (AE.Array items) = "[" <> toText (show (length items)) <> "]"
+unwrapJsonPrimValue stripped = \case
+  AE.Bool True -> "true"
+  AE.Bool False -> "false"
+  AE.String v -> if stripped then toText v else "\"" <> toText v <> "\""
+  AE.Number v -> toText @String $ show v
+  AE.Null -> "null"
+  AE.Object _ -> "{..}"
+  AE.Array items -> "[" <> toText (show (length items)) <> "]"
 
 
 lookupVecText :: V.Vector AE.Value -> Int -> Maybe Text

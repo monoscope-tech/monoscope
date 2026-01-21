@@ -49,15 +49,16 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
 -- Usage: emptyState_ (Just "chart-line") "No data" "Description" (Just "/setup") "Get Started"
 -- Pass Nothing for icon to use default, or Just "icon-name" for custom icon
 emptyState_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> Html ()
-emptyState_ iconM title subTxt url btnText =
-  let (processedUrl, targetAttr) = maybe ("", []) (\u -> (u, [target_ "_blank" | "https://" `T.isPrefixOf` u])) url
-      icon = fromMaybe "empty" iconM
-   in section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4 empty-state"] do
-        div_ [] $ faSprite_ icon "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
-        div_ [class_ "flex flex-col gap-2"] do
-          h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
-          p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
-          unless (T.null btnText) $ a_ ([href_ processedUrl, class_ "btn text-sm w-max mx-auto btn-primary"] ++ targetAttr) $ toHtml btnText
+emptyState_ iconM title subTxt urlM btnText =
+  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4 empty-state"] do
+    div_ [] $ faSprite_ (fromMaybe "empty" iconM) "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
+    div_ [class_ "flex flex-col gap-2"] do
+      h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
+      p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
+      whenJust urlM \u -> unless (T.null btnText) $
+        let attrs = [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"]
+              ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
+         in a_ attrs $ toHtml btnText
 
 
 -- | Filtered empty state - for when search/filters return no results

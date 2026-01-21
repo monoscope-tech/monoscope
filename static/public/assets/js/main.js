@@ -125,6 +125,7 @@ window.updateGroupByButtonText = (_e, self) => {
  * @param {number} duration - Animation duration in ms (default 500)
  */
 window.animateStatValue = (el, newValue, duration = 500) => {
+  if (el._animationFrameId) cancelAnimationFrame(el._animationFrameId)
   const currentText = el.textContent.replace(/[^0-9.-]/g, '')
   const startValue = parseFloat(currentText) || 0
   const startTime = performance.now()
@@ -143,10 +144,11 @@ window.animateStatValue = (el, newValue, duration = 500) => {
     // Format with commas
     el.textContent = Math.round(currentValue).toLocaleString()
 
-    if (progress < 1) requestAnimationFrame(animate)
+    if (progress < 1) el._animationFrameId = requestAnimationFrame(animate)
+    else el._animationFrameId = null
   }
 
-  requestAnimationFrame(animate)
+  el._animationFrameId = requestAnimationFrame(animate)
 }
 
 /**
@@ -252,6 +254,10 @@ window.copyToClipboard = async (text, triggerEl) => {
     return true
   } catch (err) {
     console.error('Copy failed:', err)
+    if (triggerEl) {
+      triggerEl.classList.add('copy-failed')
+      setTimeout(() => triggerEl.classList.remove('copy-failed'), 1500)
+    }
     return false
   }
 }
