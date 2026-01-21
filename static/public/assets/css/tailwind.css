@@ -186,11 +186,8 @@
 /* Animation and component styles */
 @layer custom {
   /* Staggered list animations - apply .stagger-fade to container
-     Items 9+ use modulo pattern to avoid all appearing at once */
-  .stagger-fade > * {
-    opacity: 0;
-    animation: fadeSlideIn 200ms ease-out forwards;
-  }
+     First 8 items stagger at 50ms intervals, items 9+ cycle at 25ms intervals from 400ms base */
+  .stagger-fade > * { opacity: 0; animation: fadeSlideIn 200ms ease-out forwards; }
   .stagger-fade > *:nth-child(1) { animation-delay: 0ms; }
   .stagger-fade > *:nth-child(2) { animation-delay: 50ms; }
   .stagger-fade > *:nth-child(3) { animation-delay: 100ms; }
@@ -199,15 +196,15 @@
   .stagger-fade > *:nth-child(6) { animation-delay: 250ms; }
   .stagger-fade > *:nth-child(7) { animation-delay: 300ms; }
   .stagger-fade > *:nth-child(8) { animation-delay: 350ms; }
-  .stagger-fade > *:nth-child(8n+9) { animation-delay: 400ms; }
-  .stagger-fade > *:nth-child(8n+10) { animation-delay: 425ms; }
-  .stagger-fade > *:nth-child(8n+11) { animation-delay: 450ms; }
-  .stagger-fade > *:nth-child(8n+12) { animation-delay: 475ms; }
-  .stagger-fade > *:nth-child(8n+13) { animation-delay: 500ms; }
-  .stagger-fade > *:nth-child(8n+14) { animation-delay: 525ms; }
-  .stagger-fade > *:nth-child(8n+15) { animation-delay: 550ms; }
-  .stagger-fade > *:nth-child(8n+16) { animation-delay: 575ms; }
-  /* Ensure focused items are visible during stagger animation */
+  .stagger-fade > *:nth-child(n+9) { --stagger-base: 400ms; }
+  .stagger-fade > *:nth-child(8n+9) { animation-delay: calc(var(--stagger-base) + 0ms); }
+  .stagger-fade > *:nth-child(8n+10) { animation-delay: calc(var(--stagger-base) + 25ms); }
+  .stagger-fade > *:nth-child(8n+11) { animation-delay: calc(var(--stagger-base) + 50ms); }
+  .stagger-fade > *:nth-child(8n+12) { animation-delay: calc(var(--stagger-base) + 75ms); }
+  .stagger-fade > *:nth-child(8n+13) { animation-delay: calc(var(--stagger-base) + 100ms); }
+  .stagger-fade > *:nth-child(8n+14) { animation-delay: calc(var(--stagger-base) + 125ms); }
+  .stagger-fade > *:nth-child(8n+15) { animation-delay: calc(var(--stagger-base) + 150ms); }
+  .stagger-fade > *:nth-child(8n+16) { animation-delay: calc(var(--stagger-base) + 175ms); }
   .stagger-fade > *:focus-visible { opacity: 1 !important; animation: none; }
 
   /* Button press feedback - applies to all DaisyUI buttons for tactile feel */
@@ -1458,54 +1455,19 @@ code, pre, .code, .monospace {
 }
 
 
-/* Database-specific badges - neutral background with colored borders */
-.badge-postgres {
-  @apply bg-fillWeak text-textStrong border border-strokeBrand-strong;
+/* Database-specific badges - consolidated with CSS custom properties */
+.badge-postgres, .badge-mysql, .badge-redis, .badge-mongo, .badge-mongodb,
+.badge-elastic, .badge-elasticsearch, .badge-cassandra, .badge-dynamodb,
+.badge-memcached, .badge-sqlite, .badge-clickhouse {
+  @apply bg-fillWeak text-textStrong border;
+  border-color: var(--db-color, var(--color-strokeStrong));
 }
-
-.badge-mysql {
-  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
-}
-
-.badge-redis {
-  @apply bg-fillWeak text-textStrong border border-strokeError-strong;
-}
-
-.badge-mongo {
-  @apply bg-fillWeak text-textStrong border border-strokeSuccess-strong;
-}
-
-.badge-mongodb {
-  @apply bg-fillWeak text-textStrong border border-strokeSuccess-strong;
-}
-
-.badge-elastic {
-  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
-}
-
-.badge-elasticsearch {
-  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
-}
-
-.badge-cassandra {
-  @apply bg-fillWeak text-textStrong border border-strokeInformation-strong;
-}
-
-.badge-dynamodb {
-  @apply bg-fillWeak text-textStrong border border-strokeBrand-strong;
-}
-
-.badge-memcached {
-  @apply bg-fillWeak text-textStrong border border-strokeBrand-strong;
-}
-
-.badge-sqlite {
-  @apply bg-fillWeak text-textStrong border border-strokeStrong;
-}
-
-.badge-clickhouse {
-  @apply bg-fillWeak text-textStrong border border-strokeWarning-strong;
-}
+.badge-postgres, .badge-dynamodb, .badge-memcached { --db-color: var(--color-strokeBrand-strong); }
+.badge-mysql, .badge-elastic, .badge-elasticsearch, .badge-clickhouse { --db-color: var(--color-strokeWarning-strong); }
+.badge-redis { --db-color: var(--color-strokeError-strong); }
+.badge-mongo, .badge-mongodb { --db-color: var(--color-strokeSuccess-strong); }
+.badge-cassandra { --db-color: var(--color-strokeInformation-strong); }
+.badge-sqlite { --db-color: var(--color-strokeStrong); }
 
 .tagify {}
 
@@ -2265,23 +2227,35 @@ code, pre, .code, .monospace {
   overflow: hidden;
 }
 
-/* Link hover preview - shows destination URL on hover */
-.link-preview {
+/* Hover tooltip base pattern - consolidated styles for link-preview, table links, truncate-reveal */
+.link-preview,
+table td a[href]:not(.btn):not([data-no-preview]),
+.truncate-reveal {
   position: relative;
+  --tooltip-z: 50;
+  --tooltip-max-width: 300px;
+  --tooltip-padding: 0.25rem 0.5rem;
+  --tooltip-font-size: 0.75rem;
+  --tooltip-font: 'JetBrains Mono', monospace;
+  --tooltip-color: var(--color-textWeak);
+  --tooltip-bg: var(--color-bgOverlay);
+  --tooltip-delay: 300ms;
+  --tooltip-offset: -2px;
 }
 
-.link-preview::after {
-  content: attr(href);
+.link-preview::after,
+table td a[href]:not(.btn):not([data-no-preview])::after,
+.truncate-reveal::before {
   position: absolute;
   left: 0;
-  top: 100%;
-  z-index: 50;
-  max-width: 300px;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.75rem;
-  font-family: 'JetBrains Mono', monospace;
-  color: var(--color-textWeak);
-  background: var(--color-bgOverlay);
+  top: calc(100% + 4px);
+  z-index: var(--tooltip-z);
+  max-width: var(--tooltip-max-width);
+  padding: var(--tooltip-padding);
+  font-size: var(--tooltip-font-size);
+  font-family: var(--tooltip-font);
+  color: var(--tooltip-color);
+  background: var(--tooltip-bg);
   border: 1px solid var(--color-strokeWeak);
   border-radius: 0.25rem;
   box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
@@ -2289,108 +2263,36 @@ code, pre, .code, .monospace {
   overflow: hidden;
   text-overflow: ellipsis;
   opacity: 0;
-  pointer-events: none;
-  transform: translateY(-4px);
-  transition: opacity 150ms ease-out, transform 150ms ease-out;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .link-preview:hover::after {
-    opacity: 1;
-    transform: translateY(4px);
-    transition-delay: 400ms;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .link-preview::after {
-    transition: opacity 100ms;
-    transform: none;
-  }
-  .link-preview:hover::after {
-    transform: none;
-  }
-}
-
-/* Table link preview - applies to links in table cells */
-table td a[href]:not(.btn):not([data-no-preview]) {
-  position: relative;
-}
-
-table td a[href]:not(.btn):not([data-no-preview])::after {
-  content: attr(href);
-  position: absolute;
-  left: 0;
-  top: calc(100% + 4px);
-  z-index: 100;
-  max-width: 280px;
-  padding: 0.25rem 0.5rem;
-  font-size: 0.65rem;
-  font-weight: 400;
-  font-family: 'JetBrains Mono', monospace;
-  line-height: 1.4;
-  color: var(--color-textWeak);
-  background: var(--color-bgRaised);
-  border: 1px solid var(--color-strokeWeak);
-  border-radius: 0.25rem;
-  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.12), 0 2px 4px -1px rgb(0 0 0 / 0.06);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  opacity: 0;
   visibility: hidden;
   pointer-events: none;
-  transform: translateY(-2px);
+  transform: translateY(var(--tooltip-offset));
   transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0ms 120ms;
 }
 
-@media (hover: hover) and (pointer: fine) {
-  table td a[href]:not(.btn):not([data-no-preview]):hover::after {
-    opacity: 1;
-    visibility: visible;
-    transform: translateY(0);
-    transition: opacity 120ms ease-out 350ms, transform 120ms ease-out 350ms, visibility 0ms 350ms;
-  }
-}
+/* Set content for each type */
+.link-preview::after { content: attr(href); }
+table td a[href]:not(.btn):not([data-no-preview])::after { content: attr(href); }
+.truncate-reveal::before { content: attr(data-full-text); }
 
-/* Truncated text hover reveal */
-.truncate-reveal {
-  position: relative;
-}
-
-.truncate-reveal::before {
-  content: attr(data-full-text);
-  position: absolute;
-  left: 0;
-  top: calc(100% + 4px);
-  z-index: 100;
-  max-width: 400px;
-  padding: 0.375rem 0.625rem;
-  font-size: inherit;
-  color: var(--color-textStrong);
-  background: var(--color-bgRaised);
-  border: 1px solid var(--color-strokeWeak);
-  border-radius: 0.375rem;
-  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.12);
-  white-space: normal;
-  word-break: break-word;
-  opacity: 0;
-  visibility: hidden;
-  pointer-events: none;
-  transform: translateY(-2px);
-  transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0ms 120ms;
-}
+/* Type-specific overrides */
+.link-preview { --tooltip-delay: 400ms; --tooltip-offset: -4px; }
+table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-max-width: 280px; --tooltip-font-size: 0.65rem; --tooltip-bg: var(--color-bgRaised); }
+.truncate-reveal { --tooltip-max-width: 400px; --tooltip-font: inherit; --tooltip-padding: 0.375rem 0.625rem; --tooltip-color: var(--color-textStrong); --tooltip-bg: var(--color-bgRaised); }
+.truncate-reveal::before { white-space: normal; word-break: break-word; border-radius: 0.375rem; }
 
 @media (hover: hover) and (pointer: fine) {
+  .link-preview:hover::after,
+  table td a[href]:not(.btn):not([data-no-preview]):hover::after,
   .truncate-reveal:hover::before {
     opacity: 1;
     visibility: visible;
     transform: translateY(0);
-    transition: opacity 120ms ease-out 300ms, transform 120ms ease-out 300ms, visibility 0ms 300ms;
+    transition: opacity 120ms ease-out var(--tooltip-delay), transform 120ms ease-out var(--tooltip-delay), visibility 0ms var(--tooltip-delay);
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .link-preview::after,
   table td a[href]::after,
   .truncate-reveal::before {
     transition: opacity 80ms;
