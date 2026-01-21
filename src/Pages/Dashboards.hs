@@ -233,8 +233,8 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             Just slug -> maybe 0 fst (findTabBySlug tabs slug)
             Nothing -> 0
           baseTabUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/"
-          -- Build query string from current params (excluding activeTabSlugKey which is internal)
-          queryStr = queryStringFrom $ filter (\(k, _) -> k /= activeTabSlugKey) allParams
+          -- Build query string from current params (excluding internal keys and expand param)
+          queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
       div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline", id_ "dashboard-tabs-container"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabSlug = slugify tab.name
@@ -537,6 +537,15 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             window.interpolateVarTemplates();
           }
         });
+
+        // Auto-expand widget if expand param is in URL
+        const expandWId = new URLSearchParams(window.location.search).get('expand');
+        if (expandWId) {
+          setTimeout(() => {
+            const expandBtn = document.querySelector('[data-expand-btn="' + expandWId + '"]');
+            if (expandBtn) expandBtn.click();
+          }, 100);
+        }
       });
 
       // Listen for widget-remove-requested custom events
@@ -657,7 +666,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
     input_ [class_ "modal-toggle", id_ modalId, type_ "checkbox", [__|init set my.checked to true on keyup if event's key is 'Escape' set my.checked to false|]]
     div_ [class_ "modal w-screen", role_ "dialog"] do
       label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
-      div_ [class_ "modal-box min-w-80 max-w-md flex flex-col gap-4"] do
+      div_ [class_ "modal-box relative min-w-80 max-w-md flex flex-col gap-4"] do
         Components.modalCloseButton_ modalId
         h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
         p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
@@ -1116,8 +1125,8 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
       TimePicker.refreshButton_
       div_ [class_ "w-px h-5 bg-strokeWeak"] ""
       if isNewWidget
-        then button_ [class_ "btn btn-primary btn-sm shadow-sm !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
-        else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
+        then button_ [class_ "btn btn-primary btn-sm shadow-sm", type_ "submit", form_ widgetFormId] "Save changes"
+        else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
       label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
 
   div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak mb-6"] do

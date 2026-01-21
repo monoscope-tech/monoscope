@@ -690,14 +690,14 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
 
     -- Dark mode toggle
     div_
-      [ class_ "hover:bg-fillBrand-weak px-2 py-1 rounded-lg tap-target"
+      [ class_ "hover:bg-fillBrand-weak pl-1.5"
       , Aria.label_ "Toggle dark mode"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Toggle dark mode"
       ]
       $ do
         -- Regular toggle with icons (visible when sidebar is expanded)
-        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center justify-center", Aria.label_ "Toggle dark mode"] $ do
+        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center", Aria.label_ "Toggle dark mode"] $ do
           faSprite_ "sun-bright" "regular" "h-5 w-5 text-textBrand"
           input_
             [ type_ "checkbox"
@@ -709,7 +709,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
           faSprite_ "moon-stars" "regular" "h-5 w-5 text-textBrand"
 
         -- Swap rotate icon (visible when sidebar is collapsed)
-        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden tap-target", Aria.label_ "Toggle dark mode"] $ do
+        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden", Aria.label_ "Toggle dark mode"] $ do
           input_
             [ type_ "checkbox"
             , class_ "theme-controller"
@@ -722,14 +722,14 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
           -- Moon icon (shown in dark mode)
           span_ [class_ "swap-on", Aria.label_ "Dark mode"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
     a_
-      [ class_ "hover:bg-fillBrand-weak tap-target"
+      [ class_ "hover:bg-fillBrand-weak"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Logout"
       , Aria.label_ "Logout"
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center  rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
