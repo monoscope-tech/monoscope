@@ -320,7 +320,7 @@
     top: 0;
     left: 0;
     width: 0;
-    height: 3px;
+    height: 2px;
     background: linear-gradient(90deg, var(--color-fillBrand-strong), var(--color-fillBrand-weak));
     z-index: 99999;
     opacity: 0;
@@ -519,9 +519,9 @@
     outline-offset: 1px;
   }
 
-  /* Progress bar glow effect */
+  /* Progress bar subtle glow */
   .htmx-progress.htmx-request {
-    box-shadow: 0 0 8px var(--color-fillBrand-strong), 0 0 16px rgba(0, 104, 255, 0.3);
+    box-shadow: 0 0 3px var(--color-fillBrand-strong);
   }
 
   /* Checkbox/toggle state transition */
@@ -779,6 +779,10 @@
     /* Larger tap targets on mobile */
     .btn-sm { min-height: 40px; }
     .tab { min-height: 44px; }
+
+    /* Touch device visibility for elements normally hidden on hover */
+    .touch\:opacity-100 { opacity: 1 !important; }
+    .touch\:opacity-50 { opacity: 0.5 !important; }
 
     /* Disable hover states that cause sticky on touch */
     .card-lift:hover { transform: none; box-shadow: inherit; }

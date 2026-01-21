@@ -285,7 +285,7 @@ widgetHelper_ w' = case w.wType of
         span_ ([class_ "text-lg font-medium"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) w.title) $ toHtml $ maybeToMonoid w.title
         whenJust w.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
       -- Collapse chevron: only for full-width groups
-      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
+      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
     div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
   WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ renderTable w
@@ -345,7 +345,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
           visibilityClass = case widget.alertStatus of
             Just "alerting" -> ""
             Just "warning" -> ""
-            _ -> "opacity-0 group-hover/wgt:opacity-100"
+            _ -> "opacity-0 group-hover/wgt:opacity-100 touch:opacity-50"
       span_
         [ class_ $ "p-1 transition-opacity " <> visibilityClass
         , data_ "tippy-content" tooltip
@@ -357,7 +357,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     whenJust expandBtnFn \fn ->
       button_
         [ term "_" fn
-        , class_ "p-2 cursor-pointer"
+        , class_ "p-2 cursor-pointer tap-target"
         , data_ "tippy-content" "Expand widget"
         ]
         $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
@@ -365,15 +365,20 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       $ let pid = maybeToMonoid (widget._projectId <&> (.toText))
             dashId = maybeToMonoid widget._dashboardId
          in button_
-              [ class_ "p-2 cursor-pointer hidden group-hover/wgt:block"
+              [ class_ "p-2 cursor-pointer opacity-0 group-hover/wgt:opacity-100 touch:opacity-100 tap-target transition-opacity"
               , title_ "Expand widget"
               , data_ "tippy-content" "Expand widget"
               , term
                   "_"
-                  [text| on pointerdown or click 
+                  [text| on pointerdown or click
+            add .pointer-events-none to me
+            set :icon to my.querySelector('svg')
+            if :icon then add .animate-spin to :icon end
             set #global-data-drawer.checked to true
             then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
             then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`
+            then if :icon then remove .animate-spin from :icon end
+            then remove .pointer-events-none from me
             then set #global-data-drawer-content.innerHTML to it
             then htmx.process(#global-data-drawer-content)
             then _hyperscript.processNode(#global-data-drawer-content)
