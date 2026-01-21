@@ -261,11 +261,14 @@ bodyWrapper bcfg child = do
             instance.show();
           });
 
+          // Clear tooltip warmth timeout on page unload to prevent memory leak
+          window.addEventListener('beforeunload', () => clearTimeout(tooltipWarmTimeout));
+
           // Animate stat values on HTMX content swap for delightful updates
           document.body.addEventListener('htmx:afterSwap', (e) => {
             e.target.querySelectorAll('.stat-value[data-value]').forEach(el => {
               const newVal = parseFloat(el.dataset.value);
-              if (!isNaN(newVal) && window.animateStatValue) {
+              if (!isNaN(newVal) && typeof window.animateStatValue === 'function') {
                 window.animateStatValue(el, newVal, 400);
               }
             });

@@ -62,7 +62,6 @@ import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
-import Data.List qualified as L
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
@@ -482,18 +481,11 @@ serviceColors =
 
 
 getServiceColors :: V.Vector Text -> HashMap Text Text
-getServiceColors services = go services HM.empty []
+getServiceColors = V.foldl' assign HM.empty
   where
-    go :: V.Vector Text -> HashMap Text Text -> [Text] -> HashMap Text Text
-    go svcs assignedColors usedColors
-      | V.null svcs = assignedColors
-      | otherwise =
-          let service = V.head svcs
-              availableColors' = filter (`L.notElem` usedColors) (V.toList serviceColors)
-              availableColors = if null availableColors' then V.toList serviceColors else availableColors'
-              colorIdx = sum (map ord $ toString $ toXXHash service) `mod` length availableColors
-              selectedColor = availableColors L.!! colorIdx
-           in go (V.tail svcs) (HM.insert service selectedColor assignedColors) (selectedColor : usedColors)
+    assign colors service =
+      let colorIdx = fromIntegral (xxHash (encodeUtf8 service)) `mod` V.length serviceColors
+       in HM.insert service (serviceColors V.! colorIdx) colors
 
 
 toXXHash :: Text -> Text
