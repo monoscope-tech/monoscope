@@ -485,14 +485,21 @@ modal_ modalId btnTrigger contentHtml = do
           end
       |]
     ]
-  div_ [class_ "modal w-screen", role_ "dialog", Aria.label_ "Modal dialog", style_ "--color-base-100: var(--color-fillWeaker)", [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
+  div_
+    [ class_ "modal w-screen"
+    , role_ "dialog"
+    , Aria.label_ "Modal dialog"
+    , style_ "--color-base-100: var(--color-fillWeaker)"
+    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
         set :form to target.closest('form') then
         if :form then call :form.requestSubmit() then halt end
-      |]] do
-    label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
-    div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
-      label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
-      div_ contentHtml
+      |]
+    ]
+    do
+      label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
+      div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
+        label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
+        div_ contentHtml
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()
