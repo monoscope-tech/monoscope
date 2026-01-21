@@ -2,7 +2,7 @@ module Pkg.DrainSpec (spec) where
 
 import Test.Hspec
 import Data.Vector qualified as V
-import RequestMessages qualified
+import Utils qualified
 import Data.Time
 import Pkg.Drain
 import Relude
@@ -19,7 +19,7 @@ testTimeOffset seconds = addUTCTime (fromIntegral seconds) testTime
 
 processNewLog :: Text -> Text -> UTCTime -> DrainTree -> DrainTree
 processNewLog logId logContent now tree = do
-  let tokensVec = V.fromList $ words $ RequestMessages.replaceAllFormats logContent
+  let tokensVec = V.fromList $ words $ Utils.replaceAllFormats logContent
       tokenCount = V.length tokensVec
       firstToken = if V.null tokensVec then "" else V.head tokensVec
    in if tokenCount == 0
