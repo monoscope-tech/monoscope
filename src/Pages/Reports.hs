@@ -34,7 +34,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (checkFreeTierExceeded, faSprite_, getDurationNSMS, prettyPrintCount)
+import Utils (checkFreeTierExceeded, faSprite_, getDurationNSMS, loadingIndicatorWith_, prettyPrintCount)
 
 
 data PerformanceReport = PerformanceReport
@@ -237,7 +237,7 @@ singleReportPage pid report =
                       div_ [class_ "flex w-full items-center justify-between"] do
                         div_ [class_ "flex text-sm items-center gap-3"] do
                           span_ [class_ "text-textWeak"] "Total events"
-                          span_ [class_ "font-semibold"] $ toHtml $ prettyPrintCount (fromIntegral v.events.total)
+                          span_ [class_ "font-semibold tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral v.events.total)
                         span_ [class_ $ "text-xs" <> (if v.events.change < 0 then " text-textError" else " text-textSuccess")] $ show v.events.change <> "% from last period"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
@@ -246,7 +246,7 @@ singleReportPage pid report =
                       div_ [class_ "flex w-full items-center justify-between"] do
                         div_ [class_ "flex text-sm items-center gap-3"] do
                           span_ [class_ "text-textWeak"] "Error trend"
-                          span_ [class_ "font-semibold"] $ toHtml $ prettyPrintCount (fromIntegral v.errors.total)
+                          span_ [class_ "font-semibold tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral v.errors.total)
                         span_ [class_ $ "text-xs" <> (if v.errors.change >= 0 then " text-textError" else " text-textSuccess ")] $ show v.errors.change <> "% from last week"
                       div_ [class_ "h-[90%]"] do
                         Widget.widget_
@@ -309,8 +309,8 @@ singleReportPage pid report =
                           tbody_ [class_ "text-sm"] $ forM_ v.slowDbQueries $ \queryStat -> do
                             tr_ [class_ "p"] do
                               td_ [class_ "p-2 text-textStrong max-w-96 truncate ellipsis"] $ toHtml queryStat.query
-                              td_ [class_ "p-2"] $ toHtml $ getDurationNSMS (round queryStat.averageDuration)
-                              td_ [class_ "p-2"] $ toHtml $ prettyPrintCount (fromIntegral queryStat.totalEvents)
+                              td_ [class_ "p-2 tabular-nums"] $ toHtml $ getDurationNSMS (round queryStat.averageDuration)
+                              td_ [class_ "p-2 tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral queryStat.totalEvents)
                 Nothing -> pass
       Nothing -> do
         h3_ [] "Report Not Found"
@@ -340,7 +340,7 @@ reportsPage pid reports nextUrl daily weekly =
             , hxTrigger_ "intersect once"
             ]
             $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
-              span_ [class_ "loading loading-dots text-sm text-textWeak"] pass
+              loadingIndicatorWith_ "sm" "dots" "text-textWeak"
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""

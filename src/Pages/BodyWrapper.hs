@@ -18,7 +18,7 @@ import Pkg.THUtils
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (faSprite_, freeTierLimitExceededBanner)
+import Utils (faSprite_, freeTierLimitExceededBanner, loadingIndicator_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -439,7 +439,7 @@ bodyWrapper bcfg child = do
                       else child
                   div_ [class_ "h-0 shrink"] do
                     Components.drawer_ "global-data-drawer" Nothing Nothing ""
-                    template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
+                    template_ [id_ "loader-tmp"] $ loadingIndicator_ "md" "dots"
                     -- Modal for copying widgets to other dashboards
                     Components.modal_ "dashboards-modal" "" do
                       -- Hidden fields to store widget and dashboard IDs
@@ -687,6 +687,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
     -- Dark mode toggle
     div_
       [ class_ "hover:bg-fillBrand-weak px-2 py-1 rounded-lg tap-target"
+      , Aria.label_ "Toggle dark mode"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Toggle dark mode"
       ]

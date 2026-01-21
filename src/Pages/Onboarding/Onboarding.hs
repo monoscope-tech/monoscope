@@ -51,7 +51,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
-import Utils (faSprite_, insertIfNotExist, lookupValueText, onpointerdown_)
+import Utils (faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
 
@@ -626,7 +626,7 @@ integrationsPage pid apikey =
 
                 div_ [class_ "relative p-8"] do
                   div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
-                    $ span_ [class_ "loading loading-dots loading-md"] ""
+                    $ loadingIndicator_ "md" "dots"
                   div_
                     [ id_ $ "fw-content-" <> lang
                     , hxGet_ $ "/proxy/docs/sdks/" <> thd3 (frameworks Unsafe.!! 0)
@@ -1009,7 +1009,7 @@ faQ question answer =
 universalIndicator :: Html ()
 universalIndicator =
   div_ [class_ "fixed  htmx-indicator top-0 left-0 right-0 bottom-0 flex items-center justify-center z-9999", id_ "loadingIndicator"] do
-    span_ [class_ "loading loading-dots loading-lg"] ""
+    loadingIndicator_ "lg" "dots"
 
 
 -- | Proxy handler for fetching documentation from monoscope.tech

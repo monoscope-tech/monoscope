@@ -12,6 +12,7 @@ module Utils (
   DBField (..),
   faSprite_,
   loadingIndicator_,
+  loadingIndicatorWith_,
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
@@ -137,8 +138,13 @@ faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes]
 -- | Accessible loading indicator with screen reader support
 -- Size options: "xs", "sm", "md", "lg"
 -- Type options: "dots", "spinner", "ring"
+-- Tailwind safelist: class_ "loading loading-dots loading-spinner loading-ring loading-xs loading-sm loading-md loading-lg"
 loadingIndicator_ :: Monad m => Text -> Text -> HtmlT m ()
-loadingIndicator_ size typ = span_ [class_ $ "loading loading-" <> typ <> " loading-" <> size, role_ "status", Aria.label_ "Loading"] ""
+loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
+
+-- | Loading indicator with extra classes for custom styling
+loadingIndicatorWith_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
+loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> typ <> " loading-" <> size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
 
 
 deleteParam :: Text -> Text -> Text

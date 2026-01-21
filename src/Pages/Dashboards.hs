@@ -658,7 +658,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
     div_ [class_ "modal w-screen", role_ "dialog"] do
       label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
       div_ [class_ "modal-box min-w-80 max-w-md flex flex-col gap-4"] do
-        label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
+        Components.modalCloseButton_ modalId
         h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
         p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
         whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
@@ -1174,7 +1174,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , hxTrigger_ "toggle from:closest details"
               , hxSwap_ "innerHTML"
               ]
-              $ span_ [class_ "loading loading-spinner loading-xs"] ""
+              $ loadingIndicator_ "xs" "spinner"
 
       div_ [class_ "space-y-4"] do
         div_ [class_ "flex items-start gap-3"] do
@@ -2247,7 +2247,7 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 -- | Skeleton loader shown while GridStack initializes
 dashboardSkeleton_ :: Html ()
 dashboardSkeleton_ = div_ [class_ "dashboard-skeleton absolute inset-0 z-10 bg-bgBase flex flex-col items-center justify-center"] do
-  span_ [class_ "loading loading-spinner loading-lg text-fillBrand-strong"] ""
+  loadingIndicatorWith_ "lg" "spinner" "text-fillBrand-strong"
   p_ [class_ "text-sm text-textWeak mt-3"] "Loading dashboard..."
   div_ [class_ "grid grid-cols-12 gap-4 mt-8 w-full max-w-4xl px-8"] do
     div_ [class_ "col-span-8 h-32 rounded-lg skeleton-shimmer"] ""
@@ -2358,7 +2358,7 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
             "Export"
           label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
       div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ yamlUrl, hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
-        div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ span_ [class_ "loading loading-dots loading-md"] ""
+        div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ "md" "dots"
       div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do
         div_ [id_ "yaml-status", class_ "text-sm"] ""
         button_ [class_ "btn btn-primary", hxPut_ yamlUrl, hxTarget_ "#yaml-status", hxVals_ "js:{yaml: window.yamlEditor?.getValue() || ''}"] "Save Changes"

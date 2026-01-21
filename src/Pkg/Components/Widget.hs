@@ -546,7 +546,7 @@ renderTraceTable widget = do
                       tbody_ []
                         $ tr_ []
                         $ td_ [colspan_ "100", class_ "text-center py-8"]
-                        $ span_ [class_ "loading loading-spinner loading-sm"] ""
+                        $ loadingIndicator_ "sm" "spinner"
       script_ [type_ "text/javascript"] """htmx.process(".widget-target")"""
 
 
@@ -608,7 +608,7 @@ renderTable widget = do
                       tbody_ []
                         $ tr_ []
                         $ td_ [colspan_ "100", class_ "text-center py-8"]
-                        $ span_ [class_ "loading loading-spinner loading-sm"] ""
+                        $ loadingIndicator_ "sm" "spinner"
 
     -- Add row click handler script if needed
     whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
@@ -644,7 +644,7 @@ renderStatContent widget chartId valueM = do
 renderStatPlaceholder :: Widget -> Text -> Html ()
 renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
   strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
-    $ span_ [class_ "loading loading-spinner loading-sm"] ""
+    $ loadingIndicator_ "sm" "spinner"
   div_ [class_ "inline-flex gap-1 items-center text-sm"] do
     whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
     toHtml $ maybeToMonoid widget.title

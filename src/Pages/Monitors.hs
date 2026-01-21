@@ -300,8 +300,8 @@ monitorsPageContent_ pid monitors = do
         a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] "Create Alert"
     unless (V.null monitors) do
       div_ [class_ "flex gap-4 mb-4"] do
-        div_ [class_ "badge badge-lg badge-ghost"] $ toHtml $ "Active: " <> show (V.length activeMonitors)
-        div_ [class_ "badge badge-lg badge-ghost"] $ toHtml $ "Inactive: " <> show (V.length inactiveMonitors)
+        div_ [class_ "badge badge-lg badge-ghost tabular-nums"] $ toHtml $ "Active: " <> show (V.length activeMonitors)
+        div_ [class_ "badge badge-lg badge-ghost tabular-nums"] $ toHtml $ "Inactive: " <> show (V.length inactiveMonitors)
       div_ [id_ "alertsListContainer"] do
         queryMonitors_ monitors
 

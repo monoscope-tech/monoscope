@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -11,7 +11,7 @@ import Models.Projects.Projects (ProjectId)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
-import Utils (faSprite_, onpointerdown_)
+import Utils (faSprite_, loadingIndicator_, onpointerdown_)
 
 
 statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
@@ -21,7 +21,7 @@ statBox pid title helpInfo val bckupValM = wrapper do
       span_ [class_ "font-bold text-textStrong text-2xl tabular-nums stat-value", term "data-value" (show val)] $ toHtml @Text $ fmt (commaizeF val)
       maybe "" (\bVal -> small_ [class_ "tabular-nums"] $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
     span_ [class_ "text-textWeak"] $ toHtml title
-  span_ [class_ "inline-block tooltip tap-target", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
+  span_ [class_ "inline-block tooltip tap-target", Aria.label_ "More info", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
   where
     tl = getTargetPage title
     pidT = maybe "" (.toText) pid
@@ -42,7 +42,7 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
       span_ [class_ $ "font-bold tabular-nums stat-value " <> fsiz <> fromMaybe "text-textStrong" valClsM, term "data-value" val] $ toHtml val
       div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
         p_ [] $ toHtml title
-        span_ [class_ "tap-target", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
+        span_ [class_ "tap-target", Aria.label_ "More info", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
 
 -- | Empty state component with optional contextual icon
@@ -107,7 +107,7 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
       div_
         [id_ $ drawerId <> "-content", class_ "py-4 px-8 h-full flex flex-col gap-8", hxSwap_ "innerHTML"]
         $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM)
-        $ fromMaybe (span_ [class_ "loading loading-dots loading-md"] "") content
+        $ fromMaybe (loadingIndicator_ "md" "dots") content
 
 
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()
@@ -498,8 +498,12 @@ modal_ modalId btnTrigger contentHtml = do
     do
       label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
       div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
-        label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
+        modalCloseButton_ modalId
         div_ contentHtml
+
+
+modalCloseButton_ :: Monad m => Text -> HtmlT m ()
+modalCloseButton_ modalId = label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
 
 
 resizer_ :: Text -> Text -> Bool -> Html ()

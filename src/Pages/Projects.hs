@@ -89,7 +89,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (paymentPlanPicker)
+import Pages.Components (modalCloseButton_, paymentPlanPicker)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
@@ -1428,7 +1428,7 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
     label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
     div_ [class_ "modal-box w-full max-w-2xl flex flex-col"] do
-      label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-3 top-3 tap-target"] "✕"
+      modalCloseButton_ modalId
       form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{...getTagValues(`$prefix`)}|], hxTarget_ "#main-content", hxSwap_ "outerHTML", class_ "flex flex-col h-full"] do
         whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
 
