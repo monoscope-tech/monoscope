@@ -41,7 +41,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
 
 
 -- Metrics types
@@ -235,7 +235,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
     overViewTabs pid "charts"
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" Nothing Nothing ""
-      template_ [id_ "loader-tmp"] $ loadingIndicator_ "md" "dots"
+      template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
       div_ [class_ "w-full flex gap-1 items-start"] do
         select_
           [ class_ "select bg-fillWeaker border !border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"

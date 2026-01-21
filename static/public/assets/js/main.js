@@ -125,6 +125,7 @@ window.updateGroupByButtonText = (_e, self) => {
  * @param {number} duration - Animation duration in ms (default 500)
  */
 window.animateStatValue = (el, newValue, duration = 500) => {
+  if (!el) return
   if (el._animationFrameId) cancelAnimationFrame(el._animationFrameId)
   const currentText = el.textContent.replace(/[^0-9.-]/g, '')
   const startValue = parseFloat(currentText) || 0
@@ -211,6 +212,7 @@ window.createFocusTrap = (container) => {
  * @param {HTMLElement} el - Element to show success near
  */
 window.showSuccessAt = (el) => {
+  if (!el) return
   const rect = el.getBoundingClientRect()
   const check = document.createElement('span')
   check.textContent = '✓'
@@ -225,6 +227,7 @@ window.showSuccessAt = (el) => {
  * @param {HTMLElement} el - Element to highlight
  */
 window.highlightElement = (el) => {
+  if (!el) return
   el.classList.add('stat-updated')
   setTimeout(() => el.classList.remove('stat-updated'), 1500)
 }
@@ -235,6 +238,7 @@ window.highlightElement = (el) => {
  * @param {number} offset - Offset from top (default 80 for navbar)
  */
 window.scrollToElement = (el, offset = 80) => {
+  if (!el) return
   const top = el.getBoundingClientRect().top + window.scrollY - offset
   window.scrollTo({ top, behavior: 'smooth' })
 }

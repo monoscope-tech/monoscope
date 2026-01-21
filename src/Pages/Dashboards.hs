@@ -1174,7 +1174,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , hxTrigger_ "toggle from:closest details"
               , hxSwap_ "innerHTML"
               ]
-              $ loadingIndicator_ "xs" "spinner"
+              $ loadingIndicator_ LdXS LdSpinner
 
       div_ [class_ "space-y-4"] do
         div_ [class_ "flex items-start gap-3"] do
@@ -1250,7 +1250,7 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
             option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
             option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
-      Alerts.collapsibleSection_ "rotate-left" "regular" "Recovery thresholds" (Just "(prevents flapping)") do
+      Alerts.collapsibleSection_ "Recovery thresholds" (Just "(prevents flapping)") do
         p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
         div_ [class_ "grid grid-cols-2 gap-4"] do
           Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
@@ -2247,7 +2247,7 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
 -- | Skeleton loader shown while GridStack initializes
 dashboardSkeleton_ :: Html ()
 dashboardSkeleton_ = div_ [class_ "dashboard-skeleton absolute inset-0 z-10 bg-bgBase flex flex-col items-center justify-center"] do
-  loadingIndicatorWith_ "lg" "spinner" "text-fillBrand-strong"
+  loadingIndicatorWith_ LdLG LdSpinner "text-fillBrand-strong"
   p_ [class_ "text-sm text-textWeak mt-3"] "Loading dashboard..."
   div_ [class_ "grid grid-cols-12 gap-4 mt-8 w-full max-w-4xl px-8"] do
     div_ [class_ "col-span-8 h-32 rounded-lg skeleton-shimmer"] ""
@@ -2358,7 +2358,7 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
             "Export"
           label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
       div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ yamlUrl, hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
-        div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ "md" "dots"
+        div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ LdMD LdDots
       div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do
         div_ [id_ "yaml-status", class_ "text-sm"] ""
         button_ [class_ "btn btn-primary", hxPut_ yamlUrl, hxTarget_ "#yaml-status", hxVals_ "js:{yaml: window.yamlEditor?.getValue() || ''}"] "Save Changes"

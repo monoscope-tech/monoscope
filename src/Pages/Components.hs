@@ -11,7 +11,7 @@ import Models.Projects.Projects (ProjectId)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
-import Utils (faSprite_, loadingIndicator_, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, onpointerdown_)
 
 
 statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
@@ -108,7 +108,7 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
       div_
         [id_ $ drawerId <> "-content", class_ "py-4 px-8 h-full flex flex-col gap-8", hxSwap_ "innerHTML"]
         $ div_ (maybe [] (\url -> [hxGet_ url, hxTrigger_ "intersect once"]) urlM)
-        $ fromMaybe (loadingIndicator_ "md" "dots") content
+        $ fromMaybe (loadingIndicator_ LdMD LdDots) content
 
 
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()

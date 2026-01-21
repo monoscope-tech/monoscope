@@ -352,8 +352,8 @@ frequencySelect_ defaultMins isByos selectCls = fieldset_ [class_ "fieldset flex
     mkOpt (m, l) = option_ ([value_ (show m <> "m")] <> [disabled_ "" | not isByos && m < 5] <> [selected_ "" | m == defaultMins]) ("Every " <> toHtml l)
 
 
-collapsibleSection_ :: Text -> Text -> Text -> Maybe Text -> Html () -> Html ()
-collapsibleSection_ _icon _iconKind title subtitleM content =
+collapsibleSection_ :: Text -> Maybe Text -> Html () -> Html ()
+collapsibleSection_ title subtitleM content =
   details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
     summary_
       [ class_ "p-4 cursor-pointer list-none flex items-center justify-between gap-2"

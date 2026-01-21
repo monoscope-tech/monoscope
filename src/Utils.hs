@@ -11,6 +11,8 @@ module Utils (
   parseTime,
   DBField (..),
   faSprite_,
+  LoadingSize (..),
+  LoadingType (..),
   loadingIndicator_,
   loadingIndicatorWith_,
   lookupVecInt,
@@ -134,17 +136,31 @@ faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes]
       _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
 
 
+-- | Type-safe loading indicator size
+data LoadingSize = LdXS | LdSM | LdMD | LdLG deriving (Eq, Show)
+
+
+-- | Type-safe loading indicator type
+data LoadingType = LdDots | LdSpinner | LdRing deriving (Eq, Show)
+
+
+loadingSizeClass :: LoadingSize -> Text
+loadingSizeClass = \case LdXS -> "xs"; LdSM -> "sm"; LdMD -> "md"; LdLG -> "lg"
+
+
+loadingTypeClass :: LoadingType -> Text
+loadingTypeClass = \case LdDots -> "dots"; LdSpinner -> "spinner"; LdRing -> "ring"
+
+
 -- | Accessible loading indicator with screen reader support
--- Size options: "xs", "sm", "md", "lg"
--- Type options: "dots", "spinner", "ring"
 -- Tailwind safelist: class_ "loading loading-dots loading-spinner loading-ring loading-xs loading-sm loading-md loading-lg"
-loadingIndicator_ :: Monad m => Text -> Text -> HtmlT m ()
+loadingIndicator_ :: Monad m => LoadingSize -> LoadingType -> HtmlT m ()
 loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
 
 
 -- | Loading indicator with extra classes for custom styling
-loadingIndicatorWith_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
-loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> typ <> " loading-" <> size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
+loadingIndicatorWith_ :: Monad m => LoadingSize -> LoadingType -> Text -> HtmlT m ()
+loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> loadingTypeClass typ <> " loading-" <> loadingSizeClass size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
 
 
 deleteParam :: Text -> Text -> Text

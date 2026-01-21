@@ -34,7 +34,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (checkFreeTierExceeded, faSprite_, getDurationNSMS, loadingIndicatorWith_, prettyPrintCount)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, getDurationNSMS, loadingIndicatorWith_, prettyPrintCount)
 
 
 data PerformanceReport = PerformanceReport
@@ -340,7 +340,7 @@ reportsPage pid reports nextUrl daily weekly =
             , hxTrigger_ "intersect once"
             ]
             $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
-              loadingIndicatorWith_ "sm" "dots" "text-textWeak"
+              loadingIndicatorWith_ LdSM LdDots "text-textWeak"
 
 
 -- div_ [class_ "w-5 bg-gray-200"] ""

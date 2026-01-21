@@ -18,7 +18,7 @@ import Pkg.THUtils
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (faSprite_, freeTierLimitExceededBanner, loadingIndicator_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicator_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -443,7 +443,7 @@ bodyWrapper bcfg child = do
                       else child
                   div_ [class_ "h-0 shrink"] do
                     Components.drawer_ "global-data-drawer" Nothing Nothing ""
-                    template_ [id_ "loader-tmp"] $ loadingIndicator_ "md" "dots"
+                    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
                     -- Modal for copying widgets to other dashboards
                     Components.modal_ "dashboards-modal" "" do
                       -- Hidden fields to store widget and dashboard IDs
