@@ -45,15 +45,19 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
         span_ [class_ "tap-target", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
 
-emptyState_ :: Text -> Text -> Maybe Text -> Text -> Html ()
-emptyState_ title subTxt url btnText =
+-- | Empty state component with optional contextual icon
+-- Usage: emptyState_ (Just "chart-line") "No data" "Description" (Just "/setup") "Get Started"
+-- Pass Nothing for icon to use default, or Just "icon-name" for custom icon
+emptyState_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> Html ()
+emptyState_ iconM title subTxt url btnText =
   let (processedUrl, targetAttr) = maybe ("", []) (\u -> (u, [target_ "_blank" | "https://" `T.isPrefixOf` u])) url
+      icon = fromMaybe "empty" iconM
    in section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4"] do
-        div_ [] $ faSprite_ "empty" "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
+        div_ [] $ faSprite_ icon "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
           p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
-          a_ ([href_ processedUrl, class_ "btn text-sm w-max mx-auto btn-primary"] ++ targetAttr) $ toHtml btnText
+          unless (T.null btnText) $ a_ ([href_ processedUrl, class_ "btn text-sm w-max mx-auto btn-primary"] ++ targetAttr) $ toHtml btnText
 
 
 getTargetPage :: Text -> Text

@@ -71,6 +71,7 @@ import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Slack (SlackData, getDiscordDataByProjectId, getProjectSlackData)
@@ -896,7 +897,7 @@ memberRowWithStatus pid idx prM = do
         option_ ([value_ "admin"] <> [selected_ "" | prM.permission == ProjectMembers.PAdmin]) "Admin"
         option_ ([value_ "edit"] <> [selected_ "" | prM.permission == ProjectMembers.PEdit]) "Editor"
         option_ ([value_ "view"] <> [selected_ "" | prM.permission == ProjectMembers.PView]) "Viewer"
-      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
+      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
@@ -1427,7 +1428,7 @@ teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
   div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
     label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
     div_ [class_ "modal-box w-full max-w-2xl flex flex-col"] do
-      label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-3 top-3"] "✕"
+      label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-3 top-3 tap-target"] "✕"
       form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{...getTagValues(`$prefix`)}|], hxTarget_ "#main-content", hxSwap_ "outerHTML", class_ "flex flex-col h-full"] do
         whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
 

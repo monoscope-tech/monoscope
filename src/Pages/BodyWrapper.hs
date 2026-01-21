@@ -282,6 +282,19 @@ bodyWrapper bcfg child = do
           // Re-initialize for dynamically added content (afterSettle fires after DOM is fully settled)
           document.body.addEventListener('htmx:afterSettle', initTooltips);
 
+          // Progress bar for HTMX requests
+          const progressBar = document.getElementById('htmx-progress');
+          if (progressBar) {
+            document.body.addEventListener('htmx:beforeRequest', () => {
+              progressBar.classList.remove('htmx-settling');
+              progressBar.classList.add('htmx-request');
+            });
+            document.body.addEventListener('htmx:afterRequest', () => {
+              progressBar.classList.remove('htmx-request');
+              progressBar.classList.add('htmx-settling');
+            });
+          }
+
           // Cmd+Enter / Ctrl+Enter form submission for textareas
           document.addEventListener('keydown', function(e) {
             if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
@@ -370,6 +383,10 @@ bodyWrapper bcfg child = do
     |]
 
     body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-ext" "multi-swap,preload,response-targets", term "preload" "mouseover"] do
+      -- Skip to main content link for keyboard users (accessibility)
+      a_ [class_ "sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100000] focus:bg-bgRaised focus:px-4 focus:py-2 focus:rounded-lg focus:text-textBrand focus:shadow-lg focus:ring-2 focus:ring-strokeFocus", href_ "#main-content"] "Skip to main content"
+      -- HTMX progress bar for long operations
+      div_ [id_ "htmx-progress", class_ "htmx-progress"] ""
       div_
         [ style_ "z-index:99999"
         , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-fillWeak overflow-y-auto inset-0 h-full max-h-full"
@@ -403,7 +420,7 @@ bodyWrapper bcfg child = do
                     (currUser.email == "hello@apitoolkit.io")
                     loginBanner
                   unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                  section_ [class_ "overflow-y-auto h-full grow"] do
+                  section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                     when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                     if bcfg.isSettingsPage
                       then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
@@ -575,18 +592,20 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
         -- Full logos (shown when sidebar is expanded)
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar"] do
-        input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", Aria.label_ "Toggle sidebar", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
+      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle set @aria-expanded to (event.target.checked ? 'false' : 'true')|]] do
+        input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
         [ class_ "flex flex-row border border-strokeWeak bg-fillWeaker text-textStrong hover:bg-fillWeaker gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
+        , Aria.haspopup_ "listbox"
+        , Aria.label_ $ "Switch project, current: " <> project.title
         ]
         do
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" "w-4"
-      div_ [tabindex_ "0", class_ "dropdown-content z-40"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
+      div_ [tabindex_ "0", class_ "dropdown-content z-40", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
     nav_ [class_ "mt-5 flex flex-col gap-2.5 text-textWeak"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
@@ -707,12 +726,12 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
 alerts_ :: Html ()
 alerts_ = do
   template_ [id_ "successToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-success w-96 cursor-pointer", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
-      faSprite_ "circle-info" "solid" "stroke-current shrink-0 w-6 h-6"
+    div_ [role_ "alert", class_ "alert alert-success w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+      faSprite_ "circle-check" "solid" "stroke-current shrink-0 w-6 h-6"
       span_ [class_ "title"] "Something succeeded"
   template_ [id_ "errorToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-error w-96 cursor-pointer", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
-      faSprite_ "circle-info" "solid" "stroke-current shrink-0 w-6 h-6"
+    div_ [role_ "alert", class_ "alert alert-error w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+      faSprite_ "circle-exclamation" "solid" "stroke-current shrink-0 w-6 h-6"
       span_ [class_ "title"] "Something failed"
   section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 space-y-3", id_ "toastsParent"] ""
   script_
@@ -751,7 +770,7 @@ settingsWrapper pid current pageHtml = do
     nav_ [class_ "w-72 h-full p-4 pt-8 border-r border-r-strokWeak"] do
       h1_ [class_ "text-xl pl-3 font-semibold"] "Settings"
       ul_ [class_ "flex flex-col mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
-    main_ [class_ "w-full h-full overflow-y-auto"] do
+    main_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
       pageHtml
 
 

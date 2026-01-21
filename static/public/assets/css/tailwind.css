@@ -198,12 +198,36 @@
   .btn { transition: transform 75ms ease-out; }
   .btn:active:not(:disabled) { transform: scale(0.98); }
 
-  /* Smooth drawer slide-in animation */
-  .drawer-side .drawer-content-animated {
+  /* Smooth drawer slide-in/out animation with backdrop fade */
+  .drawer-side {
+    transition: visibility 0s linear 200ms;
+  }
+  .drawer-toggle:checked ~ .drawer-side {
+    transition: visibility 0s linear 0s;
+  }
+  .drawer-side > .drawer-overlay {
+    opacity: 0;
+    transition: opacity 200ms ease-out;
+  }
+  .drawer-toggle:checked ~ .drawer-side > .drawer-overlay {
+    opacity: 1;
+  }
+  .drawer-side .drawer-content-animated,
+  .drawer-side > *:not(.drawer-overlay) {
     transform: translateX(100%);
     transition: transform 200ms ease-out;
   }
-  .drawer-toggle:checked ~ .drawer-side .drawer-content-animated {
+  .drawer-toggle:checked ~ .drawer-side .drawer-content-animated,
+  .drawer-toggle:checked ~ .drawer-side > *:not(.drawer-overlay) {
+    transform: translateX(0);
+  }
+  /* Left-side drawers */
+  .drawer-side.drawer-start .drawer-content-animated,
+  .drawer-side.drawer-start > *:not(.drawer-overlay) {
+    transform: translateX(-100%);
+  }
+  .drawer-toggle:checked ~ .drawer-side.drawer-start .drawer-content-animated,
+  .drawer-toggle:checked ~ .drawer-side.drawer-start > *:not(.drawer-overlay) {
     transform: translateX(0);
   }
 
@@ -236,6 +260,100 @@
     align-items: center;
     justify-content: center;
   }
+
+  /* Button loading state during HTMX requests */
+  form.htmx-request button[type="submit"],
+  button[type="submit"].htmx-request,
+  .btn.htmx-request {
+    pointer-events: none;
+    opacity: 0.7;
+  }
+  form.htmx-request button[type="submit"]::after,
+  button[type="submit"].htmx-request::after,
+  .btn.htmx-request::after {
+    content: "";
+    width: 1em;
+    height: 1em;
+    margin-left: 0.5em;
+    border: 2px solid currentColor;
+    border-right-color: transparent;
+    border-radius: 50%;
+    animation: spin 0.6s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+  }
+  @keyframes spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* Toggle switch optimistic feedback during HTMX requests */
+  .toggle.htmx-request,
+  form.htmx-request .toggle {
+    opacity: 0.6;
+    pointer-events: none;
+  }
+
+  /* Global HTMX progress bar for long operations */
+  .htmx-progress {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 0;
+    height: 3px;
+    background: linear-gradient(90deg, var(--color-fillBrand-strong), var(--color-fillBrand-weak));
+    z-index: 99999;
+    opacity: 0;
+    transition: opacity 150ms ease-out;
+  }
+  .htmx-progress.htmx-request {
+    opacity: 1;
+    animation: htmxProgress 2s ease-out forwards;
+  }
+  @keyframes htmxProgress {
+    0% { width: 0; }
+    20% { width: 30%; }
+    50% { width: 60%; }
+    80% { width: 85%; }
+    100% { width: 95%; }
+  }
+  .htmx-progress.htmx-settling {
+    width: 100%;
+    transition: width 100ms ease-out, opacity 200ms ease-out 100ms;
+    opacity: 0;
+  }
+
+  /* Input focus glow animation for better feedback */
+  .input:focus, .select:focus, .textarea:focus {
+    transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+    box-shadow: 0 0 0 3px var(--color-strokeBrand-weak);
+    border-color: var(--color-strokeBrand-strong);
+  }
+
+  /* Shake animation for form validation errors */
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-4px); }
+    40% { transform: translateX(4px); }
+    60% { transform: translateX(-4px); }
+    80% { transform: translateX(4px); }
+  }
+  .input-error, .shake {
+    animation: shake 300ms ease-out;
+  }
+
+  /* Toast slide-in animation */
+  @keyframes toastIn {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .toast-animate {
+    animation: toastIn 200ms ease-out;
+  }
+
+  /* Skeleton wave timing variations for visual interest */
+  .skeleton-wave:nth-child(odd) { animation-delay: 0.15s; }
+  .skeleton-wave:nth-child(even) { animation-delay: 0.3s; }
+  .skeleton-wave:nth-child(3n) { animation-delay: 0.45s; }
 }
 
 @plugin "daisyui/theme" {
@@ -876,6 +994,19 @@ code, pre, .code, .monospace {
       inset 0 -1px 0 0 oklch(from var(--color-fillWeaker) calc(l - 0.02) c h),
       0 2px 8px -2px rgba(0 0 0 / 0.08),
       0 4px 12px -4px rgba(0 0 0 / 0.04);
+    transition: transform 150ms ease-out, box-shadow 150ms ease-out;
+  }
+
+  /* Subtle hover lift for cards - only on hover-capable devices */
+  @media (hover: hover) and (pointer: fine) {
+    .surface-raised:hover {
+      transform: translateY(-1px);
+      box-shadow:
+        inset 0 1px 0 0 oklch(from var(--color-fillWeaker) calc(l + 0.04) c h),
+        inset 0 -1px 0 0 oklch(from var(--color-fillWeaker) calc(l - 0.02) c h),
+        0 4px 12px -2px rgba(0 0 0 / 0.12),
+        0 8px 20px -4px rgba(0 0 0 / 0.08);
+    }
   }
 
   [data-theme="dark"] .surface-raised {

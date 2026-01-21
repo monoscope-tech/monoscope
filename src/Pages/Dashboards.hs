@@ -64,6 +64,7 @@ import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
@@ -657,7 +658,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
     div_ [class_ "modal w-screen", role_ "dialog"] do
       label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
       div_ [class_ "modal-box min-w-80 max-w-md flex flex-col gap-4"] do
-        label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "X"
+        label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
         h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
         p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
         whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
@@ -1117,7 +1118,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
       if isNewWidget
         then button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none !h-auto", type_ "submit", form_ widgetFormId] "Save changes"
         else button_ [class_ "leading-none rounded-lg px-4 py-2 cursor-pointer btn btn-primary shadow-sm leading-none hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
+      label_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg leading-none tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
   div_ [class_ "w-full aspect-4/1 p-3 rounded-lg bg-fillWeaker mb-4"] do
     script_ [text| var widgetJSON = ${widgetJSON}; |]
@@ -1615,6 +1616,7 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
       toHtml tag
       a_
         [ class_ "cursor-pointer"
+        , Aria.label_ $ "Remove filter: " <> tag
         , hxGet_ $ removeTag tag
         , hxTarget_ "#dashboardsTableContainer"
         , hxSelect_ "#dashboardsTableContainer"
@@ -2331,10 +2333,10 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
 dashboardActions_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
 dashboardActions_ pid dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
   span_ [class_ "text-fillDisabled mr-2"] "|"
-  Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+  Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
   yamlEditorDrawer_ pid dashId
   div_ [class_ "dropdown dropdown-end"] do
-    div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer  p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
+    div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
     ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
       li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
       whenJust tabSlugM $ \_ -> li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
@@ -2362,7 +2364,7 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
           button_ [class_ "btn btn-outline btn-sm", [__|on click call yamlEditorExport()|]] do
             faSprite_ "download" "regular" "w-3 h-3 mr-1"
             "Export"
-          label_ [class_ "btn btn-ghost btn-sm", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
+          label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
       div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ yamlUrl, hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
         div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ span_ [class_ "loading loading-dots loading-md"] ""
       div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do

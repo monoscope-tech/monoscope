@@ -409,7 +409,7 @@ renderRows tbl =
 -- List mode: render columns in a flex container (no table wrapper/headers)
 {-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
-renderListRow tbl row = div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem py-3"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
+renderListRow tbl row = div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem py-3 hover:bg-fillWeaker transition-colors duration-75"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
 
@@ -418,7 +418,7 @@ renderListRow tbl row = div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsL
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ (rowAttrs <> linkHandler) do
+  tr_ (rowAttrs <> linkHandler <> [class_ "hover:bg-fillWeaker transition-colors duration-75"]) do
     when (isJust tbl.features.rowId)
       $ td_ [class_ "w-8 align-top pt-4"] do
         whenJust tbl.features.rowId \getId ->
@@ -714,7 +714,7 @@ renderZeroState zs = do
   let url = case zs.destination of
         Left labelId -> labelId
         Right destination -> destination
-  emptyState_ zs.title zs.description (Just url) zs.actionText
+  emptyState_ (Just zs.icon) zs.title zs.description (Just url) zs.actionText
 
 
 renderSimpleZeroState :: SimpleZeroState -> Html ()

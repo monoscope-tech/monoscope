@@ -398,7 +398,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
 
             when (V.null withSessionIds)
               $ div_ [class_ "flex flex-col gap-4"] do
-                emptyState_ "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide"
+                emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide"
 
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id

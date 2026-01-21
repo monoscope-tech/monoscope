@@ -374,10 +374,10 @@ renderEndpointRow endpoint = tr_ [class_ ""] do
   td_ [class_ "p-2 text-textWeak w-96 flex gap-4 items-center "] do
     span_ [class_ $ "cbadge-sm badge-" <> endpoint.method] $ toHtml endpoint.method
     span_ [class_ "flex-shrink-0 text-textStrong"] $ toHtml endpoint.urlPath
-  td_ [class_ "p-2"] $ toHtml $ prettyPrintCount endpoint.requestCount
-  td_ [class_ $ "p-2 " <> if endpoint.requestDiffPct < 0 then "text-textError" else "text-textSuccess"] $ toHtml $ show endpoint.requestDiffPct <> "%"
-  td_ [class_ "p-2"] $ toHtml $ getDurationNSMS endpoint.averageDuration
-  td_ [class_ $ "p-2 " <> if endpoint.durationDiffPct <= 0 then "text-textSuccess" else "text-textError"] $ toHtml $ show (durationDiffPct endpoint) <> "%"
+  td_ [class_ "p-2 tabular-nums"] $ toHtml $ prettyPrintCount endpoint.requestCount
+  td_ [class_ $ "p-2 tabular-nums " <> if endpoint.requestDiffPct < 0 then "text-textError" else "text-textSuccess"] $ toHtml $ show endpoint.requestDiffPct <> "%"
+  td_ [class_ "p-2 tabular-nums"] $ toHtml $ getDurationNSMS endpoint.averageDuration
+  td_ [class_ $ "p-2 tabular-nums " <> if endpoint.durationDiffPct <= 0 then "text-textSuccess" else "text-textError"] $ toHtml $ show (durationDiffPct endpoint) <> "%"
 
 
 renderEndpointsTable :: [PerformanceReport] -> Html ()
@@ -402,17 +402,17 @@ categoryCard category total avDur changeDur changeCount = do
       div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Total events"] $ do
         span_ [class_ "w-12 border-t border-t-strokeWeak self-end"] pass
         span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
-        div_ [class_ "text-sm text-textStrong"] $ toHtml (prettyPrintCount (fromIntegral total))
+        div_ [class_ "text-sm text-textStrong tabular-nums"] $ toHtml (prettyPrintCount (fromIntegral total))
         div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeCount < 0 then " text-textError" else " text-textSuccess")] $ do
           faSprite_ (if changeCount < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [] $ toHtml $ show changeCount <> "%"
+          span_ [class_ "tabular-nums"] $ toHtml $ show changeCount <> "%"
       div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Average duration"] $ do
         span_ [class_ "w-12 border-t border-t-strokeWeak self-start"] pass
         span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
-        div_ [class_ "text-sm text-textStrong"] $ toHtml (getDurationNSMS $ round avDur)
+        div_ [class_ "text-sm text-textStrong tabular-nums"] $ toHtml (getDurationNSMS $ round avDur)
         div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeDur < 0 then " text-textSuccess" else " text-textError")] $ do
           faSprite_ (if changeDur < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [] $ toHtml $ show changeDur <> "%"
+          span_ [class_ "tabular-nums"] $ toHtml $ show changeDur <> "%"
 
 
 getFaSprite :: Text -> Text

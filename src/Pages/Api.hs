@@ -10,6 +10,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -127,7 +128,8 @@ apiKeysPage pid apiKeys = do
           div_ [class_ "p-3 bg-[#0068ff]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
             $ faSprite_ "key" "regular" "h-6 w-6 text-textBrand"
           button_
-            [ class_ "btn btn-ghost btn-sm btn-circle"
+            [ class_ "btn btn-ghost btn-sm btn-circle tap-target"
+            , Aria.label_ "Close modal"
             , [__|on click set #apikey-modal.checked to false |]
             ]
             do

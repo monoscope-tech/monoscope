@@ -238,7 +238,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
       template_ [id_ "loader-tmp"] $ span_ [class_ "loading loading-dots loading-md"] ""
       div_ [class_ "w-full flex gap-1 items-start"] do
         select_
-          [ class_ "select bg-fillWeaker  border !border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden"
+          [ class_ "select bg-fillWeaker border !border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
           , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
           ]
           do
@@ -247,14 +247,14 @@ chartsPage pid metricList sources source mFilter nextUrl = do
         div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-strokeWeak bg-fillWeaker"] do
           faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
           input_
-            [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden"
+            [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden focus:ring-0"
             , type_ "text"
             , placeholder_ "Search"
             , id_ "search-input"
             , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
             ]
         select_
-          [ class_ "select bg-fillWeaker h-12 border !border-strokeWeak rounded-xl w-42 focus:outline-hidden"
+          [ class_ "select bg-fillWeaker h-12 border !border-strokeWeak rounded-xl w-42 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
           , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
           ]
           do
@@ -268,8 +268,8 @@ chartsPage pid metricList sources source mFilter nextUrl = do
             forM_ (ordNub metricNames) $ \m -> option_ ([selected_ m | m == mFilter] ++ [value_ m]) $ toHtml m
     if V.null metricList
       then
-        div_ [class_ "w-full flex items-center justify-center h-96"]
-          $ Components.emptyState_ "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
+        div_ [class_ "w-full flex items-center justify-center h-96"] $
+          Components.emptyState_ (Just "chart-line") "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
       else
         div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"]
           $ chartList pid source metricList nextUrl
@@ -320,8 +320,8 @@ dataPointsPage pid metrics = do
           div_ [class_ "w-[10vw] ml-2"] "Referenced in"
         if V.null metrics
           then
-            div_ [class_ "w-full flex items-center justify-center h-96"]
-              $ Components.emptyState_ "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
+            div_ [class_ "w-full flex items-center justify-center h-96"] $
+              Components.emptyState_ (Just "chart-line") "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
           else div_ [class_ "w-full"] $ do
             let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
             metricsTree pid metrics metrMap
@@ -334,7 +334,7 @@ metricsDetailsPage pid sources metric source currentRange = do
       div_ [class_ "flex flex-col gap-1"] do
         span_ [class_ "text-textStrong text-sm font-medium"] "Data source"
         select_
-          [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-36 focus:outline-hidden"
+          [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
           , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/"
           , name_ "metric_source"
           , hxTarget_ "#global-data-drawer-content"
@@ -388,7 +388,7 @@ metricsDetailsPage pid sources metric source currentRange = do
             div_ [class_ "flex flex-col gap-1"] do
               span_ [class_ "text-textStrong text-sm font-medium"] "By label"
               select_
-                [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-36 focus:outline-hidden"
+                [ class_ "select select-sm bg-fillWeaker border border-strokeWeak rounded-xl w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
                 , hxGet_ $ "/p/" <> pid.toText <> "/metrics/details/" <> metric.metricName <> "/breakdown"
                 , name_ "label"
                 , hxTarget_ "#breakdown-container"
@@ -552,7 +552,7 @@ tracePage pid traceItem spanRecords = do
               div_ [class_ "flex items-center gap-2 w-full rounded-lg px-3 grow-1 h-9 border border-strokeWeak bg-fillWeaker"] do
                 faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-textWeak"
                 input_
-                  [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden"
+                  [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden focus:ring-0"
                   , type_ "text"
                   , placeholder_ "Search"
                   , id_ "search-input"

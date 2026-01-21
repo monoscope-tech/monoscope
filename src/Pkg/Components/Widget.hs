@@ -15,6 +15,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -284,7 +285,7 @@ widgetHelper_ w' = case w.wType of
         span_ ([class_ "text-lg font-medium"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) w.title) $ toHtml $ maybeToMonoid w.title
         whenJust w.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
       -- Collapse chevron: only for full-width groups
-      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
+      when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
     div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
   WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ renderTable w
@@ -381,7 +382,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               ]
               $ Utils.faSprite_ "expand-icon" "regular" "w-3 h-3"
     details_ [class_ "dropdown dropdown-end"] do
-      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg", data_ "tippy-content" "Widget Menu"]
+      summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"]
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
       ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
