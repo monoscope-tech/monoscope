@@ -282,6 +282,24 @@ bodyWrapper bcfg child = do
           // Re-initialize for dynamically added content (afterSettle fires after DOM is fully settled)
           document.body.addEventListener('htmx:afterSettle', initTooltips);
 
+          // Animate stat values on HTMX content swap for delightful updates
+          document.body.addEventListener('htmx:afterSwap', (e) => {
+            e.target.querySelectorAll('.stat-value[data-value]').forEach(el => {
+              const newVal = parseFloat(el.dataset.value);
+              if (!isNaN(newVal) && window.animateStatValue) {
+                window.animateStatValue(el, newVal, 400);
+              }
+            });
+          });
+
+          // Add aria-busy during HTMX requests for screen reader feedback
+          document.body.addEventListener('htmx:beforeRequest', (e) => {
+            e.target.setAttribute('aria-busy', 'true');
+          });
+          document.body.addEventListener('htmx:afterRequest', (e) => {
+            e.target.removeAttribute('aria-busy');
+          });
+
           // Progress bar for HTMX requests
           const progressBar = document.getElementById('htmx-progress');
           if (progressBar) {
@@ -310,8 +328,19 @@ bodyWrapper bcfg child = do
               duration: 5000,
               position: {x: 'right', y: 'top'},
           });
-          document.body.addEventListener("successToast", (e)=> {e.detail.value.map(v=>notyf.success(v));});
-          document.body.addEventListener("errorToast", (e)=> {e.detail.value.map(v=>notyf.error(v));});
+          const toastAnnouncer = document.getElementById('toast-announcer');
+          document.body.addEventListener("successToast", (e)=> {
+            e.detail.value.map(v => {
+              notyf.success(v);
+              if (toastAnnouncer) toastAnnouncer.textContent = v;
+            });
+          });
+          document.body.addEventListener("errorToast", (e)=> {
+            e.detail.value.map(v => {
+              notyf.error(v);
+              if (toastAnnouncer) toastAnnouncer.textContent = 'Error: ' + v;
+            });
+          });
         });
         
     function filterByField(event, operation) {
@@ -376,6 +405,8 @@ bodyWrapper bcfg child = do
           behavior Copy(content)
                on click if 'clipboard' in window.navigator then
                     call navigator.clipboard.writeText(content's innerText)
+                    add .copy-success to me then
+                    wait 1500ms then remove .copy-success from me then
                     send successToast(value:['Value copied to the Clipboard']) to <body/>
                     halt
               end
@@ -385,6 +416,8 @@ bodyWrapper bcfg child = do
     body_ [class_ "h-full w-full bg-bgBase text-textStrong group/pg", term "data-theme" (maybe "dark" (.theme) bcfg.sessM), term "hx-ext" "multi-swap,preload,response-targets", term "preload" "mouseover"] do
       -- Skip to main content link for keyboard users (accessibility)
       a_ [class_ "sr-only focus:not-sr-only focus:absolute focus:top-4 focus:left-4 focus:z-[100000] focus:bg-bgRaised focus:px-4 focus:py-2 focus:rounded-lg focus:text-textBrand focus:shadow-lg focus:ring-2 focus:ring-strokeFocus", href_ "#main-content"] "Skip to main content"
+      -- ARIA live region for toast announcements (screen reader accessibility)
+      div_ [id_ "toast-announcer", Aria.live_ "polite", Aria.atomic_ "true", class_ "sr-only"] ""
       -- HTMX progress bar for long operations
       div_ [id_ "htmx-progress", class_ "htmx-progress"] ""
       div_
@@ -498,6 +531,23 @@ bodyWrapper bcfg child = do
             });
           }
           
+          // System theme detection - respect OS preference if user hasn't manually set
+          (function() {
+            const savedTheme = getCookie('theme');
+            if (!savedTheme) {
+              const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+              document.body.setAttribute('data-theme', prefersDark ? 'dark' : 'light');
+            }
+            // Watch for OS theme changes (only if user hasn't manually set)
+            window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', e => {
+              if (!getCookie('theme')) {
+                document.documentElement.classList.add('no-transition');
+                document.body.setAttribute('data-theme', e.matches ? 'dark' : 'light');
+                requestAnimationFrame(() => document.documentElement.classList.remove('no-transition'));
+              }
+            });
+          })();
+
           // Initialize toggle state on page load
           window.addEventListener('DOMContentLoaded', function() {
             // Set initial toggle state based on data-theme attribute

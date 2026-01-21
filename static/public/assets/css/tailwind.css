@@ -200,14 +200,14 @@
 
   /* Smooth drawer slide-in/out animation with backdrop fade */
   .drawer-side {
-    transition: visibility 0s linear 200ms;
+    transition: visibility 0s linear 250ms;
   }
   .drawer-toggle:checked ~ .drawer-side {
     transition: visibility 0s linear 0s;
   }
   .drawer-side > .drawer-overlay {
     opacity: 0;
-    transition: opacity 200ms ease-out;
+    transition: opacity 250ms var(--ease-out-expo);
   }
   .drawer-toggle:checked ~ .drawer-side > .drawer-overlay {
     opacity: 1;
@@ -215,7 +215,7 @@
   .drawer-side .drawer-content-animated,
   .drawer-side > *:not(.drawer-overlay) {
     transform: translateX(100%);
-    transition: transform 200ms ease-out;
+    transition: transform 250ms var(--ease-out-expo);
   }
   .drawer-toggle:checked ~ .drawer-side .drawer-content-animated,
   .drawer-toggle:checked ~ .drawer-side > *:not(.drawer-overlay) {
@@ -231,9 +231,16 @@
     transform: translateX(0);
   }
 
-  /* Modal fade-scale animation */
+  /* Modal fade-scale animation with exit */
   .modal-box {
-    animation: modalIn 150ms ease-out;
+    animation: modalIn 150ms var(--ease-out-expo);
+  }
+  .modal:not(:has(.modal-toggle:checked)) .modal-box {
+    animation: modalOut 120ms ease-in forwards;
+  }
+  @keyframes modalOut {
+    from { opacity: 1; transform: scale(1); }
+    to { opacity: 0; transform: scale(0.96); }
   }
 
   /* Respect reduced motion preferences */
@@ -289,8 +296,22 @@
   /* Toggle switch optimistic feedback during HTMX requests */
   .toggle.htmx-request,
   form.htmx-request .toggle {
-    opacity: 0.6;
+    opacity: 0.7;
     pointer-events: none;
+    position: relative;
+  }
+  .toggle.htmx-request::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
+    background-size: 200% 100%;
+    animation: toggleShimmer 1s ease-in-out infinite;
+  }
+  @keyframes toggleShimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
   }
 
   /* Global HTMX progress bar for long operations */
@@ -341,19 +362,544 @@
     animation: shake 300ms ease-out;
   }
 
-  /* Toast slide-in animation */
+  /* Enhanced form validation states */
+  .input-error, .select-error, .textarea-error,
+  .input:invalid:not(:placeholder-shown),
+  .textarea:invalid:not(:placeholder-shown) {
+    border-color: var(--color-strokeError-strong);
+    box-shadow: 0 0 0 3px var(--color-fillError-weak);
+  }
+  .input-success, .select-success, .textarea-success {
+    border-color: var(--color-strokeSuccess-strong);
+    box-shadow: 0 0 0 3px var(--color-fillSuccess-weak);
+  }
+
+  /* Form field hint/helper text */
+  .field-hint {
+    font-size: 0.75rem;
+    color: var(--color-textWeak);
+    margin-top: 0.25rem;
+    transition: color 150ms ease-out;
+  }
+  .field-hint-error {
+    color: var(--color-textError);
+  }
+  .field-hint-success {
+    color: var(--color-textSuccess);
+  }
+
+  /* Required field indicator */
+  .label-required::after {
+    content: ' *';
+    color: var(--color-textError);
+  }
+
+  /* Toast/Notification animations - entrance and exit */
   @keyframes toastIn {
-    from { opacity: 0; transform: translateY(-8px); }
-    to { opacity: 1; transform: translateY(0); }
+    from { opacity: 0; transform: translateX(100%) scale(0.95); }
+    to { opacity: 1; transform: translateX(0) scale(1); }
+  }
+  @keyframes toastOut {
+    from { opacity: 1; transform: translateX(0) scale(1); }
+    to { opacity: 0; transform: translateX(100%) scale(0.95); }
   }
   .toast-animate {
-    animation: toastIn 200ms ease-out;
+    animation: toastIn 250ms var(--ease-out-expo);
+  }
+  .toast-exit {
+    animation: toastOut 200ms ease-in forwards;
+  }
+
+  /* Notyf toast enhancements */
+  .notyf__toast {
+    animation: toastIn 250ms var(--ease-out-expo);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  }
+  .notyf__toast--disappear {
+    animation: toastOut 200ms ease-in forwards;
   }
 
   /* Skeleton wave timing variations for visual interest */
   .skeleton-wave:nth-child(odd) { animation-delay: 0.15s; }
   .skeleton-wave:nth-child(even) { animation-delay: 0.3s; }
   .skeleton-wave:nth-child(3n) { animation-delay: 0.45s; }
+
+  /* Badge color transitions for smooth state changes */
+  .badge, .badge-outline, .badge-ghost {
+    transition: background-color 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
+  }
+
+  /* Dropdown chevron rotation */
+  .dropdown summary svg,
+  .dropdown [tabindex] svg,
+  details summary svg {
+    transition: transform 200ms var(--ease-out-expo);
+  }
+  .dropdown:has(:focus) summary svg,
+  .dropdown[open] summary svg,
+  details[open] summary svg,
+  .dropdown:has(.dropdown-content:not(.hidden)) [tabindex] svg {
+    transform: rotate(180deg);
+  }
+
+  /* Table row hover with subtle translate */
+  tr.group\/row {
+    transition: background-color 100ms ease-out, transform 100ms ease-out;
+  }
+  tr.group\/row:hover {
+    transform: translateX(2px);
+  }
+
+  /* Content fade-in for lazy loaded content */
+  .animate-fadeIn {
+    animation: fadeSlideIn 200ms var(--ease-out-expo) forwards;
+  }
+
+  /* HTMX transition smoothing for less jarring content swaps */
+  .htmx-swapping {
+    opacity: 0.7;
+    transition: opacity 100ms ease-out;
+  }
+  .htmx-settling > * {
+    animation: fadeSlideIn 150ms var(--ease-out-expo) forwards;
+  }
+  /* Opt-in class for containers that want smoother HTMX transitions */
+  .htmx-fade-target {
+    transition: opacity 150ms ease-out;
+  }
+  .htmx-fade-target.htmx-swapping {
+    opacity: 0.5;
+  }
+
+  /* Tab indicator slide animation */
+  .tabs-box, .tabs-outline {
+    position: relative;
+  }
+  .tab {
+    transition: color 150ms ease-out, background-color 150ms ease-out, border-color 150ms ease-out;
+  }
+  .tab-active {
+    transition: color 150ms ease-out, background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+  }
+
+  /* Copy success feedback */
+  .copy-success {
+    position: relative;
+  }
+  .copy-success::after {
+    content: '✓';
+    position: absolute;
+    right: -1.5em;
+    color: var(--color-fillSuccess-strong);
+    animation: copyFeedback 1.5s var(--ease-out-expo) forwards;
+  }
+  @keyframes copyFeedback {
+    0% { opacity: 0; transform: scale(0.5); }
+    20% { opacity: 1; transform: scale(1.1); }
+    30% { transform: scale(1); }
+    80% { opacity: 1; }
+    100% { opacity: 0; }
+  }
+
+  /* Icon button press feedback (extends btn behavior to icon containers) */
+  .tap-target {
+    transition: transform 75ms ease-out;
+  }
+  .tap-target:active {
+    transform: scale(0.92);
+  }
+
+  /* Enhanced focus visibility with offset */
+  :focus-visible {
+    outline: 2px solid var(--color-strokeFocus);
+    outline-offset: 2px;
+  }
+  .btn:focus-visible, .input:focus-visible, .select:focus-visible, .textarea:focus-visible {
+    outline-offset: 1px;
+  }
+
+  /* Progress bar glow effect */
+  .htmx-progress.htmx-request {
+    box-shadow: 0 0 8px var(--color-fillBrand-strong), 0 0 16px rgba(0, 104, 255, 0.3);
+  }
+
+  /* Checkbox/toggle state transition */
+  .checkbox, .toggle {
+    transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+  }
+
+  /* Stat value highlight animation (for updates) */
+  @keyframes statPulse {
+    0% { background-color: transparent; }
+    30% { background-color: var(--color-fillBrand-weak); }
+    100% { background-color: transparent; }
+  }
+  .stat-updated {
+    animation: statPulse 1s ease-out;
+    border-radius: 4px;
+  }
+
+  /* Smooth skeleton to content transition */
+  .skeleton-to-content {
+    transition: opacity 200ms ease-out;
+  }
+  .skeleton-to-content.loaded {
+    opacity: 1;
+  }
+
+  /* Alert/notification entrance */
+  .alert {
+    animation: fadeSlideIn 200ms var(--ease-out-expo);
+  }
+
+  /* Empty state gentle entrance animation */
+  section:has(.emptyState), .empty-state {
+    animation: emptyStateIn 400ms var(--ease-out-expo);
+  }
+  @keyframes emptyStateIn {
+    from { opacity: 0; transform: translateY(16px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+
+  /* Empty state icon float animation for delight */
+  .empty-state svg, .empty-state-filtered svg {
+    animation: gentleFloat 3s ease-in-out infinite;
+  }
+  @keyframes gentleFloat {
+    0%, 100% { transform: translateY(0); }
+    50% { transform: translateY(-6px); }
+  }
+
+  /* Table row interactions */
+  .table tbody tr {
+    transition: background-color 100ms ease-out;
+  }
+  .table tbody tr.selected {
+    background-color: var(--color-fillBrand-weak);
+    box-shadow: inset 3px 0 0 var(--color-fillBrand-strong);
+  }
+  .table tbody tr[data-href]:hover,
+  .table tbody tr.cursor-pointer:hover {
+    background-color: var(--color-fillHover);
+  }
+
+  /* Link hover underline animation */
+  .link-animated {
+    position: relative;
+  }
+  .link-animated::after {
+    content: '';
+    position: absolute;
+    bottom: -1px;
+    left: 0;
+    width: 0;
+    height: 1px;
+    background: currentColor;
+    transition: width 200ms var(--ease-out-expo);
+  }
+  .link-animated:hover::after {
+    width: 100%;
+  }
+
+  /* Smooth scrollbar for small containers */
+  .smooth-scroll {
+    scroll-behavior: smooth;
+  }
+  .smooth-scroll::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .smooth-scroll::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .smooth-scroll::-webkit-scrollbar-thumb {
+    background: var(--color-strokeWeak);
+    border-radius: 3px;
+  }
+  .smooth-scroll::-webkit-scrollbar-thumb:hover {
+    background: var(--color-strokeStrong);
+  }
+
+  /* Card hover lift effect */
+  .card-lift {
+    transition: transform 200ms var(--ease-out-expo), box-shadow 200ms ease-out;
+  }
+  .card-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 8px 25px -5px rgba(0, 0, 0, 0.1), 0 4px 10px -5px rgba(0, 0, 0, 0.04);
+  }
+
+  /* Tooltip entrance animation */
+  .tippy-box {
+    animation: tooltipIn 100ms var(--ease-out-expo);
+  }
+  @keyframes tooltipIn {
+    from { opacity: 0; transform: scale(0.96); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  /* Keyboard shortcut styling for tooltips and UI */
+  kbd, .kbd {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.5em;
+    padding: 0.125em 0.375em;
+    font-family: inherit;
+    font-size: 0.75em;
+    font-weight: 500;
+    line-height: 1;
+    color: var(--color-textWeak);
+    background: var(--color-fillWeaker);
+    border: 1px solid var(--color-strokeWeak);
+    border-radius: 4px;
+    box-shadow: 0 1px 0 var(--color-strokeWeak);
+  }
+  .tippy-content kbd {
+    background: rgba(255, 255, 255, 0.1);
+    border-color: rgba(255, 255, 255, 0.2);
+    color: inherit;
+    box-shadow: 0 1px 0 rgba(255, 255, 255, 0.1);
+  }
+
+  /* Contextual empty state - filtered vs truly empty */
+  .empty-state-filtered {
+    background: var(--color-fillBrand-weak);
+    border: 1px dashed var(--color-strokeBrand-weak);
+  }
+  .empty-state-error {
+    background: var(--color-fillError-weak);
+    border: 1px dashed var(--color-strokeError-weak);
+  }
+
+  /* Pulsing dot for live/active indicators */
+  .pulse-dot {
+    position: relative;
+  }
+  .pulse-dot::before {
+    content: '';
+    position: absolute;
+    width: 8px;
+    height: 8px;
+    background: var(--color-fillSuccess-strong);
+    border-radius: 50%;
+    animation: pulseDot 2s ease-in-out infinite;
+  }
+  @keyframes pulseDot {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.5; transform: scale(1.2); }
+  }
+
+  /* Success state animation for completed actions */
+  @keyframes successPop {
+    0% { transform: scale(0); opacity: 0; }
+    50% { transform: scale(1.2); }
+    100% { transform: scale(1); opacity: 1; }
+  }
+  .success-pop {
+    animation: successPop 300ms var(--ease-out-expo);
+  }
+
+  /* Number badge bounce for notifications */
+  @keyframes badgeBounce {
+    0%, 100% { transform: scale(1); }
+    50% { transform: scale(1.15); }
+  }
+  .badge-bounce {
+    animation: badgeBounce 300ms var(--ease-out-expo);
+  }
+
+  /* Skeleton text lines with varying widths for realistic content preview */
+  .skeleton-text {
+    height: 1em;
+    border-radius: 4px;
+  }
+  .skeleton-text-short { width: 40%; }
+  .skeleton-text-medium { width: 70%; }
+  .skeleton-text-long { width: 90%; }
+  .skeleton-text-full { width: 100%; }
+
+  /* Error state card/container */
+  .error-state {
+    background: var(--color-fillError-weak);
+    border: 1px solid var(--color-strokeError-weak);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+  .error-state-icon {
+    color: var(--color-fillError-strong);
+  }
+
+  /* Warning state */
+  .warning-state {
+    background: var(--color-fillWarning-weak);
+    border: 1px solid var(--color-strokeWarning-weak);
+    border-radius: 8px;
+    padding: 1rem;
+  }
+
+  /* Navigation/breadcrumb polish */
+  .nav-item {
+    position: relative;
+    transition: color 150ms ease-out, background-color 150ms ease-out;
+  }
+  .nav-item::before {
+    content: '';
+    position: absolute;
+    left: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    width: 3px;
+    height: 0;
+    background: var(--color-fillBrand-strong);
+    border-radius: 0 2px 2px 0;
+    transition: height 150ms var(--ease-out-expo);
+  }
+  .nav-item.active::before,
+  .nav-item:hover::before {
+    height: 60%;
+  }
+  .nav-item.active::before {
+    height: 80%;
+  }
+
+  /* Breadcrumb separator animation */
+  .breadcrumb-separator {
+    opacity: 0.5;
+    transition: opacity 150ms ease-out, transform 150ms ease-out;
+  }
+  .breadcrumb-item:hover + .breadcrumb-separator {
+    opacity: 1;
+    transform: translateX(2px);
+  }
+
+  /* Mobile touch improvements */
+  @media (hover: none) and (pointer: coarse) {
+    /* Larger tap targets on mobile */
+    .btn-sm { min-height: 40px; }
+    .tab { min-height: 44px; }
+
+    /* Disable hover states that cause sticky on touch */
+    .card-lift:hover { transform: none; box-shadow: inherit; }
+    tr.group\/row:hover { transform: none; }
+  }
+
+  /* Active/pressed states for touch */
+  @media (hover: none) {
+    .btn:active:not(:disabled) {
+      transform: scale(0.97);
+      transition: transform 50ms ease-out;
+    }
+    .tap-target:active {
+      transform: scale(0.9);
+      transition: transform 50ms ease-out;
+    }
+  }
+
+  /* Table sorting feedback */
+  th[data-sorting] {
+    position: relative;
+  }
+  th[data-sorting="asc"]::after,
+  th[data-sorting="desc"]::after {
+    content: '';
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: var(--color-fillBrand-strong);
+    animation: sortIndicator 200ms var(--ease-out-expo);
+  }
+  @keyframes sortIndicator {
+    from { transform: scaleX(0); }
+    to { transform: scaleX(1); }
+  }
+
+  /* Row highlight for newly added items */
+  .row-new {
+    animation: rowHighlight 2s ease-out;
+  }
+  @keyframes rowHighlight {
+    0% { background-color: var(--color-fillBrand-weak); }
+    100% { background-color: transparent; }
+  }
+
+  /* Collapsible section animation */
+  .collapsible-content {
+    display: grid;
+    grid-template-rows: 0fr;
+    transition: grid-template-rows 200ms var(--ease-out-expo);
+  }
+  .collapsible-content.open {
+    grid-template-rows: 1fr;
+  }
+  .collapsible-content > * {
+    overflow: hidden;
+  }
+
+  /* Tooltip with arrow animation */
+  .tooltip-animated::before {
+    transition: opacity 100ms ease-out, transform 100ms ease-out;
+    transform: translateY(4px);
+    opacity: 0;
+  }
+  .tooltip-animated:hover::before {
+    transform: translateY(0);
+    opacity: 1;
+  }
+
+  /* Status indicator dot (inline) */
+  .status-dot {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    margin-right: 0.5rem;
+  }
+  .status-dot-success { background: var(--color-fillSuccess-strong); }
+  .status-dot-error { background: var(--color-fillError-strong); }
+  .status-dot-warning { background: var(--color-fillWarning-strong); }
+  .status-dot-info { background: var(--color-fillInformation-strong); }
+  .status-dot-neutral { background: var(--color-fillWeak); }
+
+  /* Loading overlay for containers */
+  .loading-overlay {
+    position: absolute;
+    inset: 0;
+    background: rgba(255, 255, 255, 0.8);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 10;
+    animation: fadeIn 150ms ease-out;
+  }
+  [data-theme="dark"] .loading-overlay {
+    background: rgba(0, 0, 0, 0.6);
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+  }
+
+  /* Query editor placeholder shimmer */
+  .query-editor-placeholder {
+    height: 38px;
+    background: var(--color-fillWeaker);
+    border: 1px solid var(--color-strokeWeak);
+    border-radius: 6px;
+    overflow: hidden;
+    position: relative;
+  }
+  .query-editor-placeholder::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.4) 50%, transparent 100%);
+    animation: shimmer 1.5s ease-in-out infinite;
+    background-size: 200% 100%;
+  }
 }
 
 @plugin "daisyui/theme" {
@@ -620,6 +1166,24 @@ body, :host {
     /* Reset underline hover effects */
     .hover\:underline:hover {
       text-decoration: inherit;
+    }
+  }
+
+  /* Scroll margin for anchor links - accounts for fixed navbar */
+  [id] {
+    scroll-margin-top: 80px;
+  }
+
+  /* Enhanced focus states for better keyboard navigation visibility */
+  :focus-visible {
+    outline: 2px solid var(--color-strokeFocus);
+    outline-offset: 2px;
+  }
+
+  /* High contrast focus for forced colors mode (Windows high contrast) */
+  @media (forced-colors: active) {
+    :focus-visible {
+      outline: 3px solid CanvasText;
     }
   }
 }
@@ -1679,4 +2243,137 @@ code, pre, .code, .monospace {
 #editor-container {
   max-width: 100%;
   overflow: hidden;
+}
+
+/* Link hover preview - shows destination URL on hover */
+.link-preview {
+  position: relative;
+}
+
+.link-preview::after {
+  content: attr(href);
+  position: absolute;
+  left: 0;
+  top: 100%;
+  z-index: 50;
+  max-width: 300px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.75rem;
+  font-family: 'JetBrains Mono', monospace;
+  color: var(--color-textWeak);
+  background: var(--color-bgOverlay);
+  border: 1px solid var(--color-strokeWeak);
+  border-radius: 0.25rem;
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 150ms ease-out, transform 150ms ease-out;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .link-preview:hover::after {
+    opacity: 1;
+    transform: translateY(4px);
+    transition-delay: 400ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .link-preview::after {
+    transition: opacity 100ms;
+    transform: none;
+  }
+  .link-preview:hover::after {
+    transform: none;
+  }
+}
+
+/* Table link preview - applies to links in table cells */
+table td a[href]:not(.btn):not([data-no-preview]) {
+  position: relative;
+}
+
+table td a[href]:not(.btn):not([data-no-preview])::after {
+  content: attr(href);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 100;
+  max-width: 280px;
+  padding: 0.25rem 0.5rem;
+  font-size: 0.65rem;
+  font-weight: 400;
+  font-family: 'JetBrains Mono', monospace;
+  line-height: 1.4;
+  color: var(--color-textWeak);
+  background: var(--color-bgRaised);
+  border: 1px solid var(--color-strokeWeak);
+  border-radius: 0.25rem;
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.12), 0 2px 4px -1px rgb(0 0 0 / 0.06);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0ms 120ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  table td a[href]:not(.btn):not([data-no-preview]):hover::after {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    transition: opacity 120ms ease-out 350ms, transform 120ms ease-out 350ms, visibility 0ms 350ms;
+  }
+}
+
+/* Truncated text hover reveal */
+.truncate-reveal {
+  position: relative;
+}
+
+.truncate-reveal::before {
+  content: attr(data-full-text);
+  position: absolute;
+  left: 0;
+  top: calc(100% + 4px);
+  z-index: 100;
+  max-width: 400px;
+  padding: 0.375rem 0.625rem;
+  font-size: inherit;
+  color: var(--color-textStrong);
+  background: var(--color-bgRaised);
+  border: 1px solid var(--color-strokeWeak);
+  border-radius: 0.375rem;
+  box-shadow: 0 4px 12px -2px rgb(0 0 0 / 0.12);
+  white-space: normal;
+  word-break: break-word;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transform: translateY(-2px);
+  transition: opacity 120ms ease-out, transform 120ms ease-out, visibility 0ms 120ms;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .truncate-reveal:hover::before {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    transition: opacity 120ms ease-out 300ms, transform 120ms ease-out 300ms, visibility 0ms 300ms;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  table td a[href]::after,
+  .truncate-reveal::before {
+    transition: opacity 80ms;
+    transform: none;
+  }
 }

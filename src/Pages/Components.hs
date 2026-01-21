@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -18,7 +18,7 @@ statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
 statBox pid title helpInfo val bckupValM = wrapper do
   div_ do
     div_ [class_ "inline-block flex flex-row content-between"] do
-      span_ [class_ "font-bold text-textStrong text-2xl tabular-nums"] $ toHtml @Text $ fmt (commaizeF val)
+      span_ [class_ "font-bold text-textStrong text-2xl tabular-nums stat-value", term "data-value" (show val)] $ toHtml @Text $ fmt (commaizeF val)
       maybe "" (\bVal -> small_ [class_ "tabular-nums"] $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
     span_ [class_ "text-textWeak"] $ toHtml title
   span_ [class_ "inline-block tooltip tap-target", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
@@ -39,7 +39,7 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
         faSprite_ icon kind $ "w-4 h-4 " <> color
     div_ [class_ "flex flex-col gap-1"] do
       let fsiz = if isJust iconM then "text-2xl " else "text-4xl "
-      span_ [class_ $ "font-bold tabular-nums " <> fsiz <> fromMaybe "text-textStrong" valClsM] $ toHtml val
+      span_ [class_ $ "font-bold tabular-nums stat-value " <> fsiz <> fromMaybe "text-textStrong" valClsM, term "data-value" val] $ toHtml val
       div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
         p_ [] $ toHtml title
         span_ [class_ "tap-target", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
@@ -52,12 +52,24 @@ emptyState_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> Html ()
 emptyState_ iconM title subTxt url btnText =
   let (processedUrl, targetAttr) = maybe ("", []) (\u -> (u, [target_ "_blank" | "https://" `T.isPrefixOf` u])) url
       icon = fromMaybe "empty" iconM
-   in section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4"] do
+   in section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4 empty-state"] do
         div_ [] $ faSprite_ icon "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
           p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
           unless (T.null btnText) $ a_ ([href_ processedUrl, class_ "btn text-sm w-max mx-auto btn-primary"] ++ targetAttr) $ toHtml btnText
+
+
+-- | Filtered empty state - for when search/filters return no results
+-- Shows a different visual treatment to indicate filters are active
+emptyStateFiltered_ :: Text -> Text -> Html () -> Html ()
+emptyStateFiltered_ title subTxt actionHtml =
+  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-10 sm:px-16 flex flex-col gap-4 rounded-xl empty-state-filtered"] do
+    div_ [] $ faSprite_ "filter-slash" "regular" "h-16 w-16 stroke-strokeBrand-strong fill-fillBrand-weak"
+    div_ [class_ "flex flex-col gap-2"] do
+      h2_ [class_ "text-lg text-textStrong font-semibold"] $ toHtml title
+      p_ [class_ "text-sm text-textWeak max-w-sm"] $ toHtml subTxt
+      actionHtml
 
 
 getTargetPage :: Text -> Text
@@ -69,8 +81,26 @@ getTargetPage _ = ""
 
 drawer_ :: Text -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
-  input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", Aria.label_ "Toggle drawer", [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup |]]
-  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
+  input_
+    [ id_ drawerId
+    , type_ "checkbox"
+    , class_ "drawer-toggle"
+    , Aria.label_ "Toggle drawer"
+    , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
+          on change
+            if my.checked then
+              add .overflow-hidden to <body/>
+              set window.drawerFocusTrap to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > div:last-child'))
+              wait 100ms then
+              set :closeBtn to my.closest('.drawer').querySelector('[aria-label="Close drawer"]')
+              if :closeBtn then call :closeBtn.focus() end
+            else
+              remove .overflow-hidden from <body/>
+              if window.drawerFocusTrap then call window.drawerFocusTrap() end
+            end
+      |]
+    ]
+  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block tap-target", Aria.label_ "Open drawer"] trigger
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full"] do
@@ -445,9 +475,20 @@ modal_ modalId btnTrigger contentHtml = do
     , Aria.label_ "Toggle modal"
     , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
           on closeModal from body set my.checked to false end
+          on change if my.checked then
+            add .overflow-hidden to <body/>
+            wait 50ms then
+            set :focusable to my.closest('.modal').querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
+            if :focusable then call :focusable.focus() end
+          else
+            remove .overflow-hidden from <body/>
+          end
       |]
     ]
-  div_ [class_ "modal w-screen", role_ "dialog", Aria.label_ "Modal dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
+  div_ [class_ "modal w-screen", role_ "dialog", Aria.label_ "Modal dialog", style_ "--color-base-100: var(--color-fillWeaker)", [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
+        set :form to target.closest('form') then
+        if :form then call :form.requestSubmit() then halt end
+      |]] do
     label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
     div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
       label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
@@ -529,7 +570,26 @@ tableSkeleton_ rows cols = table_ [class_ "w-full"] $ forM_ [1 .. rows] \_ ->
 
 
 chartSkeleton_ :: Html ()
-chartSkeleton_ = div_ [class_ "h-64 skeleton-shimmer rounded-lg"] ""
+chartSkeleton_ = div_ [class_ "h-64 rounded-lg relative overflow-hidden bg-fillWeaker"] do
+  -- Y-axis hint
+  div_ [class_ "absolute left-0 top-4 bottom-8 w-px bg-strokeWeak"] ""
+  -- X-axis hint
+  div_ [class_ "absolute left-4 right-4 bottom-8 h-px bg-strokeWeak"] ""
+  -- Shimmer bars representing data
+  div_ [class_ "absolute left-8 right-4 top-8 bottom-12 flex items-end gap-2"] do
+    div_ [class_ "flex-1 h-3/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0s"] ""
+    div_ [class_ "flex-1 h-2/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0.1s"] ""
+    div_ [class_ "flex-1 h-4/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0.2s"] ""
+    div_ [class_ "flex-1 h-1/2 skeleton-shimmer rounded-t", style_ "animation-delay: 0.3s"] ""
+    div_ [class_ "flex-1 h-3/4 skeleton-shimmer rounded-t", style_ "animation-delay: 0.4s"] ""
+    div_ [class_ "flex-1 h-2/5 skeleton-shimmer rounded-t", style_ "animation-delay: 0.5s"] ""
+  -- Y-axis labels hint
+  div_ [class_ "absolute left-1 top-6 w-3 h-2 skeleton-shimmer rounded"] ""
+  div_ [class_ "absolute left-1 top-1/2 w-4 h-2 skeleton-shimmer rounded"] ""
+  -- X-axis labels hint
+  div_ [class_ "absolute left-8 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
+  div_ [class_ "absolute left-1/2 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
+  div_ [class_ "absolute right-4 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
 
 
 cardSkeleton_ :: Html ()

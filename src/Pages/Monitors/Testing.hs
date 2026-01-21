@@ -316,20 +316,25 @@ statusBadge = statusBadge_ False
 
 
 -- | Status badge component with size option
+-- Includes icons for all statuses to ensure accessibility (not relying on color alone)
 statusBadge_ :: Bool -> Text -> Html ()
 statusBadge_ isLarge status = do
   let (badgeClass, icon) = case status of
-        "Passing" -> ("badge-success", Just "check")
-        "Failing" -> ("badge-error", Just "xmark")
-        "Active" -> ("badge-success", Nothing)
-        "Inactive" -> ("badge-ghost", Nothing)
-        "Alerting" -> ("badge-error", Nothing)
-        "Warning" -> ("badge-warning", Nothing)
-        "alert" -> ("badge-error", Nothing)
-        _ -> ("badge-ghost", Nothing)
+        "Passing" -> ("badge-success", "check")
+        "Failing" -> ("badge-error", "xmark")
+        "Active" -> ("badge-success", "circle-check")
+        "Inactive" -> ("badge-ghost", "circle-pause")
+        "Alerting" -> ("badge-error", "bell-exclamation")
+        "Warning" -> ("badge-warning", "triangle-exclamation")
+        "alert" -> ("badge-error", "bell-exclamation")
+        "Healthy" -> ("badge-success", "heart-pulse")
+        "Pending" -> ("badge-ghost", "clock")
+        "NoData" -> ("badge-ghost", "circle-question")
+        _ -> ("badge-ghost", "circle")
       sizeClass = if isLarge then "" else "badge-sm"
+      iconSize = if isLarge then "h-4 w-4" else "h-3 w-3"
   span_ [class_ $ sizeClass <> " " <> badgeClass <> " gap-1 badge"] do
-    whenJust icon $ \i -> faSprite_ i "regular" "h-3 w-3"
+    faSprite_ icon "regular" iconSize
     toHtml status
 
 

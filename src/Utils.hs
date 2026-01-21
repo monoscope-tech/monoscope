@@ -11,6 +11,7 @@ module Utils (
   parseTime,
   DBField (..),
   faSprite_,
+  loadingIndicator_,
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
@@ -75,6 +76,7 @@ import Effectful qualified
 import Effectful.PostgreSQL (WithConnection)
 import Fmt (commaizeF, fmt)
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -130,6 +132,13 @@ faSprite_ mIcon faType classes = svg_ [class_ $ "inline-block icon " <> classes]
       "regular" -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
       "solid" -> $(hashFile "/public/assets/svgs/fa-sprites/solid.svg")
       _ -> $(hashFile "/public/assets/svgs/fa-sprites/regular.svg")
+
+
+-- | Accessible loading indicator with screen reader support
+-- Size options: "xs", "sm", "md", "lg"
+-- Type options: "dots", "spinner", "ring"
+loadingIndicator_ :: Monad m => Text -> Text -> HtmlT m ()
+loadingIndicator_ size typ = span_ [class_ $ "loading loading-" <> typ <> " loading-" <> size, role_ "status", Aria.label_ "Loading"] ""
 
 
 deleteParam :: Text -> Text -> Text
