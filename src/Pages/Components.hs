@@ -571,9 +571,9 @@ resizer_ targetId urlParam increasingDirection =
 
 
 -- Skeleton loaders for lazy-loaded content (dimensions match actual components to prevent layout shift)
+-- Uses CSS grid with single shimmer overlay instead of rows*cols DOM elements
 tableSkeleton_ :: Int -> Int -> Html ()
-tableSkeleton_ rows cols = table_ [class_ "w-full"] $ forM_ [1 .. rows] \_ ->
-  tr_ $ forM_ [1 .. cols] \_ -> td_ [class_ "p-2"] $ div_ [class_ "h-4 skeleton-shimmer rounded"] ""
+tableSkeleton_ rows cols = div_ [class_ "skeleton-table w-full", style_ $ "--skeleton-rows:" <> show rows <> ";--skeleton-cols:" <> show cols] ""
 
 
 chartSkeleton_ :: Html ()

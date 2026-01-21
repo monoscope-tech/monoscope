@@ -227,60 +227,39 @@ bodyWrapper bcfg child = do
           let tooltipWarmTimeout;
           let isTooltipWarm = false;
 
-          // Lazy tooltip initialization for better performance
-          function initTooltips() {
-            document.querySelectorAll('[data-tippy-content]:not([data-tippy-initialized])').forEach(element => {
-              element.setAttribute('data-tippy-initialized', 'true');
+          // Event delegation for tooltips - single listener, no querySelectorAll per afterSettle
+          document.body.addEventListener('mouseover', function(e) {
+            const element = e.target.closest('[data-tippy-content]');
+            if (!element || element._tippy) return;
 
-              // Add mouseenter listener only once per element
-              element.addEventListener('mouseenter', function() {
-                if (!element._tippy) {
-                  const instance = tippy(element, {
-                    delay: [isTooltipWarm ? 0 : 100, 0],
-                    duration: 0,
-                    updateDuration: 0,
-                    animateFill: false,
-                    moveTransition: '',
-                    animation: false,
-                    touch: false,
-                    followCursor: false,
-                    flipOnUpdate: false,
-                    lazy: true,
-                    onShow() {
-                      isTooltipWarm = true;
-                      clearTimeout(tooltipWarmTimeout);
-                    },
-                    onHide() {
-                      tooltipWarmTimeout = setTimeout(() => {
-                        isTooltipWarm = false;
-                      }, 300);
-                    },
-                    popperOptions: {
-                        strategy: 'absolute',  // Required for scrolling containers
-
-                        modifiers: [
-                          {
-                            name: 'computeStyles',
-                            options: {
-                              gpuAcceleration: true,  // Still use GPU acceleration!
-                              adaptive: false,         // Reduce style recalculations
-                            },
-                          },
-                        ],
-                      },
-                  });
-                  // Show tooltip immediately on first hover
-                  instance.show();
-                }
-              }, { once: true }); // Listener removes itself after first trigger
+            const instance = tippy(element, {
+              delay: [isTooltipWarm ? 0 : 100, 0],
+              duration: 0,
+              updateDuration: 0,
+              animateFill: false,
+              moveTransition: '',
+              animation: false,
+              touch: false,
+              followCursor: false,
+              flipOnUpdate: false,
+              lazy: true,
+              onShow() {
+                isTooltipWarm = true;
+                clearTimeout(tooltipWarmTimeout);
+              },
+              onHide() {
+                tooltipWarmTimeout = setTimeout(() => { isTooltipWarm = false; }, 300);
+              },
+              popperOptions: {
+                strategy: 'absolute',
+                modifiers: [{
+                  name: 'computeStyles',
+                  options: { gpuAcceleration: true, adaptive: false },
+                }],
+              },
             });
-          }
-
-          // Initialize tooltips for current elements
-          initTooltips();
-
-          // Re-initialize for dynamically added content (afterSettle fires after DOM is fully settled)
-          document.body.addEventListener('htmx:afterSettle', initTooltips);
+            instance.show();
+          });
 
           // Animate stat values on HTMX content swap for delightful updates
           document.body.addEventListener('htmx:afterSwap', (e) => {

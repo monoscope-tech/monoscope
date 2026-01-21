@@ -1107,6 +1107,47 @@ body, :host {
     box-shadow: 0 0 10px rgba(26, 116, 168, 0.1);
   }
 
+  /* Table skeleton - CSS grid with single shimmer overlay (no per-cell DOM) */
+  .skeleton-table {
+    --skeleton-rows: 5;
+    --skeleton-cols: 4;
+    display: grid;
+    grid-template-rows: repeat(var(--skeleton-rows), 2.5rem);
+    grid-template-columns: repeat(var(--skeleton-cols), 1fr);
+    gap: 0.5rem;
+    padding: 0.5rem;
+    position: relative;
+    overflow: hidden;
+  }
+  .skeleton-table::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: repeating-linear-gradient(
+      0deg,
+      transparent,
+      transparent 2rem,
+      var(--color-fillWeak) 2rem,
+      var(--color-fillWeak) 2.5rem
+    );
+    background-size: 100% calc(2.5rem + 0.5rem);
+  }
+  .skeleton-table::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      transparent 40%,
+      var(--skeleton-highlight, rgba(26, 116, 168, 0.15)) 50%,
+      transparent 60%,
+      transparent 100%
+    );
+    background-size: 200% 100%;
+    animation: shimmer 2s ease-in-out infinite;
+  }
+
   /* Dashboard grid loading states */
   .grid-stack:not(.grid-stack-initialized) { visibility: hidden; }
   .dashboard-skeleton { transition: opacity 0.2s; }
