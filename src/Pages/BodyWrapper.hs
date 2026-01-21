@@ -102,14 +102,15 @@ bodyWrapper bcfg child = do
 
         -- View Transitions API (Chrome 111+, graceful fallback for others)
         meta_ [name_ "view-transition", content_ "same-origin"]
-        style_ """
+        style_
+          """
           @supports (view-transition-name: root) {
             ::view-transition-old(root) { animation: vt-fade-out 150ms ease-out; }
             ::view-transition-new(root) { animation: vt-fade-in 150ms ease-in; }
           }
           @keyframes vt-fade-out { from { opacity: 1; } to { opacity: 0; } }
           @keyframes vt-fade-in { from { opacity: 0; } to { opacity: 1; } }
-        """
+          """
 
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css"), type_ "text/css"]

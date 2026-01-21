@@ -523,13 +523,16 @@ tableSkeleton_ :: Int -> Int -> Html ()
 tableSkeleton_ rows cols = table_ [class_ "w-full"] $ forM_ [1 .. rows] \_ ->
   tr_ $ forM_ [1 .. cols] \_ -> td_ [class_ "p-2"] $ div_ [class_ "h-4 skeleton-shimmer rounded"] ""
 
+
 chartSkeleton_ :: Html ()
 chartSkeleton_ = div_ [class_ "h-64 skeleton-shimmer rounded-lg"] ""
+
 
 cardSkeleton_ :: Html ()
 cardSkeleton_ = div_ [class_ "p-4 rounded-lg skeleton-shimmer"] do
   div_ [class_ "h-4 w-3/4 bg-fillWeak rounded mb-3"] ""
   div_ [class_ "h-3 w-1/2 bg-fillWeak rounded"] ""
+
 
 -- Matches statBox_ dimensions (with icon: ~140px, without: ~120px)
 statBoxSkeleton_ :: Bool -> Html ()
