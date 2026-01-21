@@ -142,7 +142,7 @@ apiKeysPage pid apiKeys = do
           do
             div_ [class_ "flex flex-col"] do
               p_ [class_ "text-textWeak"] "Please input a title for your API key."
-              div_ $ input_ [class_ "input px-4 py-2 mt-6  border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title", autofocus_]
+              div_ $ input_ [class_ "input px-4 py-2 mt-6  border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title", [__|init if not ('ontouchstart' in window) me.focus()|]]
             div_ [class_ "flex w-full"] do
               button_
                 [ type_ "submit"

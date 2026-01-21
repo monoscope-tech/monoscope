@@ -18,6 +18,9 @@
 
 @custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
 
+/* Hover-only variant: Only applies hover effects on devices that support hover (not touch) */
+@custom-variant hover-only (@media (hover: hover) and (pointer: fine));
+
 /* JetBrains Mono font */
 @font-face {
   font-family: 'JetBrains Mono';
@@ -53,6 +56,11 @@
 }
 
 @theme {
+  /* Custom easing functions (Emil's recommendations) */
+  --ease-out-quint: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out-quint: cubic-bezier(0.86, 0, 0.07, 1);
+  --ease-out-expo: cubic-bezier(0.19, 1, 0.22, 1);
+
   /* Simple colors */
   --color-gray-25: oklch(99.1% 0.002 247);
   --color-gray-150: oklch(94.5% 0.005 247);
@@ -163,6 +171,14 @@
     to { opacity: 1; transform: translateY(0); }
   }
 
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+}
+
+/* Animation and component styles */
+@layer custom {
   /* Staggered list animations - apply .stagger-fade to container */
   .stagger-fade > * {
     opacity: 0;
@@ -195,10 +211,6 @@
   .modal-box {
     animation: modalIn 150ms ease-out;
   }
-  @keyframes modalIn {
-    from { opacity: 0; transform: scale(0.95); }
-    to { opacity: 1; transform: scale(1); }
-  }
 
   /* Respect reduced motion preferences */
   @media (prefers-reduced-motion: reduce) {
@@ -208,6 +220,21 @@
       transition-duration: 0.01ms !important;
     }
     .stagger-fade > * { animation: none; opacity: 1; }
+  }
+
+  /* Disable transitions during theme switch */
+  .no-transition *, .no-transition *::before, .no-transition *::after {
+    transition: none !important;
+  }
+
+  /* Minimum tap target size for accessibility */
+  .tap-target {
+    position: relative;
+    min-width: 44px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
   }
 }
 
@@ -338,6 +365,7 @@ body, :host {
 
   .dropdown-content {
     background-color: var(--color-bgOverlay);
+    transform-origin: top center;
     @apply border;
   }
   .modal-box {
@@ -419,6 +447,62 @@ body, :host {
   ::backdrop,
   ::file-selector-button {
     border-color: var(--color-strokeWeak, currentColor);
+  }
+
+  /* Hairline borders for retina displays */
+  :root {
+    --border-hairline: 1px;
+  }
+  @media only screen and (min-device-pixel-ratio: 2),
+         only screen and (min-resolution: 192dpi) {
+    :root {
+      --border-hairline: 0.5px;
+    }
+  }
+
+  /* Font smoothing for sharper text */
+  body {
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  /* Balanced text wrapping for headings */
+  h1, h2, h3 {
+    text-wrap: balance;
+  }
+
+  /* Prevent iOS zoom on input focus (must be 16px+) */
+  input, textarea, select {
+    font-size: max(16px, 1rem);
+  }
+
+  /* Touch device optimizations */
+  button, a, input, [role="button"] {
+    touch-action: manipulation;
+  }
+
+  /* Prevent sticky hover states on touch devices */
+  @media (hover: none) and (pointer: coarse) {
+    /* Reset background hover effects */
+    .hover\:bg-fillWeak:hover,
+    .hover\:bg-fillHover:hover,
+    .hover\:bg-fillBrand-weak:hover,
+    .hover\:bg-fillWeaker:hover {
+      background-color: inherit;
+    }
+    /* Reset text hover effects */
+    .hover\:text-textStrong:hover,
+    .hover\:text-textBrand:hover {
+      color: inherit;
+    }
+    /* Reset opacity hover effects */
+    .hover\:opacity-90:hover {
+      opacity: inherit;
+    }
+    /* Reset underline hover effects */
+    .hover\:underline:hover {
+      text-decoration: inherit;
+    }
   }
 }
 

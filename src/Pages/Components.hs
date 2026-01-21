@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, tableSkeleton_, chartSkeleton_, cardSkeleton_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -18,10 +18,10 @@ statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
 statBox pid title helpInfo val bckupValM = wrapper do
   div_ do
     div_ [class_ "inline-block flex flex-row content-between"] do
-      span_ [class_ "font-bold text-textStrong text-2xl"] $ toHtml @Text $ fmt (commaizeF val)
-      maybe "" (\bVal -> small_ $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
+      span_ [class_ "font-bold text-textStrong text-2xl tabular-nums"] $ toHtml @Text $ fmt (commaizeF val)
+      maybe "" (\bVal -> small_ [class_ "tabular-nums"] $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
     span_ [class_ "text-textWeak"] $ toHtml title
-  span_ [class_ "inline-block tooltip", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
+  span_ [class_ "inline-block tooltip tap-target", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
   where
     tl = getTargetPage title
     pidT = maybe "" (.toText) pid
@@ -33,20 +33,16 @@ statBox pid title helpInfo val bckupValM = wrapper do
 
 statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Maybe Text -> Html ()
 statBox_ pid iconM title helpInfo val bckupValM valClsM = do
-  -- let tl = getTargetPage title
-  -- let pidT = case pid of
-  --       Just p -> p.toText
-  --       Nothing -> ""
   div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
     whenJust iconM $ \(icon, kind, color) -> do
       div_ [class_ "flex items-center justify-center h-10 w-10 bg-fillWeaker rounded-xl"] do
         faSprite_ icon kind $ "w-4 h-4 " <> color
     div_ [class_ "flex flex-col gap-1"] do
       let fsiz = if isJust iconM then "text-2xl " else "text-4xl "
-      span_ [class_ $ "font-bold  " <> fsiz <> fromMaybe "text-textStrong" valClsM] $ toHtml val
+      span_ [class_ $ "font-bold tabular-nums " <> fsiz <> fromMaybe "text-textStrong" valClsM] $ toHtml val
       div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
         p_ [] $ toHtml title
-        span_ [term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
+        span_ [class_ "tap-target", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
 
 emptyState_ :: Text -> Text -> Maybe Text -> Text -> Html ()
@@ -69,10 +65,10 @@ getTargetPage _ = ""
 
 drawer_ :: Text -> Maybe Text -> Maybe (Html ()) -> Html () -> Html ()
 drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-block w-auto"] do
-  input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup |]]
-  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block"] trigger
+  input_ [id_ drawerId, type_ "checkbox", class_ "drawer-toggle", Aria.label_ "Toggle drawer", [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup |]]
+  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
-    label_ [Lucid.for_ drawerId, Aria.label_ "close modal", class_ "w-full drawer-overlay grow flex-1"] ""
+    label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full"] do
       div_
         [id_ $ drawerId <> "-content", class_ "py-4 px-8 h-full flex flex-col gap-8", hxSwap_ "innerHTML"]
@@ -442,14 +438,15 @@ modal_ modalId btnTrigger contentHtml = do
     [ class_ "modal-toggle"
     , Lucid.id_ modalId
     , Lucid.type_ "checkbox"
+    , Aria.label_ "Toggle modal"
     , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
           on closeModal from body set my.checked to false end
       |]
     ]
-  div_ [class_ "modal w-screen", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
-    label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
+  div_ [class_ "modal w-screen", role_ "dialog", Aria.label_ "Modal dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
+    label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
     div_ [class_ "modal-box w-auto flex flex-col gap-5 max-w-5xl"] do
-      label_ [Lucid.for_ modalId, class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2"] "✕"
+      label_ [Lucid.for_ modalId, Aria.label_ "Close modal", class_ "btn btn-sm btn-circle btn-ghost absolute right-2 top-2 tap-target"] "✕"
       div_ contentHtml
 
 
@@ -457,6 +454,8 @@ resizer_ :: Text -> Text -> Bool -> Html ()
 resizer_ targetId urlParam increasingDirection =
   div_
     [ class_ "group px-r relative shrink-0 h-full flex items-center justify-center cursor-ew-resize overflow-visible select-none touch-none"
+    , role_ "separator"
+    , Aria.label_ "Resize panel"
     , term "data-resize-target" targetId
     , term "data-resize-direction" (if increasingDirection then "increase" else "decrease")
     , term "data-url-param" urlParam
@@ -519,7 +518,7 @@ resizer_ targetId urlParam increasingDirection =
     $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
 
--- Skeleton loaders for lazy-loaded content
+-- Skeleton loaders for lazy-loaded content (dimensions match actual components to prevent layout shift)
 tableSkeleton_ :: Int -> Int -> Html ()
 tableSkeleton_ rows cols = table_ [class_ "w-full"] $ forM_ [1 .. rows] \_ ->
   tr_ $ forM_ [1 .. cols] \_ -> td_ [class_ "p-2"] $ div_ [class_ "h-4 skeleton-shimmer rounded"] ""
@@ -531,3 +530,13 @@ cardSkeleton_ :: Html ()
 cardSkeleton_ = div_ [class_ "p-4 rounded-lg skeleton-shimmer"] do
   div_ [class_ "h-4 w-3/4 bg-fillWeak rounded mb-3"] ""
   div_ [class_ "h-3 w-1/2 bg-fillWeak rounded"] ""
+
+-- Matches statBox_ dimensions (with icon: ~140px, without: ~120px)
+statBoxSkeleton_ :: Bool -> Html ()
+statBoxSkeleton_ withIcon = div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
+  when withIcon $ div_ [class_ "h-10 w-10 skeleton-shimmer rounded-xl"] ""
+  div_ [class_ "flex flex-col gap-1"] do
+    div_ [class_ $ "skeleton-shimmer rounded " <> if withIcon then "h-8 w-24" else "h-12 w-32"] ""
+    div_ [class_ "flex gap-2 items-center"] do
+      div_ [class_ "h-4 w-20 skeleton-shimmer rounded"] ""
+      div_ [class_ "h-4 w-4 skeleton-shimmer rounded-full"] ""

@@ -5,6 +5,7 @@ import Data.Default (Default)
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -221,16 +222,20 @@ bodyWrapper bcfg child = do
         var currentISOTimeStringVar = ((new Date()).toISOString().split(".")[0])+"+00:00";
         document.addEventListener('DOMContentLoaded', function(){
           // htmx.config.useTemplateFragments = true
+          // Tooltip warmth tracking - skip delay when moving between tooltips
+          let tooltipWarmTimeout;
+          let isTooltipWarm = false;
+
           // Lazy tooltip initialization for better performance
           function initTooltips() {
             document.querySelectorAll('[data-tippy-content]:not([data-tippy-initialized])').forEach(element => {
               element.setAttribute('data-tippy-initialized', 'true');
-              
+
               // Add mouseenter listener only once per element
               element.addEventListener('mouseenter', function() {
                 if (!element._tippy) {
                   const instance = tippy(element, {
-                    delay: [100, 0],
+                    delay: [isTooltipWarm ? 0 : 100, 0],
                     duration: 0,
                     updateDuration: 0,
                     animateFill: false,
@@ -240,9 +245,18 @@ bodyWrapper bcfg child = do
                     followCursor: false,
                     flipOnUpdate: false,
                     lazy: true,
+                    onShow() {
+                      isTooltipWarm = true;
+                      clearTimeout(tooltipWarmTimeout);
+                    },
+                    onHide() {
+                      tooltipWarmTimeout = setTimeout(() => {
+                        isTooltipWarm = false;
+                      }, 300);
+                    },
                     popperOptions: {
                         strategy: 'absolute',  // Required for scrolling containers
-                        
+
                         modifiers: [
                           {
                             name: 'computeStyles',
@@ -260,13 +274,24 @@ bodyWrapper bcfg child = do
               }, { once: true }); // Listener removes itself after first trigger
             });
           }
-          
+
           // Initialize tooltips for current elements
           initTooltips();
-          
+
           // Re-initialize for dynamically added content (afterSettle fires after DOM is fully settled)
           document.body.addEventListener('htmx:afterSettle', initTooltips);
-          
+
+          // Cmd+Enter / Ctrl+Enter form submission for textareas
+          document.addEventListener('keydown', function(e) {
+            if ((e.metaKey || e.ctrlKey) && e.key === 'Enter' && e.target.tagName === 'TEXTAREA') {
+              const form = e.target.closest('form');
+              if (form) {
+                e.preventDefault();
+                form.requestSubmit();
+              }
+            }
+          });
+
           var notyf = new Notyf({
               duration: 5000,
               position: {x: 'right', y: 'top'},
@@ -425,13 +450,16 @@ bodyWrapper bcfg child = do
           }
 
           
-          // Dark mode toggle function
+          // Dark mode toggle function - disables transitions during theme switch
           function toggleDarkMode() {
             const currentTheme = document.body.getAttribute('data-theme');
             const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
+
+            // Disable transitions during theme switch to prevent flash
+            document.documentElement.classList.add('no-transition');
             document.body.setAttribute('data-theme', newTheme);
             setCookie('theme', newTheme, 365);
-            
+
             // Update all toggle states
             const toggle = document.getElementById('dark-mode-toggle');
             const swapToggle = document.getElementById('dark-mode-toggle-swap');
@@ -445,6 +473,11 @@ bodyWrapper bcfg child = do
             if (navbarToggle) {
               navbarToggle.checked = newTheme === 'dark';
             }
+
+            // Re-enable transitions after paint
+            requestAnimationFrame(() => {
+              document.documentElement.classList.remove('no-transition');
+            });
           }
           
           // Initialize toggle state on page load
@@ -534,15 +567,15 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-all duration-200 ease-in-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex"] do
         -- Full logos (shown when sidebar is expanded)
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      label_ [class_ "cursor-pointer text-strokeStrong"] do
-        input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
+      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar"] do
+        input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", Aria.label_ "Toggle sidebar", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
@@ -604,38 +637,41 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
 
     -- Dark mode toggle
     div_
-      [ class_ "hover:bg-fillBrand-weak px-2 py-1 rounded-lg"
+      [ class_ "hover:bg-fillBrand-weak px-2 py-1 rounded-lg tap-target"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Toggle dark mode"
       ]
       $ do
         -- Regular toggle with icons (visible when sidebar is expanded)
-        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center justify-center"] $ do
+        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center justify-center", Aria.label_ "Toggle dark mode"] $ do
           faSprite_ "sun-bright" "regular" "h-5 w-5 text-textBrand"
           input_
             [ type_ "checkbox"
             , class_ "toggle theme-controller"
             , id_ "dark-mode-toggle"
+            , Aria.label_ "Toggle dark mode"
             , onclick_ "toggleDarkMode()"
             ]
           faSprite_ "moon-stars" "regular" "h-5 w-5 text-textBrand"
 
         -- Swap rotate icon (visible when sidebar is collapsed)
-        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden"] $ do
+        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden tap-target", Aria.label_ "Toggle dark mode"] $ do
           input_
             [ type_ "checkbox"
             , class_ "theme-controller"
             , id_ "dark-mode-toggle-swap"
+            , Aria.label_ "Toggle dark mode"
             , onclick_ "toggleDarkMode()"
             ]
           -- Sun icon (shown in light mode)
-          span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-6 w-6"
+          span_ [class_ "swap-off", Aria.label_ "Light mode"] $ faSprite_ "sun-bright" "regular" "h-6 w-6"
           -- Moon icon (shown in dark mode)
-          span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
+          span_ [class_ "swap-on", Aria.label_ "Dark mode"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
     a_
-      [ class_ "hover:bg-fillBrand-weak"
+      [ class_ "hover:bg-fillBrand-weak tap-target"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Logout"
+      , Aria.label_ "Logout"
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]

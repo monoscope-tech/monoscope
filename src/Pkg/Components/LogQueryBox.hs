@@ -102,7 +102,6 @@ logQueryBox_ config = do
               [ class_ "border-0 w-full flex-1 p-1 outline-none peer"
               , placeholder_ "Ask. Eg: Logs with errors. Hit Enter to submit"
               , id_ "ai-search-input"
-              , autofocus_
               , required_ "required"
               , name_ "input"
               , hxPost_ $ "/p/" <> config.pid.toText <> "/log_explorer/ai_search"
