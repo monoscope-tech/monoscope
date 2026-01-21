@@ -90,13 +90,13 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
           on change
             if my.checked then
               add .overflow-hidden to <body/>
-              set window.drawerFocusTrap to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > div:last-child'))
+              set my._focusTrapCleanup to window.createFocusTrap(my.closest('.drawer').querySelector('.drawer-side > div:last-child'))
               wait 100ms then
               set :closeBtn to my.closest('.drawer').querySelector('[aria-label="Close drawer"]')
               if :closeBtn then call :closeBtn.focus() end
             else
               remove .overflow-hidden from <body/>
-              if window.drawerFocusTrap then call window.drawerFocusTrap() end
+              if my._focusTrapCleanup then call my._focusTrapCleanup() end
             end
       |]
     ]
