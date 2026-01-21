@@ -248,7 +248,7 @@
   .modal-box {
     animation: modalIn 150ms var(--ease-out-expo);
   }
-  .modal:not(:has(.modal-toggle:checked)) .modal-box {
+  .modal:not(:has(.modal-toggle:checked)):not(.modal-open) .modal-box {
     animation: modalOut 120ms ease-in forwards;
   }
   @keyframes modalOut {
@@ -1544,8 +1544,6 @@ code, pre, .code, .monospace {
     @apply sticky left-0 right-0 z-10;
   }
 }
-
-@utility log-row {}
 
 @layer custom {
   .surface-raised {
