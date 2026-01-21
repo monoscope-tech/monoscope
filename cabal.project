@@ -39,8 +39,8 @@ source-repository-package
 
 source-repository-package
   type: git
-  location: https://github.com/dawkaka/proto-lens
-  tag: cf4e060ea3376b68b65a9e207115f55b38cf1a12
+  location: https://github.com/tonyalaribe/proto-lens
+  tag: da3a3c7d8f43b7b22a3325a6706eb2aad98f41be
   subdir: proto-lens-setup
   subdir: proto-lens-protoc
   subdir: proto-lens-runtime
