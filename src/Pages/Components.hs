@@ -55,10 +55,12 @@ emptyState_ iconM title subTxt urlM btnText =
     div_ [class_ "flex flex-col gap-2"] do
       h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
       p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
-      whenJust urlM \u -> unless (T.null btnText) $
-        let attrs = [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"]
-              ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
-         in a_ attrs $ toHtml btnText
+      whenJust urlM \u ->
+        unless (T.null btnText)
+          $ let attrs =
+                  [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"]
+                    ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
+             in a_ attrs $ toHtml btnText
 
 
 -- | Filtered empty state - for when search/filters return no results
