@@ -201,7 +201,7 @@ projectCard_ project = do
           unless (V.null project.usersDisplayImages) do
             div_ [class_ "flex -space-x-2"] do
               project.usersDisplayImages & V.toList & take 3 & mapM_ \imgSrc ->
-                img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-base-100", src_ imgSrc, alt_ "User avatar"]
+                img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-base-100", src_ imgSrc, alt_ "User avatar", term "loading" "lazy", term "decoding" "async"]
               when (V.length project.usersDisplayImages > 3) do
                 span_ [class_ "flex items-center justify-center h-6 w-6 rounded-full bg-fillWeak text-textWeak text-xs ring-2 ring-base-100"] do
                   toHtml ("+" <> show (V.length project.usersDisplayImages - 3))
@@ -712,7 +712,7 @@ memberCell members = do
   div_ [class_ "inline-block flex -space-x-2"] do
     forM_ members $ \m -> do
       div_ [class_ "inline-block mx-0.5", term "data-tippy-content" m.memberName]
-        $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar"]
+        $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar", term "loading" "lazy", term "decoding" "async"]
 
 
 notifsCell :: ProjectMembers.TeamVM -> Html ()
@@ -798,7 +798,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
         card_ (faSprite_ "users" "regular" "h-4 w-4" >> "Members" >> span_ [class_ "text-textWeak font-normal"] ("(" <> show (V.length team.members) <> ")"))
           $ div_ [class_ "mt-3 divide-y divide-strokeWeak"]
           $ forM_ team.members \m ->
-            div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ m.memberAvatar, class_ "w-8 h-8 rounded-full border border-strokeWeak"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml m.memberName) >> div_ [class_ "text-xs text-textWeak"] (toHtml m.memberEmail))
+            div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ m.memberAvatar, class_ "w-8 h-8 rounded-full border border-strokeWeak", term "loading" "lazy", term "decoding" "async"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml m.memberName) >> div_ [class_ "text-xs text-textWeak"] (toHtml m.memberEmail))
         card_ (faSprite_ "bell" "regular" "h-4 w-4" >> "Notifications") $ div_ [class_ "mt-3 space-y-3"] do
           notifRow_ "envelope" "regular" "Email" $ V.toList team.notify_emails
           notifRow_ "slack" "solid" "Slack" $ V.toList $ V.map (resolveChannel slackChannels) team.slack_channels

@@ -1137,7 +1137,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
                set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
                trigger 'update-widget' on me |]
       ]
-      ""
+      Components.chartSkeleton_
   div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
     div_ [class_ "space-y-7"] do
       -- Select your visualization section removed to avoid circular dependencies
@@ -1518,7 +1518,7 @@ dashboardsGet_ dg = do
           p_ [class_ "text-xs text-textWeak w-full overflow-ellipsis truncate", id_ "dItemDescription"] "Get started from a blank slate"
         div_ [class_ "pt-5"]
           $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
-          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview"]
+          $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
         let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
         script_
           [text|

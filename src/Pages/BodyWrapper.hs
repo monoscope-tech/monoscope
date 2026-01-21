@@ -89,6 +89,27 @@ bodyWrapper bcfg child = do
         link_ [rel_ "mask-icon", href_ "/public/safari-pinned-tab.svg", term "color" "#5bbad5"]
         meta_ [name_ "msapplication-TileColor", content_ "#da532c"]
         meta_ [name_ "theme-color", content_ "#ffffff"]
+
+        -- Resource hints for faster loading
+        link_ [rel_ "preconnect", href_ "https://www.gravatar.com"]
+        link_ [rel_ "preconnect", href_ "https://ui-avatars.com"]
+        link_ [rel_ "dns-prefetch", href_ "https://cdn.jsdelivr.net"]
+        link_ [rel_ "dns-prefetch", href_ "https://unpkg.com"]
+
+        -- Preload critical CSS
+        link_ [rel_ "preload", href_ $(hashAssetFile "/public/assets/css/tailwind.min.css"), term "as" "style"]
+
+        -- View Transitions API (Chrome 111+, graceful fallback for others)
+        meta_ [name_ "view-transition", content_ "same-origin"]
+        style_ """
+          @supports (view-transition-name: root) {
+            ::view-transition-old(root) { animation: vt-fade-out 150ms ease-out; }
+            ::view-transition-new(root) { animation: vt-fade-in 150ms ease-in; }
+          }
+          @keyframes vt-fade-out { from { opacity: 1; } to { opacity: 0; } }
+          @keyframes vt-fade-in { from { opacity: 0; } to { opacity: 1; } }
+        """
+
         link_ [rel_ "stylesheet", type_ "text/css", href_ $(hashAssetFile "/public/assets/css/thirdparty/notyf3.min.css")]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/css/thirdparty/tagify.min.css"), type_ "text/css"]
         link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack.min.css")]

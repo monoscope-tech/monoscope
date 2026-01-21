@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, tableSkeleton_, chartSkeleton_, cardSkeleton_) where
 
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
@@ -517,3 +517,17 @@ resizer_ targetId urlParam increasingDirection =
       , class_ "absolute left-1/2 top-1/2 z-10 -translate-x-1/2 leading-none py-1 -translate-y-1/2 bg-bgBase rounded-sm border border-strokeBrand-weak group-hover:border-strokeBrand-strong text-iconNeutral group-hover:text-iconBrand"
       ]
     $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
+
+
+-- Skeleton loaders for lazy-loaded content
+tableSkeleton_ :: Int -> Int -> Html ()
+tableSkeleton_ rows cols = table_ [class_ "w-full"] $ forM_ [1 .. rows] \_ ->
+  tr_ $ forM_ [1 .. cols] \_ -> td_ [class_ "p-2"] $ div_ [class_ "h-4 skeleton-shimmer rounded"] ""
+
+chartSkeleton_ :: Html ()
+chartSkeleton_ = div_ [class_ "h-64 skeleton-shimmer rounded-lg"] ""
+
+cardSkeleton_ :: Html ()
+cardSkeleton_ = div_ [class_ "p-4 rounded-lg skeleton-shimmer"] do
+  div_ [class_ "h-4 w-3/4 bg-fillWeak rounded mb-3"] ""
+  div_ [class_ "h-3 w-1/2 bg-fillWeak rounded"] ""

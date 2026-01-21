@@ -157,6 +157,58 @@
       background-position: 200% 0;
     }
   }
+
+  @keyframes fadeSlideIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Staggered list animations - apply .stagger-fade to container */
+  .stagger-fade > * {
+    opacity: 0;
+    animation: fadeSlideIn 200ms ease-out forwards;
+  }
+  .stagger-fade > *:nth-child(1) { animation-delay: 0ms; }
+  .stagger-fade > *:nth-child(2) { animation-delay: 50ms; }
+  .stagger-fade > *:nth-child(3) { animation-delay: 100ms; }
+  .stagger-fade > *:nth-child(4) { animation-delay: 150ms; }
+  .stagger-fade > *:nth-child(5) { animation-delay: 200ms; }
+  .stagger-fade > *:nth-child(6) { animation-delay: 250ms; }
+  .stagger-fade > *:nth-child(7) { animation-delay: 300ms; }
+  .stagger-fade > *:nth-child(8) { animation-delay: 350ms; }
+  .stagger-fade > *:nth-child(n+9) { animation-delay: 400ms; }
+
+  /* Button press feedback - applies to all DaisyUI buttons for tactile feel */
+  .btn { transition: transform 75ms ease-out; }
+  .btn:active:not(:disabled) { transform: scale(0.98); }
+
+  /* Smooth drawer slide-in animation */
+  .drawer-side .drawer-content-animated {
+    transform: translateX(100%);
+    transition: transform 200ms ease-out;
+  }
+  .drawer-toggle:checked ~ .drawer-side .drawer-content-animated {
+    transform: translateX(0);
+  }
+
+  /* Modal fade-scale animation */
+  .modal-box {
+    animation: modalIn 150ms ease-out;
+  }
+  @keyframes modalIn {
+    from { opacity: 0; transform: scale(0.95); }
+    to { opacity: 1; transform: scale(1); }
+  }
+
+  /* Respect reduced motion preferences */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+    .stagger-fade > * { animation: none; opacity: 1; }
+  }
 }
 
 @plugin "daisyui/theme" {
