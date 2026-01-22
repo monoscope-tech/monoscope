@@ -25,7 +25,8 @@ import Data.Text qualified as T
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity (_selectWhere)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -308,17 +309,4 @@ getPatternsWithCurrentRates pid =
 
 -- | Get a pattern by ID
 getLogPatternById :: DB es => LogPatternId -> Eff es (Maybe LogPattern)
-getLogPatternById lpid = do
-  results <- PG.query q (Only lpid)
-  return $ listToMaybe results
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at, log_pattern, pattern_hash,
-               service_name, log_level, sample_message, first_seen_at, last_seen_at,
-               occurrence_count, state, acknowledged_by, acknowledged_at,
-               baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
-               baseline_samples, baseline_updated_at
-        FROM apis.log_patterns
-        WHERE id = ?
-      |]
+getLogPatternById lpid = listToMaybe <$> PG.query (_selectWhere @LogPattern [[field| id |]]) (Only lpid)
