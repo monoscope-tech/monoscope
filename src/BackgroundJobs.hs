@@ -510,7 +510,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text,
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     existingPatterns <- LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map ("", False,, Nothing, Nothing, Nothing) existingPatterns
+    let known = V.fromList $ map ("",False,,Nothing,Nothing,Nothing) existingPatterns
         -- Include level in content for pattern matching so different levels create different patterns
         combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
@@ -1700,11 +1700,12 @@ detectLogPatternSpikes pid authCtx = do
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
   let spikeData = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
-          (BSEstablished, Just mean, Just stddev) | stddev > 0 ->
-            let currentRate = fromIntegral lpRate.currentHourCount :: Double
-                zScore = (currentRate - mean) / stddev
-                isSpike = abs zScore > 3.0 && currentRate > mean + 10
-             in if isSpike then Just (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev) else Nothing
+          (BSEstablished, Just mean, Just stddev)
+            | stddev > 0 ->
+                let currentRate = fromIntegral lpRate.currentHourCount :: Double
+                    zScore = (currentRate - mean) / stddev
+                    isSpike = abs zScore > 3.0 && currentRate > mean + 10
+                 in if isSpike then Just (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev) else Nothing
           _ -> Nothing
 
   let spikeIds = V.fromList $ map (\(pid', _, _, _, _) -> pid') spikeData
