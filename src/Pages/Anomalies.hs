@@ -474,7 +474,7 @@ buildAIContext issue errM trDataM spans =
       , Just $ "- **Title**: " <> issue.title
       , Just $ "- **Type**: " <> show issue.issueType
       , Just $ "- **Severity**: " <> issue.severity
-      , Just $ "- **Service**: " <> (fromMaybe "unknown-service" issue.service)
+      , Just $ "- **Service**: " <> fromMaybe "unknown-service" issue.service
       , Just $ "- **Affected Requests**: " <> "0"
       , Just $ "- **Affected Clients**: " <> "0"
       , Just $ "- **Recommended Action**: " <> issue.recommendedAction

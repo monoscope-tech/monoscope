@@ -113,7 +113,7 @@ buildTitlePrompt issue =
                     <> toText (show $ V.length apiData.modifiedFields)
                     <> "\n"
                     <> "Service: "
-                    <> (fromMaybe "unknown-service" issue.service)
+                    <> fromMaybe "unknown-service" issue.service
                 _ -> "Generate a concise title for this API change."
         Issues.RuntimeException ->
           let Aeson issueDataValue = issue.issueData
@@ -127,7 +127,7 @@ buildTitlePrompt issue =
                     <> T.take 100 errorData.errorMessage
                     <> "\n"
                     <> "Service: "
-                    <> (fromMaybe "unknown-service" issue.service)
+                    <> fromMaybe "unknown-service" issue.service
                 _ -> "Generate a concise title for this runtime exception."
         Issues.QueryAlert ->
           let Aeson issueDataValue = issue.issueData
@@ -202,7 +202,7 @@ buildDescriptionPrompt issue =
                     <> toText (show $ V.length apiData.anomalyHashes)
                     <> "\n"
                     <> "Service: "
-                    <> (fromMaybe "unknown-service" issue.service)
+                    <> fromMaybe "unknown-service" issue.service
                 _ -> "Describe this API change and its implications."
         Issues.RuntimeException ->
           let Aeson issueDataValue = issue.issueData

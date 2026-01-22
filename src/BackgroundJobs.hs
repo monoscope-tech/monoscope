@@ -510,7 +510,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text,
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     existingPatterns <- LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map (\pat -> ("", False, pat, Nothing, Nothing, Nothing)) existingPatterns
+    let known = V.fromList $ map ("", False,, Nothing, Nothing, Nothing) existingPatterns
         -- Include level in content for pattern matching so different levels create different patterns
         combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
@@ -1729,11 +1729,11 @@ processNewLogPattern :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBa
 processNewLogPattern pid patternHash authCtx = do
   Log.logInfo "Processing new log pattern" (pid, patternHash)
   totalEvents <- do
-    res <- PG.query [sql| SELECT count(5000) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
+    res <- PG.query [sql| SELECT count(*) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
     case res of
       [Only cnt] -> return cnt
       _ -> return 0
-  if totalEvents < 5000
+  if totalEvents < 10000
     then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
     else do
       patternM <- LogPatterns.getLogPatternByHash pid patternHash
