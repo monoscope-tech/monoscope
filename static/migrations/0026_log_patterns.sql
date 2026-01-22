@@ -61,4 +61,8 @@ ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern';
 ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern_rate_change';
 ALTER TABLE apis.log_patterns ADD COLUMN trace_id TEXT;
 
+ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS target_hash TEXT NOT NULL DEFAULT '';
+ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS environment TEXT;
+
 COMMIT;
