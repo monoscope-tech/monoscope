@@ -252,6 +252,7 @@ timeStatBox_ title timeStr
           div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] $ p_ [] $ toHtml title
   | otherwise = pass
 
+
 anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Anomalies.ATError -> UTCTime -> Bool -> Html ()
 anomalyDetailPage pid issue tr otellogs errM now isFirst = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
@@ -294,7 +295,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 statBox_ (Just pid) Nothing "Affected Requests" "" "0" Nothing Nothing
                 statBox_ (Just pid) Nothing "Affected Clients" "" "0" Nothing Nothing
                 timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
-                timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC  err.updatedAt 
+                timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
               widget "Error trend" "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code"
             div_ [class_ "flex flex-col gap-4"] do
               div_ [class_ "grid grid-cols-2 gap-4 w-full"] do

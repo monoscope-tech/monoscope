@@ -273,7 +273,7 @@ data IssueL = IssueL
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
   , title :: Text
-  , service ::  Maybe Text
+  , service :: Maybe Text
   , critical :: Bool
   , severity :: Text -- Computed in query
   , affectedRequests :: Int -- Will be converted from affected_payloads in query
