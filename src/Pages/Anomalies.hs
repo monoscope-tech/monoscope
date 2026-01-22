@@ -272,8 +272,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
     -- Metrics & Timeline Row (8-column grid: 4 stats + chart)
     div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
       -- Stats (1 column each)
-      statBox_ (Just pid) Nothing "Affected Requests" "" (show issue.affectedRequests) Nothing Nothing
-      statBox_ (Just pid) Nothing "Affected Clients" "" (show issue.affectedClients) Nothing Nothing
+      statBox_ (Just pid) Nothing "Affected Requests" "" "0" Nothing Nothing
+      statBox_ (Just pid) Nothing "Affected Clients" "" "0" Nothing Nothing
       whenJust errM $ \err -> do
         timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
         timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
@@ -429,9 +429,9 @@ buildAIContext issue errM trDataM spans =
       , Just $ "- **Title**: " <> issue.title
       , Just $ "- **Type**: " <> show issue.issueType
       , Just $ "- **Severity**: " <> issue.severity
-      , Just $ "- **Service**: " <> issue.service
-      , Just $ "- **Affected Requests**: " <> show issue.affectedRequests
-      , Just $ "- **Affected Clients**: " <> show issue.affectedClients
+      , Just $ "- **Service**: " <>  (fromMaybe "unknown-service" issue.service)
+      , Just $ "- **Affected Requests**: " <> "0"
+      , Just $ "- **Affected Clients**: " <> "0"
       , Just $ "- **Recommended Action**: " <> issue.recommendedAction
       , errM >>= \err ->
           Just

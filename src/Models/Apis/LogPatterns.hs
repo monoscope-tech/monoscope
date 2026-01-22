@@ -91,8 +91,8 @@ data LogPattern = LogPattern
 
 
 -- | Get all log patterns for a project
-getLogPatterns :: DB es => Projects.ProjectId -> Maybe LogPatternState -> Int -> Int -> Eff es [LogPattern]
-getLogPatterns pid mstate limit offset = PG.query q (pid, maybe "%" logPatternStateToText mstate, limit, offset)
+getLogPatterns :: DB es => Projects.ProjectId -> Int -> Int -> Eff es [LogPattern]
+getLogPatterns pid limit offset = PG.query q (pid, limit, offset)
   where
     q =
       [sql|
@@ -102,7 +102,7 @@ getLogPatterns pid mstate limit offset = PG.query q (pid, maybe "%" logPatternSt
                baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
                baseline_samples, baseline_updated_at
         FROM apis.log_patterns
-        WHERE project_id = ? AND state LIKE ?
+        WHERE project_id = ?
         ORDER BY last_seen_at DESC
         LIMIT ? OFFSET ?
       |]
@@ -322,3 +322,5 @@ getLogPatternById lpid = do
         FROM apis.log_patterns
         WHERE id = ?
       |]
+
+

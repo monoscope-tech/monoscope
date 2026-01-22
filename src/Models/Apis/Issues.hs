@@ -44,6 +44,8 @@ module Models.Apis.Issues (
   issueIdText,
   parseIssueType,
   issueTypeToText,
+  createLogPatternIssue,
+  createLogPatternRateChangeIssue,
 
   -- * AI Conversations
   AIConversation (..),
@@ -78,6 +80,7 @@ import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -104,6 +107,8 @@ data IssueType
   = APIChange
   | RuntimeException
   | QueryAlert
+  | LogPattern
+  | LogPatternRateChange
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] IssueType
@@ -117,6 +122,8 @@ issueTypeToText :: IssueType -> Text
 issueTypeToText APIChange = "api_change" -- Maps to anomaly_type 'shape' in DB
 issueTypeToText RuntimeException = "runtime_exception"
 issueTypeToText QueryAlert = "query_alert"
+issueTypeToText LogPattern = "log_pattern"
+issueTypeToText LogPatternRateChange = "log_pattern"
 
 
 parseIssueType :: Text -> Maybe IssueType
@@ -124,8 +131,9 @@ parseIssueType "api_change" = Just APIChange
 parseIssueType "shape" = Just APIChange -- Handle DB anomaly_type
 parseIssueType "runtime_exception" = Just RuntimeException
 parseIssueType "query_alert" = Just QueryAlert
+parseIssueType "log_pattern" = Just LogPattern
+parseIssueType "log_pattern_rate_change" = Just LogPatternRateChange
 parseIssueType _ = Nothing
-
 
 instance ToField IssueType where
   toField = Escape . encodeUtf8 . issueTypeToText
@@ -137,6 +145,9 @@ instance FromField IssueType where
     Just bs -> case parseIssueType (decodeUtf8 bs) of
       Just t -> pure t
       Nothing -> returnError ConversionFailed f $ "Unknown issue type: " <> decodeUtf8 bs
+
+
+
 
 
 -- | API Change issue data
@@ -197,30 +208,23 @@ data Issue = Issue
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
-  , endpointHash :: Text -- For API changes, empty for others
-  -- Status fields
+  , sourceType :: Text
+  , targetHash :: Text
+  , endpointHash :: Text
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
-  , -- Issue details
-    title :: Text
-  , service :: Text
+  , title :: Text
+  , service :: Maybe Text
+  , environment :: Maybe Text
   , critical :: Bool
   , severity :: Text -- "critical", "warning", "info"
-  -- Impact metrics
-  , affectedRequests :: Int
-  , affectedClients :: Int
-  , errorRate :: Maybe Double
-  , -- Actions
-    recommendedAction :: Text
+  , recommendedAction :: Text
   , migrationComplexity :: Text -- "low", "medium", "high", "n/a"
-  -- Data payload (polymorphic based on issueType)
   , issueData :: Aeson AE.Value
-  , -- Payload changes tracking (for API changes)
-    requestPayloads :: Aeson [PayloadChange]
+  , requestPayloads :: Aeson [PayloadChange]
   , responsePayloads :: Aeson [PayloadChange]
-  , -- LLM enhancement tracking
-    llmEnhancedAt :: Maybe UTCTime
+  , llmEnhancedAt :: Maybe UTCTime
   , llmEnhancementVersion :: Maybe Int
   }
   deriving stock (Generic, Show)
@@ -235,18 +239,18 @@ instance Default Issue where
       , createdAt = error "createdAt must be set"
       , updatedAt = error "updatedAt must be set"
       , projectId = def
-      , issueType = def
+      , issueType = error "issueType must be set"
+      , sourceType = ""
+      , targetHash = ""
       , endpointHash = ""
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
       , title = ""
-      , service = ""
+      , service = Nothing
+      , environment = Nothing
       , critical = False
       , severity = "info"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = ""
       , migrationComplexity = "low"
       , issueData = Aeson AE.Null
@@ -255,7 +259,6 @@ instance Default Issue where
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
-
 
 -- | Issue with aggregated event data (for list views)
 data IssueL = IssueL
@@ -468,12 +471,9 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
       , title = "API structure has changed"
-      , service = Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
+      , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
       , critical = isCritical
       , severity = if isCritical then "critical" else "warning"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "Review the API changes and update your integration accordingly."
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
       , issueData = Aeson $ AE.toJSON apiChangeData
@@ -514,12 +514,9 @@ createRuntimeExceptionIssue projectId atError = do
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
       , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
-      , service = fromMaybe "unknown-service" atError.serviceName
+      , service =  atError.serviceName
       , critical = True
       , severity = "critical"
-      , affectedRequests = 1
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "Investigate the error and implement a fix."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON exceptionData
@@ -560,12 +557,9 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
       , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
-      , service = "Monitoring"
+      , service = Just "Monitoring"
       , critical = True
       , severity = "warning"
-      , affectedRequests = 0
-      , affectedClients = 0
-      , errorRate = Nothing
       , recommendedAction = "Review the query results and take appropriate action."
       , migrationComplexity = "n/a"
       , issueData = Aeson $ AE.toJSON alertData
@@ -663,3 +657,124 @@ slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
 
 discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId = textToConversationId
+
+
+
+-- | Create an issue for a log pattern rate change
+createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> IO Issue
+createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
+  now <- getCurrentTime
+  let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
+      changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
+      rateChangeData =
+        LogPatternRateChangeData
+          { patternHash = lp.patternHash
+          , logPattern = lp.logPattern
+          , sampleMessage = lp.sampleMessage
+          , logLevel = lp.logLevel
+          , serviceName = lp.serviceName
+          , currentRatePerHour = currentRate
+          , baselineMean = baselineMean
+          , baselineStddev = baselineStddev
+          , zScore = zScoreVal
+          , changePercent = changePercentVal
+          , changeDirection = direction
+          , detectedAt = now
+          }
+      severity = case (direction, lp.logLevel) of
+        ("spike", Just "error") -> "critical"
+        ("spike", _) -> "warning"
+        ("drop", _) -> "info"
+        _ -> "info"
+  mkIssue projectId LogPatternRateChange lp.patternHash lp.patternHash lp.serviceName (direction == "spike" && lp.logLevel == Just "error") severity ("Log Pattern " <> T.toTitle direction <> ": " <> T.take 60 lp.logPattern <> " (" <> T.pack (show (round changePercentVal :: Int)) <> "%)") ("Log pattern volume " <> direction <> " detected. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr (" <> T.pack (show (round zScoreVal :: Int)) <> " std devs).") "n/a" rateChangeData
+
+-- | Create an issue for a new log pattern
+createLogPatternIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> IO Issue
+createLogPatternIssue projectId lp = do
+  now <- getCurrentTime
+  let logPatternData =
+        LogPatternData
+          { patternHash = lp.patternHash
+          , logPattern = lp.logPattern
+          , sampleMessage = lp.sampleMessage
+          , logLevel = lp.logLevel
+          , serviceName = lp.serviceName
+          , firstSeenAt = now
+          , occurrenceCount = fromIntegral lp.occurrenceCount
+          }
+      severity = case lp.logLevel of
+        Just "error" -> "critical"
+        Just "warning" -> "warning"
+        _ -> "info"
+  mkIssue projectId LogPattern lp.patternHash lp.patternHash lp.serviceName (lp.logLevel == Just "error") severity ("New Log Pattern: " <> T.take 100 lp.logPattern) "A new log pattern has been detected. Review to ensure it's expected behavior." "n/a" logPatternData
+
+-- | Log Pattern issue data (new pattern detected)
+data LogPatternData = LogPatternData
+  { patternHash :: Text
+  , logPattern :: Text
+  , sampleMessage :: Maybe Text
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , firstSeenAt :: UTCTime
+  , occurrenceCount :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson LogPatternData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternData
+
+-- | Log Pattern Rate Change issue data (volume spike/drop)
+data LogPatternRateChangeData = LogPatternRateChangeData
+  { patternHash :: Text
+  , logPattern :: Text
+  , sampleMessage :: Maybe Text
+  , logLevel :: Maybe Text
+  , serviceName :: Maybe Text
+  , currentRatePerHour :: Double
+  , baselineMean :: Double
+  , baselineStddev :: Double
+  , zScore :: Double -- standard deviations from baseline
+  , changePercent :: Double -- percentage change from baseline
+  , changeDirection :: Text -- "spike" or "drop"
+  , detectedAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (NFData)
+  deriving (FromField, ToField) via Aeson LogPatternRateChangeData
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternRateChangeData
+
+
+-- | Helper to create an issue with common defaults
+mkIssue :: AE.ToJSON a => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> IO Issue
+mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
+  issueId <- UUIDId <$> UUID4.nextRandom
+  now <- getCurrentTime
+  zonedNow <- utcToLocalZonedTime now
+  pure
+    Issue
+      { id = issueId
+      , createdAt = zonedNow
+      , updatedAt = zonedNow
+      , projectId = projectId
+      , issueType = issueType
+      , sourceType = issueTypeToText issueType
+      , targetHash = targetHash
+      , endpointHash = endpointHash
+      , acknowledgedAt = Nothing
+      , acknowledgedBy = Nothing
+      , archivedAt = Nothing
+      , title = title
+      , service = service
+      , environment = Nothing
+      , critical = critical
+      , severity = severity
+      , recommendedAction = recommendedAction
+      , migrationComplexity = migrationComplexity
+      , issueData = Aeson $ AE.toJSON issueData
+      , requestPayloads = Aeson []
+      , responsePayloads = Aeson []
+      , llmEnhancedAt = Nothing
+      , llmEnhancementVersion = Nothing
+      }
+
+
