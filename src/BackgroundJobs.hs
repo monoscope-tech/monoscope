@@ -605,7 +605,6 @@ processOneMinuteErrors scheduledTime pid = do
     let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
     Log.logInfo "Completed 1-minute error processing for project" ("project_id", AE.toJSON pid.toText)
-
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
     processErrorsPaginated oneMinuteAgo skip = do
