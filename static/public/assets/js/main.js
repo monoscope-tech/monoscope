@@ -266,3 +266,23 @@ window.copyToClipboard = async (text, triggerEl) => {
   }
 }
 
+/**
+ * Setup sticky header detection using IntersectionObserver
+ * @param {string} sentinelId - ID of the sentinel element
+ * @param {string} targetId - ID of the container to add/remove 'stuck' class
+ * @param {string} stuckClass - Class to toggle when stuck (default: 'widget-drawer-stuck')
+ */
+window.setupStickyObserver = (sentinelId, targetId, stuckClass = 'widget-drawer-stuck') => {
+  const sentinel = document.getElementById(sentinelId)
+  const target = document.getElementById(targetId)
+  if (!sentinel || !target) return
+  if (target._stickyObserver) target._stickyObserver.disconnect()
+
+  const observer = new IntersectionObserver(
+    ([entry]) => target.classList.toggle(stuckClass, !entry.isIntersecting),
+    { root: target.closest('.overflow-y-scroll'), threshold: 0 }
+  )
+  observer.observe(sentinel)
+  target._stickyObserver = observer
+}
+

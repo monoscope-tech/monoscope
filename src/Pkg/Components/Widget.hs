@@ -375,7 +375,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             add .pointer-events-none to me
             set :icon to my.querySelector('svg')
             if :icon then add .animate-spin to :icon end
-            js(wId) { const url = new URL(window.location); url.searchParams.set('expand', wId); history.replaceState({}, '', url); } end
+            js { const url = new URL(window.location); url.searchParams.set('expand', '${wId}'); history.replaceState({}, '', url); } end
             set #global-data-drawer.checked to true
             then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML
             then fetch `/p/${pid}/dashboards/${dashId}/widgets/${wId}/expand`

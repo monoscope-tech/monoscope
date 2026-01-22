@@ -224,7 +224,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     whenJust (findVarToPrompt activeTab variables) \v -> variablePickerModal_ pid dashId activeTabSlug' allParams v False
 
   -- Render variables and tabs in the same container
-  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-4 py-2 gap-4 items-center flex-wrap sticky top-0 z-10"] do
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-sm px-4 py-1 gap-4 items-center flex-wrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> do
       -- Get active tab from path-based slug or fall back to first tab
@@ -1065,6 +1065,8 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
       -- filterElementId = widPrefix <> "-filterElement" -- removed unused variable
       -- widgetTypeNameId = widPrefix <> "-widgetType" -- removed unused variable
       drawerStateCheckbox = if isJust existingWidgetM then "global-data-drawer" else "page-data-drawer"
+      stickySentinelId = widPrefix <> "-sticky-sentinel"
+      stickyContainerId = widPrefix <> "-sticky-container"
 
   let widgetJSON = decodeUtf8 $ fromLazy $ AE.encode widgetToUse
   let formAction = case dashboardIdM of
@@ -1102,53 +1104,69 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
     ]
     ""
 
-  div_ [class_ "flex justify-between items-center mb-6"] do
-    div_ [class_ "flex justify-between"] do
-      unless isNewWidget
-        $ div_ [class_ "tabs tabs-box tabs-outline"] do
-          let mkTab tabName isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active"] do
-                input_
-                  $ [ type_ "radio"
-                    , value_ tabName
-                    , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
-                    , name_ $ wid <> "-drawer-tab"
-                    ]
-                  <> [checked_ | isActive]
-                toHtml tabName
-          mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
-          mkTab "Edit" (effectiveActiveTab == "edit")
-          mkTab "Alerts" (effectiveActiveTab == "alerts")
-      when isNewWidget $ h3_ [class_ "text-lg font-semibold text-textStrong"] "Add a new widget"
+  -- Sentinel for sticky header detection
+  div_ [id_ stickySentinelId, class_ "h-px w-full", Aria.hidden_ "true"] ""
 
-    div_ [class_ "flex items-center gap-3"] do
-      TimePicker.timepicker_ Nothing currentRange (Just "widget")
-      TimePicker.refreshButton_
-      div_ [class_ "w-px h-5 bg-strokeWeak"] ""
-      if isNewWidget
-        then button_ [class_ "btn btn-primary btn-sm shadow-sm", type_ "submit", form_ widgetFormId] "Save changes"
-        else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-      label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
+  -- Sticky container for header + preview
+  let widgetTypeAttr = case widgetToUse.wType of
+        Widget.WTTable -> "table"
+        Widget.WTStat -> "stat"
+        Widget.WTTimeseriesStat -> "stat"
+        _ -> "chart"
+  div_
+    [ id_ stickyContainerId
+    , class_ "sticky top-0 z-20 -mx-8 px-8 pt-4 pb-2 widget-drawer-sticky"
+    , term "_" [text|on load js(me) { window.setupStickyObserver('${stickySentinelId}', '${stickyContainerId}') } end|]
+    ]
+    do
+      div_ [class_ "flex justify-between items-center mb-4"] do
+        div_ [class_ "flex justify-between"] do
+          unless isNewWidget
+            $ div_ [class_ "tabs tabs-box tabs-outline"] do
+              let mkTab tabName isActive = label_ [role_ "tab", class_ "tab has-[:checked]:tab-active"] do
+                    input_
+                      $ [ type_ "radio"
+                        , value_ tabName
+                        , class_ $ "hidden page-drawer-tab-" <> T.toLower tabName
+                        , name_ $ wid <> "-drawer-tab"
+                        ]
+                      <> [checked_ | isActive]
+                    toHtml tabName
+              mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
+              mkTab "Edit" (effectiveActiveTab == "edit")
+              mkTab "Alerts" (effectiveActiveTab == "alerts")
+          when isNewWidget $ h3_ [class_ "text-lg font-semibold text-textStrong"] "Add a new widget"
 
-  div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak mb-6"] do
-    script_ [text| var widgetJSON = ${widgetJSON}; |]
-    div_
-      [ id_ widgetPreviewId
-      , class_ "h-full w-full"
-      , hxPost_ ("/p/" <> pid.toText <> "/widget")
-      , hxTrigger_ "intersect once, update-widget"
-      , hxTarget_ "this"
-      , hxSwap_ "innerHTML"
-      , hxVals_ "js:{...widgetJSON}"
-      , hxExt_ "json-enc"
-      , term
-          "_"
-          [text| on 'update-widget-query'
-               set widgetJSON.query to event.detail.value then
-               set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
-               trigger 'update-widget' on me |]
-      ]
-      Components.chartSkeleton_
-  div_ [class_ $ if isNewWidget then "block" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block"] do
+        div_ [class_ "flex items-center gap-3"] do
+          TimePicker.timepicker_ Nothing currentRange (Just "widget")
+          TimePicker.refreshButton_
+          div_ [class_ "w-px h-5 bg-strokeWeak"] ""
+          if isNewWidget
+            then button_ [class_ "btn btn-primary btn-sm shadow-sm", type_ "submit", form_ widgetFormId] "Save changes"
+            else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
+          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
+
+      div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
+        script_ [text| var widgetJSON = ${widgetJSON}; |]
+        div_
+          [ id_ widgetPreviewId
+          , class_ "h-full w-full"
+          , hxPost_ ("/p/" <> pid.toText <> "/widget")
+          , hxTrigger_ "intersect once, update-widget"
+          , hxTarget_ "this"
+          , hxSwap_ "innerHTML"
+          , hxVals_ "js:{...widgetJSON}"
+          , hxExt_ "json-enc"
+          , term
+              "_"
+              [text| on 'update-widget-query'
+                   set widgetJSON.query to event.detail.value then
+                   set widgetJSON.title to #{'${widgetTitleInputId}'}.value then
+                   trigger 'update-widget' on me |]
+          ]
+          Components.chartSkeleton_
+
+  div_ [class_ $ if isNewWidget then "block mt-6" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block mt-6"] do
     div_ [class_ "space-y-8"] do
       div_ [class_ "space-y-4"] do
         div_ [class_ "flex items-start gap-3"] do
@@ -1210,7 +1228,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
         alertEndpoint = case dashboardIdM of
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
-    div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block"] do
+    div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
       widgetAlertConfig_ pid alertFormId alertEndpoint sourceWid widgetToUse
 
 
