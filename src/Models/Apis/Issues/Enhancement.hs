@@ -145,6 +145,20 @@ buildTitlePrompt issue =
                     <> "Actual value: "
                     <> toText (show alertData.actualValue)
                 _ -> "Generate a concise title for this query alert."
+        Issues.LogPattern ->
+          "Generate a concise title for this log pattern issue.\n"
+            <> "Title: "
+            <> issue.title
+            <> "\n"
+            <> "Service: "
+            <> fromMaybe "unknown-service" issue.service
+        Issues.LogPatternRateChange ->
+          "Generate a concise title for this log pattern rate change.\n"
+            <> "Title: "
+            <> issue.title
+            <> "\n"
+            <> "Service: "
+            <> fromMaybe "unknown-service" issue.service
 
       systemPrompt =
         unlines
@@ -233,6 +247,20 @@ buildDescriptionPrompt issue =
                 <> "Triggered at: "
                 <> toText (show alertData.triggeredAt)
             _ -> "Describe this query alert."
+        Issues.LogPattern ->
+          "Describe this log pattern issue and its implications.\n"
+            <> "Title: "
+            <> issue.title
+            <> "\n"
+            <> "Service: "
+            <> fromMaybe "unknown-service" issue.service
+        Issues.LogPatternRateChange ->
+          "Describe this log pattern rate change and its implications.\n"
+            <> "Title: "
+            <> issue.title
+            <> "\n"
+            <> "Service: "
+            <> fromMaybe "unknown-service" issue.service
 
       systemPrompt =
         unlines
@@ -298,6 +326,10 @@ buildCriticalityPrompt issue =
           "Runtime exception: " <> issue.title
         Issues.QueryAlert ->
           "Query alert: " <> issue.title
+        Issues.LogPattern ->
+          "Log pattern: " <> issue.title
+        Issues.LogPatternRateChange ->
+          "Log pattern rate change: " <> issue.title
 
       systemPrompt =
         unlines
