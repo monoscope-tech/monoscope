@@ -390,7 +390,6 @@ updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, 
     |]
 
 
--- | Update issue enhancement
 updateIssueEnhancement :: DB es => IssueId -> Text -> Text -> Text -> Eff es ()
 updateIssueEnhancement issueId title action complexity = void $ PG.execute q params
   where

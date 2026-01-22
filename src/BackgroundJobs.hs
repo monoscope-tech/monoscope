@@ -527,10 +527,11 @@ processPatterns kind fieldName events pid scheduledTime since = do
           "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
           _ -> pass -- Unknown kind, skip
         Relude.when (kind == "log" && not (T.null patternTxt)) $ do
-          let (serviceName, logLevel, logTraceId) = case V.head ids of
-                logId | logId /= "" -> case V.find (\(i, _, _, sName, lvl) -> i == logId) events of
-                  Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
-                  Nothing -> (Nothing, Nothing, Nothing)
+          let (serviceName, logLevel, logTraceId) = case ids V.!? 0 of
+                Just logId | logId /= "" -> 
+                  case V.find (\(i, _, _, _, _) -> i == logId) events of
+                    Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
+                    Nothing -> (Nothing, Nothing, Nothing)
                 _ -> (Nothing, Nothing, Nothing)
           let patternHash = toXXHash patternTxt
           void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg)

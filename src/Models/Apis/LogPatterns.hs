@@ -298,7 +298,7 @@ getPatternsWithCurrentRates pid =
         LEFT JOIN (
           SELECT log_pattern, COUNT(*) AS current_count
           FROM otel_logs_and_spans
-          WHERE project_id = ?::text
+          WHERE project_id = ?
             AND timestamp >= date_trunc('hour', NOW())
             AND log_pattern IS NOT NULL
           GROUP BY log_pattern
