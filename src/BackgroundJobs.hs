@@ -520,10 +520,12 @@ processPatterns kind fieldName events pid scheduledTime since = do
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
-      let q = [text|UPDATE otel_logs_and_spans SET $fieldName = ?  WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|]
       unless (V.null ids) $ do
-        -- Update otel_logs_and_spans with pattern
-        void $ PG.execute (Query $ encodeUtf8 q) (patternTxt, pid, since, V.filter (/= "") ids)
+        -- Update otel_logs_and_spans with pattern (using explicit field names to avoid SQL injection)
+        case kind of
+          "log" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
+          "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
+          _ -> pass -- Unknown kind, skip
         Relude.when (kind == "log" && not (T.null patternTxt)) $ do
           let (serviceName, logLevel, logTraceId) = case V.head ids of
                 logId | logId /= "" -> case V.find (\(i, _, _, sName, lvl) -> i == logId) events of
@@ -1695,32 +1697,30 @@ calculateLogPatternBaselines pid = do
 detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
-
-  -- Get all patterns with their current hour counts in one query
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
+  let spikeData = flip mapMaybe patternsWithRates \lpRate ->
+        case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
+          (BSEstablished, Just mean, Just stddev) | stddev > 0 ->
+            let currentRate = fromIntegral lpRate.currentHourCount :: Double
+                zScore = (currentRate - mean) / stddev
+                isSpike = abs zScore > 3.0 && currentRate > mean + 10
+             in if isSpike then Just (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev) else Nothing
+          _ -> Nothing
 
-  forM_ patternsWithRates \lpRate -> do
-    -- Only check patterns with established baselines
-    case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
-      (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
-        let currentRate = fromIntegral lpRate.currentHourCount :: Double
-            zScore = (currentRate - mean) / stddev
-            -- Spike detection: >3 std devs AND at least 10 more events than baseline
-            isSpike = abs zScore > 3.0 && currentRate > mean + 10
+  let spikeIds = V.fromList $ map (\(pid', _, _, _, _) -> pid') spikeData
+  spikePatterns <- LogPatterns.getLogPatternsByIds spikeIds
+  let patternMap = HM.fromList $ V.toList $ V.map (\lp -> (lp.patternHash, lp)) spikePatterns
 
-        Relude.when isSpike $ do
-          Log.logInfo "Log pattern spike detected" (lpRate.patternId, lpRate.logPattern, currentRate, mean, zScore)
-
-          -- Get full pattern record for issue creation
-          patternM <- LogPatterns.getLogPatternById lpRate.patternId
-          whenJust patternM \lp -> do
-            issue <- liftIO $ Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev "spike"
-            Issues.insertIssue issue
-            liftIO $ withResource authCtx.jobsPool \conn ->
-              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-
-            Log.logInfo "Created issue for log pattern spike" (pid, lp.id, issue.id)
-      _ -> pass -- Skip patterns without established baseline
+  forM_ spikeData \(patternId, patternHash, currentRate, mean, stddev) -> do
+    case HM.lookup patternHash patternMap of
+      Just lp -> do
+        Log.logInfo "Log pattern spike detected" (patternId, lp.logPattern, currentRate, mean)
+        issue <- liftIO $ Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev "spike"
+        Issues.insertIssue issue
+        liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        Log.logInfo "Created issue for log pattern spike" (pid, lp.id, issue.id)
+      Nothing -> pass
   Log.logInfo "Finished log pattern spike detection" pid
 
 

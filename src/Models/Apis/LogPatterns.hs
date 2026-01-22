@@ -17,6 +17,7 @@ module Models.Apis.LogPatterns (
   LogPatternWithRate (..),
   getPatternsWithCurrentRates,
   getLogPatternById,
+  getLogPatternsByIds,
 )
 where
 
@@ -303,10 +304,17 @@ getPatternsWithCurrentRates pid =
           GROUP BY log_pattern
         ) counts ON counts.log_pattern = lp.log_pattern
         WHERE lp.project_id = ?
-          AND lp.state != 'ignored'
+          AND lp.state != 'ignored' AND lp.baseline_state = 'established'
       |]
 
 
 -- | Get a pattern by ID
 getLogPatternById :: DB es => LogPatternId -> Eff es (Maybe LogPattern)
 getLogPatternById lpid = listToMaybe <$> PG.query (_selectWhere @LogPattern [[field| id |]]) (Only lpid)
+
+
+-- | Get multiple patterns by IDs in a single query (avoids N+1)
+getLogPatternsByIds :: DB es => V.Vector LogPatternId -> Eff es (V.Vector LogPattern)
+getLogPatternsByIds ids
+  | V.null ids = pure V.empty
+  | otherwise = V.fromList <$> PG.query [sql| SELECT * FROM apis.log_patterns WHERE id = ANY(?) |] (Only ids)
