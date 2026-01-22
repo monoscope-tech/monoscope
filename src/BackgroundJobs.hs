@@ -604,6 +604,8 @@ processOneMinuteErrors scheduledTime pid = do
   Relude.when ctx.config.enableEventsTableUpdates $ do
     let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
+    Log.logInfo "Completed 1-minute error processing for project" ("project_id", AE.toJSON pid.toText)
+
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
     processErrorsPaginated oneMinuteAgo skip = do
@@ -647,6 +649,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- Group errors by traceId within each project to avoid duplicate errors from same trace
       -- (otel log and span, [errors])
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
+      traceShowM allErrors
       processProjectErrors pid allErrors
       -- Batch all error updates into a single query using unnest (avoids N+1 pattern)
       let mkErrorUpdate groupedErrors = do
@@ -1814,7 +1817,7 @@ detectEndpointVolumeRateChange pid authCtx = do
     case (epRate.baselineVolumeHourlyMean, epRate.baselineVolumeHourlyStddev) of
       (Just baselineMean, Just stddev) | stddev > 0 && baselineMean > 10 -> do
         let currentRate = fromIntegral epRate.currentHourRequests
-            zScore = (currentRate - baselineMean) / stddev
+            zScore = (currentRate - baselineMean) / stddev -- (actually us mad here instead of stddev)
             absZScore = abs zScore
             -- Significant change: >3 std devs in either direction
             isSignificantChange = absZScore > 3.0

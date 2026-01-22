@@ -631,6 +631,7 @@ upsertErrorQueryAndParam pid err = (q, params)
         ON CONFLICT (project_id, hash) DO UPDATE SET
           updated_at = NOW(),
           message = EXCLUDED.message,
+          error_data = EXCLUDED.error_data,
           recent_trace_id = EXCLUDED.recent_trace_id,
           occurrences_1m = apis.errors.occurrences_1m + 1,
           occurrences_5m = apis.errors.occurrences_5m + 1,
@@ -638,7 +639,6 @@ upsertErrorQueryAndParam pid err = (q, params)
           occurrences_24h = apis.errors.occurrences_24h + 1,
           state = CASE
             WHEN apis.errors.state = 'resolved' THEN 'regressed'
-            WHEN apis.errors.state = 'new' AND apis.errors.occurrences_1h > 10 THEN 'escalating'
             ELSE apis.errors.state
           END,
           regressed_at = CASE
