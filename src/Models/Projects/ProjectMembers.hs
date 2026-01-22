@@ -149,7 +149,7 @@ softDeleteProjectMembers ids = void $ PG.execute q (Only $ V.fromList $ toList i
   where
     q =
       [sql| UPDATE projects.project_members
-            SET active = FALSE
+            SET active = FALSE, deleted_at = NOW()
             WHERE id = ANY(?::uuid[]); |]
 
 
