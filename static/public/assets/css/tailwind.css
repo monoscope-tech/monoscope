@@ -526,9 +526,12 @@
   }
 
   /* Enhanced focus visibility with offset */
-  :focus-visible {
+  :focus-visible:not(.no-focus-ring) {
     outline: 2px solid var(--color-strokeFocus);
     outline-offset: 2px;
+  }
+  .no-focus-ring:focus-visible {
+    outline: none !important;
   }
   .btn:focus-visible, .input:focus-visible, .select:focus-visible, .textarea:focus-visible {
     outline-offset: 1px;
@@ -1244,14 +1247,17 @@ body, :host {
   }
 
   /* Enhanced focus states for better keyboard navigation visibility */
-  :focus-visible {
+  :focus-visible:not(.no-focus-ring) {
     outline: 2px solid var(--color-strokeFocus);
     outline-offset: 2px;
+  }
+  .no-focus-ring:focus-visible {
+    outline: none !important;
   }
 
   /* High contrast focus for forced colors mode (Windows high contrast) */
   @media (forced-colors: active) {
-    :focus-visible {
+    :focus-visible:not(.no-focus-ring) {
       outline: 3px solid CanvasText;
     }
   }
