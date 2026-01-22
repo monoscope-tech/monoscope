@@ -528,7 +528,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
           _ -> pass -- Unknown kind, skip
         Relude.when (kind == "log" && not (T.null patternTxt)) $ do
           let (serviceName, logLevel, logTraceId) = case ids V.!? 0 of
-                Just logId | logId /= "" -> 
+                Just logId | logId /= "" ->
                   case V.find (\(i, _, _, _, _) -> i == logId) events of
                     Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
                     Nothing -> (Nothing, Nothing, Nothing)
