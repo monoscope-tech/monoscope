@@ -23,6 +23,8 @@ module Models.Apis.Issues (
   APIChangeData (..),
   RuntimeExceptionData (..),
   QueryAlertData (..),
+  LogPatternRateChangeData (..),
+  LogPatternData (..),
 
   -- * Database Operations
   insertIssue,
@@ -123,7 +125,7 @@ issueTypeToText APIChange = "api_change" -- Maps to anomaly_type 'shape' in DB
 issueTypeToText RuntimeException = "runtime_exception"
 issueTypeToText QueryAlert = "query_alert"
 issueTypeToText LogPattern = "log_pattern"
-issueTypeToText LogPatternRateChange = "log_pattern"
+issueTypeToText LogPatternRateChange = "log_pattern_rate_change"
 
 
 parseIssueType :: Text -> Maybe IssueType
@@ -271,7 +273,7 @@ data IssueL = IssueL
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
   , title :: Text
-  , service :: Text
+  , service ::  Maybe Text
   , critical :: Bool
   , severity :: Text -- Computed in query
   , affectedRequests :: Int -- Will be converted from affected_payloads in query
@@ -296,30 +298,27 @@ data IssueL = IssueL
 -- | Insert a single issue
 -- Note: ON CONFLICT only applies to api_change issues that are open (not acknowledged/archived)
 -- Other issue types will fail on duplicate inserts as intended
+-- | Insert a single issue
+-- Note: ON CONFLICT only applies to api_change issues that are open (not acknowledged/archived)
+-- Other issue types will fail on duplicate inserts as intended
 insertIssue :: DB es => Issue -> Eff es ()
 insertIssue issue = void $ PG.execute q issue
   where
     q =
       [sql|
 INSERT INTO apis.issues (
-  id, created_at, updated_at, project_id, issue_type, endpoint_hash,
+  id, created_at, updated_at, project_id, issue_type, source_type, target_hash, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
-  title, service, critical, severity,
-  affected_requests, affected_clients, error_rate,
+  title, service, environment, critical, severity,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version
 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT (project_id, endpoint_hash)
-  WHERE issue_type = 'api_change'
-    AND acknowledged_at IS NULL
-    AND archived_at IS NULL
-    AND endpoint_hash != ''
+ON CONFLICT (project_id, target_hash, issue_type)
+  WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
-  affected_requests = issues.affected_requests + EXCLUDED.affected_requests,
-  affected_clients = GREATEST(issues.affected_clients, EXCLUDED.affected_clients),
-  issue_data = issues.issue_data || EXCLUDED.issue_data
+  issue_data = EXCLUDED.issue_data
     |]
 
 
@@ -353,7 +352,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     q =
       [text|
       SELECT id, created_at, updated_at, project_id, issue_type::text, endpoint_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
-        CASE WHEN critical THEN 'critical' ELSE 'info' END, affected_requests, affected_clients, NULL::double precision,
+        CASE WHEN critical THEN 'critical' ELSE 'info' END, 0::int, 0::int, NULL::double precision,
         recommended_action, migration_complexity, issue_data, request_payloads, response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
       FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
     |]

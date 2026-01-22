@@ -566,8 +566,27 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       pidTxt = pid.toText
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "log_pattern" targetM
-      q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
-  PG.query (Query $ encodeUtf8 q) (Only skip)
+  if target == "log_pattern"
+    then do
+      -- Join with log_patterns table to filter out ignored patterns
+      let q =
+            [text|
+              SELECT lp.log_pattern, count(*) as p_count
+              FROM apis.log_patterns lp
+              INNER JOIN otel_logs_and_spans ols
+                ON lp.log_pattern = ols.log_pattern AND lp.project_id::text = ols.project_id
+              WHERE lp.project_id = ?
+                AND lp.state != 'ignored'
+                AND ${whereCondition}
+              GROUP BY lp.log_pattern
+              ORDER BY p_count DESC
+              OFFSET ? LIMIT 15
+            |]
+      PG.query (Query $ encodeUtf8 q) (pid, skip)
+    else do
+      -- For other targets (e.g., summary_pattern), use the original query
+      let q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
+      PG.query (Query $ encodeUtf8 q) (Only skip)
 
 
 getLast24hTotalRequest :: DB es => Projects.ProjectId -> Eff es Int
