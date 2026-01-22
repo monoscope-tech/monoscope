@@ -186,7 +186,7 @@ selectAllProjectMembers pid = PG.query q (Only pid)
     q =
       [sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name, pm.active
               FROM projects.project_members pm JOIN users.users us ON (pm.user_id=us.id)
-              WHERE pm.project_id=?::uuid AND pm.deleted_at IS NULL ORDER BY pm.created_at ASC |]
+              WHERE pm.project_id=?::uuid AND pm.deleted_at IS NULL AND pm.active = TRUE ORDER BY pm.created_at ASC |]
 
 
 data TeamDetails = TeamDetails

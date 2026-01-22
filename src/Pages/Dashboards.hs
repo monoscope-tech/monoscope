@@ -1115,7 +1115,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
         _ -> "chart"
   div_
     [ id_ stickyContainerId
-    , class_ "sticky top-0 z-20 -mx-8 px-8 pt-4 pb-2 widget-drawer-sticky"
+    , class_ "sticky top-0 z-20 -mx-8 px-8 pb-2 bg-bgRaised widget-drawer-sticky"
     , term "_" [text|on load js(me) { window.setupStickyObserver('${stickySentinelId}', '${stickyContainerId}') } end|]
     ]
     do
@@ -1144,7 +1144,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           if isNewWidget
             then button_ [class_ "btn btn-primary btn-sm shadow-sm", type_ "submit", form_ widgetFormId] "Save changes"
             else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
+          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-textWeak hover:text-textStrong", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
 
       div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
         script_ [text| var widgetJSON = ${widgetJSON}; |]

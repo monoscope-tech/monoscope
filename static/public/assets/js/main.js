@@ -280,7 +280,7 @@ window.setupStickyObserver = (sentinelId, targetId, stuckClass = 'widget-drawer-
 
   const observer = new IntersectionObserver(
     ([entry]) => target.classList.toggle(stuckClass, !entry.isIntersecting),
-    { root: target.closest('.overflow-y-scroll'), threshold: 0 }
+    { threshold: 0 }
   )
   observer.observe(sentinel)
   target._stickyObserver = observer

@@ -1155,25 +1155,13 @@ body, :host {
   .dashboard-skeleton { transition: opacity 0.2s; }
   .dashboard-loaded .dashboard-skeleton { opacity: 0; pointer-events: none; }
 
-  /* Widget drawer sticky header + compressed chart */
-  .widget-preview-container {
-    transition: aspect-ratio 150ms var(--ease-out-expo);
-  }
-  .widget-drawer-stuck .widget-preview-container {
-    aspect-ratio: 8 / 1;
-  }
-  .widget-drawer-stuck .widget-preview-container[data-widget-type="table"] {
-    aspect-ratio: 6 / 1;
-  }
-  .widget-drawer-stuck .widget-preview-container[data-widget-type="stat"] {
-    aspect-ratio: 12 / 1;
-  }
+  /* Widget drawer sticky header - shadow only, no size change to avoid jitter */
   .widget-drawer-sticky {
-    transition: box-shadow 150ms ease-out;
+    transition: box-shadow 150ms ease-out, padding 150ms ease-out;
   }
-  .widget-drawer-stuck .widget-drawer-sticky {
+  .widget-drawer-stuck.widget-drawer-sticky {
     box-shadow: 0 2px 8px -2px rgba(0, 0, 0, 0.08);
-    background-color: var(--color-bgRaised);
+    padding-top: 1rem;
   }
 }
 
