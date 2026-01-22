@@ -224,7 +224,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     whenJust (findVarToPrompt activeTab variables) \v -> variablePickerModal_ pid dashId activeTabSlug' allParams v False
 
   -- Render variables and tabs in the same container
-  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-4 py-2 gap-4 items-center flex-wrap"] do
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-fillWeaker px-4 py-2 gap-4 items-center flex-wrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> do
       -- Get active tab from path-based slug or fall back to first tab
@@ -371,7 +371,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-scroll pb-20 group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
     let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result `elem` [Nothing, Just []]]
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"

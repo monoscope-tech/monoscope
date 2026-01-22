@@ -105,7 +105,7 @@ spec = aroundAll withTestResources do
         testServant tr $ Log.apiLogH testPid (Just query) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
-        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount _ -> do
           -- Should only return entries matching the query
           resultCount `shouldSatisfy` (> 0)
           V.length requestVecs `shouldSatisfy` (> 0)
@@ -130,7 +130,7 @@ spec = aroundAll withTestResources do
         testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg1 of
-        Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ _ resultCount1 -> do
+        Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ _ resultCount1 _ -> do
           V.length requestVecs1 `shouldSatisfy` (>= 200)  -- Should return at least all 200 test messages (under the 500 limit)
           resultCount1 `shouldSatisfy` (>= 200)  -- At least our 200 test messages
           -- With 500 limit, might not need pagination for 200 items
@@ -155,7 +155,7 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg of
-        Log.LogsGetJson _ _ _ _ _ returnedCols _ _ -> do
+        Log.LogsGetJson _ _ _ _ _ returnedCols _ _ _ -> do
           -- The system returns the requested columns plus default columns in a curated order
           returnedCols `shouldBe` ["id", "timestamp", "name", "duration", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
@@ -169,7 +169,7 @@ spec = aroundAll withTestResources do
 
       -- Invalid query should return 0 results (not silently ignored)
       case pg of
-        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount _ -> do
           V.length requestVecs `shouldBe` 0
           resultCount `shouldBe` 0
         Log.LogsGetErrorSimple _ -> pass  -- Also acceptable
@@ -181,7 +181,7 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of
-        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount _ -> do
           V.length requestVecs `shouldBe` 0
           resultCount `shouldBe` 0
         Log.LogsGetErrorSimple _ -> pass
@@ -205,7 +205,7 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
 
       case pg1 of
-        Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ colIdxMap1 resultCount1 -> do
+        Log.LogsGetJson requestVecs1 _ nextUrl1 _ _ _ colIdxMap1 resultCount1 _ -> do
           V.length requestVecs1 `shouldBe` 500  -- API limits to 500 per page
           resultCount1 `shouldSatisfy` (>= 1000)  -- At least our 1000 test messages
           
@@ -242,7 +242,7 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of
-        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount _ -> do
           resultCount `shouldSatisfy` (>= 2)
           V.length requestVecs `shouldSatisfy` (>= 2)
         _ -> error "Expected JSON response but got something else"
@@ -275,7 +275,7 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of
-        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount _ -> do
           -- Should only include messages within the time range
           resultCount `shouldSatisfy` (>= 1)
           V.length requestVecs `shouldSatisfy` (>= 1)
@@ -304,7 +304,7 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg1 of
-        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount _ -> do
           -- In frozen time at 2025-01-01, "1H" means from 1 hour before to now
           -- Should include msgNow and msgHourBeforeMsg
           resultCount `shouldSatisfy` (>= 2)
@@ -316,7 +316,7 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg2 of
-        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount -> do
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ resultCount _ -> do
           -- Should include msgNow and msgHourBeforeMsg, but NOT msgTwoDaysBeforeMsg
           resultCount `shouldSatisfy` (>= 2)
           V.length requestVecs `shouldSatisfy` (>= 2)
@@ -328,6 +328,6 @@ spec = aroundAll withTestResources do
         Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
       
       case pg of
-        Log.LogsGetJson _ _ _ _ _ cols _ _ -> do
+        Log.LogsGetJson _ _ _ _ _ cols _ _ _ -> do
           cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
