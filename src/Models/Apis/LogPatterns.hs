@@ -50,7 +50,7 @@ data LogPatternState
   = LPSNew
   | LPSAcknowledged
   | LPSIgnored
-  deriving stock (Eq, Generic, Show, Read)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving
     (AE.FromJSON, AE.ToJSON)
@@ -322,5 +322,3 @@ getLogPatternById lpid = do
         FROM apis.log_patterns
         WHERE id = ?
       |]
-
-

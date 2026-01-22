@@ -80,10 +80,10 @@ import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
-import Models.Apis.LogPatterns qualified as LogPatterns
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
@@ -135,6 +135,7 @@ parseIssueType "log_pattern" = Just LogPattern
 parseIssueType "log_pattern_rate_change" = Just LogPatternRateChange
 parseIssueType _ = Nothing
 
+
 instance ToField IssueType where
   toField = Escape . encodeUtf8 . issueTypeToText
 
@@ -145,9 +146,6 @@ instance FromField IssueType where
     Just bs -> case parseIssueType (decodeUtf8 bs) of
       Just t -> pure t
       Nothing -> returnError ConversionFailed f $ "Unknown issue type: " <> decodeUtf8 bs
-
-
-
 
 
 -- | API Change issue data
@@ -259,6 +257,7 @@ instance Default Issue where
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
+
 
 -- | Issue with aggregated event data (for list views)
 data IssueL = IssueL
@@ -514,7 +513,7 @@ createRuntimeExceptionIssue projectId atError = do
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
       , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
-      , service =  atError.serviceName
+      , service = atError.serviceName
       , critical = True
       , severity = "critical"
       , recommendedAction = "Investigate the error and implement a fix."
@@ -659,7 +658,6 @@ discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId = textToConversationId
 
 
-
 -- | Create an issue for a log pattern rate change
 createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> IO Issue
 createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
@@ -688,6 +686,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
         _ -> "info"
   mkIssue projectId LogPatternRateChange lp.patternHash lp.patternHash lp.serviceName (direction == "spike" && lp.logLevel == Just "error") severity ("Log Pattern " <> T.toTitle direction <> ": " <> T.take 60 lp.logPattern <> " (" <> T.pack (show (round changePercentVal :: Int)) <> "%)") ("Log pattern volume " <> direction <> " detected. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr (" <> T.pack (show (round zScoreVal :: Int)) <> " std devs).") "n/a" rateChangeData
 
+
 -- | Create an issue for a new log pattern
 createLogPatternIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> IO Issue
 createLogPatternIssue projectId lp = do
@@ -708,6 +707,7 @@ createLogPatternIssue projectId lp = do
         _ -> "info"
   mkIssue projectId LogPattern lp.patternHash lp.patternHash lp.serviceName (lp.logLevel == Just "error") severity ("New Log Pattern: " <> T.take 100 lp.logPattern) "A new log pattern has been detected. Review to ensure it's expected behavior." "n/a" logPatternData
 
+
 -- | Log Pattern issue data (new pattern detected)
 data LogPatternData = LogPatternData
   { patternHash :: Text
@@ -722,6 +722,7 @@ data LogPatternData = LogPatternData
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson LogPatternData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternData
+
 
 -- | Log Pattern Rate Change issue data (volume spike/drop)
 data LogPatternRateChangeData = LogPatternRateChangeData
@@ -776,5 +777,3 @@ mkIssue projectId issueType targetHash endpointHash service critical severity ti
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
-
-

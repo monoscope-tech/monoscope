@@ -42,6 +42,7 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
@@ -64,7 +65,7 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
@@ -80,9 +81,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Models.Apis.LogPatterns qualified as LogPatterns
 import Utils (DBField, toXXHash)
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 
 
 data BgJobs
@@ -116,8 +115,8 @@ data BgJobs
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
-  | LogPatternBaselineCalculation Projects.ProjectId 
-  | LogPatternSpikeDetection Projects.ProjectId 
+  | LogPatternBaselineCalculation Projects.ProjectId
+  | LogPatternSpikeDetection Projects.ProjectId
   | NewLogPatternDetected Projects.ProjectId Text
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -504,6 +503,7 @@ logsPatternExtraction scheduledTime pid = do
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
+
 -- | Generic pattern extraction for logs or summaries
 -- events: (id, content, traceId, serviceName, level)
 processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
@@ -532,6 +532,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
                 _ -> (Nothing, Nothing, Nothing)
           let patternHash = toXXHash patternTxt
           void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg)
+
 
 -- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain
 processBatch :: Bool -> V.Vector (Text, Bool, Text, Maybe Text, Maybe Text, Maybe Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -1687,6 +1688,7 @@ calculateLogPatternBaselines pid = do
         pass
 
   Log.logInfo "Finished calculating log pattern baselines" (pid, length patterns)
+
 
 -- | Detect log pattern volume spikes and create issues
 -- Uses otel_logs_and_spans table for current rate calculation
