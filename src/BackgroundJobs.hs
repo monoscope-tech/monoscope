@@ -1686,7 +1686,7 @@ calculateLogPatternBaselines pid = do
             newMean = stats.hourlyMedian
             newStddev = stats.hourlyMADScaled
             patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / (24 * 60 * 60)
-            newState = if newMean > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning
+            newState = if newMean > 100 || patternAgeDays > 1 then BSEstablished else BSLearning
         _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
         pass
 
