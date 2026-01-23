@@ -81,6 +81,7 @@ import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
 import Utils (DBField)
+import Models.Apis.Errors qualified as Errors
 
 
 data BgJobs
@@ -114,6 +115,9 @@ data BgJobs
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
+  | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
+  | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
+  | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -353,6 +357,9 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    ErrorBaselineCalculation pid -> calculateErrorBaselines pid
+    ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
+    NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -382,6 +389,12 @@ runHourlyJob scheduledTime hour = do
       let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
       createJob conn "background_jobs" batchJob
 
+  -- Schedule baseline calculation and spike detection for active projects
+  liftIO $ withResource ctx.jobsPool \conn ->
+    forM_ activeProjects \pid -> do
+      -- Error baseline and spike detection
+      _ <- createJob conn "background_jobs" $ ErrorBaselineCalculation pid
+      createJob conn "background_jobs" $ ErrorSpikeDetection pid
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
   Relude.when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
@@ -1637,3 +1650,114 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
   where
     breached t = if triggerLessThan then t >= value else t <= value
     recovered r t = if triggerLessThan then value > fromMaybe t r else value < fromMaybe t r
+
+
+calculateErrorBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
+calculateErrorBaselines pid = do
+  Log.logInfo "Calculating error baselines" pid
+  errors <- Errors.getActiveErrors pid
+
+  forM_ errors \err -> do
+    -- Get hourly stats from error_events over last 7 days (168 hours)
+    statsM <- Errors.getErrorEventStats err.id 168
+    case statsM of
+      Nothing -> pass
+      Just stats -> do
+        let newSamples = stats.totalHours
+            newMean = stats.hourlyMedian
+            newStddev = stats.hourlyMADScaled
+            -- Establish baseline after 24 hours of data
+            newState = if newSamples >= 24 then BSEstablished else BSLearning
+        _ <- Errors.updateBaseline err.id newState newMean newStddev newSamples
+        pass
+
+  Log.logInfo "Finished calculating error baselines" (pid, length errors)
+
+
+-- | Detect error spikes and create issues
+-- Uses error_events table for current rate calculation
+detectErrorSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+detectErrorSpikes pid authCtx = do
+  Log.logInfo "Detecting error spikes" pid
+
+  -- Get all errors with their current hour counts in one query
+  errorsWithRates <- Errors.getErrorsWithCurrentRates pid
+
+  forM_ errorsWithRates \errRate -> do
+    -- Only check errors with established baselines
+    case (errRate.baselineState, errRate.baselineMean, errRate.baselineStddev) of
+      (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
+        let currentRate = fromIntegral errRate.currentHourCount :: Double
+            zScore = (currentRate - mean) / stddev
+            isSpike = abs zScore > 3.0 && currentRate > mean + 5
+
+        Relude.when isSpike $ do
+          Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
+
+          -- Get full error record for issue creation
+          errorM <- Errors.getErrorById errRate.errorId
+          whenJust errorM \err -> do
+            _ <- Errors.updateErrorState err.id Errors.ESEscalating
+            issue <- liftIO $ Issues.createErrorSpikeIssue pid err currentRate mean stddev
+            Issues.insertIssue issue
+            liftIO $ withResource authCtx.jobsPool \conn ->
+              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+
+            Log.logInfo "Created issue for error spike" (pid, err.id, issue.id)
+      _ -> pass -- Skip errors without established baseline
+  Log.logInfo "Finished error spike detection" pid
+
+
+-- | Process a new error and create an issue
+processNewError :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewError pid errorHash authCtx = do
+  Log.logInfo "Processing new error" (pid, errorHash)
+  errorM <- Errors.getErrorByHash pid errorHash
+  case errorM of
+    Nothing -> Log.logAttention "Error not found for new error processing" (pid, errorHash)
+    Just err -> do
+      -- Only create issue for truly new errors (state = 'new')
+      Relude.when (err.state == Errors.ESNew) $ do
+        -- Create a runtime exception issue
+        issue <- liftIO $ Issues.createNewErrorIssue pid err
+        Issues.insertIssue issue
+        -- Queue LLM enhancement
+        liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        -- Send notifications only if project exists and has alerts enabled
+        projectM <- Projects.projectById pid
+        whenJust projectM \project -> Relude.when project.errorAlerts do
+          users <- Projects.usersByProjectId pid
+          let issueId = UUID.toText issue.id.unUUIDId
+          forM_ project.notificationsChannel \case
+            Projects.NSlack -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
+            Projects.NDiscord -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
+            Projects.NPhone -> sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title project.whatsappNumbers
+            Projects.NEmail ->
+              forM_ users \u -> do
+                let e = err.errorData
+                    errorsJ =
+                      V.singleton
+                        $ AE.object
+                          [ "root_error_message" AE..= e.rootErrorMessage
+                          , "error_type" AE..= e.errorType
+                          , "error_message" AE..= e.message
+                          , "stack_trace" AE..= e.stackTrace
+                          , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                          , "hash" AE..= e.hash
+                          , "tech" AE..= e.technology
+                          , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                          , "root_error_type" AE..= e.rootErrorType
+                          ]
+                    title = project.title
+                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                    templateVars =
+                      [aesonQQ|{
+                          "project_name": #{title},
+                          "errors_url": #{errors_url},
+                          "errors": #{errorsJ}
+                     }|]
+                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+
+        Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
+

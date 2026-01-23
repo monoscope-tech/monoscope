@@ -7,6 +7,7 @@ module Pkg.DeriveUtils (
   idFromText,
   unAesonText,
   unAesonTextMaybe,
+  BaselineState (..)
 ) where
 
 import Data.Aeson qualified as AE

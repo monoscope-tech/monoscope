@@ -50,6 +50,7 @@ module Models.Apis.Issues (
   AIChatMessage (..),
   ConversationType (..),
   getOrCreateConversation,
+  
   insertChatMessage,
   selectChatHistory,
 
@@ -90,7 +91,7 @@ import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (formatUTC)
-
+import Models.Apis.Errors qualified as Errors
 
 type IssueId = UUIDId "issue"
 
@@ -663,3 +664,97 @@ slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
 
 discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId = textToConversationId
+
+
+-- | Create issue for a new error
+createNewErrorIssue :: Projects.ProjectId -> Errors.Error -> IO Issue
+createNewErrorIssue projectId err = do
+  now <- getCurrentTime
+  let exceptionData =
+        RuntimeExceptionData
+          { errorType = err.errorType
+          , errorMessage = err.message
+          , stackTrace = err.stacktrace
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = 1
+          , firstSeen = now
+          , lastSeen = now
+          }
+  mkIssue
+    projectId
+    RuntimeException
+    err.hash
+    err.hash
+    err.service
+    True
+    "critical"
+    ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
+    "Investigate the new error and implement a fix."
+    "n/a"
+    exceptionData
+
+
+-- | Create issue for an error spike
+createErrorSpikeIssue :: Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> IO Issue
+createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
+  now <- getCurrentTime
+  let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
+      increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
+      exceptionData =
+        RuntimeExceptionData
+          { errorType = err.errorType
+          , errorMessage = err.message
+          , stackTrace = err.stacktrace
+          , requestPath = Nothing
+          , requestMethod = Nothing
+          , occurrenceCount = round currentRate
+          , firstSeen = now
+          , lastSeen = now
+          }
+  mkIssue
+    projectId
+    RuntimeException
+    err.hash
+    err.hash
+    err.service
+    True
+    "critical"
+    ("Error Spike: " <> err.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)")
+    ("Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes.")
+    "n/a"
+    exceptionData
+
+
+-- | Helper to create an issue with common defaults
+mkIssue :: AE.ToJSON a => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> IO Issue
+mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
+  issueId <- UUIDId <$> UUID4.nextRandom
+  now <- getCurrentTime
+  zonedNow <- utcToLocalZonedTime now
+  pure
+    Issue
+      { id = issueId
+      , createdAt = zonedNow
+      , updatedAt = zonedNow
+      , projectId = projectId
+      , issueType = issueType
+      , sourceType = issueTypeToSourceType issueType
+      , targetHash = targetHash
+      , endpointHash = endpointHash
+      , acknowledgedAt = Nothing
+      , acknowledgedBy = Nothing
+      , archivedAt = Nothing
+      , title = title
+      , service = service
+      , environment = Nothing
+      , critical = critical
+      , severity = severity
+      , recommendedAction = recommendedAction
+      , migrationComplexity = migrationComplexity
+      , issueData = Aeson $ AE.toJSON issueData
+      , requestPayloads = Aeson []
+      , responsePayloads = Aeson []
+      , llmEnhancedAt = Nothing
+      , llmEnhancementVersion = Nothing
+      }
