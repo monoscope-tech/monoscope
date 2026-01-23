@@ -1705,7 +1705,7 @@ detectLogPatternSpikes pid authCtx = do
             | stddev > 0 ->
                 let currentRate = fromIntegral lpRate.currentHourCount :: Double
                     zScore = (currentRate - mean) / stddev
-                    isSpike = abs zScore > 3.0 && currentRate > mean 
+                    isSpike = abs zScore > 3.0 && currentRate > mean
                  in if isSpike then Just (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev) else Nothing
           _ -> Nothing
 

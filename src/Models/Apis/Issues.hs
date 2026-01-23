@@ -686,10 +686,11 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
           , changeDirection = direction
           , detectedAt = now
           }
-      severity = 
-        if | direction == "spike" && lp.logLevel == Just "error" -> "critical"
-              | direction == "spike" -> "warning"
-              | otherwise -> "info"
+      severity =
+        if
+          | direction == "spike" && lp.logLevel == Just "error" -> "critical"
+          | direction == "spike" -> "warning"
+          | otherwise -> "info"
   mkIssue projectId LogPatternRateChange lp.patternHash lp.patternHash lp.serviceName (direction == "spike" && lp.logLevel == Just "error") severity ("Log Pattern " <> T.toTitle direction <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)") ("Log pattern volume " <> direction <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs).") "n/a" rateChangeData
 
 
