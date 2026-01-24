@@ -510,7 +510,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text,
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     existingPatterns <- LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map ("",False,,Nothing,Nothing,Nothing) existingPatterns
+    let known = V.fromList $ map (\pat -> ("",False,pat,Nothing,Nothing,Nothing)) existingPatterns
         -- Include level in content for pattern matching so different levels create different patterns
         combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
@@ -1686,7 +1686,11 @@ calculateLogPatternBaselines pid = do
             newMean = stats.hourlyMedian
             newStddev = stats.hourlyMADScaled
             patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / (24 * 60 * 60)
-            newState = if newMean > 100 || patternAgeDays > 1 then BSEstablished else BSLearning
+            newState = case lp.baselineState of
+                          BSEstablished -> BSEstablished 
+                          BSLearning -> if newMean > 100 || patternAgeDays > 1
+                                        then BSEstablished 
+                                        else BSLearning
         _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
         pass
 
