@@ -98,81 +98,78 @@ buildTitlePrompt issue =
           let Aeson issueDataValue = issue.issueData
            in case AE.fromJSON issueDataValue of
                 AE.Success (apiData :: Issues.APIChangeData) ->
-                  "Generate a concise, descriptive title for this API change.\n"
-                    <> "Endpoint: "
-                    <> apiData.endpointMethod
-                    <> " "
-                    <> apiData.endpointPath
-                    <> "\n"
-                    <> "New fields: "
-                    <> toText (show $ V.length apiData.newFields)
-                    <> "\n"
-                    <> "Deleted fields: "
-                    <> toText (show $ V.length apiData.deletedFields)
-                    <> "\n"
-                    <> "Modified fields: "
-                    <> toText (show $ V.length apiData.modifiedFields)
-                    <> "\n"
-                    <> "Service: "
-                    <> fromMaybe "unknown-service" issue.service
+                  let endpoint = apiData.endpointMethod <> " " <> apiData.endpointPath
+                      newFields = toText (show $ V.length apiData.newFields)
+                      deletedFields = toText (show $ V.length apiData.deletedFields)
+                      modifiedFields = toText (show $ V.length apiData.modifiedFields)
+                      service = fromMaybe "unknown-service" issue.service
+                   in [text|
+                        Generate a concise, descriptive title for this API change.
+                        Endpoint: $endpoint
+                        New fields: $newFields
+                        Deleted fields: $deletedFields
+                        Modified fields: $modifiedFields
+                        Service: $service
+                        |]
                 _ -> "Generate a concise title for this API change."
         Issues.RuntimeException ->
           let Aeson issueDataValue = issue.issueData
            in case AE.fromJSON issueDataValue of
                 AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-                  "Generate a concise title for this runtime exception.\n"
-                    <> "Error type: "
-                    <> errorData.errorType
-                    <> "\n"
-                    <> "Error message: "
-                    <> T.take 100 errorData.errorMessage
-                    <> "\n"
-                    <> "Service: "
-                    <> fromMaybe "unknown-service" issue.service
+                  let errorType = errorData.errorType
+                      errorMessage = T.take 100 errorData.errorMessage
+                      service = fromMaybe "unknown-service" issue.service
+                   in [text|
+                        Generate a concise title for this runtime exception.
+                        Error type: $errorType
+                        Error message: $errorMessage
+                        Service: $service
+                        |]
                 _ -> "Generate a concise title for this runtime exception."
         Issues.QueryAlert ->
           let Aeson issueDataValue = issue.issueData
            in case AE.fromJSON issueDataValue of
                 AE.Success (alertData :: Issues.QueryAlertData) ->
-                  "Generate a concise title for this query alert.\n"
-                    <> "Query: "
-                    <> alertData.queryName
-                    <> "\n"
-                    <> "Threshold: "
-                    <> toText (show alertData.thresholdValue)
-                    <> " ("
-                    <> alertData.thresholdType
-                    <> ")\n"
-                    <> "Actual value: "
-                    <> toText (show alertData.actualValue)
+                  let queryName = alertData.queryName
+                      thresholdValue = toText (show alertData.thresholdValue)
+                      thresholdType = alertData.thresholdType
+                      actualValue = toText (show alertData.actualValue)
+                   in [text|
+                        Generate a concise title for this query alert.
+                        Query: $queryName
+                        Threshold: $thresholdValue ($thresholdType)
+                        Actual value: $actualValue
+                        |]
                 _ -> "Generate a concise title for this query alert."
         Issues.LogPattern ->
-          "Generate a concise title for this log pattern issue.\n"
-            <> "Title: "
-            <> issue.title
-            <> "\n"
-            <> "Service: "
-            <> fromMaybe "unknown-service" issue.service
+          let title = issue.title
+              service = fromMaybe "unknown-service" issue.service
+           in [text|
+                Generate a concise title for this log pattern issue.
+                Title: $title
+                Service: $service
+                |]
         Issues.LogPatternRateChange ->
-          "Generate a concise title for this log pattern rate change.\n"
-            <> "Title: "
-            <> issue.title
-            <> "\n"
-            <> "Service: "
-            <> fromMaybe "unknown-service" issue.service
+          let title = issue.title
+              service = fromMaybe "unknown-service" issue.service
+           in [text|
+                Generate a concise title for this log pattern rate change.
+                Title: $title
+                Service: $service
+                |]
 
       systemPrompt =
-        unlines
-          [ "You are an API monitoring assistant. Generate clear, actionable titles for API issues."
-          , "Keep titles under 80 characters."
-          , "Focus on the impact and what changed."
-          , "Use present tense and active voice."
-          , "Examples:"
-          , "- 'New User Authentication Endpoint Added to Auth Service'"
-          , "- 'Breaking Change: 5 Required Fields Removed from Order Response'"
-          , "- 'Payment Service Schema Updated with 3 New Optional Fields'"
-          , "- 'Critical: NullPointerException in Cart Service Checkout Flow'"
-          ]
+        [text|
+          You are an API monitoring assistant. Generate clear, actionable titles for API issues.
+          Keep titles under 80 characters.
+          Focus on the impact and what changed.
+          Use present tense and active voice.
+          Examples:
+          - 'New User Authentication Endpoint Added to Auth Service'
+          - 'Breaking Change: 5 Required Fields Removed from Order Response'
+          - 'Payment Service Schema Updated with 3 New Optional Fields'
+          - 'Critical: NullPointerException in Cart Service Checkout Flow'
+          |]
    in systemPrompt <> "\n\n" <> baseContext
 
 

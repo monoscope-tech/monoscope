@@ -574,11 +574,8 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
             [text|
               SELECT log_pattern, count(*) as p_count
               FROM otel_logs_and_spans
-              WHERE ${whereCondition}
-                AND log_pattern = ANY(?)
-              GROUP BY log_pattern
-              ORDER BY p_count DESC
-              OFFSET ? LIMIT 15
+              WHERE ${whereCondition} AND log_pattern = ANY(?)
+              GROUP BY log_pattern ORDER BY p_count DESC OFFSET ? LIMIT 15
             |]
       PG.query (Query $ encodeUtf8 q) (activePatterns, skip)
     else do
