@@ -46,6 +46,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types ()
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnumShow (..))
@@ -566,8 +567,21 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       pidTxt = pid.toText
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "log_pattern" targetM
-      q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
-  PG.query (Query $ encodeUtf8 q) (Only skip)
+  if target == "log_pattern"
+    then do
+      activePatterns <- V.fromList <$> LogPatterns.getLogPatternTexts pid
+      let q =
+            [text|
+              SELECT log_pattern, count(*) as p_count
+              FROM otel_logs_and_spans
+              WHERE ${whereCondition} AND log_pattern = ANY(?)
+              GROUP BY log_pattern ORDER BY p_count DESC OFFSET ? LIMIT 15
+            |]
+      PG.query (Query $ encodeUtf8 q) (activePatterns, skip)
+    else do
+      -- For other targets (e.g., summary_pattern), use the original query
+      let q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
+      PG.query (Query $ encodeUtf8 q) (Only skip)
 
 
 getLast24hTotalRequest :: DB es => Projects.ProjectId -> Eff es Int

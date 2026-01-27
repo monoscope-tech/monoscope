@@ -257,7 +257,7 @@ anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace
 anomalyDetailPage pid issue tr otellogs errM now isFirst = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
-  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-auto pb-32"] do
+  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 overflow-auto pb-32"] do
     -- Header
     div_ [class_ "flex flex-col gap-3"] do
       div_ [class_ "flex gap-2 flex-wrap items-center"] do
@@ -268,37 +268,37 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
           _ -> pass
       h3_ [class_ "text-textStrong text-2xl font-semibold"] $ toHtml issue.title
       p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
-
-    -- Metrics & Timeline Row (8-column grid: 4 stats + chart)
-    div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-      -- Stats (1 column each)
-      statBox_ (Just pid) Nothing "Affected Requests" "" (show issue.affectedRequests) Nothing Nothing
-      statBox_ (Just pid) Nothing "Affected Clients" "" (show issue.affectedClients) Nothing Nothing
-      whenJust errM $ \err -> do
-        timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
-        timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
-      -- Timeline (4 columns)
-      div_ [class_ "col-span-4"]
-        $ Widget.widget_
-        $ (def :: Widget.Widget)
-          { Widget.standalone = Just True
-          , Widget.id = Just $ issueId <> "-timeline"
-          , Widget.wType = Widget.WTTimeseries
-          , Widget.title = Just "Error trends"
-          , Widget.showTooltip = Just True
-          , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
-          , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-          , Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code"
-          , Widget._projectId = Just issue.projectId
-          , Widget.hideLegend = Just True
-          }
+    let widget title q =
+          div_ [class_ "col-span-4"]
+            $ Widget.widget_
+            $ (def :: Widget.Widget)
+              { Widget.standalone = Just True
+              , Widget.id = Just $ issueId <> "-timeline"
+              , Widget.naked = Just True
+              , Widget.wType = Widget.WTTimeseries
+              , Widget.title = Just title
+              , Widget.showTooltip = Just True
+              , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
+              , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+              , Widget.query = Just q
+              , Widget._projectId = Just issue.projectId
+              , Widget.hideLegend = Just True
+              }
     -- Two Column Layout
-    div_ [class_ "flex flex-col gap-4"] do
-      div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
-        case issue.issueType of
-          Issues.RuntimeException -> do
-            case AE.fromJSON (getAeson issue.issueData) of
-              AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
+    case issue.issueType of
+      Issues.RuntimeException -> do
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
+            div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
+              -- Stats (1 column each)
+              whenJust errM $ \err -> do
+                statBox_ (Just pid) Nothing "Affected Requests" "" "0" Nothing Nothing
+                statBox_ (Just pid) Nothing "Affected Clients" "" "0" Nothing Nothing
+                timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
+                timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
+              widget "Error trend" "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code"
+            div_ [class_ "flex flex-col gap-4"] do
+              div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
                 div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
                   div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center justify-between"] do
                     div_ [class_ "flex items-center gap-2"] do
@@ -325,7 +325,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                           div_ [] do
                             span_ [class_ "text-xs text-textWeak"] "First seen:"
                             span_ [class_ "ml-2 text-xs"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt)
-
                         div_ [class_ "flex items-center gap-2"] do
                           faSprite_ "calendar" "regular" "w-3 h-3"
                           div_ [] do
@@ -343,62 +342,108 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                           div_ [] do
                             span_ [class_ "text-sm text-textWeak"] "Service:"
                             span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown service" err.errorData.serviceName
-              _ -> pass
-          Issues.QueryAlert -> do
-            case AE.fromJSON (getAeson issue.issueData) of
-              AE.Success (alertData :: Issues.QueryAlertData) -> do
-                div_ [class_ "mb-4"] do
-                  span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-                  div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
-                    $ toHtml alertData.queryExpression
-              _ -> pass
           _ -> pass
+      Issues.QueryAlert -> do
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (alertData :: Issues.QueryAlertData) -> do
+            div_ [class_ "mb-4"] do
+              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"]
+                $ toHtml alertData.queryExpression
+          _ -> pass
+      Issues.APIChange ->
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.APIChangeData) -> do
+            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+              span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+                faSprite_ "server" "regular" "h-3 w-3"
+                toHtml d.endpointHost
+            -- Stats and chart
+            div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
+              timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
+              widget "Request trend" $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
+          _ -> pass
+      Issues.LogPattern ->
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternData) -> do
+            div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
+              statBox_ (Just pid) Nothing "Log Level" "" (fromMaybe "Unknown" d.logLevel) Nothing Nothing
+              statBox_ (Just pid) Nothing "Service" "" (fromMaybe "Unknown" d.serviceName) Nothing Nothing
+              statBox_ (Just pid) Nothing "Occurrences" "" (show d.occurrenceCount) Nothing Nothing
+              timeStatBox_ "First Seen" $ prettyTimeAuto now d.firstSeenAt
+            div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+              div_ [class_ "px-4 py-3 border-b border-strokeWeak"] do
+                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+              div_ [class_ "p-4"] do
+                pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
+            whenJust d.sampleMessage $ \msg -> do
+              div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] do
+                  span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
+                div_ [class_ "p-4"] do
+                  pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml msg
+          _ -> pass
+      Issues.LogPatternRateChange ->
+        case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternRateChangeData) -> do
+            div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
+              statBox_ (Just pid) Nothing "Direction" "" d.changeDirection Nothing Nothing
+              statBox_ (Just pid) Nothing "Change" "" (show (round d.changePercent :: Int) <> "%") Nothing Nothing
+              statBox_ (Just pid) Nothing "Current Rate" "" (show (round d.currentRatePerHour :: Int) <> "/hr") Nothing Nothing
+              statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineMean :: Int) <> "/hr") Nothing Nothing
+            div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+              div_ [class_ "px-4 py-3 border-b border-strokeWeak"] do
+                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+              div_ [class_ "p-4"] do
+                pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
+          _ -> pass
+    div_ [class_ "surface-raised h-max rounded-2xl overflow-hidden", id_ "error-details-container"] do
+      div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
+        div_ [class_ "flex items-center gap-2"] do
+          faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4 text-iconNeutral"
+          h4_ [class_ "text-textStrong text-lg font-medium"] "Investigation"
+        div_ [class_ "flex items-center"] do
+          let aUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId <> ""
+          a_ [href_ $ aUrl <> "?first_occurrence=true", class_ $ (if isFirst then "text-textBrand font-medium" else "text-textWeak hover:text-textStrong") <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" "Show first trace the error occured"] "First"
+          a_ [href_ aUrl, class_ $ (if isFirst then "text-textWeak hover:text-textStrong" else "text-textBrand font-medium") <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" "Show recent trace the error occured"] "Recent"
+          span_ [class_ "mx-4 w-px h-4 bg-strokeWeak"] pass
+          button_ [class_ "text-xs py-3 px-3 cursor-pointer err-tab t-tab-active font-medium", onclick_ "navigatable(this, '#span-content', '#error-details-container', 't-tab-active', 'err')"] "Trace"
+          button_ [class_ "text-xs py-3 px-3 cursor-pointer err-tab font-medium", onclick_ "navigatable(this, '#log-content', '#error-details-container', 't-tab-active', 'err')"] "Logs"
+          button_ [class_ "text-xs py-3 px-3 cursor-pointer err-tab font-medium", onclick_ "navigatable(this, '#replay-content', '#error-details-container', 't-tab-active', 'err')"] "Replay"
+      div_ [class_ "p-2 w-full overflow-x-hidden"] do
+        div_ [class_ "flex w-full err-tab-content", id_ "span-content"] do
+          div_ [id_ "trace_container", class_ "grow-1 max-w-[80%] w-1/2 min-w-[20%] shrink-1"] do
+            whenJust tr $ \t ->
+              tracePage pid t spanRecs
+            unless (isJust tr)
+              $ div_ [class_ "flex flex-col items-center justify-center h-48"] do
+                faSprite_ "inbox-full" "regular" "w-6 h-6 text-textWeak"
+                span_ [class_ "mt-2 text-sm text-textWeak"] "No trace data available for this error."
+          div_ [class_ "transition-opacity duration-200 mx-1", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+          div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] w-1/2 w-c-scroll overflow-x-hidden overflow-y-auto", id_ "log_details_container"] do
+            span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+            let (spanId, createdAt) = case spanRecs V.!? 0 of
+                  Just sr -> (sr.uSpanId, formatUTC sr.timestamp)
+                  Nothing -> ("", "")
+            let url = "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> createdAt <> "/detailed"
+            div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
-      div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
-        div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
-          div_ [class_ "flex items-center gap-2"] do
-            faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4 text-iconNeutral"
-            h4_ [class_ "text-textStrong text-lg font-medium"] "Investigation"
-          div_ [class_ "flex items-center"] do
-            let aUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId <> ""
-            a_ [href_ $ aUrl <> "?first_occurrence=true", class_ $ (if isFirst then "text-textBrand font-medium" else "text-textWeak hover:text-textStrong") <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" "Show first trace the error occured"] "First"
-            a_ [href_ aUrl, class_ $ (if isFirst then "text-textWeak hover:text-textStrong" else "text-textBrand font-medium") <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" "Show recent trace the error occured"] "Recent"
-            span_ [class_ "mx-4 w-px h-4 bg-strokeWeak"] pass
-            button_ [class_ "text-xs py-3 px-3 cursor-pointer err-tab t-tab-active font-medium", onclick_ "navigatable(this, '#span-content', '#error-details-container', 't-tab-active', 'err')"] "Trace"
-            button_ [class_ "text-xs py-3 px-3 cursor-pointer err-tab font-medium", onclick_ "navigatable(this, '#log-content', '#error-details-container', 't-tab-active', 'err')"] "Logs"
-            button_ [class_ "text-xs py-3 px-3 cursor-pointer err-tab font-medium", onclick_ "navigatable(this, '#replay-content', '#error-details-container', 't-tab-active', 'err')"] "Replay"
-        div_ [class_ "p-2 w-full overflow-x-hidden"] do
-          div_ [class_ "flex w-full err-tab-content", id_ "span-content"] do
-            div_ [id_ "trace_container", class_ "grow-1 max-w-[80%] w-1/2 min-w-[20%] shrink-1"] do
-              whenJust tr $ \t ->
-                tracePage pid t spanRecs
-              unless (isJust tr)
-                $ div_ [class_ "flex flex-col items-center justify-center h-48"] do
-                  faSprite_ "inbox-full" "regular" "w-6 h-6 text-textWeak"
-                  span_ [class_ "mt-2 text-sm text-textWeak"] "No trace data available for this error."
-            div_ [class_ "transition-opacity duration-200 mx-1", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] w-1/2 w-c-scroll overflow-x-hidden overflow-y-auto", id_ "log_details_container"] do
-              span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-              let (spanId, createdAt) = case spanRecs V.!? 0 of
-                    Just sr -> (sr.uSpanId, formatUTC sr.timestamp)
-                    Nothing -> ("", "")
-              let url = "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> createdAt <> "/detailed"
-              div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
+        div_ [id_ "log-content", class_ "hidden err-tab-content"] do
+          div_ [class_ "flex flex-col gap-4"] do
+            virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (\x -> x.recentTraceId)) <> "\"")))
 
-          div_ [id_ "log-content", class_ "hidden err-tab-content"] do
-            div_ [class_ "flex flex-col gap-4"] do
-              virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (\x -> x.recentTraceId)) <> "\"")))
-
-          div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
-            let withSessionIds = V.catMaybes $ V.map (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs
-            unless (V.null withSessionIds) do
-              let sessionId = V.head withSessionIds
-              div_ [class_ "border border-r border-l w-max mx-auto"]
-                $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
-
-            when (V.null withSessionIds)
-              $ div_ [class_ "flex flex-col gap-4"] do
-                emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide"
+        div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
+          let withSessionIds = V.catMaybes $ V.map (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) spanRecs
+          unless (V.null withSessionIds) do
+            let sessionId = V.head withSessionIds
+            div_ [class_ "border border-r border-l w-max mx-auto"]
+              $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" sessionId, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text)
+          when (V.null withSessionIds)
+            $ div_ [class_ "flex flex-col gap-4"] do
+              emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide"
 
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
@@ -429,9 +474,9 @@ buildAIContext issue errM trDataM spans =
       , Just $ "- **Title**: " <> issue.title
       , Just $ "- **Type**: " <> show issue.issueType
       , Just $ "- **Severity**: " <> issue.severity
-      , Just $ "- **Service**: " <> issue.service
-      , Just $ "- **Affected Requests**: " <> show issue.affectedRequests
-      , Just $ "- **Affected Clients**: " <> show issue.affectedClients
+      , Just $ "- **Service**: " <> fromMaybe "unknown-service" issue.service
+      , Just $ "- **Affected Requests**: " <> "0"
+      , Just $ "- **Affected Clients**: " <> "0"
       , Just $ "- **Recommended Action**: " <> issue.recommendedAction
       , errM >>= \err ->
           Just
@@ -935,7 +980,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
       div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-      span_ [class_ "text-textStrong"] $ toHtml issue.service
+      span_ [class_ "text-textStrong"] $ toHtml $ fromMaybe "unknown-service" issue.service
     -- Time since
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
@@ -981,6 +1026,22 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
         div_ [class_ "mb-4"] do
           span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
           div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+      _ -> pass
+    Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternData) ->
+        div_ [class_ "border border-strokeWeak rounded-lg mb-4"] do
+          label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
+            toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
+          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
+      _ -> pass
+    Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternRateChangeData) ->
+        div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
+          label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
+            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
+            toHtml $ "Rate " <> d.changeDirection <> " (" <> show (round d.changePercent :: Int) <> "%)"
+            input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
+          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
       _ -> pass
     _ -> pass
 
@@ -1243,6 +1304,8 @@ issueTypeBadge issueType critical = badge cls icon txt
     (cls, icon, txt) = case issueType of
       Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
       Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
+      Issues.LogPattern -> ("bg-fillInformation-strong", "file-text", "LOG PATTERN")
+      Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "trending-up", "RATE CHANGE")
       Issues.APIChange
         | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
         | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
