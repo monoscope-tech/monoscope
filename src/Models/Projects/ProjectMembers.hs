@@ -100,7 +100,7 @@ insertProjectMembers :: DB es => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers [] = pure 0
 insertProjectMembers members = PG.executeMany q members
   where
-    q = [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE |]
+    q = [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL |]
 
 
 data ProjectMemberVM = ProjectMemberVM

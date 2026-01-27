@@ -156,6 +156,7 @@ jobs:
       - name: Run ${{ matrix.test-suite }}
         env:
           USE_EXTERNAL_DB: true
+          LOG_LEVEL: ${{ matrix.test-suite == 'integration-tests' && 'warn' || '' }}
         run: |
           echo "::group::Running ${{ matrix.test-suite }}"
           cabal test ${{ matrix.test-suite }} --ghc-options="-O0 -j8" --test-show-details=direct
