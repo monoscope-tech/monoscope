@@ -113,7 +113,7 @@ getLogPatterns pid limit offset = PG.query q (pid, limit, offset)
 getLogPatternTexts :: DB es => Projects.ProjectId -> Eff es [Text]
 getLogPatternTexts pid = coerce @[Only Text] @[Text] <$> PG.query q (Only pid)
   where
-    q = [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ?|]
+    q = [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND state != 'ignored' |]
 
 
 -- | Get log pattern by hash

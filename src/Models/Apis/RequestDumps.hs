@@ -46,6 +46,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types ()
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DBUtils (WrappedEnumShow (..))
@@ -558,7 +559,6 @@ valueToVector (Only val) = case val of
   AE.Array arr -> Just arr
   _ -> Nothing
 
-
 fetchLogPatterns :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
@@ -568,21 +568,18 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       target = fromMaybe "log_pattern" targetM
   if target == "log_pattern"
     then do
-      -- Join with log_patterns table to filter out ignored patterns
+      activePatterns <- V.fromList <$> LogPatterns.getLogPatternTexts pid skip
       let q =
             [text|
-              SELECT lp.log_pattern, count(*) as p_count
-              FROM apis.log_patterns lp
-              INNER JOIN otel_logs_and_spans ols
-                ON lp.log_pattern = ols.log_pattern AND lp.project_id::text = ols.project_id
-              WHERE lp.project_id = ?
-                AND lp.state != 'ignored'
-                AND ${whereCondition}
-              GROUP BY lp.log_pattern
+              SELECT log_pattern, count(*) as p_count
+              FROM otel_logs_and_spans
+              WHERE ${whereCondition}
+                AND log_pattern = ANY(?)
+              GROUP BY log_pattern
               ORDER BY p_count DESC
               OFFSET ? LIMIT 15
             |]
-      PG.query (Query $ encodeUtf8 q) (pid, skip)
+      PG.query (Query $ encodeUtf8 q) (activePatterns, skip)
     else do
       -- For other targets (e.g., summary_pattern), use the original query
       let q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
