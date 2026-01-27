@@ -559,6 +559,7 @@ valueToVector (Only val) = case val of
   AE.Array arr -> Just arr
   _ -> Nothing
 
+
 fetchLogPatterns :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
