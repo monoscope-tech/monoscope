@@ -569,7 +569,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       target = fromMaybe "log_pattern" targetM
   if target == "log_pattern"
     then do
-      activePatterns <- V.fromList <$> LogPatterns.getLogPatternTexts pid skip
+      activePatterns <- V.fromList <$> LogPatterns.getLogPatternTexts pid
       let q =
             [text|
               SELECT log_pattern, count(*) as p_count
