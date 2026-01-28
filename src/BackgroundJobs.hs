@@ -533,7 +533,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
                     Nothing -> (Nothing, Nothing, Nothing)
                 _ -> (Nothing, Nothing, Nothing)
           let patternHash = toXXHash patternTxt
-          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg)
+          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg) "body"
 
 
 -- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain

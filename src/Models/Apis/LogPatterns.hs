@@ -81,6 +81,7 @@ data LogPattern = LogPattern
   , baselineVolumeHourlyStddev :: Maybe Double
   , baselineSamples :: Int
   , baselineUpdatedAt :: Maybe ZonedTime
+  , fieldPath :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -102,7 +103,7 @@ getLogPatterns pid limit offset = PG.query q (pid, limit, offset)
                service_name, log_level, sample_message, first_seen_at, last_seen_at,
                occurrence_count, state, acknowledged_by, acknowledged_at,
                baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
-               baseline_samples, baseline_updated_at
+               baseline_samples, baseline_updated_at, field_path
         FROM apis.log_patterns
         WHERE project_id = ?
         ORDER BY last_seen_at DESC
@@ -128,7 +129,7 @@ getLogPatternByHash pid hash = do
                service_name, log_level, sample_message, first_seen_at, last_seen_at,
                occurrence_count, state, acknowledged_by, acknowledged_at,
                baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
-               baseline_samples, baseline_updated_at
+               baseline_samples, baseline_updated_at, field_path
         FROM apis.log_patterns
         WHERE project_id = ? AND pattern_hash = ?
       |]
@@ -148,15 +149,15 @@ acknowledgeLogPatterns uid patternHashes
       |]
 
 
-upsertLogPattern :: DB es => Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Int64
-upsertLogPattern pid pat patHash serviceName logLevel trId sampleMsg =
-  PG.execute q (pid, pat, patHash, serviceName, logLevel, trId, sampleMsg)
+upsertLogPattern :: DB es => Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Eff es Int64
+upsertLogPattern pid pat patHash serviceName logLevel trId sampleMsg fieldPath =
+  PG.execute q (pid, pat, patHash, serviceName, logLevel, trId, sampleMsg, fieldPath)
   where
     q =
       [sql|
-        INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, service_name, log_level, trace_id, sample_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (project_id, pattern_hash) DO UPDATE SET
+        INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, service_name, log_level, trace_id, sample_message, field_path)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (project_id, log_level, field_path, pattern_hash) DO UPDATE SET
           last_seen_at = NOW(),
           occurrence_count = apis.log_patterns.occurrence_count + 1,
           sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
