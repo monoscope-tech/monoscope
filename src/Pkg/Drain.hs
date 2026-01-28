@@ -15,10 +15,10 @@ import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
+import Models.Telemetry.Telemetry (SeverityLevel (..))
 import Relude
 import RequestMessages (valueToFields)
-import Utils (extractMessageFromLog, extractMessageAndTargetKeyFromLog, messageKeys, replaceAllFormats)
-import Models.Telemetry.Telemetry (SeverityLevel (..))
+import Utils (extractMessageAndTargetKeyFromLog, extractMessageFromLog, messageKeys, replaceAllFormats)
 
 
 data LogGroup = LogGroup
@@ -37,8 +37,8 @@ data LogGroup = LogGroup
 
 data DrainLevelTwo = DrainLevelTwo
   { firstToken :: Text -- The first token used for grouping
-  , fieldPath :: Text 
-  , logGroups  :: V.Vector LogGroup -- Leaf clusters
+  , fieldPath :: Text
+  , logGroups :: V.Vector LogGroup -- Leaf clusters
   }
   deriving (Generic, Show)
   deriving anyclass (NFData)
