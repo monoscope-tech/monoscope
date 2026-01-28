@@ -65,4 +65,9 @@ ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAU
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS target_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS environment TEXT;
 
+-- Add field_path column and update unique constraint
+ALTER TABLE apis.log_patterns ADD COLUMN IF NOT EXISTS field_path TEXT NOT NULL DEFAULT 'body';
+ALTER TABLE apis.log_patterns DROP CONSTRAINT IF EXISTS log_patterns_project_id_pattern_hash_key;
+ALTER TABLE apis.log_patterns ADD CONSTRAINT log_patterns_project_level_path_hash_key UNIQUE(project_id, log_level, field_path, pattern_hash);
+
 COMMIT;
