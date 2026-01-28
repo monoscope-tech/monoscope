@@ -519,7 +519,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
     Relude.when (V.length newPatterns > 0)
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
-    forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
+    forM_ newPatterns \(sampleMsg, fieldPath, patternTxt, ids) -> do
       unless (V.null ids) $ do
         case kind of
           "log" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
@@ -533,7 +533,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
                     Nothing -> (Nothing, Nothing, Nothing)
                 _ -> (Nothing, Nothing, Nothing)
           let patternHash = toXXHash patternTxt
-          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg) "body"
+          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg) fieldPath
 
 
 -- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain
@@ -544,13 +544,13 @@ processBatch isSummary batch now inTree =
 
 processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processNewLog _isSummary logId isSampleLog content now tree =
-  let tokens = Drain.generateDrainTokens content
+  let (tokens, fieldPath) = Drain.generateDrainTokens content
    in if V.null tokens
         then tree
         else
           let tokenCount = V.length tokens
               firstToken = V.head tokens
-           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId isSampleLog content now
+           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId isSampleLog content fieldPath now
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
