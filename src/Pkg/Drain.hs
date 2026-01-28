@@ -5,14 +5,19 @@ module Pkg.Drain (
   updateTreeWithLog,
   generateDrainTokens,
   getAllLogGroups,
+  -- Exported for testing
+  tokenize,
+  extractQuoted,
+  extractBracketedContent,
 ) where
 
-import Data.Char (isSpace)
+import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
 import Relude
-import Utils (replaceAllFormats)
+import RequestMessages (valueToFields)
+import Utils (extractMessageFromLog, messageKeys, replaceAllFormats)
 
 
 data LogGroup = LogGroup
@@ -235,36 +240,101 @@ getAllLogGroups tree =
    in V.map (\grp -> (grp.exampleLog, templateStr grp, logIds grp)) allLogGroups
 
 
-looksLikeJson :: T.Text -> Bool
-looksLikeJson t =
-  ("{" `T.isInfixOf` t && "}" `T.isSuffixOf` t)
-    || ("[" `T.isInfixOf` t && "]" `T.isSuffixOf` t)
+generateDrainTokens :: T.Text -> V.Vector T.Text
+generateDrainTokens content =
+  case AE.decodeStrict' (encodeUtf8 content) of
+    Just jsonValue ->
+      case extractMessageFromLog jsonValue of
+        Just msg ->
+          tokenizeUnstructured msg
+        Nothing ->
+          let keyPaths = V.toList $ V.map fst $ valueToFields jsonValue
+           in if null keyPaths
+                then tokenizeUnstructured content
+                else V.fromList keyPaths
+    Nothing ->
+      tokenizeUnstructured content
 
 
-tokenizeJsonLike :: T.Text -> [T.Text]
-tokenizeJsonLike txt
+-- | Tokenize unstructured log content with smart handling of:
+-- - Embedded JSON arrays → [*]
+-- - Embedded JSON objects → {*}
+-- - Key=value patterns → key=<*>
+-- - Quoted strings as single tokens
+tokenizeUnstructured :: T.Text -> V.Vector T.Text
+tokenizeUnstructured content =
+  let preprocessed = replaceAllFormats content
+   in V.fromList $ tokenize preprocessed
+
+
+-- | Tokenize text handling quotes, embedded JSON, and key=value patterns
+tokenize :: T.Text -> [T.Text]
+tokenize txt
   | T.null txt = []
-  | otherwise = go txt
+  | otherwise = go (T.stripStart txt)
   where
     go t
       | T.null t = []
-      | T.head t `elem` ['{', '}', '[', ']', ',', ':'] =
-          let c = one (T.head t)
-           in c : go (T.tail t)
+      -- Handle quoted strings as single token
       | T.head t == '"' =
-          let (quoted, rest) = T.breakOn "\"" (T.tail t)
-              token = "\"" <> quoted <> "\"" -- include the quotes
-           in token : go (T.drop 1 rest)
-      | isSpace (T.head t) =
-          go (T.dropWhile isSpace t)
+          let (quoted, rest) = extractQuoted '"' (T.tail t)
+           in ("\"" <> quoted <> "\"") : go (T.stripStart rest)
+      | T.head t == '\'' =
+          let (quoted, rest) = extractQuoted '\'' (T.tail t)
+           in ("'" <> quoted <> "'") : go (T.stripStart rest)
+      -- Handle embedded JSON array
+      | T.head t == '[' =
+          let (_, rest) = extractBracketedContent '[' ']' t
+           in "[*]" : go (T.stripStart rest)
+      -- Handle embedded JSON object
+      | T.head t == '{' =
+          let (_, rest) = extractBracketedContent '{' '}' t
+           in "{*}" : go (T.stripStart rest)
+      -- Handle regular token (may contain key=value)
       | otherwise =
-          let (chunk, rest) = T.span (\c -> not (isSpace c) && notElem c ['{', '}', '[', ']', ',', ':']) t
-           in chunk : go rest
+          let (token, rest) = T.break isTokenDelimiter t
+           in if T.null token
+                then go (T.drop 1 t)
+                else processToken token ++ go (T.stripStart rest)
+
+    isTokenDelimiter c = c `elem` [' ', '\t', '\n', '\r', '[', '{']
+
+    -- Process a token, handling key=value patterns
+    processToken :: T.Text -> [T.Text]
+    processToken token =
+      case T.breakOn "=" token of
+        (key, rest)
+          | not (T.null rest) && not (T.null key) && T.length rest > 1 ->
+              -- Has key=value pattern: keep key=<*>
+              [key <> "=<*>"]
+          | otherwise -> [token]
 
 
-generateDrainTokens :: T.Text -> V.Vector T.Text
-generateDrainTokens content =
-  let replaced = replaceAllFormats content
-   in if looksLikeJson replaced
-        then V.fromList (tokenizeJsonLike replaced)
-        else V.fromList $ words replaced
+-- | Extract content within quotes, handling escaped quotes
+extractQuoted :: Char -> T.Text -> (T.Text, T.Text)
+extractQuoted quoteChar txt = go txt ""
+  where
+    go t acc
+      | T.null t = (acc, t)
+      | T.head t == '\\' && T.length t > 1 && T.index t 1 == quoteChar =
+          go (T.drop 2 t) (acc <> T.singleton '\\' <> T.singleton quoteChar)
+      | T.head t == quoteChar = (acc, T.tail t)
+      | otherwise = go (T.tail t) (acc <> T.singleton (T.head t))
+
+
+-- | Extract content within brackets, handling nested brackets
+extractBracketedContent :: Char -> Char -> T.Text -> (T.Text, T.Text)
+extractBracketedContent open close txt
+  | T.null txt = ("", txt)
+  | T.head txt /= open = ("", txt)
+  | otherwise = go (T.tail txt) "" (1 :: Int)
+  where
+    go t acc depth
+      | T.null t = (acc, t)
+      | depth == 0 = (acc, t)
+      | T.head t == open = go (T.tail t) (acc <> T.singleton open) (depth + 1)
+      | T.head t == close =
+          if depth == 1
+            then (acc, T.tail t)
+            else go (T.tail t) (acc <> T.singleton close) (depth - 1)
+      | otherwise = go (T.tail t) (acc <> T.singleton (T.head t)) depth

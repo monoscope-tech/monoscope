@@ -521,7 +521,6 @@ processPatterns kind fieldName events pid scheduledTime since = do
 
     forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
       unless (V.null ids) $ do
-        -- Update otel_logs_and_spans with pattern (using explicit field names to avoid SQL injection)
         case kind of
           "log" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
           "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)

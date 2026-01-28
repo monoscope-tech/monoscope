@@ -4,7 +4,7 @@ import Test.Hspec
 import Data.Vector qualified as V
 import Utils qualified
 import Data.Time
-import Pkg.Drain
+import Pkg.Drain (DrainTree, emptyDrainTree, updateTreeWithLog, getAllLogGroups, tokenize, extractQuoted, extractBracketedContent)
 import Relude
 
 -- Helper function to create a test time
@@ -30,8 +30,83 @@ processBatch logBatch now initialTree = do
   V.foldl (\tree (logId, logContent) -> processNewLog logId logContent now tree) initialTree logBatch
 
 spec :: Spec
-spec = describe "DRAIN updateTreeWithLog" $ do
-  describe "End to End drain tree test" $ do
+spec = do
+  describe "tokenize" $ do
+    it "handles basic tokenization" $
+      tokenize "hello world" `shouldBe` ["hello", "world"]
+
+    it "keeps quoted strings as single tokens" $
+      tokenize "Added products \"one, two, three\" to cart"
+        `shouldBe` ["Added", "products", "\"one, two, three\"", "to", "cart"]
+
+    it "handles single quoted strings at start of token" $
+      tokenize "'hello world' is a greeting"
+        `shouldBe` ["'hello world'", "is", "a", "greeting"]
+
+    it "replaces key=value pattern values with <*>" $
+      tokenize "userId=12345 status=active"
+        `shouldBe` ["userId=<*>", "status=<*>"]
+
+    it "converts embedded JSON arrays to [*]" $
+      tokenize "Processing [1, 2, 3] items"
+        `shouldBe` ["Processing", "[*]", "items"]
+
+    it "converts embedded JSON objects to {*}" $
+      tokenize "Config {\"debug\": true} loaded"
+        `shouldBe` ["Config", "{*}", "loaded"]
+
+    it "handles nested brackets" $
+      tokenize "data [[1,2],[3,4]] end"
+        `shouldBe` ["data", "[*]", "end"]
+
+    it "handles combined example" $
+      tokenize "GET /api/users [200] {\"count\": 5}"
+        `shouldBe` ["GET", "/api/users", "[*]", "{*}"]
+
+  describe "extractQuoted" $ do
+    it "extracts basic quoted string" $
+      extractQuoted '"' "hello world\" rest"
+        `shouldBe` ("hello world", " rest")
+
+    it "handles escaped quotes" $
+      extractQuoted '"' "hello \\\"world\\\"\" rest"
+        `shouldBe` ("hello \\\"world\\\"", " rest")
+
+    it "handles single quotes" $
+      extractQuoted '\'' "hello world' more"
+        `shouldBe` ("hello world", " more")
+
+    it "returns all content for unclosed quote" $
+      extractQuoted '"' "no closing quote"
+        `shouldBe` ("no closing quote", "")
+
+  describe "extractBracketedContent" $ do
+    it "extracts simple array" $
+      extractBracketedContent '[' ']' "[1, 2, 3] rest"
+        `shouldBe` ("1, 2, 3", " rest")
+
+    it "handles nested arrays" $
+      extractBracketedContent '[' ']' "[[1,2],[3,4]] end"
+        `shouldBe` ("[1,2],[3,4]", " end")
+
+    it "extracts JSON object" $
+      extractBracketedContent '{' '}' "{\"key\": \"value\"} more"
+        `shouldBe` ("\"key\": \"value\"", " more")
+
+    it "handles nested objects" $
+      extractBracketedContent '{' '}' "{\"a\": {\"b\": 1}} rest"
+        `shouldBe` ("\"a\": {\"b\": 1}", " rest")
+
+    it "returns empty for no opening bracket" $
+      extractBracketedContent '[' ']' "no bracket"
+        `shouldBe` ("", "no bracket")
+
+    it "returns all content for unclosed bracket" $
+      extractBracketedContent '[' ']' "[unclosed"
+        `shouldBe` ("unclosed", "")
+
+  describe "DRAIN updateTreeWithLog" $ do
+   describe "End to End drain tree test" $ do
     it "should get correct log pattern for HTTP requests" $ do
       let initialTree = emptyDrainTree
           updatedTree = processBatch (V.fromList basicHttpLogs) (testTimeOffset 0) initialTree
