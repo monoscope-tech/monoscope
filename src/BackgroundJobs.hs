@@ -499,7 +499,7 @@ logsPatternExtraction scheduledTime pid = do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
         let (logs, _) = L.partition (\(k, _, _, _, _, _, _) -> k == "log") otelEvents
         processPatterns "log" "log_pattern" (V.fromList [(i, body, trId, serviceName, level) | (_, i, body, _, trId, serviceName, level) <- logs]) pid scheduledTime startTime
-       -- processPatterns "summary" "summary_pattern" (V.fromList [(i, s, trId, serviceName, level) | (_, i, _, s, trId, serviceName, level) <- summaries]) pid scheduledTime startTime
+        -- processPatterns "summary" "summary_pattern" (V.fromList [(i, s, trId, serviceName, level) | (_, i, _, s, trId, serviceName, level) <- summaries]) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
@@ -520,12 +520,12 @@ processPatterns kind fieldName events pid scheduledTime since = do
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, fieldPath, patternTxt, ids) -> do
-      traceShowM  patternTxt
+      traceShowM patternTxt
       traceShowM ids
       unless (V.null ids) $ do
         case kind of
           "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
-          _ ->  void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
+          _ -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
         Relude.when (kind == "log" && not (T.null patternTxt) && not (patternTxt `elem` existingPatterns)) $ do
           let (serviceName, logLevel, logTraceId) = case ids V.!? 0 of
                 Just logId | logId /= "" ->
@@ -1752,7 +1752,3 @@ processNewLogPattern pid patternHash authCtx = do
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
-
-
-
-
