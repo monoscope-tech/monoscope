@@ -21,7 +21,6 @@ import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, s
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
-import Network.Wai.Middleware.Heartbeat (heartbeatMiddleware)
 import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
@@ -142,3 +141,16 @@ logException :: Text -> LogBase.Logger -> LogLevel -> Safe.SomeException -> IO (
 logException envTxt logger logLevel exception =
   runLogT envTxt logger logLevel
     $ LogBase.logAttention "odd-jobs runner crashed " (show @Text exception)
+
+
+heartbeatMiddleware :: Middleware
+heartbeatMiddleware app req sendResponse =
+  case rawPathInfo req of
+    "/heartbeat" ->
+      if getVerb
+        then heartbeat
+        else app req sendResponse
+    _ -> app req sendResponse
+  where
+    getVerb = (requestMethod req == methodGet) || (requestMethod req == methodHead)
+    heartbeat = sendResponse $ responseLBS status200 [("Content-Type", "text/plain")] "Ok"
