@@ -324,9 +324,9 @@ extractQuoted quoteChar txt = go txt ""
     go t acc
       | T.null t = (acc, t)
       | T.head t == '\\' && T.length t > 1 && T.index t 1 == quoteChar =
-          go (T.drop 2 t) (acc <> T.singleton '\\' <> T.singleton quoteChar)
+          go (T.drop 2 t) (acc <> one '\\' <> one quoteChar)
       | T.head t == quoteChar = (acc, T.tail t)
-      | otherwise = go (T.tail t) (acc <> T.singleton (T.head t))
+      | otherwise = go (T.tail t) (acc <> one (T.head t))
 
 
 -- | Extract content within brackets, handling nested brackets
@@ -339,9 +339,9 @@ extractBracketedContent open close txt
     go t acc depth
       | T.null t = (acc, t)
       | depth == 0 = (acc, t)
-      | T.head t == open = go (T.tail t) (acc <> T.singleton open) (depth + 1)
+      | T.head t == open = go (T.tail t) (acc <> one open) (depth + 1)
       | T.head t == close =
           if depth == 1
             then (acc, T.tail t)
-            else go (T.tail t) (acc <> T.singleton close) (depth - 1)
-      | otherwise = go (T.tail t) (acc <> T.singleton (T.head t)) depth
+            else go (T.tail t) (acc <> one close) (depth - 1)
+      | otherwise = go (T.tail t) (acc <> one (T.head t)) depth

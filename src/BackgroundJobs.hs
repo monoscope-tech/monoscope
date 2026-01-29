@@ -1,3 +1,5 @@
+{-# LANGUAGE TupleSections #-}
+
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus) where
 
 import Control.Lens ((.~))
@@ -510,7 +512,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text,
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     existingPatterns <- LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map (\pat -> ("", False, pat, Nothing, Nothing, Nothing)) existingPatterns
+    let known = V.fromList $ map ("", False,, Nothing, Nothing, Nothing) existingPatterns
         -- Include level in content for pattern matching so different levels create different patterns
         combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
@@ -526,7 +528,7 @@ processPatterns kind fieldName events pid scheduledTime since = do
         case kind of
           "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
           _ -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
-        Relude.when (kind == "log" && not (T.null patternTxt) && not (patternTxt `elem` existingPatterns)) $ do
+        Relude.when (kind == "log" && not (T.null patternTxt) && patternTxt `notElem` existingPatterns) $ do
           let (serviceName, logLevel, logTraceId) = case ids V.!? 0 of
                 Just logId | logId /= "" ->
                   case V.find (\(i, _, _, _, _) -> i == logId) events of
