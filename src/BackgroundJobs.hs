@@ -512,7 +512,7 @@ processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text,
 processPatterns kind fieldName events pid scheduledTime since = do
   Relude.when (not $ V.null events) $ do
     existingPatterns <- LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map ("", False,, Nothing, Nothing, Nothing) existingPatterns
+    let known = V.fromList $ map ("",False,,Nothing,Nothing,Nothing) existingPatterns
         -- Include level in content for pattern matching so different levels create different patterns
         combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
