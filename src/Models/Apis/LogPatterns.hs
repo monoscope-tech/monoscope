@@ -22,6 +22,7 @@ module Models.Apis.LogPatterns (
 where
 
 import Data.Aeson qualified as AE
+import Data.List (lookup)
 import Data.Text qualified as T
 import Data.Time
 import Data.UUID qualified as UUID
@@ -119,20 +120,7 @@ getLogPatternTexts pid = coerce @[Only Text] @[Text] <$> PG.query q (Only pid)
 
 -- | Get log pattern by hash
 getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe LogPattern)
-getLogPatternByHash pid hash = do
-  results <- PG.query q (pid, hash)
-  return $ listToMaybe results
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at, log_pattern, pattern_hash,
-               service_name, log_level, sample_message, first_seen_at, last_seen_at,
-               occurrence_count, state, acknowledged_by, acknowledged_at,
-               baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
-               baseline_samples, baseline_updated_at, field_path
-        FROM apis.log_patterns
-        WHERE project_id = ? AND pattern_hash = ?
-      |]
+getLogPatternByHash pid hash = listToMaybe <$> PG.query (_selectWhere @LogPattern [[field| project_id |], [field| pattern_hash |]]) (pid, hash)
 
 
 -- | Acknowledge log patterns
@@ -279,32 +267,53 @@ data LogPatternWithRate = LogPatternWithRate
 
 -- | Get all patterns with their current hour counts
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
-getPatternsWithCurrentRates pid =
-  PG.query q (pid, pid)
+getPatternsWithCurrentRates pid = do
+  patterns <- PG.query patternsQuery (Only pid)
+  counts :: [(Text, Int)] <- PG.query countsQuery (Only pid)
+
+  traceShowM counts
+  traceShowM patterns
+
+  pure $ map (attachCount counts) patterns
   where
-    q =
+    patternsQuery =
       [sql|
         SELECT
-          lp.id,
-          lp.project_id,
-          lp.log_pattern,
-          lp.pattern_hash,
-          lp.baseline_state,
-          lp.baseline_volume_hourly_mean,
-          lp.baseline_volume_hourly_stddev,
-          COALESCE(counts.current_count, 0)::INT AS current_hour_count
-        FROM apis.log_patterns lp
-        LEFT JOIN (
-          SELECT log_pattern, COUNT(*) AS current_count
-          FROM otel_logs_and_spans
-          WHERE project_id = ?
-            AND timestamp >= date_trunc('hour', NOW())
-            AND log_pattern IS NOT NULL
-          GROUP BY log_pattern
-        ) counts ON counts.log_pattern = lp.log_pattern
-        WHERE lp.project_id = ?
-          AND lp.state != 'ignored' AND lp.baseline_state = 'established'
+          id,
+          project_id,
+          log_pattern,
+          pattern_hash,
+          baseline_state,
+          baseline_volume_hourly_mean,
+          baseline_volume_hourly_stddev
+        FROM apis.log_patterns
+        WHERE project_id = ?
+          AND state != 'ignored'
+          AND baseline_state = 'established'
       |]
+
+    countsQuery =
+      [sql|
+        SELECT log_pattern, COUNT(*)::INT
+        FROM otel_logs_and_spans
+        WHERE project_id = ?::text
+          AND timestamp >=  now() - interval '1 hour'
+          AND kind = 'log'
+          AND log_pattern IS NOT NULL
+        GROUP BY log_pattern
+      |]
+
+    attachCount counts (patId, projId, logPat, patHash, blState, blMean, blStddev) =
+      LogPatternWithRate
+        { patternId = patId
+        , projectId = projId
+        , logPattern = logPat
+        , patternHash = patHash
+        , baselineState = blState
+        , baselineMean = blMean
+        , baselineStddev = blStddev
+        , currentHourCount = fromMaybe 0 $ lookup logPat counts
+        }
 
 
 -- | Get a pattern by ID

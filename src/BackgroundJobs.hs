@@ -111,7 +111,7 @@ data BgJobs
   | SlackNotification Projects.ProjectId Text
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
-  | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
+  | FiveMinutesLogsPatternProcessing UTCTime Projects.ProjectId
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
@@ -308,7 +308,7 @@ processBackgroundJob authCtx bgJob =
                 -- Schedule 5-minute log pattern extraction
                 forM_ [0 .. 287] \interval -> do
                   let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
-                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime p) scheduledTime
+                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinutesLogsPatternProcessing scheduledTime p) scheduledTime
                   pass
                 -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
                 forM_ [0 .. 287] \interval -> do
@@ -352,11 +352,11 @@ processBackgroundJob authCtx bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
-    FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
+    FiveMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
-    QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
     LogPatternBaselineCalculation pid -> calculateLogPatternBaselines pid
     LogPatternSpikeDetection pid -> detectLogPatternSpikes pid authCtx
     NewLogPatternDetected pid patternHash -> processNewLogPattern pid patternHash authCtx
@@ -487,8 +487,8 @@ logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   Relude.when ctx.config.enableEventsTableUpdates $ do
-    tenMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
-    paginate 0 tenMinutesAgo
+    fiveMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
+    paginate 0 fiveMinutesAgo
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
     limitVal = 250
@@ -497,9 +497,9 @@ logsPatternExtraction scheduledTime pid = do
       otelEvents :: [(Text, Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT kind, id::text, coalesce(body::text,''), coalesce(summary::text,''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ?   AND timestamp >= ?   AND timestamp < ?   AND (summary_pattern IS NULL  OR log_pattern IS NULL) OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       unless (null otelEvents) do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        let (logs, summaries) = L.partition (\(k, _, _, _, _, _, _) -> k == "log") otelEvents
+        let (logs, _) = L.partition (\(k, _, _, _, _, _, _) -> k == "log") otelEvents
         processPatterns "log" "log_pattern" (V.fromList [(i, body, trId, serviceName, level) | (_, i, body, _, trId, serviceName, level) <- logs]) pid scheduledTime startTime
-        processPatterns "summary" "summary_pattern" (V.fromList [(i, s, trId, serviceName, level) | (_, i, _, s, trId, serviceName, level) <- summaries]) pid scheduledTime startTime
+       -- processPatterns "summary" "summary_pattern" (V.fromList [(i, s, trId, serviceName, level) | (_, i, _, s, trId, serviceName, level) <- summaries]) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
@@ -520,12 +520,13 @@ processPatterns kind fieldName events pid scheduledTime since = do
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, fieldPath, patternTxt, ids) -> do
+      traceShowM  patternTxt
+      traceShowM ids
       unless (V.null ids) $ do
         case kind of
-          "log" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
           "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
-          _ -> pass -- Unknown kind, skip
-        Relude.when (kind == "log" && not (T.null patternTxt)) $ do
+          _ ->  void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
+        Relude.when (kind == "log" && not (T.null patternTxt) && not (patternTxt `elem` existingPatterns)) $ do
           let (serviceName, logLevel, logTraceId) = case ids V.!? 0 of
                 Just logId | logId /= "" ->
                   case V.find (\(i, _, _, _, _) -> i == logId) events of
@@ -1703,6 +1704,7 @@ detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgrou
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
+  traceShowM patternsWithRates
   let spikeData = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
           (BSEstablished, Just mean, Just stddev)
@@ -1750,3 +1752,7 @@ processNewLogPattern pid patternHash authCtx = do
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+
+
+
+

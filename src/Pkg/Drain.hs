@@ -139,7 +139,7 @@ updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId isSample
        in (updatedLevelOnes, wasUpdated)
     Nothing ->
       let newLogGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId field now
-          newLevelTwo = DrainLevelTwo{firstToken = firstToken, logGroups = V.singleton newLogGroup}
+          newLevelTwo = DrainLevelTwo{firstToken = firstToken, fieldPath = field, logGroups = V.singleton newLogGroup}
           newLevelOne = DrainLevelOne{tokenCount = targetCount, nodes = V.singleton newLevelTwo}
           updatedLevelOnes = V.cons newLevelOne levelOnes
        in (updatedLevelOnes, False)
@@ -246,19 +246,21 @@ getAllLogGroups tree =
 
 
 generateDrainTokens :: T.Text -> (V.Vector T.Text, Text)
-generateDrainTokens content =
-  case AE.decodeStrict' (encodeUtf8 content) of
-    Just jsonValue ->
-      case extractMessageAndTargetKeyFromLog jsonValue of
-        Just (msg, key) ->
-          (tokenizeUnstructured msg, key)
-        Nothing ->
-          let keyPaths = V.toList $ V.map fst $ valueToFields jsonValue
-           in if null keyPaths
-                then (tokenizeUnstructured content, "body")
-                else (V.fromList keyPaths, "body")
-    Nothing ->
-      (tokenizeUnstructured content, "body")
+generateDrainTokens content
+  | looksLikeJson content =
+      fromMaybe fallback $ do
+        jsonValue <- AE.decodeStrict' (encodeUtf8 content)
+        (msg, key) <- extractMessageAndTargetKeyFromLog jsonValue
+        pure (tokenizeUnstructured msg, key)
+  | otherwise = fallback
+  where
+    fallback = (tokenizeUnstructured content, "body")
+
+
+looksLikeJson :: T.Text -> Bool
+looksLikeJson t =
+  ("{" `T.isInfixOf` t && "}" `T.isSuffixOf` t)
+    || ("[" `T.isInfixOf` t && "]" `T.isSuffixOf` t)
 
 
 -- | Tokenize unstructured log content with smart handling of:
@@ -269,7 +271,7 @@ generateDrainTokens content =
 tokenizeUnstructured :: T.Text -> V.Vector T.Text
 tokenizeUnstructured content =
   let preprocessed = replaceAllFormats content
-   in V.fromList $ tokenize preprocessed
+   in V.fromList $ words preprocessed
 
 
 -- | Tokenize text handling quotes, embedded JSON, and key=value patterns
