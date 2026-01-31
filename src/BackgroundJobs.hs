@@ -522,8 +522,6 @@ processPatterns kind fieldName events pid scheduledTime since = do
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, fieldPath, patternTxt, ids) -> do
-      traceShowM patternTxt
-      traceShowM ids
       unless (V.null ids) $ do
         case kind of
           "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
@@ -1706,7 +1704,6 @@ detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgrou
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
-  traceShowM patternsWithRates
   let spikeData = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
           (BSEstablished, Just mean, Just stddev)

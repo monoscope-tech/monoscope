@@ -271,9 +271,6 @@ getPatternsWithCurrentRates pid = do
   patterns <- PG.query patternsQuery (Only pid)
   counts :: [(Text, Int)] <- PG.query countsQuery (Only pid)
 
-  traceShowM counts
-  traceShowM patterns
-
   pure $ map (attachCount counts) patterns
   where
     patternsQuery =
