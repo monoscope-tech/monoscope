@@ -45,6 +45,8 @@ module Utils (
   prettyPrintCount,
   formatWithCommas,
   extractMessageFromLog,
+  extractMessageAndTargetKeyFromLog,
+  messageKeys,
   -- Fill color helpers
   statusFillColor,
   statusFillColorText,
@@ -736,6 +738,18 @@ extractMessageFromLog (AE.Object obj) =
       Just val -> Just (toText $ show val)
       Nothing -> Nothing
 extractMessageFromLog _ = Nothing
+
+
+extractMessageAndTargetKeyFromLog :: Value -> Maybe (Text, Text)
+extractMessageAndTargetKeyFromLog (AE.Object obj) =
+  listToMaybe [v | key <- messageKeys, Just v <- [extractValue key obj]]
+  where
+    extractValue :: T.Text -> Object -> Maybe (T.Text, T.Text)
+    extractValue key km = case Data.Aeson.KeyMap.lookup (fromText key) km of
+      Just (AE.String s) -> Just (s, key)
+      Just val -> Just (toText $ show val, key)
+      Nothing -> Nothing
+extractMessageAndTargetKeyFromLog _ = Nothing
 
 
 -- | Get fill color class for HTTP status codes
