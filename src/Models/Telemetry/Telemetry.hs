@@ -84,6 +84,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified as Eff
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -96,7 +97,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (lookupValueText, replaceAllFormats, toXXHash)
+import Utils (lookupValueText, replaceAllFormats)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -1011,7 +1012,7 @@ getErrorEvents _ = []
 
 -- | Extract all runtime errors from a collection of spans
 -- This is the main entry point for error anomaly detection
-getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector RequestDumps.ATError
+getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector Errors.ATError
 getAllATErrors = V.concatMap extractErrorsFromSpan
   where
     extractErrorsFromSpan spanObj =
@@ -1025,7 +1026,7 @@ getAllATErrors = V.concatMap extractErrorsFromSpan
 -- - exception.message: The exception message
 -- - exception.stacktrace: The stacktrace
 -- Also extracts HTTP context (method, path) for better error tracking
-extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe RequestDumps.ATError
+extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe Errors.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
   AE.Object attrs <- KEM.lookup "exception" attrs'
@@ -1041,17 +1042,24 @@ extractATError spanObj (AE.Object o) = do
         Just (AE.String s) -> Just s
         _ -> Nothing
       getTextOrEmpty k = fromMaybe "" (lookupText k)
+      getUserAttrM k v = case unAesonTextMaybe spanObj.resource >>= Map.lookup v of
+        Just (AE.Object userAttrs) -> KEM.lookup k userAttrs >>= asText
+        _ -> Nothing
 
       typ = getTextOrEmpty "type"
       msg = getTextOrEmpty "message"
       stack = getTextOrEmpty "stacktrace"
+
+      userId = getUserAttrM "id" "user"
+      userEmail = getUserAttrM "email" "user"
+      sessionId = getUserAttrM "id" "session"
 
       -- TODO: parse telemetry.sdk.name to SDKTypes
       tech = case unAesonTextMaybe spanObj.resource >>= Map.lookup "telemetry" of
         Just (AE.Object tel) ->
           KEM.lookup "sdk" tel
             >>= ( \case
-                    AE.Object sdkObj -> KEM.lookup "name" sdkObj >>= asText
+                    AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
                     _ -> Nothing
                 )
         _ -> Nothing
@@ -1065,28 +1073,37 @@ extractATError spanObj (AE.Object o) = do
 
       asText (AE.String t) = Just t
       asText _ = Nothing
+      pid = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
 
   -- Build ATError structure for anomaly detection
   -- The hash is critical for grouping similar errors together
   -- Hash components: projectId + service + span name + error type + sanitized message/stack
   -- This ensures similar errors are grouped while allowing variations in the actual message
+  -- projectId mService mEndpoint runtime exceptionType message stackTrace
+
   return
-    $ RequestDumps.ATError
-      { projectId = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
+    $ Errors.ATError
+      { projectId = pid
       , when = spanObj.timestamp
       , errorType = typ
       , rootErrorType = typ
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = Just (toXXHash (spanObj.project_id <> fromMaybe "" serviceName <> fromMaybe "" spanObj.name <> typ <> replaceAllFormats (msg <> stack)))
+      , hash = Errors.computeErrorFingerprint spanObj.project_id serviceName spanObj.name (fromMaybe "unknown" tech) typ msg stack
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method
       , requestPath = urlPath
       , spanId = spanId
       , traceId = trId
-      , stack = tech
+      , runtime = tech
+      , parentSpanId = spanObj.parent_id
+      , endpointHash = Nothing
+      , environment = Nothing
+      , userId = userId
+      , userEmail = userEmail
+      , sessionId = sessionId
       }
 extractATError _ _ = Nothing
 

@@ -73,6 +73,7 @@ import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
+import Models.Apis.Errors qualified as Errors
 
 
 newtype AnomalyBulkForm = AnomalyBulk
@@ -196,7 +197,7 @@ anomalyDetailCore pid firstM fetchIssue = do
               }
       errorM <-
         issue.issueType & \case
-          Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
+          Issues.RuntimeException -> Errors.getErrorLByHash pid issue.targetHash
           _ -> pure Nothing
       (trItem, spanRecs) <- case errorM of
         Just err -> do
@@ -253,7 +254,7 @@ timeStatBox_ title timeStr
   | otherwise = pass
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Anomalies.ATError -> UTCTime -> Bool -> Html ()
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Errors.ErrorL -> UTCTime -> Bool -> Html ()
 anomalyDetailPage pid issue tr otellogs errM now isFirst = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
@@ -285,17 +286,17 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               , Widget.hideLegend = Just True
               }
     -- Two Column Layout
-    case issue.issueType of
+    case issue.issueType of 
       Issues.RuntimeException -> do
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
             div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
               -- Stats (1 column each)
               whenJust errM $ \err -> do
-                statBox_ (Just pid) Nothing "Affected Requests" "" "0" Nothing Nothing
-                statBox_ (Just pid) Nothing "Affected Clients" "" "0" Nothing Nothing
+                statBox_ (Just pid) Nothing "Affected Requests" "" (show err.occurrences) Nothing Nothing
+                statBox_ (Just pid) Nothing "Affected Clients" "" (show err.affectedUsers) Nothing Nothing
                 timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
-                timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
+                timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC (fromMaybe err.updatedAt err.lastOccurredAt)
               widget "Error trend" "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code"
             div_ [class_ "flex flex-col gap-4"] do
               div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
@@ -335,7 +336,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                           faSprite_ "code" "regular" "w-4 h-4"
                           div_ [] do
                             span_ [class_ "text-sm text-textWeak"] "Stack:"
-                            span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown stack" err.errorData.stack
+                            span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown stack" err.errorData.runtime
 
                         div_ [class_ "flex items-center gap-2"] do
                           faSprite_ "server" "regular" "w-3 h-3"
@@ -343,6 +344,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                             span_ [class_ "text-sm text-textWeak"] "Service:"
                             span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown service" err.errorData.serviceName
           _ -> pass
+  
       Issues.QueryAlert -> do
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (alertData :: Issues.QueryAlertData) -> do

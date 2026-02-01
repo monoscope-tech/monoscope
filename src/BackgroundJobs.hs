@@ -360,7 +360,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
-    QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
     NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
@@ -661,30 +661,25 @@ processOneMinuteErrors scheduledTime pid = do
 -- Log.logInfo "Completed 1-minute error processing" ()
 
 -- | Process and insert errors for a specific project
-processProjectErrors :: Projects.ProjectId -> V.Vector RequestDumps.ATError -> ATBackgroundCtx ()
+processProjectErrors :: Projects.ProjectId -> V.Vector Errors.ATError -> ATBackgroundCtx ()
 processProjectErrors pid errors = do
-  -- Process each error, extracting HTTP fields if available
   let processedErrors = V.map processError errors
 
-  -- Extract queries and params
   let (_, queries, paramsList) = V.unzip3 processedErrors
-
-  -- Bulk insert errors
   result <- try $ V.zipWithM_ PG.execute queries paramsList
 
   case result of
     Left (e :: SomePostgreSqlException) ->
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
     Right _ ->
-      -- Only log if errors were actually inserted (reduces noise in tests)
       Relude.when (V.length errors > 0)
         $ Log.logInfo "Successfully inserted errors for project"
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
   where
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
-    processError :: RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-    processError = RequestMessages.processErrors pid Nothing Nothing Nothing
+    processError :: Errors.ATError -> (Errors.ATError, Query, [DBField])
+    processError = RequestMessages.processErrors pid
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
@@ -1145,59 +1140,6 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
     Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes
     Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
-    -- Runtime exceptions get individual issues
-    -- Each unique error pattern gets its own issue for tracking
-    Anomalies.ATRuntimeException -> do
-      errors <- Anomalies.errorsByHashes pid targetHashes
-
-      -- Create one issue per error
-      forM_ errors \err -> do
-        issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
-        Issues.insertIssue issue
-        -- Queue enhancement job
-        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        -- Send notifications only if project exists and has alerts enabled
-        projectM <- Projects.projectById pid
-        whenJust projectM \project -> Relude.when project.errorAlerts do
-          users <- Projects.usersByProjectId pid
-          let issueId = UUID.toText issue.id.unUUIDId
-          forM_ project.notificationsChannel \case
-            Projects.NSlack ->
-              forM_ errors \err' -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
-            Projects.NDiscord ->
-              forM_ errors \err' -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
-            Projects.NPhone ->
-              forM_ errors \err' ->
-                sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title project.whatsappNumbers
-            Projects.NEmail ->
-              forM_ users \u -> do
-                let errosJ =
-                      ( \ee ->
-                          let e = ee.errorData
-                           in AE.object
-                                [ "root_error_message" AE..= e.rootErrorMessage
-                                , "error_type" AE..= e.errorType
-                                , "error_message" AE..= e.message
-                                , "stack_trace" AE..= e.stackTrace
-                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                                , "hash" AE..= e.hash
-                                , "tech" AE..= e.technology
-                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                                , "root_error_type" AE..= e.rootErrorType
-                                ]
-                      )
-                        <$> errors
-                    title = project.title
-                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                    templateVars =
-                      [aesonQQ|{
-                          "project_name": #{title},
-                          "errors_url": #{errors_url},
-                          "errors": #{errosJ}
-                     }|]
-                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
-    -- Ignore other anomaly types
     _ -> pass
 
 

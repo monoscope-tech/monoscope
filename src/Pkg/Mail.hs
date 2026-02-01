@@ -8,6 +8,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool ()
 import Data.Text qualified as T
+import Models.Apis.Errors qualified as Errors
 import Data.Time
 import Data.Vector qualified as V
 import Effectful (
@@ -44,7 +45,7 @@ sendSlackMessage pid message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
-  | RuntimeErrorAlert {issueId :: Text, errorData :: RequestDumps.ATError}
+  | RuntimeErrorAlert {issueId :: Text, errorData :: Errors.ATError}
   | ShapeAlert
   | ReportAlert
       { reportType :: Text
@@ -122,7 +123,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
   case alert of
     RuntimeErrorAlert{..} -> do
       let template = appCtx.config.whatsappErrorTemplate
-          url = pid.toText <> "/anomalies/by_hash/" <> fromMaybe "" errorData.hash
+          url = pid.toText <> "/anomalies/by_hash/" <> errorData.hash
           contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> errorData.errorType <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
       pass
@@ -199,7 +200,7 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* Errors-" <> toText (show errCount) <> ", Total-" <> toText (show evCount))]) breakDown
 
 
-slackErrorAlert :: RequestDumps.ATError -> Text -> Text -> Text -> AE.Value
+slackErrorAlert :: Errors.ATError -> Text -> Text -> Text -> AE.Value
 slackErrorAlert err project channelId projectUrl =
   AE.object
     [ "blocks"
@@ -209,7 +210,7 @@ slackErrorAlert err project channelId projectUrl =
               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
               , AE.object
                   [ "type" AE..= "context"
-                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> fromMaybe "" err.stack <> "`")] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]])
+                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> fromMaybe "" err.runtime <> "`")] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]])
                   ]
               , AE.object
                   [ "type" AE..= "context"
@@ -305,7 +306,7 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
-discordErrorAlert :: RequestDumps.ATError -> Text -> Text -> AE.Value
+discordErrorAlert :: Errors.ATError -> Text -> Text -> AE.Value
 discordErrorAlert err project projectUrl =
   [aesonQQ|{
 "embeds": [
@@ -326,7 +327,7 @@ discordErrorAlert err project projectUrl =
   "content": "**🔴 New Runtime Error**"
 }|]
   where
-    url = projectUrl <> "/anomalies/by_hash/" <> fromMaybe "" err.hash
+    url = projectUrl <> "/anomalies/by_hash/" <> err.hash
     msg = "```" <> err.message <> "```"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath
