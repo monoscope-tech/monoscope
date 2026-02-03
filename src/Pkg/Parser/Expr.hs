@@ -729,29 +729,28 @@ kqlTimespanToInterval timespan =
 -- | Convert KQL timespan to PostgreSQL time bucket string
 -- This is used for bin() function in summarize queries
 -- Handles both KQL short format (30s) and PostgreSQL format (30 seconds)
+-- SECURITY: Never passes through user input - always returns validated/reconstructed strings
 kqlTimespanToTimeBucket :: Text -> Text
-kqlTimespanToTimeBucket timespan =
-  let ts = T.strip timespan
-   in if isPostgresInterval ts
-        then ts -- Already in PostgreSQL format
-        else case ts of
-          _ | T.isSuffixOf "ms" ts -> T.dropEnd 2 ts <> " milliseconds"
-          _ | T.isSuffixOf "µs" ts -> T.dropEnd 2 ts <> " microseconds"
-          _ | T.isSuffixOf "us" ts -> T.dropEnd 2 ts <> " microseconds"
-          _ | T.isSuffixOf "ns" ts -> T.dropEnd 2 ts <> " nanoseconds"
-          _ | T.isSuffixOf "w" ts -> T.dropEnd 1 ts <> " weeks"
-          _ | T.isSuffixOf "d" ts -> T.dropEnd 1 ts <> " days"
-          _ | T.isSuffixOf "h" ts -> T.dropEnd 1 ts <> " hours"
-          _ | T.isSuffixOf "m" ts -> T.dropEnd 1 ts <> " minutes"
-          _ | T.isSuffixOf "s" ts -> T.dropEnd 1 ts <> " seconds"
-          _ -> "5 minutes" -- Default to 5 minutes if parsing fails
+kqlTimespanToTimeBucket timespan = fromMaybe "5 minutes" $ parsePostgresInterval ts <|> parseKqlFormat ts
   where
-    -- Check if already in PostgreSQL interval format like "30 seconds" or "1 hour"
-    -- Validates entire format (number + unit) to prevent SQL injection
-    isPostgresInterval t = case words t of
-      [num, unit] -> isJust (readMaybe @Int $ toString num) && unit `elem` validUnits
-      _ -> False
+    ts = T.strip timespan
     validUnits = ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
+    -- Parse and reconstruct PostgreSQL interval format (returns validated string, not original input)
+    parsePostgresInterval t = case words t of
+      [num, unit] | Just n <- readMaybe @Int (toString num), unit `elem` validUnits -> Just $ show n <> " " <> unit
+      _ -> Nothing
+    -- Parse KQL short format (e.g., "30s", "5m", "1h")
+    parseKqlFormat t
+      | T.isSuffixOf "ms" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " milliseconds"
+      | T.isSuffixOf "µs" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " microseconds"
+      | T.isSuffixOf "us" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " microseconds"
+      | T.isSuffixOf "ns" t, Just n <- readMaybe @Int (toString $ T.dropEnd 2 t) = Just $ show n <> " nanoseconds"
+      | T.isSuffixOf "w" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " weeks"
+      | T.isSuffixOf "d" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " days"
+      | T.isSuffixOf "h" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " hours"
+      | T.isSuffixOf "m" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " minutes"
+      | T.isSuffixOf "s" t, Just n <- readMaybe @Int (toString $ T.dropEnd 1 t) = Just $ show n <> " seconds"
+      | otherwise = Nothing
 
 
 instance Display Values where
