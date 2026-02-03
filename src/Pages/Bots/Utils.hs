@@ -4,8 +4,6 @@ import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEMP
 import Data.Effectful.Wreq (HTTP, Options, defaults, header, postWith)
-import Network.HTTP.Client.Internal (responseBody, responseStatus)
-import Network.HTTP.Types.Status (statusCode)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
@@ -14,9 +12,8 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
-import Effectful.Log (Log)
 import Effectful.Error.Static (Error)
-import System.Logging qualified as Log
+import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
@@ -25,7 +22,9 @@ import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Lucid
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Client.Internal (responseBody, responseStatus)
 import Network.HTTP.Types (urlEncode)
+import Network.HTTP.Types.Status (statusCode)
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (navBar)
@@ -34,6 +33,7 @@ import Pkg.Components.Widget qualified as Widget
 import Relude
 import Servant.Server (ServerError)
 import System.Config (AuthContext, EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
 import Utils qualified
@@ -145,11 +145,12 @@ chartWidth, chartHeight :: Int
 chartWidth = 600
 chartHeight = 300
 
+
 -- | Render a widget to PNG via chartshot and return the image URL
 -- This sends pre-built ECharts options to chartshot, ensuring consistency
 -- with web platform rendering (proper bin_auto handling, etc.)
 -- Returns empty string on failure (graceful degradation for bots)
-chartScreenshotUrl :: (HTTP :> es, Log :> es, IOE :> es) => Widget.Widget -> Text -> Maybe Text -> Eff es Text
+chartScreenshotUrl :: (HTTP :> es, IOE :> es, Log :> es) => Widget.Widget -> Text -> Maybe Text -> Eff es Text
 chartScreenshotUrl widget chartShotBaseUrl themeM = do
   let echartsOpts = Widget.widgetToECharts widget
       body = AE.object ["echarts" AE..= echartsOpts, "width" AE..= chartWidth, "height" AE..= chartHeight, "theme" AE..= fromMaybe "default" themeM]
