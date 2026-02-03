@@ -162,7 +162,7 @@ slackInteractionsH interaction = do
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- renderWidgetToChartUrl def{Widget.wType = wType, Widget.query = Just query} slackData.projectId from to envCfg.chartShotUrl Nothing
+              imageUrl <- renderWidgetToChartUrl def{Widget.wType = wType, Widget.query = Just query} slackData.projectId from to envCfg.chartShotUrl
               let content' = getBotContentWithUrl inter.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
               _ <- sendSlackFollowupResponse inter.response_url content
@@ -590,7 +590,7 @@ slackEventsPostH payload = do
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- renderWidgetToChartUrl def{Widget.wType = wType, Widget.query = Just query} slackData.projectId from to envCfg.chartShotUrl Nothing
+              imageUrl <- renderWidgetToChartUrl def{Widget.wType = wType, Widget.query = Just query} slackData.projectId from to envCfg.chartShotUrl
               let content' = getBotContentWithUrl event.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
               _ <- sendSlackChatMessage envCfg.slackBotToken content

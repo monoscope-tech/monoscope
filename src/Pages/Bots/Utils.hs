@@ -140,44 +140,41 @@ chartImageUrl options baseUrl now =
    in baseUrl <> "?time=" <> timeMs <> options
 
 
--- | Default chart dimensions for bot/email rendering
-chartWidth, chartHeight :: Int
-chartWidth = 600
-chartHeight = 300
-
-
 -- | Render a widget to PNG via chartshot and return the image URL
--- This sends pre-built ECharts options to chartshot, ensuring consistency
--- with web platform rendering (proper bin_auto handling, etc.)
+-- Uses widget.theme for theming (defaults to "default" if not set)
 -- Returns empty string on failure (graceful degradation for bots)
-chartScreenshotUrl :: (HTTP :> es, IOE :> es, Log :> es) => Widget.Widget -> Text -> Maybe Text -> Eff es Text
-chartScreenshotUrl widget chartShotBaseUrl themeM = do
-  let echartsOpts = Widget.widgetToECharts widget
-      body = AE.object ["echarts" AE..= echartsOpts, "width" AE..= chartWidth, "height" AE..= chartHeight, "theme" AE..= fromMaybe "default" themeM]
-      url = chartShotBaseUrl <> "/render"
-  resp <- postWith defaults (toString url) body
-  let respBody = responseBody resp
-      status = statusCode $ responseStatus resp :: Int
-  if status /= 200
-    then do
-      Log.logAttention "chartScreenshotUrl: chartshot returned non-200" $ AE.object ["url" AE..= url, "status" AE..= status, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
+chartScreenshotUrl :: (HTTP :> es, IOE :> es, Log :> es) => Widget.Widget -> Text -> Eff es Text
+chartScreenshotUrl widget chartShotBaseUrl
+  | not (T.isPrefixOf "http" chartShotBaseUrl) = do
+      Log.logAttention "chartScreenshotUrl: invalid URL" $ AE.object ["url" AE..= chartShotBaseUrl]
       pure ""
-    else case AE.decode respBody of
-      Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
-      _ -> do
-        Log.logAttention "chartScreenshotUrl: failed to parse response" $ AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
-        pure ""
+  | otherwise = do
+      let echartsOpts = Widget.widgetToECharts widget
+          body = AE.object ["echarts" AE..= echartsOpts, "width" AE..= (600 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
+          url = chartShotBaseUrl <> "/render"
+      resp <- postWith defaults (toString url) body
+      let respBody = responseBody resp
+          status = statusCode $ responseStatus resp :: Int
+      if status /= 200
+        then do
+          Log.logAttention "chartScreenshotUrl: chartshot returned non-200" $ AE.object ["url" AE..= url, "status" AE..= status, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
+          pure ""
+        else case AE.decode respBody of
+          Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
+          _ -> do
+            Log.logAttention "chartScreenshotUrl: failed to parse response (expected {url: string})" $ AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
+            pure ""
 
 
 -- | Render widget to chart URL, fetching data if needed (eager-aware)
-renderWidgetToChartUrl :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, HTTP :> es, Log :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Eff es Text
-renderWidgetToChartUrl widget pid from to chartShotUrl themeM = do
+renderWidgetToChartUrl :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, HTTP :> es, Log :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Eff es Text
+renderWidgetToChartUrl widget pid from to chartShotUrl = do
   widget' <- case widget.dataset of
     Just _ -> pure widget
     Nothing -> do
       metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing Nothing (Just from) (Just to) Nothing []
       pure $ widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD}
-  chartScreenshotUrl widget' chartShotUrl themeM
+  chartScreenshotUrl widget' chartShotUrl
 
 
 data TableData = TableData
