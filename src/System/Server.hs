@@ -104,16 +104,14 @@ runServer appLogger env tp = do
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
   let exceptionLogger = logException env.config.environment appLogger env.config.logLevel
   asyncs <-
-    liftIO
-      $ sequence
-      $ concat
-        [ [async $ runSettings warpSettings wrappedServer]
-        , if env.config.enablePubsubService then [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger] else []
-        , [async $ Safe.withException bgJobWorker exceptionLogger]
-        , [async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger]
-        , if env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics then [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger] else []
-        , if env.config.enableReplayService then [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger] else []
-        ]
+    liftIO $ sequenceA $ catMaybes
+      [ Just $ async $ runSettings warpSettings wrappedServer
+      , guard env.config.enablePubsubService $> async (Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger)
+      , Just $ async $ Safe.withException bgJobWorker exceptionLogger
+      , Just $ async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger
+      , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger)
+      , guard env.config.enableReplayService $> async (Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger)
+      ]
   void $ liftIO $ waitAnyCancel asyncs
 
 
