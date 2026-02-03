@@ -874,7 +874,7 @@ widgetToECharts widget =
                     , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
                     , "itemGap" AE..= AE.Number (fromIntegral itemGap)
                     , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
-                    , "data" AE..= fromMaybe seriesNames (extractLegend widget)  -- Use series names from dataset if no explicit queries
+                    , "data" AE..= fromMaybe seriesNames (extractLegend widget) -- Use series names from dataset if no explicit queries
                     ]
                       <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
               )
@@ -891,7 +891,7 @@ widgetToECharts widget =
             AE..= AE.object
               [ "type" AE..= ("time" :: Text)
               , "scale" AE..= True
-              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)  -- Already in ms from queryMetrics
+              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just) -- Already in ms from queryMetrics
               , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
               , "boundaryGap" AE..= ([0, 0.01] :: [Double])
               , "splitLine"
