@@ -9,6 +9,7 @@ import Data.Char (isDigit)
 import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
 import Data.Set (member)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
@@ -734,10 +735,10 @@ kqlTimespanToTimeBucket :: Text -> Text
 kqlTimespanToTimeBucket timespan = fromMaybe "5 minutes" $ parsePostgresInterval ts <|> parseKqlFormat ts
   where
     ts = T.strip timespan
-    validUnits = ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
+    validUnits = Set.fromList ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
     -- Parse and reconstruct PostgreSQL interval format (returns validated string, not original input)
     parsePostgresInterval t = case words t of
-      [num, unit] | Just n <- readMaybe @Int (toString num), unit `elem` validUnits -> Just $ show n <> " " <> unit
+      [num, unit] | Just n <- readMaybe @Int (toString num), unit `member` validUnits -> Just $ show n <> " " <> unit
       _ -> Nothing
     -- Parse KQL short format (e.g., "30s", "5m", "1h")
     parseKqlFormat t

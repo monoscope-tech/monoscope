@@ -145,17 +145,17 @@ chartImageUrl options baseUrl now =
 -- Returns empty string on failure (graceful degradation for bots)
 chartScreenshotUrl :: (HTTP :> es, IOE :> es, Log :> es) => Widget.Widget -> Text -> Eff es Text
 chartScreenshotUrl widget chartShotBaseUrl
-  | not (T.isPrefixOf "http" chartShotBaseUrl) = Log.logAttention "chartScreenshotUrl: invalid URL" (AE.object ["url" AE..= chartShotBaseUrl]) >> pure ""
+  | not (T.isPrefixOf "http" chartShotBaseUrl) = Log.logAttention "chartScreenshotUrl: invalid URL" (AE.object ["url" AE..= chartShotBaseUrl, "widgetId" AE..= widget.id]) >> pure ""
   | otherwise = do
       let url = chartShotBaseUrl <> "/render"
           body = AE.object ["echarts" AE..= Widget.widgetToECharts widget, "width" AE..= (900 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
       resp <- postWith defaults (toString url) body
       let respBody = responseBody resp
       if statusCode (responseStatus resp) /= 200
-        then Log.logAttention "chartScreenshotUrl: non-200" (AE.object ["url" AE..= url, "status" AE..= statusCode (responseStatus resp), "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
+        then Log.logAttention "chartScreenshotUrl: non-200" (AE.object ["url" AE..= url, "status" AE..= statusCode (responseStatus resp), "widgetId" AE..= widget.id, "query" AE..= widget.query, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
         else case AE.decode respBody of
           Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
-          _ -> Log.logAttention "chartScreenshotUrl: parse failed (expected {url: string})" (AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
+          _ -> Log.logAttention "chartScreenshotUrl: parse failed (expected {url: string})" (AE.object ["url" AE..= url, "widgetId" AE..= widget.id, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
 
 
 -- | Render widget to chart URL, fetching data if needed (eager-aware)
