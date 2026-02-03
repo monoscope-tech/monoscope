@@ -1,10 +1,11 @@
 module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, chartScreenshotUrl, renderWidgetToChartUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext) where
 
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEMP
-import Data.Effectful.Wreq (HTTP, defaults, header, postWith, responseBody)
-import Data.Effectful.Wreq qualified
+import Data.Effectful.Wreq (HTTP, Options, defaults, header, postWith)
+import Network.HTTP.Client.Internal (responseBody, responseStatus)
+import Network.HTTP.Types.Status (statusCode)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
@@ -12,10 +13,10 @@ import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, (:>))
-import Effectful.Error.Static (Error)
+import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
-import Effectful.Log qualified as Log
+import Effectful.Error.Static (Error)
+import System.Logging qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
@@ -57,11 +58,11 @@ instance ToHtml BotResponse where
   toHtmlRaw = toHtml
 
 
-authHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.Options
+authHeader :: Text -> Options -> Options
 authHeader token = header "Authorization" .~ [encodeUtf8 $ "Bot " <> token]
 
 
-contentTypeHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.Options
+contentTypeHeader :: Text -> Options -> Options
 contentTypeHeader contentType = header "Content-Type" .~ [encodeUtf8 contentType]
 
 
@@ -139,27 +140,32 @@ chartImageUrl options baseUrl now =
    in baseUrl <> "?time=" <> timeMs <> options
 
 
+-- | Default chart dimensions for bot/email rendering
+chartWidth, chartHeight :: Int
+chartWidth = 600
+chartHeight = 300
+
 -- | Render a widget to PNG via chartshot and return the image URL
 -- This sends pre-built ECharts options to chartshot, ensuring consistency
 -- with web platform rendering (proper bin_auto handling, etc.)
-chartScreenshotUrl :: (HTTP :> es, Log :> es) => Widget.Widget -> Text -> Maybe Text -> Eff es Text
+-- Returns empty string on failure (graceful degradation for bots)
+chartScreenshotUrl :: (HTTP :> es, Log :> es, IOE :> es) => Widget.Widget -> Text -> Maybe Text -> Eff es Text
 chartScreenshotUrl widget chartShotBaseUrl themeM = do
   let echartsOpts = Widget.widgetToECharts widget
-      body =
-        AE.object
-          [ "echarts" AE..= echartsOpts
-          , "width" AE..= (600 :: Int)
-          , "height" AE..= (300 :: Int)
-          , "theme" AE..= fromMaybe "default" themeM
-          ]
+      body = AE.object ["echarts" AE..= echartsOpts, "width" AE..= chartWidth, "height" AE..= chartHeight, "theme" AE..= fromMaybe "default" themeM]
       url = chartShotBaseUrl <> "/render"
   resp <- postWith defaults (toString url) body
-  let respBody = resp ^. responseBody
-  case AE.decode respBody of
-    Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
-    _ -> do
-      Log.logAttention "chartScreenshotUrl: failed to parse chartshot response" (AE.object ["chartshot_url" AE..= url])
+  let respBody = responseBody resp
+      status = statusCode $ responseStatus resp :: Int
+  if status /= 200
+    then do
+      Log.logAttention "chartScreenshotUrl: chartshot returned non-200" $ AE.object ["url" AE..= url, "status" AE..= status, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
       pure ""
+    else case AE.decode respBody of
+      Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
+      _ -> do
+        Log.logAttention "chartScreenshotUrl: failed to parse response" $ AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
+        pure ""
 
 
 -- | Render widget to chart URL, fetching data if needed (eager-aware)
