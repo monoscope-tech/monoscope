@@ -732,18 +732,19 @@ kqlTimespanToInterval timespan =
 kqlTimespanToTimeBucket :: Text -> Text
 kqlTimespanToTimeBucket timespan =
   let ts = T.strip timespan
-   in if isPostgresInterval ts then ts -- Already in PostgreSQL format
-      else case ts of
-        _ | T.isSuffixOf "ms" ts -> T.dropEnd 2 ts <> " milliseconds"
-        _ | T.isSuffixOf "µs" ts -> T.dropEnd 2 ts <> " microseconds"
-        _ | T.isSuffixOf "us" ts -> T.dropEnd 2 ts <> " microseconds"
-        _ | T.isSuffixOf "ns" ts -> T.dropEnd 2 ts <> " nanoseconds"
-        _ | T.isSuffixOf "w" ts -> T.dropEnd 1 ts <> " weeks"
-        _ | T.isSuffixOf "d" ts -> T.dropEnd 1 ts <> " days"
-        _ | T.isSuffixOf "h" ts -> T.dropEnd 1 ts <> " hours"
-        _ | T.isSuffixOf "m" ts -> T.dropEnd 1 ts <> " minutes"
-        _ | T.isSuffixOf "s" ts -> T.dropEnd 1 ts <> " seconds"
-        _ -> "5 minutes" -- Default to 5 minutes if parsing fails
+   in if isPostgresInterval ts
+        then ts -- Already in PostgreSQL format
+        else case ts of
+          _ | T.isSuffixOf "ms" ts -> T.dropEnd 2 ts <> " milliseconds"
+          _ | T.isSuffixOf "µs" ts -> T.dropEnd 2 ts <> " microseconds"
+          _ | T.isSuffixOf "us" ts -> T.dropEnd 2 ts <> " microseconds"
+          _ | T.isSuffixOf "ns" ts -> T.dropEnd 2 ts <> " nanoseconds"
+          _ | T.isSuffixOf "w" ts -> T.dropEnd 1 ts <> " weeks"
+          _ | T.isSuffixOf "d" ts -> T.dropEnd 1 ts <> " days"
+          _ | T.isSuffixOf "h" ts -> T.dropEnd 1 ts <> " hours"
+          _ | T.isSuffixOf "m" ts -> T.dropEnd 1 ts <> " minutes"
+          _ | T.isSuffixOf "s" ts -> T.dropEnd 1 ts <> " seconds"
+          _ -> "5 minutes" -- Default to 5 minutes if parsing fails
   where
     -- Check if already in PostgreSQL interval format like "30 seconds" or "1 hour"
     isPostgresInterval t = any (`T.isSuffixOf` t) ["seconds", "second", "minutes", "minute", "hours", "hour", "days", "day", "weeks", "week"]
