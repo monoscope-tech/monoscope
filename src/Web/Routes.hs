@@ -684,6 +684,9 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM expM 
       width = clamp 100 2000 $ fromMaybe 900 widthM
       height = clamp 100 2000 $ fromMaybe 300 heightM
 
+  -- Debug logging
+  Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
+
   case verifyWidgetSignature now ctx.env.apiKeyEncryptionSecretKey pid v sinceStr fromDStr toDStr sigM expM of
     Left err -> Error.throwError $ err403{errBody = err}
     Right () -> pure ()

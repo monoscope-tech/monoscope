@@ -177,6 +177,7 @@ data WidgetDataset = WidgetDataset
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
 
 
+-- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)
 toWidgetDataset :: Charts.MetricsData -> WidgetDataset
 toWidgetDataset md =
   WidgetDataset
@@ -873,7 +874,7 @@ widgetToECharts widget =
                     , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
                     , "itemGap" AE..= AE.Number (fromIntegral itemGap)
                     , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
-                    , "data" AE..= fromMaybe [] (extractLegend widget)
+                    , "data" AE..= fromMaybe seriesNames (extractLegend widget)  -- Use series names from dataset if no explicit queries
                     ]
                       <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
               )
@@ -890,8 +891,8 @@ widgetToECharts widget =
             AE..= AE.object
               [ "type" AE..= ("time" :: Text)
               , "scale" AE..= True
-              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #from . _Just)
-              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #to . _Just)
+              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)  -- Already in ms from queryMetrics
+              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
               , "boundaryGap" AE..= ([0, 0.01] :: [Double])
               , "splitLine"
                   AE..= AE.object

@@ -67,6 +67,14 @@ async function main() {
   finalOptions.animation = false;
   finalOptions.backgroundColor = finalOptions.backgroundColor || "#ffffff";
 
+  // Add 1% padding for PNG rendering (doesn't affect dashboard widgets)
+  finalOptions.grid = finalOptions.grid || {};
+  delete finalOptions.grid.width; // Remove width so left/right padding works
+  finalOptions.grid.left = (parseFloat(finalOptions.grid.left) || 0) + 1 + "%";
+  finalOptions.grid.right = (parseFloat(finalOptions.grid.right) || 0) + 1 + "%";
+  finalOptions.grid.top = (parseFloat(finalOptions.grid.top) || 5) + 1 + "%";
+  finalOptions.grid.bottom = (parseFloat(finalOptions.grid.bottom) || 2) + 1 + "%";
+
   if (process.env.DEBUG_CHART) console.error("FINAL OPTIONS:", JSON.stringify(finalOptions, null, 2));
 
   chart.setOption(finalOptions);

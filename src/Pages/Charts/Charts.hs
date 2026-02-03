@@ -1,6 +1,6 @@
 {-# LANGUAGE NoFieldSelectors #-}
 
-module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..)) where
+module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
 import Control.Exception.Annotated (checkpoint)
 import Data.Annotation (toAnnotation)
@@ -136,7 +136,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
       let sqlQuery = DashboardUtils.replacePlaceholders mappngSQL' querySQL
-      liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
+      convertTimestampsToMs <$> liftIO (fetchMetricsData respDataType sqlQuery now fromD toD authCtx)
     _ -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
@@ -145,7 +145,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
       let pid = Unsafe.fromJust pidM
       let source = parseMaybe pSource =<< sourceM
       let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
-      queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+      convertTimestampsToMs <$> queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
 
 
 -- | Execute query with caching support for timeseries queries
@@ -239,3 +239,12 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           { dataJSON = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
+
+
+-- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts
+convertTimestampsToMs :: MetricsData -> MetricsData
+convertTimestampsToMs md = md{dataset = V.map convertRow md.dataset, from = (* 1000) <$> md.from, to = (* 1000) <$> md.to}
+  where
+    convertRow row = case V.uncons row of
+      Just (Just ts, rest) -> V.cons (Just $ ts * 1000) rest
+      _ -> row

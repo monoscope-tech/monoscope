@@ -140,7 +140,7 @@ widgetPngUrl :: UTCTime -> Text -> Text -> Projects.ProjectId -> Widget.Widget -
 widgetPngUrl now secret hostUrl pid widget since from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
-      (sig, expiry) = signWidgetUrl now secret pid widgetJson since from to 31536000
+      (sig, expiry) = signWidgetUrl now secret pid widgetJson since from to 0  -- Never expires for bot embeds
       timeParams = mconcat [if T.null since then "" else "&since=" <> since, if T.null from then "" else "&from=" <> from, if T.null to then "" else "&to=" <> to]
    in hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig <> "&exp=" <> expiry
 
@@ -279,11 +279,11 @@ formatHistoryAsContext platform msgs =
     formatMessage m = "[" <> show (LLM.role m) <> "] " <> LLM.content m
 
 
--- | Generate HMAC signature for widget PNG URL with absolute expiration timestamp
--- Payload: projectId:widgetJSON:since:from:to:expiresAt (unix timestamp)
+-- | Generate HMAC signature for widget PNG URL. Use expiresSecs=0 for never-expiring URLs.
+-- Payload: projectId:widgetJSON:since:from:to:expiresAt (unix timestamp, 0 = never expires)
 signWidgetUrl :: UTCTime -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Int -> (Text, Text)
 signWidgetUrl now secret pid widgetJson since from to expiresSecs =
-  let expiresAt = floor $ utcTimeToPOSIXSeconds (addUTCTime (fromIntegral expiresSecs) now) :: Int
+  let expiresAt = if expiresSecs == 0 then 0 else floor $ utcTimeToPOSIXSeconds (addUTCTime (fromIntegral expiresSecs) now) :: Int
       payload = pid.toText <> ":" <> widgetJson <> ":" <> since <> ":" <> from <> ":" <> to <> ":" <> show expiresAt
       sig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
    in (sig, show expiresAt)
@@ -301,6 +301,7 @@ verifyWidgetSignature now secret pid widgetJson sinceM fromM toM (Just sig) (Jus
       expectedSig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
       nowUnix = floor $ utcTimeToPOSIXSeconds now :: Int
       expiresAt = fromMaybe 0 $ readMaybe @Int (toString expStr)
-   in if nowUnix > expiresAt
+      isExpired = expiresAt /= 0 && nowUnix > expiresAt  -- exp=0 means never expires
+   in if isExpired
         then Left "Signature expired"
         else if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "Invalid signature"
