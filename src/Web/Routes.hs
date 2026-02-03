@@ -45,6 +45,7 @@ import Web.Cookie (SetCookie)
 -- System and configuration imports
 import Deriving.Aeson qualified as DAE
 import Pages.Bots.Utils (verifyWidgetSignature)
+import Pkg.Components.TimePicker qualified as TimePicker
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
@@ -671,16 +672,14 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
   addRespHeaders processedWidget
 
 
--- Widget PNG handler - serves PNG image directly (public endpoint for bot embeds)
--- Requires valid HMAC signature for unauthenticated access
--- Cache indefinitely when both from/to are specified (immutable time range)
+-- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
 widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
 widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr sigM expM allParams = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
   let v = fromMaybe "" widgetJsonM
 
-  -- Verify signature for public access
-  case verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v fromDStr toDStr sigM expM of
+  case verifyWidgetSignature now ctx.env.apiKeyEncryptionSecretKey pid v sinceStr fromDStr toDStr sigM expM of
     Left err -> Error.throwError $ err403{errBody = err}
     Right () -> pure ()
 
@@ -688,33 +687,32 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr sigM expM allParams = do
     Right w -> pure w
     Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
 
-  let widgetWithPid = widget & #_projectId ?~ pid
+  let widgetWithPid = widget & #_projectId ?~ pid & #eager ?~ True
 
-  -- Fetch data for the widget
-  metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
-  let processedWidget = widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
+  metricsD <- case widgetWithPid.wType of
+    Widget.WTStat -> Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
+    _ -> Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
 
-  -- Render to PNG via chart-cli in web-components
-  let input =
-        AE.encode
-          $ AE.object
-            [ "echarts" AE..= Widget.widgetToECharts processedWidget
-            , "width" AE..= (900 :: Int)
-            , "height" AE..= (300 :: Int)
-            , "theme" AE..= fromMaybe "default" processedWidget.theme
-            ]
-      processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "./web-components/src/chart-cli.ts"]
+  when (V.null metricsD.dataset) $ Error.throwError $ err404{errBody = "No data available for the specified query"}
+
+  let processedWidget = case widgetWithPid.wType of
+        Widget.WTStat -> widgetWithPid & #dataset ?~ def{Widget.source = AE.Null, Widget.value = metricsD.dataFloat}
+        _ -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
+      input = AE.encode $ AE.object
+        [ "echarts" AE..= Widget.widgetToECharts processedWidget
+        , "width" AE..= (900 :: Int)
+        , "height" AE..= (300 :: Int)
+        , "theme" AE..= fromMaybe "default" processedWidget.theme
+        ]
+      processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "web-components/src/chart-cli.ts"]
 
   result <- liftIO $ readProcess processConfig
   pngBytes <- case result of
     (ExitSuccess, bytes, _) -> pure bytes
     (ExitFailure code, _, errOut) -> do
-      Log.logAttention "widgetPngGetH: chart render failed"
-        $ AE.object
-          ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (LBS.toStrict errOut), "widgetId" AE..= processedWidget.id]
-      pure LBS.empty
+      Log.logAttention "widgetPngGetH: chart render failed" $ AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (LBS.toStrict errOut), "widgetId" AE..= processedWidget.id]
+      Error.throwError $ err500{errBody = "Chart rendering failed"}
 
-  -- Cache indefinitely if specific from/to provided, otherwise short cache
   let cacheHeader = if isJust fromDStr && isJust toDStr then "public, max-age=31536000, immutable" else "public, max-age=300"
   pure $ addHeader @"Cache-Control" cacheHeader $ addHeader @"Content-Type" "image/png" pngBytes
 

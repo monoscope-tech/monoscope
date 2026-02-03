@@ -154,13 +154,14 @@ slackInteractionsH interaction = do
       case result of
         Left _ -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
         Right AIQueryResult{..} -> do
-          let (from, to) = timeRangeStr
+          let (from, _to) = timeRangeStr
           case visualization of
             Just vizType -> do
+              now <- Time.currentTime
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  imageUrl = widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from to
+                  imageUrl = widgetPngUrl now envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from "" ""
                   content' = getBotContentWithUrl inter.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
               _ <- sendSlackFollowupResponse inter.response_url content
@@ -318,7 +319,8 @@ slackActionsH action = do
         let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
             widget = find (\w -> fromMaybe "Untitled-" w.title == widgetTitle) dashboard.widgets
         whenJust widget $ \w -> whenJust (idFromText pid) $ \projectId -> do
-          let chartUrl' = widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w "1d" ""
+          now <- Time.currentTime
+          let chartUrl' = widgetPngUrl now authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w "24H" "" ""
               blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
               privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
           _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
@@ -574,13 +576,14 @@ slackEventsPostH payload = do
           Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing
           Issues.insertChatMessage slackData.projectId convId "assistant" query Nothing Nothing
 
-          let (from, to) = timeRangeStr
+          let (from, _to) = timeRangeStr
           case visualization of
             Just vizType -> do
+              now <- Time.currentTime
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  imageUrl = widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from to
+                  imageUrl = widgetPngUrl now envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from "" ""
                   content' = getBotContentWithUrl event.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
               _ <- sendSlackChatMessage envCfg.slackBotToken content
