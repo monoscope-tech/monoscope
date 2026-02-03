@@ -1010,18 +1010,20 @@ sendReportForProject pid rType = do
       let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-          eventsWidget = (def :: Widget.Widget)
-            { Widget.wType = Widget.WTTimeseries
-            , Widget.query = Just "summarize count(*) by bin_auto(timestamp), resource___service___name"
-            , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataEvents
-            , Widget.hideLegend = Just False
-            , Widget.legendPosition = Just "bottom"
-            }
-          errorsWidget = eventsWidget
-            { Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name"
-            , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataErrors
-            , Widget.theme = Just "roma"
-            }
+          eventsWidget =
+            (def :: Widget.Widget)
+              { Widget.wType = Widget.WTTimeseries
+              , Widget.query = Just "summarize count(*) by bin_auto(timestamp), resource___service___name"
+              , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataEvents
+              , Widget.hideLegend = Just False
+              , Widget.legendPosition = Just "bottom"
+              }
+          errorsWidget =
+            eventsWidget
+              { Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name"
+              , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataErrors
+              , Widget.theme = Just "roma"
+              }
       -- Render charts via chartshot (uses bin_auto, consistent with web platform)
       allQ <- BotUtils.chartScreenshotUrl eventsWidget ctx.env.chartShotUrl Nothing
       errQ <- BotUtils.chartScreenshotUrl errorsWidget ctx.env.chartShotUrl (Just "roma")

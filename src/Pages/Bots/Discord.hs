@@ -372,13 +372,14 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
       metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just discordData.projectId) (Just query) Nothing Nothing (Just from) (Just to) Nothing []
-      let widget = (def :: Widget.Widget)
-            { Widget.wType = widgetType
-            , Widget.query = Just query
-            , Widget.dataset = Just $ toWidgetDataset metricsData
-            , Widget.hideLegend = Just False
-            , Widget.legendPosition = Just "bottom"
-            }
+      let widget =
+            (def :: Widget.Widget)
+              { Widget.wType = widgetType
+              , Widget.query = Just query
+              , Widget.dataset = Just $ toWidgetDataset metricsData
+              , Widget.hideLegend = Just False
+              , Widget.legendPosition = Just "bottom"
+              }
       imageUrl <- chartScreenshotUrl widget authCtx.env.chartShotUrl Nothing
       let content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content

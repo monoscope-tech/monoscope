@@ -24,8 +24,8 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Components (navBar)
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components (navBar)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Relude
@@ -159,14 +159,15 @@ chartScreenshotUrl widget chartShotBaseUrl themeM = do
 
 
 toWidgetDataset :: Charts.MetricsData -> Widget.WidgetDataset
-toWidgetDataset md = Widget.WidgetDataset
-  { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
-  , rowsPerMin = md.rowsPerMin
-  , value = Just md.rowsCount
-  , from = md.from
-  , to = md.to
-  , stats = md.stats
-  }
+toWidgetDataset md =
+  Widget.WidgetDataset
+    { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
+    , rowsPerMin = md.rowsPerMin
+    , value = Just md.rowsCount
+    , from = md.from
+    , to = md.to
+    , stats = md.stats
+    }
 
 
 data TableData = TableData
