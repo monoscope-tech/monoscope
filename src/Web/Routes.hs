@@ -684,9 +684,8 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allPa
 
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
 
-  case verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM of
-    Left err -> Error.throwError $ err403{errBody = err}
-    Right () -> pass
+  whenLeft_ (verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err ->
+    Error.throwError $ err403{errBody = err}
 
   widget <- case AE.eitherDecode (encodeUtf8 v) of
     Right w -> pure w

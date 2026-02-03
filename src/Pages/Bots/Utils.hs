@@ -132,12 +132,12 @@ formatSpans spans =
 
 
 -- | Construct signed URL for widget PNG endpoint. Returns Left if URL exceeds 8000 chars.
-widgetPngUrl :: Text -> Text -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Text -> Either Text Text
+widgetPngUrl :: Text -> Text -> Projects.ProjectId -> Widget.Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Either Text Text
 widgetPngUrl secret hostUrl pid widget since from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
       sig = signWidgetUrl secret pid widgetJson
-      timeParams = foldMap (\(k, v) -> if T.null v then "" else "&" <> k <> "=" <> v) ([("since", since), ("from", from), ("to", to)] :: [(Text, Text)])
+      timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", from), ("to", to)] :: [(Text, Maybe Text)])
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000 then Left "Widget configuration too large for URL. Try simplifying the query." else Right url
 

@@ -160,7 +160,7 @@ slackInteractionsH interaction = do
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  imageUrl = fromRight "" $ widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from "" ""
+                  imageUrl = fromRight "" $ widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} (Just from) Nothing Nothing
                   content' = getBotContentWithUrl inter.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
               _ <- sendSlackFollowupResponse inter.response_url content
@@ -318,7 +318,7 @@ slackActionsH action = do
         let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
             widget = find (\w -> fromMaybe "Untitled-" w.title == widgetTitle) dashboard.widgets
         whenJust widget $ \w -> whenJust (idFromText pid) $ \projectId -> do
-          let chartUrl' = fromRight "" $ widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w "24H" "" ""
+          let chartUrl' = fromRight "" $ widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w Nothing Nothing Nothing
               blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
               privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
           _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
@@ -580,7 +580,7 @@ slackEventsPostH payload = do
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  imageUrl = fromRight "" $ widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from "" ""
+                  imageUrl = fromRight "" $ widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} (Just from) Nothing Nothing
                   content' = getBotContentWithUrl event.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
               _ <- sendSlackChatMessage envCfg.slackBotToken content

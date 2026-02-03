@@ -281,7 +281,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                       whenJust dashboardM $ \dashboard -> do
                         let widgetM = find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets
                         whenJust widgetM $ \w -> do
-                          let chartUrl' = fromRight "" $ widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w "24H" "" ""
+                          let chartUrl' = fromRight "" $ widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
                               url = envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId
                               content = sharedWidgetContent widget chartUrl' url
                           sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
@@ -367,7 +367,7 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
           question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
-          imageUrl = fromRight "" $ widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} from "" ""
+          imageUrl = fromRight "" $ widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} (Just from) Nothing Nothing
           content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of
