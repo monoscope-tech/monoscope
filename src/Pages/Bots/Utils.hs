@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, signWidgetUrl, verifyWidgetSignature) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -11,7 +11,6 @@ import Data.Effectful.Wreq (Options, header)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
@@ -132,17 +131,15 @@ formatSpans spans =
    in "```\n" <> unlines (hd : rows) <> "```"
 
 
--- | Construct signed URL for widget PNG endpoint
--- Supports both relative time (since like "1H", "24H") and absolute time (from/to)
--- Uses timepicker-style params for consistency with the rest of the platform
--- Signature expires in 1 year (31536000 seconds) for long-term bot embeds
-widgetPngUrl :: UTCTime -> Text -> Text -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Text -> Text
-widgetPngUrl now secret hostUrl pid widget since from to =
+-- | Construct signed URL for widget PNG endpoint. Returns Left if URL exceeds 8000 chars.
+widgetPngUrl :: Text -> Text -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Text -> Either Text Text
+widgetPngUrl secret hostUrl pid widget since from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
-      (sig, expiry) = signWidgetUrl now secret pid widgetJson since from to 0 -- Never expires for bot embeds
-      timeParams = mconcat [if T.null since then "" else "&since=" <> since, if T.null from then "" else "&from=" <> from, if T.null to then "" else "&to=" <> to]
-   in hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig <> "&exp=" <> expiry
+      sig = signWidgetUrl secret pid widgetJson
+      timeParams = foldMap (\(k, v) -> if T.null v then "" else "&" <> k <> "=" <> v) ([("since", since), ("from", from), ("to", to)] :: [(Text, Text)])
+      url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
+   in if T.length url > 8000 then Left "Widget configuration too large for URL. Try simplifying the query." else Right url
 
 
 data TableData = TableData
@@ -279,29 +276,13 @@ formatHistoryAsContext platform msgs =
     formatMessage m = "[" <> show (LLM.role m) <> "] " <> LLM.content m
 
 
--- | Generate HMAC signature for widget PNG URL. Use expiresSecs=0 for never-expiring URLs.
--- Payload: projectId:widgetJSON:since:from:to:expiresAt (unix timestamp, 0 = never expires)
-signWidgetUrl :: UTCTime -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> Int -> (Text, Text)
-signWidgetUrl now secret pid widgetJson since from to expiresSecs =
-  let expiresAt = if expiresSecs == 0 then 0 else floor $ utcTimeToPOSIXSeconds (addUTCTime (fromIntegral expiresSecs) now) :: Int
-      payload = pid.toText <> ":" <> widgetJson <> ":" <> since <> ":" <> from <> ":" <> to <> ":" <> show expiresAt
-      sig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
-   in (sig, show expiresAt)
+signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
+signWidgetUrl secret pid widgetJson =
+  let payload = pid.toText <> ":" <> widgetJson
+   in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
 
 
--- | Verify HMAC signature for widget PNG URL, checking expiration against current time
-verifyWidgetSignature :: UTCTime -> Text -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Either LBS.ByteString ()
-verifyWidgetSignature _ _ _ _ _ _ _ Nothing _ = Left "Missing signature"
-verifyWidgetSignature _ _ _ _ _ _ _ _ Nothing = Left "Missing expiration"
-verifyWidgetSignature now secret pid widgetJson sinceM fromM toM (Just sig) (Just expStr) =
-  let since = fromMaybe "" sinceM
-      from = fromMaybe "" fromM
-      to = fromMaybe "" toM
-      payload = pid.toText <> ":" <> widgetJson <> ":" <> since <> ":" <> from <> ":" <> to <> ":" <> expStr
-      expectedSig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
-      nowUnix = floor $ utcTimeToPOSIXSeconds now :: Int
-      expiresAt = fromMaybe 0 $ readMaybe @Int (toString expStr)
-      isExpired = expiresAt /= 0 && nowUnix > expiresAt -- exp=0 means never expires
-   in if isExpired
-        then Left "Signature expired"
-        else if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "Invalid signature"
+verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Either LBS.ByteString ()
+verifyWidgetSignature secret pid widgetJson = \case
+  Nothing -> Left "Missing signature"
+  Just sig -> let expected = signWidgetUrl secret pid widgetJson in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expected :: ByteString) then Right () else Left "Invalid signature"

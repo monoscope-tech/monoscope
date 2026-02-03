@@ -1012,8 +1012,8 @@ sendReportForProject pid rType = do
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
           eventsWidget = def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), resource___service___name"}
           errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name", Widget.theme = Just "roma"}
-          allQ = BotUtils.widgetPngUrl currentTime ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget "" stmTxt currentTimeTxt
-          errQ = BotUtils.widgetPngUrl currentTime ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget "" stmTxt currentTimeTxt
+          allQ = fromRight "" $ BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget "" stmTxt currentTimeTxt
+          errQ = fromRight "" $ BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget "" stmTxt currentTimeTxt
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case

@@ -6,10 +6,10 @@ module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH) w
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
+import Data.Ord (clamp)
 import GHC.TypeLits (Symbol)
 import Relude hiding (ask)
 
@@ -199,7 +199,7 @@ data Routes mode = Routes
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> QPT "exp" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   }
   deriving stock (Generic)
 
@@ -675,19 +675,16 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
-widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM expM allParams = do
+widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  now <- Time.currentTime
   let v = fromMaybe "" widgetJsonM
-      clamp lo hi x = max lo (min hi x)
-      width = clamp 100 2000 $ fromMaybe 900 widthM
-      height = clamp 100 2000 $ fromMaybe 300 heightM
+      width = clamp (100, 2000) $ fromMaybe 900 widthM
+      height = clamp (100, 2000) $ fromMaybe 300 heightM
 
-  -- Debug logging
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
 
-  case verifyWidgetSignature now ctx.env.apiKeyEncryptionSecretKey pid v sinceStr fromDStr toDStr sigM expM of
+  case verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM of
     Left err -> Error.throwError $ err403{errBody = err}
     Right () -> pure ()
 
@@ -696,17 +693,8 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM expM 
     Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
 
   let widgetWithPid = widget & #_projectId ?~ pid & #eager ?~ True
-
-  metricsD <- case widgetWithPid.wType of
-    Widget.WTStat -> Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
-    _ -> Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
-
-  when (V.null metricsD.dataset) $ Error.throwError $ err404{errBody = "No data available for the specified query"}
-
-  let processedWidget = case widgetWithPid.wType of
-        Widget.WTStat -> widgetWithPid & #dataset ?~ def{Widget.source = AE.Null, Widget.value = metricsD.dataFloat}
-        _ -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
-      input =
+  processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widgetWithPid
+  let input =
         AE.encode
           $ AE.object
             [ "echarts" AE..= Widget.widgetToECharts processedWidget

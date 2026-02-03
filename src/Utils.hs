@@ -68,6 +68,7 @@ import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HS
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
@@ -536,17 +537,22 @@ themeColorsHex =
     ]
 
 
+nullishNames, percentileNames :: HS.HashSet Text
+nullishNames = HS.fromList ["null", "undefined", "unknown"]
+percentileNames = HS.fromList ["median", "max", "min", "q1", "q3"]
+
+
 -- | Get hex color for chart series - auto-detects type (status code, percentile, or generic)
 getSeriesColorHex :: Text -> Text
 getSeriesColorHex name
   | T.null name = themeColorsHex V.! 0
-  | T.toLower name `elem` ["null", "undefined", "unknown"] = "#9ca3af"
+  | HS.member (T.toLower name) nullishNames = "#9ca3af"
   | isStatusCode name = statusCodeColorHex (fromMaybe 0 $ readMaybe $ toString name)
   | isPercentile name = percentileColorHex name
   | otherwise = themeColorsHex V.! hashTextToIndex name
   where
     isStatusCode t = T.length t == 3 && T.all isDigit t && T.head t `elem` ['2' .. '5']
-    isPercentile t = T.isPrefixOf "p" (T.toLower t) || T.toLower t `elem` ["median", "max", "min", "q1", "q3"]
+    isPercentile t = T.isPrefixOf "p" (T.toLower t) || HS.member (T.toLower t) percentileNames
     hashTextToIndex t = fromIntegral (xxHash (encodeUtf8 t)) `mod` V.length themeColorsHex
     statusCodeColorHex code
       | code >= 200 && code < 300 = "#1A74A8"
@@ -570,11 +576,7 @@ getSeriesColorHex name
 
 
 toXXHash :: Text -> Text
-toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 input) ""
-
-
-leftPad :: Int -> Text -> Text
-leftPad len txt = T.justifyRight len '0' (T.take len txt)
+toXXHash = T.justifyRight 8 '0' . T.take 8 . fromString . flip showHex "" . xxHash . encodeUtf8
 
 
 -- | Turn a dot‑key + value into a singleton nested Object
