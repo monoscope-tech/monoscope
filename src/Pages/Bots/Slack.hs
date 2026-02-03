@@ -20,8 +20,6 @@ import Data.Effectful.Wreq (
  )
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time qualified as Time
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
@@ -39,7 +37,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, chartImageUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, renderWidgetToChartUrl)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
@@ -162,8 +160,8 @@ slackInteractionsH interaction = do
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- renderWidgetToChartUrl def{Widget.wType = wType, Widget.query = Just query} slackData.projectId from to envCfg.chartShotUrl
-              let content' = getBotContentWithUrl inter.text query query_url imageUrl
+                  imageUrl = widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from to
+                  content' = getBotContentWithUrl inter.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
               _ <- sendSlackFollowupResponse inter.response_url content
               pass
@@ -319,10 +317,8 @@ slackActionsH action = do
       whenJust dashboardM $ \dashboard -> do
         let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
             widget = find (\w -> fromMaybe "Untitled-" w.title == widgetTitle) dashboard.widgets
-        whenJust widget $ \w -> do
-          now <- Time.currentTime
-          let widgetQuery = "&widget=" <> toUriStr (decodeUtf8 $ AE.encode $ AE.toJSON w)
-              chartUrl' = chartImageUrl ("&p=" <> pid <> widgetQuery) authCtx.env.chartShotUrl now
+        whenJust widget $ \w -> whenJust (idFromText pid) $ \projectId -> do
+          let chartUrl' = widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w "1d" ""
               blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
               privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
           _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
@@ -584,8 +580,8 @@ slackEventsPostH payload = do
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- renderWidgetToChartUrl def{Widget.wType = wType, Widget.query = Just query} slackData.projectId from to envCfg.chartShotUrl
-              let content' = getBotContentWithUrl event.text query query_url imageUrl
+                  imageUrl = widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} from to
+                  content' = getBotContentWithUrl event.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
               _ <- sendSlackChatMessage envCfg.slackBotToken content
               pass

@@ -1,5 +1,9 @@
 // Deterministic color mapping for charts
 // Uses colors from the existing ECharts theme for consistency
+//
+// SYNC WARNING: This file is duplicated in chartshot (github.com/monoscope-tech/chartshot)
+// When updating this logic, also update chartshot/colorMapping.ts to keep server-side
+// chart rendering consistent with browser rendering.
 
 // Theme colors with better contrast - removed light/pale colors
 const THEME_COLORS = [

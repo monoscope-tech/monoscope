@@ -1,20 +1,20 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, chartScreenshotUrl, renderWidgetToChartUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext) where
+{-# LANGUAGE PackageImports #-}
+
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, signWidgetUrl, verifyWidgetSignature) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as KEMP
-import Data.Effectful.Wreq (HTTP, Options, defaults, header, postWith)
+import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
+import Data.ByteString.Lazy qualified as LBS
+import Data.Effectful.Wreq (Options, header)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
-import Data.Time qualified as Time
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, IOE, (:>))
-import Effectful.Error.Static (Error)
+import Effectful (Eff, (:>))
 import Effectful.Log (Log)
-import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
@@ -22,21 +22,18 @@ import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Lucid
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Projects.Projects qualified as Projects
-import Network.HTTP.Client.Internal (responseBody, responseStatus)
 import Network.HTTP.Types (urlEncode)
-import Network.HTTP.Types.Status (statusCode)
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Charts.Charts qualified as Charts
 import Pages.Components (navBar)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Relude
-import Servant.Server (ServerError)
-import System.Config (AuthContext, EnvConfig (..))
-import System.Logging qualified as Log
+import System.Config (EnvConfig (..))
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
 import Utils qualified
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 data BotType = Discord | Slack | WhatsApp
@@ -134,38 +131,15 @@ formatSpans spans =
    in "```\n" <> unlines (hd : rows) <> "```"
 
 
-chartImageUrl :: Text -> Text -> Time.UTCTime -> Text
-chartImageUrl options baseUrl now =
-  let timeMs = show $ floor (utcTimeToPOSIXSeconds now * 1000)
-   in baseUrl <> "?time=" <> timeMs <> options
-
-
--- | Render a widget to PNG via chartshot and return the image URL
--- Uses widget.theme for theming (defaults to "default" if not set)
--- Returns empty string on failure (graceful degradation for bots)
-chartScreenshotUrl :: (HTTP :> es, IOE :> es, Log :> es) => Widget.Widget -> Text -> Eff es Text
-chartScreenshotUrl widget chartShotBaseUrl
-  | not (T.isPrefixOf "http" chartShotBaseUrl) = Log.logAttention "chartScreenshotUrl: invalid URL" (AE.object ["url" AE..= chartShotBaseUrl, "widgetId" AE..= widget.id]) >> pure ""
-  | otherwise = do
-      let url = chartShotBaseUrl <> "/render"
-          body = AE.object ["echarts" AE..= Widget.widgetToECharts widget, "width" AE..= (900 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
-      resp <- postWith defaults (toString url) body
-      let respBody = responseBody resp
-      if statusCode (responseStatus resp) /= 200
-        then Log.logAttention "chartScreenshotUrl: non-200" (AE.object ["url" AE..= url, "status" AE..= statusCode (responseStatus resp), "widgetId" AE..= widget.id, "query" AE..= widget.query, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
-        else case AE.decode respBody of
-          Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
-          _ -> Log.logAttention "chartScreenshotUrl: parse failed (expected {url: string})" (AE.object ["url" AE..= url, "widgetId" AE..= widget.id, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
-
-
--- | Render widget to chart URL, fetching data if needed (eager-aware)
--- Returns empty string early if dataset is empty to avoid unnecessary HTTP call
-renderWidgetToChartUrl :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, HTTP :> es, Log :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Eff es Text
-renderWidgetToChartUrl widget pid from to chartShotUrl = case widget.dataset of
-  Just _ -> chartScreenshotUrl widget chartShotUrl
-  Nothing -> do
-    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing Nothing (Just from) (Just to) Nothing []
-    if V.null metricsD.dataset then pure "" else chartScreenshotUrl widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD} chartShotUrl
+-- | Construct signed URL for widget PNG endpoint
+-- This URL can be embedded in Discord/Slack messages for image rendering
+-- Signature expires in 1 year (31536000 seconds) for long-term bot embeds
+widgetPngUrl :: Text -> Text -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Text
+widgetPngUrl secret hostUrl pid widget from to =
+  let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
+      encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
+      (sig, expiry) = signWidgetUrl secret pid widgetJson from to 31536000
+  in hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> "&from=" <> from <> "&to=" <> to <> "&sig=" <> sig <> "&exp=" <> expiry
 
 
 data TableData = TableData
@@ -300,3 +274,24 @@ formatHistoryAsContext platform msgs =
     ]
   where
     formatMessage m = "[" <> show (LLM.role m) <> "] " <> LLM.content m
+
+
+-- | Generate HMAC signature for widget PNG URL
+-- Payload: projectId:widgetJSON:from:to:expires
+signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text -> Text -> Int -> (Text, Text)
+signWidgetUrl secret pid widgetJson from to expiresSecs =
+  let payload = pid.toText <> ":" <> widgetJson <> ":" <> from <> ":" <> to <> ":" <> show expiresSecs
+      sig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
+  in (sig, show expiresSecs)
+
+
+-- | Verify HMAC signature for widget PNG URL
+verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Either LBS.ByteString ()
+verifyWidgetSignature _ _ _ _ _ Nothing _ = Left "Missing signature"
+verifyWidgetSignature _ _ _ _ _ _ Nothing = Left "Missing expiration"
+verifyWidgetSignature secret pid widgetJson fromM toM (Just sig) (Just expStr) =
+  let from = fromMaybe "" fromM
+      to = fromMaybe "" toM
+      payload = pid.toText <> ":" <> widgetJson <> ":" <> from <> ":" <> to <> ":" <> expStr
+      expectedSig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
+  in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "Invalid signature"

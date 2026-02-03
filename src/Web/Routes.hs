@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH) where
 
 -- Standard library imports
 import Control.Lens
@@ -10,7 +10,7 @@ import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import GHC.TypeLits (Symbol)
-import Relude
+import Relude hiding (ask)
 
 -- Database imports
 import Database.PostgreSQL.Simple qualified as PGS
@@ -22,6 +22,7 @@ import Effectful (runPureEff)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (runReader)
+import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
@@ -43,7 +44,11 @@ import Web.Cookie (SetCookie)
 
 -- System and configuration imports
 import Deriving.Aeson qualified as DAE
-import System.Config (AuthContext)
+import Pages.Bots.Utils (verifyWidgetSignature)
+import System.Config (AuthContext (..), EnvConfig (..))
+import System.Exit (ExitCode (..))
+import System.Logging qualified as Log
+import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Web.Auth (APItoolkitAuthContext, authHandler)
 import Web.Auth qualified as Auth
@@ -191,6 +196,7 @@ data Routes mode = Routes
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "sig" :> QPT "exp" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   }
   deriving stock (Generic)
 
@@ -411,6 +417,7 @@ server pool =
     , chartsDataShot = Charts.queryMetrics
     , rrwebPost = Replay.replayPostH
     , avatarGet = avatarGetH
+    , widgetPngGet = widgetPngGetH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -646,27 +653,67 @@ avatarGetH userId = do
 -- Widget GET handler that accepts dashboard parameters
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
-  -- Parse the widgetJSON parameter
   let v = fromMaybe "" widgetJsonM
   widget <- case AE.eitherDecode (encodeUtf8 v) of
     Right w -> pure w
-    Left err -> do
-      Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
+    Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
 
-  -- Get the current time for processing
   now <- Time.currentTime
-
-  -- Process the widget with dashboard parameters (similar to how processWidget works in Dashboards)
   let widgetWithPid = widget & #_projectId ?~ pid
 
-  -- Process eager widgets (tables, stats, etc.) with dashboard parameters
   processedWidget <-
     if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
-      else pure widgetWithPid
+      else do
+        metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
+        pure $ widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
 
-  -- Return the processed widget
   addRespHeaders processedWidget
+
+
+-- Widget PNG handler - serves PNG image directly (public endpoint for bot embeds)
+-- Requires valid HMAC signature for unauthenticated access
+-- Cache indefinitely when both from/to are specified (immutable time range)
+widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr sigM expM allParams = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let v = fromMaybe "" widgetJsonM
+
+  -- Verify signature for public access
+  case verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v fromDStr toDStr sigM expM of
+    Left err -> Error.throwError $ err403{errBody = err}
+    Right () -> pure ()
+
+  widget <- case AE.eitherDecode (encodeUtf8 v) of
+    Right w -> pure w
+    Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
+
+  let widgetWithPid = widget & #_projectId ?~ pid
+
+  -- Fetch data for the widget
+  metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
+  let processedWidget = widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
+
+  -- Render to PNG via chart-cli in web-components
+  let input = AE.encode $ AE.object
+        [ "echarts" AE..= Widget.widgetToECharts processedWidget
+        , "width" AE..= (900 :: Int)
+        , "height" AE..= (300 :: Int)
+        , "theme" AE..= fromMaybe "default" processedWidget.theme
+        ]
+      processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "./web-components/src/chart-cli.ts"]
+
+  result <- liftIO $ readProcess processConfig
+  pngBytes <- case result of
+    (ExitSuccess, bytes, _) -> pure bytes
+    (ExitFailure code, _, errOut) -> do
+      Log.logAttention "widgetPngGetH: chart render failed" $ AE.object
+        [ "exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (LBS.toStrict errOut), "widgetId" AE..= processedWidget.id ]
+      pure LBS.empty
+
+  -- Cache indefinitely if specific from/to provided, otherwise short cache
+  let cacheHeader = if isJust fromDStr && isJust toDStr then "public, max-age=31536000, immutable" else "public, max-age=300"
+  pure $ addHeader @"Cache-Control" cacheHeader $ addHeader @"Content-Type" "image/png" pngBytes
 
 
 -- flamegraph GET handler

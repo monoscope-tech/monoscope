@@ -34,10 +34,9 @@ import Effectful.Time qualified as Time
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
-import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, renderWidgetToChartUrl)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -282,9 +281,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                       whenJust dashboardM $ \dashboard -> do
                         let widgetM = find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets
                         whenJust widgetM $ \w -> do
-                          now <- Time.currentTime
-                          let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
-                              chartUrl' = chartImageUrl ("&p=" <> discordData.projectId.toText <> widgetQuery) envCfg.chartShotUrl now
+                          let chartUrl' = widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w "1d" ""
                               url = envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId
                               content = sharedWidgetContent widget chartUrl' url
                           sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
@@ -370,8 +367,8 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
           question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
-      imageUrl <- renderWidgetToChartUrl def{Widget.wType = widgetType, Widget.query = Just query} discordData.projectId from to authCtx.env.chartShotUrl
-      let content = getBotContentWithUrl question query query_url imageUrl
+          imageUrl = widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} from to
+          content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of
       Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])

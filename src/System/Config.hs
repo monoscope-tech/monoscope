@@ -88,7 +88,6 @@ data EnvConfig = EnvConfig
   , lemonSqueezyWebhookSecret :: Text
   , openaiApiKey :: Text
   , openaiBaseUrl :: Text
-  , chartShotUrl :: Text
   , hostUrl :: Text
   , monoscopePusherServiceAccountB64 :: Text
   , twilioAccountSid :: Text
