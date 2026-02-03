@@ -7,9 +7,9 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Map qualified as Map
+import Data.Ord (clamp)
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
-import Data.Ord (clamp)
 import GHC.TypeLits (Symbol)
 import Relude hiding (ask)
 

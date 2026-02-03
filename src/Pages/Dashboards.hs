@@ -740,7 +740,7 @@ processWidget pid now timeRange allParams widgetBase = do
 
 
 -- | Fetch widget data based on widget type (for stat and chart widgets)
-fetchWidgetData :: (DB es, Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
+fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
 fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTStat -> do
     stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
