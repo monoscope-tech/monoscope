@@ -1014,14 +1014,14 @@ sendReportForProject pid rType = do
             (def :: Widget.Widget)
               { Widget.wType = Widget.WTTimeseries
               , Widget.query = Just "summarize count(*) by bin_auto(timestamp), resource___service___name"
-              , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataEvents
+              , Widget.dataset = Just $ Widget.toWidgetDataset chartDataEvents
               , Widget.hideLegend = Just False
               , Widget.legendPosition = Just "bottom"
               }
           errorsWidget =
             eventsWidget
               { Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name"
-              , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataErrors
+              , Widget.dataset = Just $ Widget.toWidgetDataset chartDataErrors
               , Widget.theme = Just "roma"
               }
       -- Render charts via chartshot (uses bin_auto, consistent with web platform)

@@ -37,8 +37,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, chartScreenshotUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, toWidgetDataset)
-import Pages.Charts.Charts qualified as Charts
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, renderWidgetToChartUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -371,16 +370,8 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
           question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
-      metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just discordData.projectId) (Just query) Nothing Nothing (Just from) (Just to) Nothing []
-      let widget =
-            (def :: Widget.Widget)
-              { Widget.wType = widgetType
-              , Widget.query = Just query
-              , Widget.dataset = Just $ toWidgetDataset metricsData
-              , Widget.hideLegend = Just False
-              , Widget.legendPosition = Just "bottom"
-              }
-      imageUrl <- chartScreenshotUrl widget authCtx.env.chartShotUrl Nothing
+          widget = (def :: Widget.Widget){Widget.wType = widgetType, Widget.query = Just query, Widget.hideLegend = Just False, Widget.legendPosition = Just "bottom"}
+      imageUrl <- renderWidgetToChartUrl widget discordData.projectId from to authCtx.env.chartShotUrl Nothing
       let content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of

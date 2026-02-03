@@ -786,17 +786,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
         ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
   _ -> do
     metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-    pure
-      $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+    pure $ widget & #dataset ?~ Widget.toWidgetDataset metricsD
 
 
 -- | Populate widgets with their alert statuses
@@ -1229,13 +1219,14 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
     div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
-      widgetAlertConfig_ pid alertFormId alertEndpoint sourceWid widgetToUse
+      widgetAlertConfig_ pid alertFormId alertEndpoint widgetPreviewId sourceWid widgetToUse
 
 
 -- | Widget alert configuration form
-widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Widget.Widget -> Html ()
-widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
+widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget -> Html ()
+widgetAlertConfig_ pid alertFormId alertEndpoint chartTargetId widgetId widget = do
   let hasAlert = isJust widget.alertId
+      chartUpdateAttr = term "_" [text|on input set chart to #{'${chartTargetId}'} if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
   form_
     [ id_ alertFormId
     , hxPost_ alertEndpoint
@@ -1264,8 +1255,8 @@ widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
         h4_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
         div_ [class_ "grid grid-cols-2 gap-4"] do
-          Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [] widget.alertThreshold
-          Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [] widget.warningThreshold
+          Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [chartUpdateAttr] widget.alertThreshold
+          Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [chartUpdateAttr] widget.warningThreshold
         Alerts.directionSelect_ False "select-bordered w-full"
         fieldset_ [class_ "fieldset"] do
           label_ [class_ "label text-xs"] "Show threshold lines"

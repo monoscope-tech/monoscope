@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, chartScreenshotUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, toWidgetDataset) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, chartScreenshotUrl, renderWidgetToChartUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext) where
 
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
@@ -14,7 +14,9 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
+import Effectful.Error.Static (Error)
 import Effectful.Log qualified as Log
+import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
@@ -29,7 +31,8 @@ import Pages.Components (navBar)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Relude
-import System.Config (EnvConfig (..))
+import Servant.Server (ServerError)
+import System.Config (AuthContext, EnvConfig (..))
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
 import Utils qualified
@@ -159,16 +162,15 @@ chartScreenshotUrl widget chartShotBaseUrl themeM = do
       pure ""
 
 
-toWidgetDataset :: Charts.MetricsData -> Widget.WidgetDataset
-toWidgetDataset md =
-  Widget.WidgetDataset
-    { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
-    , rowsPerMin = md.rowsPerMin
-    , value = Just md.rowsCount
-    , from = md.from
-    , to = md.to
-    , stats = md.stats
-    }
+-- | Render widget to chart URL, fetching data if needed (eager-aware)
+renderWidgetToChartUrl :: (DB es, HTTP :> es, Log :> es, Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Eff es Text
+renderWidgetToChartUrl widget pid from to chartShotUrl themeM = do
+  widget' <- case widget.dataset of
+    Just _ -> pure widget
+    Nothing -> do
+      metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing Nothing (Just from) (Just to) Nothing []
+      pure $ widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD}
+  chartScreenshotUrl widget' chartShotUrl themeM
 
 
 data TableData = TableData
