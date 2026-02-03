@@ -130,20 +130,12 @@ SELECT extract(epoch from time_bucket('1 days', timestamp))::integer, 'value', c
           pcts `shouldBe` [95.0]
         Nothing -> fail "Expected percentilesInfo to be extracted"
 
-    it "generates LATERAL unnest SQL for percentiles with bin" do
+    it "generates UNION ALL SQL for percentiles with bin" do
       let (_, c) = fromRight' $ parseQueryToComponents (defSqlQueryCfg defPid fixedUTCTime Nothing Nothing) "| summarize percentiles(duration, 50, 90) by bin(timestamp, 1h)"
       let sql = fromMaybe "" c.finalSummarizeQuery
       let expected =
             [text|
-SELECT timeB, quantile, value FROM (
-  SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB,
-    ARRAY[COALESCE((approx_percentile(0.5, percentile_agg((duration)::float)))::float, 0),
-          COALESCE((approx_percentile(0.9, percentile_agg((duration)::float)))::float, 0)] AS values,
-    ARRAY['p50','p90'] AS quantiles
-  FROM otel_logs_and_spans
-  WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE)
-  GROUP BY timeB
-  HAVING COUNT(*) > 0 ) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile) WHERE value IS NOT NULL ORDER BY timeB DESC
+SELECT timeB, quantile, value FROM (SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p50' AS quantile, COALESCE((approx_percentile(0.5, percentile_agg((duration)::float)))::float, 0) AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0 UNION ALL SELECT extract(epoch from time_bucket('1 hours', timestamp))::integer AS timeB, 'p90' AS quantile, COALESCE((approx_percentile(0.9, percentile_agg((duration)::float)))::float, 0) AS value FROM otel_logs_and_spans WHERE project_id='00000000-0000-0000-0000-000000000000' and (TRUE) GROUP BY timeB HAVING COUNT(*) > 0) sub WHERE value IS NOT NULL ORDER BY timeB DESC, quantile
             |]
       normT sql `shouldBe` normT expected
 

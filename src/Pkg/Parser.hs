@@ -235,8 +235,7 @@ sqlFromQueryComponents sqlCfg qc =
     nq = normalizeQuery sqlCfg qc
     timestampCol = "timestamp"
 
-    -- Process columns for summary JSON conversion (COALESCE for DataFusion/Arrow null handling)
-    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "COALESCE(to_json(summary), 'null')" else col) $ colsNoAsClause nq.nqSelectCols
+    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "to_json(summary)" else col) $ colsNoAsClause nq.nqSelectCols
     selectClause = T.intercalate "," processedCols
 
     -- Use pre-computed values from NormalizedQuery
