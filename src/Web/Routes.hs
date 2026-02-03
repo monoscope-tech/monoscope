@@ -695,20 +695,23 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr sigM expM allParams = do
   let processedWidget = widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
 
   -- Render to PNG via chart-cli in web-components
-  let input = AE.encode $ AE.object
-        [ "echarts" AE..= Widget.widgetToECharts processedWidget
-        , "width" AE..= (900 :: Int)
-        , "height" AE..= (300 :: Int)
-        , "theme" AE..= fromMaybe "default" processedWidget.theme
-        ]
+  let input =
+        AE.encode
+          $ AE.object
+            [ "echarts" AE..= Widget.widgetToECharts processedWidget
+            , "width" AE..= (900 :: Int)
+            , "height" AE..= (300 :: Int)
+            , "theme" AE..= fromMaybe "default" processedWidget.theme
+            ]
       processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "./web-components/src/chart-cli.ts"]
 
   result <- liftIO $ readProcess processConfig
   pngBytes <- case result of
     (ExitSuccess, bytes, _) -> pure bytes
     (ExitFailure code, _, errOut) -> do
-      Log.logAttention "widgetPngGetH: chart render failed" $ AE.object
-        [ "exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (LBS.toStrict errOut), "widgetId" AE..= processedWidget.id ]
+      Log.logAttention "widgetPngGetH: chart render failed"
+        $ AE.object
+          ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (LBS.toStrict errOut), "widgetId" AE..= processedWidget.id]
       pure LBS.empty
 
   -- Cache indefinitely if specific from/to provided, otherwise short cache

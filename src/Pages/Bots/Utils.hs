@@ -139,7 +139,7 @@ widgetPngUrl secret hostUrl pid widget from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
       (sig, expiry) = signWidgetUrl secret pid widgetJson from to 31536000
-  in hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> "&from=" <> from <> "&to=" <> to <> "&sig=" <> sig <> "&exp=" <> expiry
+   in hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> "&from=" <> from <> "&to=" <> to <> "&sig=" <> sig <> "&exp=" <> expiry
 
 
 data TableData = TableData
@@ -282,7 +282,7 @@ signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text -> Text -> Int -> (T
 signWidgetUrl secret pid widgetJson from to expiresSecs =
   let payload = pid.toText <> ":" <> widgetJson <> ":" <> from <> ":" <> to <> ":" <> show expiresSecs
       sig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
-  in (sig, show expiresSecs)
+   in (sig, show expiresSecs)
 
 
 -- | Verify HMAC signature for widget PNG URL
@@ -294,4 +294,4 @@ verifyWidgetSignature secret pid widgetJson fromM toM (Just sig) (Just expStr) =
       to = fromMaybe "" toM
       payload = pid.toText <> ":" <> widgetJson <> ":" <> from <> ":" <> to <> ":" <> expStr
       expectedSig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
-  in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "Invalid signature"
+   in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "Invalid signature"
