@@ -399,8 +399,12 @@ data FieldValue
 
 
 -- | Convert FieldValue to JSON
+-- For FText: if it looks like JSON (starts with [ or {), try to parse it
+-- This handles to_json() results from DataFusion which return JSON as TEXT
 fieldValueToJson :: FieldValue -> AE.Value
-fieldValueToJson (FText t) = AE.String t
+fieldValueToJson (FText t)
+  | Just c <- T.uncons t, fst c == '[' || fst c == '{' = fromMaybe (AE.String t) (AE.decodeStrict $ encodeUtf8 t)
+  | otherwise = AE.String t
 fieldValueToJson (FInt i) = AE.Number (fromIntegral i)
 fieldValueToJson (FDouble d) = AE.Number (realToFrac d)
 fieldValueToJson (FBool b) = AE.Bool b
