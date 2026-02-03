@@ -686,7 +686,7 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allPa
 
   case verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM of
     Left err -> Error.throwError $ err403{errBody = err}
-    Right () -> pure ()
+    Right () -> pass
 
   widget <- case AE.eitherDecode (encodeUtf8 v) of
     Right w -> pure w
@@ -711,7 +711,7 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allPa
       Error.throwError $ err504{errBody = "Chart rendering timed out"}
     Just (ExitSuccess, bytes, _) -> pure bytes
     Just (ExitFailure code, _, errOut) -> do
-      Log.logAttention "widgetPngGetH: chart render failed" $ AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (LBS.toStrict errOut), "widgetId" AE..= processedWidget.id]
+      Log.logAttention "widgetPngGetH: chart render failed" $ AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id]
       Error.throwError $ err500{errBody = "Chart rendering failed"}
 
   let cacheHeader = if isJust fromDStr && isJust toDStr then "public, max-age=31536000, immutable" else "public, max-age=300"
