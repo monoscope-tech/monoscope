@@ -13,8 +13,8 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
-import Effectful.Log (Log)
 import Effectful.Error.Static (Error)
+import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -163,7 +163,7 @@ chartScreenshotUrl widget chartShotBaseUrl themeM = do
 
 
 -- | Render widget to chart URL, fetching data if needed (eager-aware)
-renderWidgetToChartUrl :: (DB es, HTTP :> es, Log :> es, Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Eff es Text
+renderWidgetToChartUrl :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, HTTP :> es, Log :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Maybe Text -> Eff es Text
 renderWidgetToChartUrl widget pid from to chartShotUrl themeM = do
   widget' <- case widget.dataset of
     Just _ -> pure widget
