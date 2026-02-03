@@ -370,8 +370,7 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
           question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
-          widget = (def :: Widget.Widget){Widget.wType = widgetType, Widget.query = Just query, Widget.hideLegend = Just False, Widget.legendPosition = Just "bottom"}
-      imageUrl <- renderWidgetToChartUrl widget discordData.projectId from to authCtx.env.chartShotUrl Nothing
+      imageUrl <- renderWidgetToChartUrl def{Widget.wType = widgetType, Widget.query = Just query} discordData.projectId from to authCtx.env.chartShotUrl Nothing
       let content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of
