@@ -511,10 +511,29 @@ getServiceColors = V.foldl' assign HM.empty
 
 -- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS
 themeColorsHex :: V.Vector Text
-themeColorsHex = V.fromList
-  ["#1A74A8", "#91cc75", "#fac858", "#ee6666", "#73c0de", "#3ba272", "#fc8452", "#9a60b4"
-  , "#c71585", "#37a2da", "#32c5e9", "#20b2aa", "#228b22", "#ff8c00", "#ff6347", "#dc143c"
-  , "#8b008b", "#4b0082", "#6a5acd", "#4169e1"]
+themeColorsHex =
+  V.fromList
+    [ "#1A74A8"
+    , "#91cc75"
+    , "#fac858"
+    , "#ee6666"
+    , "#73c0de"
+    , "#3ba272"
+    , "#fc8452"
+    , "#9a60b4"
+    , "#c71585"
+    , "#37a2da"
+    , "#32c5e9"
+    , "#20b2aa"
+    , "#228b22"
+    , "#ff8c00"
+    , "#ff6347"
+    , "#dc143c"
+    , "#8b008b"
+    , "#4b0082"
+    , "#6a5acd"
+    , "#4169e1"
+    ]
 
 
 -- | Get hex color for chart series - auto-detects type (status code, percentile, or generic)
@@ -526,7 +545,7 @@ getSeriesColorHex name
   | isPercentile name = percentileColorHex name
   | otherwise = themeColorsHex V.! hashTextToIndex name
   where
-    isStatusCode t = T.length t == 3 && T.all isDigit t && T.head t `elem` ['2'..'5']
+    isStatusCode t = T.length t == 3 && T.all isDigit t && T.head t `elem` ['2' .. '5']
     isPercentile t = T.isPrefixOf "p" (T.toLower t) || T.toLower t `elem` ["median", "max", "min", "q1", "q3"]
     hashTextToIndex t = fromIntegral (xxHash (encodeUtf8 t)) `mod` V.length themeColorsHex
     statusCodeColorHex code
@@ -536,10 +555,17 @@ getSeriesColorHex name
       | code >= 500 = "#ee6666"
       | otherwise = "#9d96f5"
     percentileColorHex p = case T.toLower p of
-      "p50" -> "#91cc75"; "median" -> "#91cc75"; "min" -> "#91cc75"
-      "p75" -> "#3ba272"; "q1" -> "#3ba272"
-      "p90" -> "#fac858"; "p95" -> "#fc8452"; "q3" -> "#fc8452"
-      "p99" -> "#dc2626"; "p100" -> "#991b1b"; "max" -> "#991b1b"
+      "p50" -> "#91cc75"
+      "median" -> "#91cc75"
+      "min" -> "#91cc75"
+      "p75" -> "#3ba272"
+      "q1" -> "#3ba272"
+      "p90" -> "#fac858"
+      "p95" -> "#fc8452"
+      "q3" -> "#fc8452"
+      "p99" -> "#dc2626"
+      "p100" -> "#991b1b"
+      "max" -> "#991b1b"
       _ -> themeColorsHex V.! hashTextToIndex p
 
 

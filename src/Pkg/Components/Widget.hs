@@ -823,7 +823,8 @@ extractSeriesNamesFromDataset (Just wd) = case wd.source of
     AE.Array headers | V.length headers > 1 -> mapMaybe getText $ V.toList $ V.tail headers
     _ -> []
   _ -> []
-  where getText (AE.String t) = Just t; getText _ = Nothing
+  where
+    getText (AE.String t) = Just t; getText _ = Nothing
 extractSeriesNamesFromDataset Nothing = []
 
 
@@ -994,7 +995,7 @@ extractLegend widget = fmap (map (fromMaybe "Unnamed Series" . (.query))) widget
 
 -- Helper: Create series from dataset headers with colors and encode for dataset binding
 createSeriesFromHeaders :: WidgetType -> [Text] -> [AE.Value]
-createSeriesFromHeaders wType = zipWith (createSeries wType) [1..]
+createSeriesFromHeaders wType = zipWith (createSeries wType) [1 ..]
 
 
 -- Helper: Create a single series with name, column index, and color
@@ -1003,7 +1004,9 @@ createSeries widgetType colIdx name =
   let isStat = widgetType == WTTimeseriesStat
       gradientStyle = AE.object ["color" AE..= AE.object ["type" AE..= ("linear" :: Text), "x" AE..= (0 :: Int), "y" AE..= (0 :: Int), "x2" AE..= (0 :: Int), "y2" AE..= (1 :: Int)]]
    in AE.object
-        [ "name" AE..= name, "type" AE..= mapWidgetTypeToChartType widgetType, "stack" AE..= ("Stack" :: Text)
+        [ "name" AE..= name
+        , "type" AE..= mapWidgetTypeToChartType widgetType
+        , "stack" AE..= ("Stack" :: Text)
         , "encode" AE..= AE.object ["x" AE..= (0 :: Int), "y" AE..= colIdx]
         , "itemStyle" AE..= AE.object ["color" AE..= getSeriesColorHex name]
         , "showBackground" AE..= not isStat

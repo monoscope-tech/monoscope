@@ -6,12 +6,12 @@ module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH) w
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import GHC.TypeLits (Symbol)
 import Relude hiding (ask)
-import Data.Default (def)
 
 -- Database imports
 import Database.PostgreSQL.Simple qualified as PGS
@@ -703,15 +703,16 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM expM 
   let processedWidget = case widgetWithPid.wType of
         Widget.WTStat -> widgetWithPid & #dataset ?~ def{Widget.source = AE.Null, Widget.value = metricsD.dataFloat}
         _ -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
-      input = AE.encode $ AE.object
-        [ "echarts" AE..= Widget.widgetToECharts processedWidget
-        , "width" AE..= width
-        , "height" AE..= height
-        , "theme" AE..= fromMaybe "default" processedWidget.theme
-        ]
+      input =
+        AE.encode
+          $ AE.object
+            [ "echarts" AE..= Widget.widgetToECharts processedWidget
+            , "width" AE..= width
+            , "height" AE..= height
+            , "theme" AE..= fromMaybe "default" processedWidget.theme
+            ]
       processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "web-components/src/chart-cli.ts"]
-      timeoutMicros = 30000000  -- 30 seconds
-
+      timeoutMicros = 30000000 -- 30 seconds
   resultM <- liftIO $ timeout timeoutMicros $ readProcess processConfig
   pngBytes <- case resultM of
     Nothing -> do
