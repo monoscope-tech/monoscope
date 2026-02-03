@@ -749,7 +749,7 @@ kqlTimespanToTimeBucket timespan =
     -- Check if already in PostgreSQL interval format like "30 seconds" or "1 hour"
     -- Validates entire format (number + unit) to prevent SQL injection
     isPostgresInterval t = case T.words t of
-      [num, unit] -> T.all isDigit num && unit `elem` validUnits
+      [num, unit] -> isJust (readMaybe @Int $ toString num) && unit `elem` validUnits
       _ -> False
     validUnits = ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
 

@@ -159,14 +159,13 @@ chartScreenshotUrl widget chartShotBaseUrl
 
 
 -- | Render widget to chart URL, fetching data if needed (eager-aware)
+-- Returns empty string early if dataset is empty to avoid unnecessary HTTP call
 renderWidgetToChartUrl :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, HTTP :> es, Log :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Eff es Text
-renderWidgetToChartUrl widget pid from to chartShotUrl = do
-  widget' <- case widget.dataset of
-    Just _ -> pure widget
-    Nothing -> do
-      metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing Nothing (Just from) (Just to) Nothing []
-      if V.null metricsD.dataset then pure widget else pure $ widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD}
-  chartScreenshotUrl widget' chartShotUrl
+renderWidgetToChartUrl widget pid from to chartShotUrl = case widget.dataset of
+  Just _ -> chartScreenshotUrl widget chartShotUrl
+  Nothing -> do
+    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing Nothing (Just from) (Just to) Nothing []
+    if V.null metricsD.dataset then pure "" else chartScreenshotUrl widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD} chartShotUrl
 
 
 data TableData = TableData
