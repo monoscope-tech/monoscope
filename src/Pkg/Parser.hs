@@ -235,8 +235,8 @@ sqlFromQueryComponents sqlCfg qc =
     nq = normalizeQuery sqlCfg qc
     timestampCol = "timestamp"
 
-    -- Process columns for summary JSON conversion
-    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "to_json(summary)" else col) $ colsNoAsClause nq.nqSelectCols
+    -- Process columns for summary JSON conversion (COALESCE for DataFusion/Arrow null handling)
+    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "COALESCE(to_json(summary), 'null')" else col) $ colsNoAsClause nq.nqSelectCols
     selectClause = T.intercalate "," processedCols
 
     -- Use pre-computed values from NormalizedQuery
@@ -292,28 +292,22 @@ sqlFromQueryComponents sqlCfg qc =
         Just binInterval ->
           case qc.percentilesInfo of
             Just (fieldExpr, pcts) ->
-              -- Generate LATERAL unnest query for percentiles with custom percentile values
+              -- Generate UNION ALL query for percentiles (DataFusion-compatible, no unnest)
               let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                  -- Generate ARRAY of percentile expressions (fieldExpr already includes any division)
-                  pctExprs =
-                    T.intercalate
-                      ",\n                          "
-                      [ "COALESCE((approx_percentile(" <> show (p / 100.0) <> ", percentile_agg((" <> fieldExpr <> ")::float)))::float, 0)"
-                      | p <- pcts
-                      ]
-                  -- Generate ARRAY of percentile labels
-                  pctLabels = T.intercalate "," ["'p" <> show (round p :: Int) <> "'" | p <- pcts]
-               in [fmt|SELECT timeB, quantile, value FROM (
-                      SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
-                        ARRAY[{pctExprs}] AS values,
-                        ARRAY[{pctLabels}] AS quantiles
+                  -- Generate a subquery per percentile and UNION ALL them
+                  pctSubqueries =
+                    [ [fmt|SELECT extract(epoch from {timeBucketExpr})::integer AS timeB,
+                        'p{show (round p :: Int)}' AS quantile,
+                        COALESCE((approx_percentile({show (p / 100.0)}, percentile_agg(({fieldExpr})::float)))::float, 0) AS value
                       FROM {fromTable}
                       WHERE {buildWhere}
                       GROUP BY timeB
-                      HAVING COUNT(*) > 0
-                    ) s, LATERAL unnest(s.values, s.quantiles) AS u(value, quantile)
+                      HAVING COUNT(*) > 0|]
+                    | p <- pcts
+                    ]
+               in [fmt|SELECT timeB, quantile, value FROM ({T.intercalate " UNION ALL " pctSubqueries}) sub
                     WHERE value IS NOT NULL
-                    ORDER BY timeB DESC {limitClause}|]
+                    ORDER BY timeB DESC, quantile {limitClause}|]
             Nothing ->
               -- Normal summarize query
               let resolve = resolveExtendedColumn (Map.fromList qc.extendedColumns)

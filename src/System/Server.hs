@@ -15,7 +15,7 @@ import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
-import Network.HTTP.Types (status200)
+import Network.HTTP.Types (methodGet, methodHead, status200)
 import Network.Wai
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
@@ -108,11 +108,11 @@ runServer appLogger env tp = do
       $ sequence
       $ concat
         [ [async $ runSettings warpSettings wrappedServer]
-        , [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger | env.config.enablePubsubService]
+        , if env.config.enablePubsubService then [async $ Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger] else []
         , [async $ Safe.withException bgJobWorker exceptionLogger]
         , [async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger]
-        , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger | env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics]
-        , [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger | env.config.enableReplayService]
+        , if env.config.enableKafkaService && (not . any T.null) env.config.kafkaTopics then [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger] else []
+        , if env.config.enableReplayService then [async $ Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger] else []
         ]
   void $ liftIO $ waitAnyCancel asyncs
 

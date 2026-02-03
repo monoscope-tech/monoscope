@@ -93,7 +93,6 @@ library
       Models.Telemetry.Telemetry
       Models.Users.Sessions
       Models.Users.Users
-      Network.Wai.Middleware.Heartbeat
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
       Pages.Anomalies

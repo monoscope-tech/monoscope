@@ -820,9 +820,12 @@ instance ToRow OtelLogsAndSpans where
 bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   appCtx <- Eff.ask @AuthContext
+  Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON appCtx.config.enableTimefusionWrites)]
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
   _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  when appCtx.config.enableTimefusionWrites $ void $ retryTimefusion 10 updatedRecords
+  when appCtx.config.enableTimefusionWrites $ do
+    Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length updatedRecords)]
+    void $ retryTimefusion 10 updatedRecords
   where
     retryTimefusion 0 recs = labeled @"timefusion" @WithConnection $ bulkInsertOtelLogsAndSpans recs
     retryTimefusion n recs = do
@@ -832,7 +835,9 @@ bulkInsertOtelLogsAndSpansTF records = do
           threadDelay (1000000 * (4 - n))
           retryTimefusion (n - 1) recs
         Left e -> throwIO e
-        Right count -> pure count
+        Right count -> do
+          Log.logTrace "TimeFusion write succeeded" $ AE.object [("rows_inserted", AE.toJSON count)]
+          pure count
 
 
 -- Function to insert OtelLogsAndSpans records with all fields in flattened structure
@@ -872,8 +877,8 @@ bulkInserSpansAndLogsQuery =
        resource___telemetry___sdk___version, resource___user_agent___original,
        project_id, summary, date)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
  
     |]
 
