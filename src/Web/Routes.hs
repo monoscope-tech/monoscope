@@ -698,12 +698,14 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr sigM expM allParams = do
   let processedWidget = case widgetWithPid.wType of
         Widget.WTStat -> widgetWithPid & #dataset ?~ def{Widget.source = AE.Null, Widget.value = metricsD.dataFloat}
         _ -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
-      input = AE.encode $ AE.object
-        [ "echarts" AE..= Widget.widgetToECharts processedWidget
-        , "width" AE..= (900 :: Int)
-        , "height" AE..= (300 :: Int)
-        , "theme" AE..= fromMaybe "default" processedWidget.theme
-        ]
+      input =
+        AE.encode
+          $ AE.object
+            [ "echarts" AE..= Widget.widgetToECharts processedWidget
+            , "width" AE..= (900 :: Int)
+            , "height" AE..= (300 :: Int)
+            , "theme" AE..= fromMaybe "default" processedWidget.theme
+            ]
       processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "web-components/src/chart-cli.ts"]
 
   result <- liftIO $ readProcess processConfig

@@ -142,7 +142,7 @@ widgetPngUrl now secret hostUrl pid widget since from to =
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
       (sig, expiry) = signWidgetUrl now secret pid widgetJson since from to 31536000
       timeParams = mconcat [if T.null since then "" else "&since=" <> since, if T.null from then "" else "&from=" <> from, if T.null to then "" else "&to=" <> to]
-  in hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig <> "&exp=" <> expiry
+   in hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig <> "&exp=" <> expiry
 
 
 data TableData = TableData
@@ -286,7 +286,7 @@ signWidgetUrl now secret pid widgetJson since from to expiresSecs =
   let expiresAt = floor $ utcTimeToPOSIXSeconds (addUTCTime (fromIntegral expiresSecs) now) :: Int
       payload = pid.toText <> ":" <> widgetJson <> ":" <> since <> ":" <> from <> ":" <> to <> ":" <> show expiresAt
       sig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
-  in (sig, show expiresAt)
+   in (sig, show expiresAt)
 
 
 -- | Verify HMAC signature for widget PNG URL, checking expiration against current time
@@ -301,5 +301,6 @@ verifyWidgetSignature now secret pid widgetJson sinceM fromM toM (Just sig) (Jus
       expectedSig = decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
       nowUnix = floor $ utcTimeToPOSIXSeconds now :: Int
       expiresAt = fromMaybe 0 $ readMaybe @Int (toString expStr)
-  in if nowUnix > expiresAt then Left "Signature expired"
-     else if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "Invalid signature"
+   in if nowUnix > expiresAt
+        then Left "Signature expired"
+        else if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expectedSig :: ByteString) then Right () else Left "Invalid signature"
