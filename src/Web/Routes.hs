@@ -11,6 +11,7 @@ import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import GHC.TypeLits (Symbol)
 import Relude hiding (ask)
+import Data.Default (def)
 
 -- Database imports
 import Database.PostgreSQL.Simple qualified as PGS
@@ -50,6 +51,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
+import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Web.Auth (APItoolkitAuthContext, authHandler)
 import Web.Auth qualified as Auth
@@ -197,7 +199,7 @@ data Routes mode = Routes
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "sig" :> QPT "exp" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> QPT "exp" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   }
   deriving stock (Generic)
 
@@ -673,11 +675,14 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
-widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr sigM expM allParams = do
+widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM expM allParams = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let v = fromMaybe "" widgetJsonM
+      clamp lo hi x = max lo (min hi x)
+      width = clamp 100 2000 $ fromMaybe 900 widthM
+      height = clamp 100 2000 $ fromMaybe 300 heightM
 
   case verifyWidgetSignature now ctx.env.apiKeyEncryptionSecretKey pid v sinceStr fromDStr toDStr sigM expM of
     Left err -> Error.throwError $ err403{errBody = err}
@@ -698,20 +703,22 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr sigM expM allParams = do
   let processedWidget = case widgetWithPid.wType of
         Widget.WTStat -> widgetWithPid & #dataset ?~ def{Widget.source = AE.Null, Widget.value = metricsD.dataFloat}
         _ -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
-      input =
-        AE.encode
-          $ AE.object
-            [ "echarts" AE..= Widget.widgetToECharts processedWidget
-            , "width" AE..= (900 :: Int)
-            , "height" AE..= (300 :: Int)
-            , "theme" AE..= fromMaybe "default" processedWidget.theme
-            ]
+      input = AE.encode $ AE.object
+        [ "echarts" AE..= Widget.widgetToECharts processedWidget
+        , "width" AE..= width
+        , "height" AE..= height
+        , "theme" AE..= fromMaybe "default" processedWidget.theme
+        ]
       processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "web-components/src/chart-cli.ts"]
+      timeoutMicros = 30000000  -- 30 seconds
 
-  result <- liftIO $ readProcess processConfig
-  pngBytes <- case result of
-    (ExitSuccess, bytes, _) -> pure bytes
-    (ExitFailure code, _, errOut) -> do
+  resultM <- liftIO $ timeout timeoutMicros $ readProcess processConfig
+  pngBytes <- case resultM of
+    Nothing -> do
+      Log.logAttention "widgetPngGetH: chart render timed out" $ AE.object ["widgetId" AE..= processedWidget.id, "width" AE..= width, "height" AE..= height]
+      Error.throwError $ err504{errBody = "Chart rendering timed out"}
+    Just (ExitSuccess, bytes, _) -> pure bytes
+    Just (ExitFailure code, _, errOut) -> do
       Log.logAttention "widgetPngGetH: chart render failed" $ AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (LBS.toStrict errOut), "widgetId" AE..= processedWidget.id]
       Error.throwError $ err500{errBody = "Chart rendering failed"}
 

@@ -816,6 +816,17 @@ renderChart widget = do
 -- -- selectFormatter WTTimeseries = "{a} <br/>{b}: {c}ms"
 -- -- selectFormatter _ = "{a} <br/>{b}: {c}"
 
+-- Helper: Extract series names from dataset source (headers[1:])
+extractSeriesNamesFromDataset :: Maybe WidgetDataset -> [Text]
+extractSeriesNamesFromDataset (Just wd) = case wd.source of
+  AE.Array arr | not (V.null arr) -> case V.head arr of
+    AE.Array headers | V.length headers > 1 -> mapMaybe getText $ V.toList $ V.tail headers
+    _ -> []
+  _ -> []
+  where getText (AE.String t) = Just t; getText _ = Nothing
+extractSeriesNamesFromDataset Nothing = []
+
+
 -- Function to convert Widget to ECharts options
 widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget =
@@ -823,6 +834,7 @@ widgetToECharts widget =
       axisVisibility = not isStat
       gridLinesVisibility = not isStat
       legendVisibility = not isStat && widget.hideLegend /= Just True
+      seriesNames = extractSeriesNamesFromDataset widget.dataset
    in AE.object
         [ "tooltip"
             AE..= AE.object
@@ -923,7 +935,7 @@ widgetToECharts widget =
         , "dataset"
             AE..= AE.object
               ["source" AE..= maybe AE.Null (.source) widget.dataset]
-        , "series" AE..= addMarkLinesToFirstSeries widget (map (createSeries widget.wType) ([] :: [Maybe Query]))
+        , "series" AE..= addMarkLinesToFirstSeries widget (createSeriesFromHeaders widget.wType seriesNames)
         , "animation" AE..= False
         , if widget.allowZoom == Just True
             then
@@ -980,39 +992,22 @@ extractLegend :: Widget -> Maybe [Text]
 extractLegend widget = fmap (map (fromMaybe "Unnamed Series" . (.query))) widget.queries
 
 
--- Helper: Create series
-createSeries :: WidgetType -> Maybe Query -> AE.Value
-createSeries widgetType query =
+-- Helper: Create series from dataset headers with colors and encode for dataset binding
+createSeriesFromHeaders :: WidgetType -> [Text] -> [AE.Value]
+createSeriesFromHeaders wType = zipWith (createSeries wType) [1..]
+
+
+-- Helper: Create a single series with name, column index, and color
+createSeries :: WidgetType -> Int -> Text -> AE.Value
+createSeries widgetType colIdx name =
   let isStat = widgetType == WTTimeseriesStat
-      gradientStyle =
-        AE.object
-          [ "color"
-              AE..= AE.object
-                [ "type" AE..= ("linear" :: Text)
-                , "x" AE..= (0 :: Int)
-                , "y" AE..= (0 :: Int)
-                , "x2" AE..= (0 :: Int)
-                , "y2" AE..= (1 :: Int)
-                -- , "colorStops"
-                --     AE..= AE. [ AE.object ["offset" AE..= (0 :: Double), "color" AE..= ("rgba(0, 136, 212, 0.7)" :: Text)]
-                --           , AE.object ["offset" AE..= (1 :: Double), "color" AE..= ("rgba(0, 136, 212, 0.1)" :: Text)]
-                --           ]
-                ]
-          ]
+      gradientStyle = AE.object ["color" AE..= AE.object ["type" AE..= ("linear" :: Text), "x" AE..= (0 :: Int), "y" AE..= (0 :: Int), "x2" AE..= (0 :: Int), "y2" AE..= (1 :: Int)]]
    in AE.object
-        [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
-        , "type" AE..= mapWidgetTypeToChartType widgetType
-        , "stack" AE..= ("Stack" :: Text)
-        , "markArea"
-            AE..= AE.object
-              [ "show" AE..= True
-              , "data"
-                  AE..= AE.Array V.empty
-              ]
+        [ "name" AE..= name, "type" AE..= mapWidgetTypeToChartType widgetType, "stack" AE..= ("Stack" :: Text)
+        , "encode" AE..= AE.object ["x" AE..= (0 :: Int), "y" AE..= colIdx]
+        , "itemStyle" AE..= AE.object ["color" AE..= getSeriesColorHex name]
         , "showBackground" AE..= not isStat
-        , "backgroundStyle"
-            AE..= AE.object
-              ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)] -- This will be overridden in JS based on theme
+        , "backgroundStyle" AE..= AE.object ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
         , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
         , "lineStyle" AE..= AE.object ["width" AE..= if isStat then 0 else 1]
         ]

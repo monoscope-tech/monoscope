@@ -359,7 +359,7 @@ discordInteractionsH rawBody signatureM timestampM = do
 
 sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> Text -> Maybe Text -> Maybe Time.UTCTime -> Maybe Time.UTCTime -> (Text, Text) -> Time.UTCTime -> ATBaseCtx ()
 sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTimeM toTimeM timeRangeStr now = do
-  let (from, to) = timeRangeStr
+  let (from, _to) = timeRangeStr
   case visualization of
     Just vizType -> do
       let widgetType = Widget.mapChatTypeToWidgetType vizType
@@ -368,7 +368,7 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
           question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
-          imageUrl = widgetPngUrl now authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} from
+          imageUrl = widgetPngUrl now authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} from "" ""
           content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of

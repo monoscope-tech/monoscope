@@ -41,6 +41,9 @@ module Utils (
   toXXHash,
   getServiceColors,
   getGrpcStatusColor,
+  -- Hex color mapping for ECharts server-side rendering
+  themeColorsHex,
+  getSeriesColorHex,
   nestedJsonFromDotNotation,
   prettyPrintCount,
   formatWithCommas,
@@ -504,6 +507,40 @@ getServiceColors = V.foldl' assign HM.empty
     assign colors service =
       let colorIdx = fromIntegral (xxHash (encodeUtf8 service)) `mod` V.length serviceColors
        in HM.insert service (serviceColors V.! colorIdx) colors
+
+
+-- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS
+themeColorsHex :: V.Vector Text
+themeColorsHex = V.fromList
+  ["#1A74A8", "#91cc75", "#fac858", "#ee6666", "#73c0de", "#3ba272", "#fc8452", "#9a60b4"
+  , "#c71585", "#37a2da", "#32c5e9", "#20b2aa", "#228b22", "#ff8c00", "#ff6347", "#dc143c"
+  , "#8b008b", "#4b0082", "#6a5acd", "#4169e1"]
+
+
+-- | Get hex color for chart series - auto-detects type (status code, percentile, or generic)
+getSeriesColorHex :: Text -> Text
+getSeriesColorHex name
+  | T.null name = themeColorsHex V.! 0
+  | T.toLower name `elem` ["null", "undefined", "unknown"] = "#9ca3af"
+  | isStatusCode name = statusCodeColorHex (fromMaybe 0 $ readMaybe $ toString name)
+  | isPercentile name = percentileColorHex name
+  | otherwise = themeColorsHex V.! hashTextToIndex name
+  where
+    isStatusCode t = T.length t == 3 && T.all isDigit t && T.head t `elem` ['2'..'5']
+    isPercentile t = T.isPrefixOf "p" (T.toLower t) || T.toLower t `elem` ["median", "max", "min", "q1", "q3"]
+    hashTextToIndex t = fromIntegral (xxHash (encodeUtf8 t)) `mod` V.length themeColorsHex
+    statusCodeColorHex code
+      | code >= 200 && code < 300 = "#1A74A8"
+      | code >= 300 && code < 400 = "#73c0de"
+      | code >= 400 && code < 500 = "#fac858"
+      | code >= 500 = "#ee6666"
+      | otherwise = "#9d96f5"
+    percentileColorHex p = case T.toLower p of
+      "p50" -> "#91cc75"; "median" -> "#91cc75"; "min" -> "#91cc75"
+      "p75" -> "#3ba272"; "q1" -> "#3ba272"
+      "p90" -> "#fac858"; "p95" -> "#fc8452"; "q3" -> "#fc8452"
+      "p99" -> "#dc2626"; "p100" -> "#991b1b"; "max" -> "#991b1b"
+      _ -> themeColorsHex V.! hashTextToIndex p
 
 
 toXXHash :: Text -> Text
