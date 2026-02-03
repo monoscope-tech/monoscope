@@ -1012,8 +1012,10 @@ sendReportForProject pid rType = do
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
           eventsWidget = def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), resource___service___name", Widget.dataset = Just $ Widget.toWidgetDataset chartDataEvents}
           errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name", Widget.dataset = Just $ Widget.toWidgetDataset chartDataErrors, Widget.theme = Just "roma"}
-      allQ <- BotUtils.chartScreenshotUrl eventsWidget ctx.env.chartShotUrl
-      errQ <- BotUtils.chartScreenshotUrl errorsWidget ctx.env.chartShotUrl
+      (allQ, errQ) <- Ki.scoped \scope -> do
+        allQThread <- Ki.fork scope $ BotUtils.chartScreenshotUrl eventsWidget ctx.env.chartShotUrl
+        errQThread <- Ki.fork scope $ BotUtils.chartScreenshotUrl errorsWidget ctx.env.chartShotUrl
+        (,) <$> Ki.atomically (Ki.await allQThread) <*> Ki.atomically (Ki.await errQThread)
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case

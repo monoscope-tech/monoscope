@@ -145,25 +145,17 @@ chartImageUrl options baseUrl now =
 -- Returns empty string on failure (graceful degradation for bots)
 chartScreenshotUrl :: (HTTP :> es, IOE :> es, Log :> es) => Widget.Widget -> Text -> Eff es Text
 chartScreenshotUrl widget chartShotBaseUrl
-  | not (T.isPrefixOf "http" chartShotBaseUrl) = do
-      Log.logAttention "chartScreenshotUrl: invalid URL" $ AE.object ["url" AE..= chartShotBaseUrl]
-      pure ""
+  | not (T.isPrefixOf "http" chartShotBaseUrl) = Log.logAttention "chartScreenshotUrl: invalid URL" (AE.object ["url" AE..= chartShotBaseUrl]) >> pure ""
   | otherwise = do
-      let echartsOpts = Widget.widgetToECharts widget
-          body = AE.object ["echarts" AE..= echartsOpts, "width" AE..= (900 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
-          url = chartShotBaseUrl <> "/render"
+      let url = chartShotBaseUrl <> "/render"
+          body = AE.object ["echarts" AE..= Widget.widgetToECharts widget, "width" AE..= (900 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
       resp <- postWith defaults (toString url) body
       let respBody = responseBody resp
-          status = statusCode $ responseStatus resp :: Int
-      if status /= 200
-        then do
-          Log.logAttention "chartScreenshotUrl: chartshot returned non-200" $ AE.object ["url" AE..= url, "status" AE..= status, "body" AE..= (decodeUtf8 respBody :: Text)]
-          pure ""
+      if statusCode (responseStatus resp) /= 200
+        then Log.logAttention "chartScreenshotUrl: non-200" (AE.object ["url" AE..= url, "status" AE..= statusCode (responseStatus resp), "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
         else case AE.decode respBody of
           Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
-          _ -> do
-            Log.logAttention "chartScreenshotUrl: failed to parse response (expected {url: string})" $ AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 respBody :: Text)]
-            pure ""
+          _ -> Log.logAttention "chartScreenshotUrl: parse failed (expected {url: string})" (AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
 
 
 -- | Render widget to chart URL, fetching data if needed (eager-aware)
@@ -173,7 +165,7 @@ renderWidgetToChartUrl widget pid from to chartShotUrl = do
     Just _ -> pure widget
     Nothing -> do
       metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing Nothing (Just from) (Just to) Nothing []
-      pure $ widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD}
+      if V.null metricsD.dataset then pure widget else pure $ widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD}
   chartScreenshotUrl widget' chartShotUrl
 
 
