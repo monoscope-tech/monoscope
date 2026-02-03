@@ -150,19 +150,19 @@ chartScreenshotUrl widget chartShotBaseUrl
       pure ""
   | otherwise = do
       let echartsOpts = Widget.widgetToECharts widget
-          body = AE.object ["echarts" AE..= echartsOpts, "width" AE..= (600 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
+          body = AE.object ["echarts" AE..= echartsOpts, "width" AE..= (900 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
           url = chartShotBaseUrl <> "/render"
       resp <- postWith defaults (toString url) body
       let respBody = responseBody resp
           status = statusCode $ responseStatus resp :: Int
       if status /= 200
         then do
-          Log.logAttention "chartScreenshotUrl: chartshot returned non-200" $ AE.object ["url" AE..= url, "status" AE..= status, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
+          Log.logAttention "chartScreenshotUrl: chartshot returned non-200" $ AE.object ["url" AE..= url, "status" AE..= status, "body" AE..= (decodeUtf8 respBody :: Text)]
           pure ""
         else case AE.decode respBody of
           Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
           _ -> do
-            Log.logAttention "chartScreenshotUrl: failed to parse response (expected {url: string})" $ AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 (toStrict respBody) :: Text)]
+            Log.logAttention "chartScreenshotUrl: failed to parse response (expected {url: string})" $ AE.object ["url" AE..= url, "body" AE..= (decodeUtf8 respBody :: Text)]
             pure ""
 
 
