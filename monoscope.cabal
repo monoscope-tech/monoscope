@@ -82,6 +82,7 @@ library
       Models.Apis.RequestDumps
       Models.Apis.Shapes
       Models.Apis.Slack
+      Models.Apis.LogPatterns
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
