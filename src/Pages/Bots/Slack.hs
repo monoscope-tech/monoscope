@@ -39,7 +39,8 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, chartScreenshotUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
+import Pages.Charts.Charts qualified as Charts
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
@@ -151,7 +152,6 @@ slackInteractionsH interaction = do
   where
     handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> ATBaseCtx ()
     handleAskCommand inter slackData authCtx = do
-      now <- Time.currentTime
       let envCfg = authCtx.env
       result <- processAIQuery slackData.projectId inter.text Nothing envCfg.openaiApiKey
       case result of
@@ -160,10 +160,29 @@ slackInteractionsH interaction = do
           let (from, to) = timeRangeStr
           case visualization of
             Just vizType -> do
-              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = "&q=" <> toUriStr query <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+              let wType = Widget.mapChatTypeToWidgetType vizType
+                  chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  content' = getBotContent inter.text query query_url opts envCfg.chartShotUrl now
+              -- Execute query server-side and build chart with bin_auto support
+              metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just slackData.projectId) (Just query) Nothing Nothing (Just from) (Just to) Nothing []
+              let widgetDataset = Widget.WidgetDataset
+                    { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsData.headers) (AE.toJSON <<$>> metricsData.dataset)
+                    , rowsPerMin = metricsData.rowsPerMin
+                    , value = Just metricsData.rowsCount
+                    , from = metricsData.from
+                    , to = metricsData.to
+                    , stats = metricsData.stats
+                    }
+                  widget = (def :: Widget)
+                    { Widget.wType = wType
+                    , Widget.query = Just query
+                    , Widget.dataset = Just widgetDataset
+                    , Widget.hideLegend = Just False
+                    , Widget.legendPosition = Just "bottom"
+                    }
+              -- Render chart via chartshot with pre-built ECharts options
+              imageUrl <- chartScreenshotUrl widget envCfg.chartShotUrl Nothing
+              let content' = getBotContentWithUrl inter.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
               _ <- sendSlackFollowupResponse inter.response_url content
               pass
@@ -381,8 +400,9 @@ chartImageUrl options baseUrl now =
    in baseUrl <> "?time=" <> timeMs <> options
 
 
-getBotContent :: Text -> Text -> Text -> Text -> Text -> Time.UTCTime -> AE.Value
-getBotContent question query query_url chartOptions baseUrl now =
+-- | Build Slack message content with a chart image URL
+getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
+getBotContentWithUrl question query query_url imageUrl =
   AE.Array
     ( V.fromList
         [ AE.object
@@ -390,12 +410,14 @@ getBotContent question query query_url chartOptions baseUrl now =
             , "title" AE..= question
             , "markdown_in" AE..= AE.Array (V.fromList ["text"])
             , "title_link" AE..= query_url
-            , "image_url" AE..= chartImageUrl chartOptions baseUrl now
+            , "image_url" AE..= imageUrl
             , "fields" AE..= AE.Array (V.fromList [AE.object ["title" AE..= "Query used", "value" AE..= query]])
             , "actions" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= "View in log explorer", "url" AE..= query_url]])
             ]
         ]
     )
+
+
 
 
 dashboardView :: Text -> V.Vector AE.Value -> AE.Value
@@ -586,10 +608,28 @@ slackEventsPostH payload = do
           let (from, to) = timeRangeStr
           case visualization of
             Just vizType -> do
-              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = "&q=" <> toUriStr query <> "&p=" <> slackData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+              let wType = Widget.mapChatTypeToWidgetType vizType
+                  chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  content' = getBotContent event.text query query_url opts envCfg.chartShotUrl now
+              -- Execute query server-side and build chart with bin_auto support
+              metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just slackData.projectId) (Just query) Nothing Nothing (Just from) (Just to) Nothing []
+              let widgetDataset = Widget.WidgetDataset
+                    { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsData.headers) (AE.toJSON <<$>> metricsData.dataset)
+                    , rowsPerMin = metricsData.rowsPerMin
+                    , value = Just metricsData.rowsCount
+                    , from = metricsData.from
+                    , to = metricsData.to
+                    , stats = metricsData.stats
+                    }
+                  widget = (def :: Widget)
+                    { Widget.wType = wType
+                    , Widget.query = Just query
+                    , Widget.dataset = Just widgetDataset
+                    , Widget.hideLegend = Just False
+                    , Widget.legendPosition = Just "bottom"
+                    }
+              imageUrl <- chartScreenshotUrl widget envCfg.chartShotUrl Nothing
+              let content' = getBotContentWithUrl event.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
               _ <- sendSlackChatMessage envCfg.slackBotToken content
               pass

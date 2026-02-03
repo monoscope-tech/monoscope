@@ -1,8 +1,9 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, chartScreenshotUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, toWidgetDataset) where
 
-import Control.Lens ((.~))
+import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
-import Data.Effectful.Wreq (header)
+import Data.Aeson.KeyMap qualified as KEMP
+import Data.Effectful.Wreq (HTTP, defaults, header, postWith, responseBody)
 import Data.Effectful.Wreq qualified
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
@@ -13,6 +14,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
+import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
@@ -23,7 +25,9 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (navBar)
+import Pages.Charts.Charts qualified as Charts
 import Pkg.AI qualified as AI
+import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (EnvConfig (..))
 import System.Types (DB)
@@ -130,6 +134,39 @@ chartImageUrl :: Text -> Text -> Time.UTCTime -> Text
 chartImageUrl options baseUrl now =
   let timeMs = show $ floor (utcTimeToPOSIXSeconds now * 1000)
    in baseUrl <> "?time=" <> timeMs <> options
+
+
+-- | Render a widget to PNG via chartshot and return the image URL
+-- This sends pre-built ECharts options to chartshot, ensuring consistency
+-- with web platform rendering (proper bin_auto handling, etc.)
+chartScreenshotUrl :: (HTTP :> es, Log :> es) => Widget.Widget -> Text -> Maybe Text -> Eff es Text
+chartScreenshotUrl widget chartShotBaseUrl themeM = do
+  let echartsOpts = Widget.widgetToECharts widget
+      body =
+        AE.object
+          [ "echarts" AE..= echartsOpts
+          , "width" AE..= (600 :: Int)
+          , "height" AE..= (300 :: Int)
+          , "theme" AE..= fromMaybe "default" themeM
+          ]
+  resp <- postWith defaults (toString $ chartShotBaseUrl <> "/render") body
+  let respBody = resp ^. responseBody
+  case AE.decode respBody of
+    Just (AE.Object o) | Just (AE.String url) <- KEMP.lookup "url" o -> pure url
+    _ -> do
+      Log.logAttention "chartScreenshotUrl: failed to parse chartshot response" ()
+      pure ""
+
+
+toWidgetDataset :: Charts.MetricsData -> Widget.WidgetDataset
+toWidgetDataset md = Widget.WidgetDataset
+  { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
+  , rowsPerMin = md.rowsPerMin
+  , value = Just md.rowsCount
+  , from = md.from
+  , to = md.to
+  , stats = md.stats
+  }
 
 
 data TableData = TableData

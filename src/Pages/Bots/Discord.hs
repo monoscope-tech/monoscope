@@ -37,7 +37,8 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartScreenshotUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, toWidgetDataset)
+import Pages.Charts.Charts qualified as Charts
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -364,13 +365,22 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
   let (from, to) = timeRangeStr
   case visualization of
     Just vizType -> do
-      let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+      let widgetType = Widget.mapChatTypeToWidgetType vizType
+          chartType = Widget.mapWidgetTypeToChartType widgetType
           query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
-          opts = "&q=" <> toUriStr query <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
           question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
-          content = getBotContent question query query_url opts authCtx.env.chartShotUrl now
+      metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just discordData.projectId) (Just query) Nothing Nothing (Just from) (Just to) Nothing []
+      let widget = (def :: Widget.Widget)
+            { Widget.wType = widgetType
+            , Widget.query = Just query
+            , Widget.dataset = Just $ toWidgetDataset metricsData
+            , Widget.hideLegend = Just False
+            , Widget.legendPosition = Just "bottom"
+            }
+      imageUrl <- chartScreenshotUrl widget authCtx.env.chartShotUrl Nothing
+      let content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of
       Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
@@ -462,8 +472,8 @@ getThreadStarterMessage interaction botToken = do
     Nothing -> pure Nothing
 
 
-getBotContent :: Text -> Text -> Text -> Text -> Text -> Time.UTCTime -> AE.Value
-getBotContent question query query_url chartOptions baseUrl now =
+getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
+getBotContentWithUrl question query query_url imageUrl =
   AE.object
     [ "flags" AE..= 32768
     , "components"
@@ -476,7 +486,7 @@ getBotContent question query query_url chartOptions baseUrl now =
                     AE..= AE.Array
                       ( V.fromList
                           [ AE.object ["type" AE..= 10, "content" AE..= ("### " <> question)]
-                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= chartImageUrl chartOptions baseUrl now]])]
+                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= imageUrl]])]
                           , AE.object ["type" AE..= 10, "content" AE..= ("**Query used:** " <> query)]
                           , AE.object ["type" AE..= 1, "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open explorer", "url" AE..= query_url, "style" AE..= 5]])]
                           ]

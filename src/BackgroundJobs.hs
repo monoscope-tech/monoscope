@@ -5,6 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
@@ -56,14 +57,15 @@ import Models.Telemetry.Telemetry (SeverityLevel (..))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.GitHub qualified as GitHub
@@ -941,9 +943,9 @@ sendReportForProject pid rType = do
   ctx <- ask @Config.AuthContext
   users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
-  let (prv, typTxt, intv) = case rType of
-        WeeklyReport -> (6 * 86400, "weekly", "1d")
-        _ -> (86400, "daily", "1h")
+  let (prv, typTxt) = case rType of
+        WeeklyReport -> (6 * 86400, "weekly")
+        _ -> (86400, "daily")
 
   let startTime = addUTCTime (negate prv) currentTime
   projectM <- Projects.projectById pid
@@ -1008,10 +1010,22 @@ sendReportForProject pid rType = do
       let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-          chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
-          allQ = chartShotUrl <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-          errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-          alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
+          eventsWidget = (def :: Widget.Widget)
+            { Widget.wType = Widget.WTTimeseries
+            , Widget.query = Just "summarize count(*) by bin_auto(timestamp), resource___service___name"
+            , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataEvents
+            , Widget.hideLegend = Just False
+            , Widget.legendPosition = Just "bottom"
+            }
+          errorsWidget = eventsWidget
+            { Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name"
+            , Widget.dataset = Just $ BotUtils.toWidgetDataset chartDataErrors
+            , Widget.theme = Just "roma"
+            }
+      -- Render charts via chartshot (uses bin_auto, consistent with web platform)
+      allQ <- BotUtils.chartScreenshotUrl eventsWidget ctx.env.chartShotUrl Nothing
+      errQ <- BotUtils.chartScreenshotUrl errorsWidget ctx.env.chartShotUrl (Just "roma")
+      let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
         Projects.NDiscord -> do
