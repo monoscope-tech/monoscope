@@ -1,9 +1,9 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), chartImageUrl, chartScreenshotUrl, renderWidgetToChartUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
-import Data.Effectful.Wreq (header)
-import Data.Effectful.Wreq qualified
+import Data.Aeson.KeyMap qualified as KEMP
+import Data.Effectful.Wreq (HTTP, Options, defaults, header, postWith)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
@@ -11,8 +11,10 @@ import Data.Time qualified as Time
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
+import Effectful.Error.Static (Error)
 import Effectful.Log (Log)
+import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
@@ -20,12 +22,18 @@ import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Lucid
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Projects.Projects qualified as Projects
+import Network.HTTP.Client.Internal (responseBody, responseStatus)
 import Network.HTTP.Types (urlEncode)
+import Network.HTTP.Types.Status (statusCode)
 import Pages.BodyWrapper (PageCtx (..))
+import Pages.Charts.Charts qualified as Charts
 import Pages.Components (navBar)
 import Pkg.AI qualified as AI
+import Pkg.Components.Widget qualified as Widget
 import Relude
-import System.Config (EnvConfig (..))
+import Servant.Server (ServerError)
+import System.Config (AuthContext, EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
 import Utils qualified
@@ -50,11 +58,11 @@ instance ToHtml BotResponse where
   toHtmlRaw = toHtml
 
 
-authHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.Options
+authHeader :: Text -> Options -> Options
 authHeader token = header "Authorization" .~ [encodeUtf8 $ "Bot " <> token]
 
 
-contentTypeHeader :: Text -> Data.Effectful.Wreq.Options -> Data.Effectful.Wreq.Options
+contentTypeHeader :: Text -> Options -> Options
 contentTypeHeader contentType = header "Content-Type" .~ [encodeUtf8 contentType]
 
 
@@ -130,6 +138,34 @@ chartImageUrl :: Text -> Text -> Time.UTCTime -> Text
 chartImageUrl options baseUrl now =
   let timeMs = show $ floor (utcTimeToPOSIXSeconds now * 1000)
    in baseUrl <> "?time=" <> timeMs <> options
+
+
+-- | Render a widget to PNG via chartshot and return the image URL
+-- Uses widget.theme for theming (defaults to "default" if not set)
+-- Returns empty string on failure (graceful degradation for bots)
+chartScreenshotUrl :: (HTTP :> es, IOE :> es, Log :> es) => Widget.Widget -> Text -> Eff es Text
+chartScreenshotUrl widget chartShotBaseUrl
+  | not (T.isPrefixOf "http" chartShotBaseUrl) = Log.logAttention "chartScreenshotUrl: invalid URL" (AE.object ["url" AE..= chartShotBaseUrl, "widgetId" AE..= widget.id]) >> pure ""
+  | otherwise = do
+      let url = chartShotBaseUrl <> "/render"
+          body = AE.object ["echarts" AE..= Widget.widgetToECharts widget, "width" AE..= (900 :: Int), "height" AE..= (300 :: Int), "theme" AE..= fromMaybe "default" widget.theme]
+      resp <- postWith defaults (toString url) body
+      let respBody = responseBody resp
+      if statusCode (responseStatus resp) /= 200
+        then Log.logAttention "chartScreenshotUrl: non-200" (AE.object ["url" AE..= url, "status" AE..= statusCode (responseStatus resp), "widgetId" AE..= widget.id, "query" AE..= widget.query, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
+        else case AE.decode respBody of
+          Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
+          _ -> Log.logAttention "chartScreenshotUrl: parse failed (expected {url: string})" (AE.object ["url" AE..= url, "widgetId" AE..= widget.id, "body" AE..= (decodeUtf8 respBody :: Text)]) >> pure ""
+
+
+-- | Render widget to chart URL, fetching data if needed (eager-aware)
+-- Returns empty string early if dataset is empty to avoid unnecessary HTTP call
+renderWidgetToChartUrl :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, HTTP :> es, Log :> es, Time.Time :> es) => Widget.Widget -> Projects.ProjectId -> Text -> Text -> Text -> Eff es Text
+renderWidgetToChartUrl widget pid from to chartShotUrl = case widget.dataset of
+  Just _ -> chartScreenshotUrl widget chartShotUrl
+  Nothing -> do
+    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query Nothing Nothing (Just from) (Just to) Nothing []
+    if V.null metricsD.dataset then pure "" else chartScreenshotUrl widget{Widget.dataset = Just $ Widget.toWidgetDataset metricsD} chartShotUrl
 
 
 data TableData = TableData
