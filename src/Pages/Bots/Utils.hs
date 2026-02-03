@@ -149,12 +149,13 @@ chartScreenshotUrl widget chartShotBaseUrl themeM = do
           , "height" AE..= (300 :: Int)
           , "theme" AE..= fromMaybe "default" themeM
           ]
-  resp <- postWith defaults (toString $ chartShotBaseUrl <> "/render") body
+      url = chartShotBaseUrl <> "/render"
+  resp <- postWith defaults (toString url) body
   let respBody = resp ^. responseBody
   case AE.decode respBody of
-    Just (AE.Object o) | Just (AE.String url) <- KEMP.lookup "url" o -> pure url
+    Just (AE.Object o) | Just (AE.String imgUrl) <- KEMP.lookup "url" o -> pure imgUrl
     _ -> do
-      Log.logAttention "chartScreenshotUrl: failed to parse chartshot response" ()
+      Log.logAttention "chartScreenshotUrl: failed to parse chartshot response" (AE.object ["chartshot_url" AE..= url])
       pure ""
 
 

@@ -37,7 +37,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartScreenshotUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, toWidgetDataset)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, chartScreenshotUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, toWidgetDataset)
 import Pages.Charts.Charts qualified as Charts
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
