@@ -144,7 +144,7 @@ handleTableResponse target tableAsVecE envCfg projectId query =
                               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("`" <> query <> "`")]]
                               , AE.object ["type" AE..= "divider"]
                               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= tableData]]
-                              , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True], "url" AE..= url']])]
+                              , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "action_id" AE..= "view-log-explorer", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True], "url" AE..= url']])]
                               ]
                           )
                     , "response_type" AE..= "in_channel"
@@ -396,7 +396,7 @@ formatReportForSlack report pid envCfg eventsUrl errorsUrl channelId =
                   , AE.object ["type" AE..= "divider"]
                   , AE.object ["type" AE..= "image", "image_url" AE..= eventsUrl, "alt_text" AE..= ("Events chart for " <> report.reportType <> " report showing " <> show totalEvents <> " total events")]
                   , AE.object ["type" AE..= "image", "image_url" AE..= errorsUrl, "alt_text" AE..= ("Errors chart for " <> report.reportType <> " report showing " <> show totalErrors <> " total errors")]
-                  , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View Full Report"), "emoji" AE..= True], "url" AE..= reportUrl]])]
+                  , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "action_id" AE..= "view-full-report", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View Full Report"), "emoji" AE..= True], "url" AE..= reportUrl]])]
                   ]
               )
         , "response_type" AE..= "in_channel"

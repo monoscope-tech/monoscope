@@ -429,10 +429,10 @@ getBotContentWithUrl question query query_url imageUrl =
     [ "blocks"
         AE..= AE.Array
           ( V.fromList
-              [ AE.object ["type" AE..= "header", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "chart" <> " " <> question), "emoji" AE..= True]]
-              , AE.object ["type" AE..= "image", "image_url" AE..= imageUrl, "alt_text" AE..= ("Chart: " <> question)]
+              [ AE.object ["type" AE..= "header", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= T.take 150 (botEmoji "chart" <> " " <> question), "emoji" AE..= True]]
+              , AE.object ["type" AE..= "image", "image_url" AE..= imageUrl, "alt_text" AE..= ("Chart: " <> T.take 200 question)]
               , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Query:* `" <> query <> "`")]])]
-              , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True], "url" AE..= query_url]])]
+              , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "action_id" AE..= "view-log-explorer", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True], "url" AE..= query_url]])]
               ]
           )
     , "response_type" AE..= "in_channel"
