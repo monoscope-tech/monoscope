@@ -1227,48 +1227,50 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
     div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
-      widgetAlertConfig_ pid alertFormId alertEndpoint wid sourceWid widgetToUse
+      widgetAlertConfig_ pid alertFormId alertEndpoint widgetPreviewId sourceWid widgetToUse
 
 
--- | Widget alert configuration form
+-- | Widget alert configuration form (unified with Log Explorer form structure)
 widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget -> Html ()
-widgetAlertConfig_ pid alertFormId alertEndpoint chartTargetId widgetId widget = do
+widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget = do
   let hasAlert = isJust widget.alertId
-      chartUpdateAttr = term "_" [text|on input set chart to #{'${chartTargetId}'} if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
+      defaultTitle = fromMaybe "Widget Alert" widget.title <> " - Threshold Alert"
+  -- Enable Alert toggle
+  label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer mb-4"] do
+    div_ [] do
+      h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
+      p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
+    input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary peer", [__|on change if my.checked then remove .hidden from next <form/> else add .hidden to next <form/>|]] <> [checked_ | hasAlert]
   form_
     [ id_ alertFormId
     , hxPost_ alertEndpoint
     , hxSwap_ "none"
     , hxTrigger_ "submit"
-    , class_ "space-y-6"
+    , hxVals_ "js:{teams: typeof getSelectedTeams === 'function' ? getSelectedTeams() : []}"
+    , class_ $ "flex flex-col gap-3" <> if hasAlert then "" else " hidden"
+    , [__|on htmx:afterRequest if event.detail.successful set my value to '' then call me.reset() end|]
     ]
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
       input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
-      input_
-        [ type_ "hidden"
-        , name_ "vizType"
-        , value_ $ case widget.wType of
-            Widget.WTTimeseries -> "timeseries"
-            Widget.WTTimeseriesLine -> "timeseries_line"
-            _ -> "timeseries"
-        ]
+      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of { Widget.WTTimeseries -> "timeseries"; Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries" }]
 
-      label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer"] do
-        div_ [] do
-          h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
-          p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
-        input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary"] <> [checked_ | hasAlert]
+      -- Alert name field
+      fieldset_ [class_ "fieldset"] do
+        label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
+        input_ [type_ "text", name_ "title", value_ defaultTitle, placeholder_ "e.g. High error rate alert", class_ "input input-sm w-full", required_ ""]
 
-      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
-        h4_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
-        div_ [class_ "grid grid-cols-2 gap-4"] do
-          Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [chartUpdateAttr] widget.alertThreshold
-          Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [chartUpdateAttr] widget.warningThreshold
-        Alerts.directionSelect_ False "select-bordered w-full"
+      -- Monitor Schedule section (shared component)
+      Alerts.monitorScheduleSection_ True 5 5 (Just "threshold_exceeded") (Just chartTargetId)
+
+      -- Thresholds section (shared component)
+      Alerts.thresholdsSection_ (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
+
+      -- Widget-specific: Show threshold lines option
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-3"] do
         fieldset_ [class_ "fieldset"] do
-          label_ [class_ "label text-xs"] "Show threshold lines"
-          select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
+          label_ [class_ "label text-xs"] "Show threshold lines on chart"
+          select_ [name_ "showThresholdLines", class_ "select select-sm w-full"] do
             let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
                 isOnBreach = widget.showThresholdLines == Just "on_breach"
                 isNever = widget.showThresholdLines == Just "never"
@@ -1276,35 +1278,15 @@ widgetAlertConfig_ pid alertFormId alertEndpoint chartTargetId widgetId widget =
             option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
             option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
-      Alerts.collapsibleSection_ "Recovery thresholds" (Just "(prevents flapping)") do
-        p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
-        div_ [class_ "grid grid-cols-2 gap-4"] do
-          Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
-          Alerts.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-bordered w-full" Nothing
+      -- Notification Settings section (shared component) - empty teams, users can configure after creation
+      Alerts.notificationSettingsSection_ Nothing Nothing Nothing True V.empty V.empty alertFormId
 
-      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] $ Alerts.frequencySelect_ 5 True "select-bordered w-full"
-
-      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
-        label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Alert title"
-        input_
-          [ type_ "text"
-          , name_ "title"
-          , class_ "input input-bordered w-full"
-          , placeholder_ "Widget threshold exceeded"
-          , required_ "required"
-          , value_ $ fromMaybe (fromMaybe "Widget Alert" widget.title <> " - Threshold Alert") Nothing
-          ]
-
-      div_ [class_ "flex justify-end gap-3 pt-4"] do
-        when hasAlert do
-          button_
-            [ type_ "button"
-            , class_ "btn btn-ghost btn-sm"
-            , hxDelete_ alertEndpoint
-            , hxSwap_ "none"
-            ]
-            "Remove Alert"
-        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] $ if hasAlert then "Update Alert" else "Create Alert"
+      -- Action buttons
+      div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
+        when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm", hxDelete_ alertEndpoint, hxSwap_ "none"] "Remove Alert"
+        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] do
+          faSprite_ "plus" "regular" "w-3.5 h-3.5"
+          if hasAlert then "Update Alert" else "Create Alert"
 
 
 --------------------------------------------------------------------
@@ -1323,7 +1305,14 @@ data WidgetAlertForm = WidgetAlertForm
   , alertRecoveryThreshold :: Maybe Text
   , warningRecoveryThreshold :: Maybe Text
   , frequency :: Maybe Text
+  , timeWindow :: Maybe Text
+  , conditionType :: Maybe Text
   , title :: Text
+  , severity :: Maybe Text
+  , subject :: Maybe Text
+  , message :: Maybe Text
+  , recipientEmailAll :: Maybe Text
+  , teams :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -1362,22 +1351,22 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
               , warningThreshold = form.warningThreshold
               , recipientEmails = []
               , recipientSlacks = []
-              , recipientEmailAll = Nothing
+              , recipientEmailAll = Just (form.recipientEmailAll == Just "true")
               , direction = form.direction
               , title = form.title
-              , severity = "warning"
-              , subject = form.title
-              , message = ""
+              , severity = fromMaybe "Warning" form.severity
+              , subject = fromMaybe form.title form.subject
+              , message = fromMaybe "" form.message
               , query = form.query
               , since = "1h"
               , from = ""
               , to = ""
               , frequency = form.frequency
-              , timeWindow = Nothing
-              , conditionType = Just "threshold_exceeded"
+              , timeWindow = form.timeWindow
+              , conditionType = form.conditionType <|> Just "threshold_exceeded"
               , source = Just "widget"
               , vizType = form.vizType
-              , teams = []
+              , teams = form.teams
               , alertRecoveryThreshold = form.alertRecoveryThreshold
               , warningRecoveryThreshold = form.warningRecoveryThreshold
               , widgetId = Just form.widgetId
