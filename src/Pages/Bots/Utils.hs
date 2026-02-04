@@ -15,7 +15,6 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
-import System.Logging qualified as Log
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
@@ -30,6 +29,7 @@ import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Relude
 import System.Config (EnvConfig (..))
+import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
 import Utils qualified
@@ -133,7 +133,7 @@ formatSpans spans =
 
 
 -- | Construct signed URL for widget PNG endpoint. Logs error and returns empty string if URL exceeds 8000 chars.
-widgetPngUrl :: (Log :> es, IOE :> es) => Text -> Text -> Projects.ProjectId -> Widget.Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
+widgetPngUrl :: (IOE :> es, Log :> es) => Text -> Text -> Projects.ProjectId -> Widget.Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
