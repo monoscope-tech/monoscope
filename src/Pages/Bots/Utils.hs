@@ -129,8 +129,8 @@ handleTableResponse target tableAsVecE envCfg projectId query =
               explorerLink = "[View in Log Explorer →](" <> url' <> ")"
               moreText = if resultCount > shownCount then "\n_" <> show (resultCount - shownCount) <> " more results in Log Explorer_" else ""
               headerEmoji = botEmoji "table"
-              header = headerEmoji <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " events)"
-              content = header <> "\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
+              headerText = headerEmoji <> " **Query Results** (showing " <> show shownCount <> " of " <> show resultCount <> " events)"
+              content = headerText <> "\n`" <> query <> "`\n" <> tableData <> moreText <> "\n"
            in case target of
                 Discord -> AE.object ["content" AE..= (content <> "\n" <> explorerLink)]
                 WhatsApp -> AE.object ["body" AE..= (content <> "\n" <> url')]
