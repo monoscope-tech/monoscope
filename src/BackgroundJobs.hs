@@ -1010,12 +1010,10 @@ sendReportForProject pid rType = do
       let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-          eventsWidget = def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), resource___service___name", Widget.dataset = Just $ Widget.toWidgetDataset chartDataEvents}
-          errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name", Widget.dataset = Just $ Widget.toWidgetDataset chartDataErrors, Widget.theme = Just "roma"}
-      (allQ, errQ) <- Ki.scoped \scope -> do
-        allQThread <- Ki.fork scope $ BotUtils.chartScreenshotUrl eventsWidget ctx.env.chartShotUrl
-        errQThread <- Ki.fork scope $ BotUtils.chartScreenshotUrl errorsWidget ctx.env.chartShotUrl
-        (,) <$> Ki.atomically (Ki.await allQThread) <*> Ki.atomically (Ki.await errQThread)
+          eventsWidget = def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"}
+          errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
+      allQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
+      errQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case

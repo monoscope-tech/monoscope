@@ -128,9 +128,9 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       return h.substring(0, 75) + (h.length > 75 ? '...' : '');
     });
     opt.xAxis = opt.xAxis || {};
-    opt.xAxis.min = from * 1000;
-    opt.xAxis.max = to * 1000;
-    opt.dataset.source = [trmHeaders || [], ...dataset.map((row: any) => [row[0] * 1000, ...row.slice(1)])];
+    opt.xAxis.min = from;  // Already in ms from server
+    opt.xAxis.max = to;
+    opt.dataset.source = [trmHeaders || [], ...dataset];
     opt.yAxis.max = stats.max;
     if (widgetData.chartType != 'line') {
       opt.yAxis.max = stats.max_group_sum;
@@ -272,7 +272,7 @@ const chartWidget = (widgetData: WidGetData) => {
     widgetData.query = baseQuery;
   }
 
-  opt.dataset.source = opt.dataset?.source?.map((row: any) => [row[0] * 1000, ...row.slice(1)]) ?? null;
+  // Timestamps already in ms from server (toWidgetDataset converts seconds to ms)
 
   (window as any)[`${chartType}Chart`] = chart;
 

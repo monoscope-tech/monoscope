@@ -340,6 +340,7 @@ library
     , text-display
     , time
     , tmp-postgres
+    , typed-process
     , unliftio
     , unordered-containers
     , uuid
@@ -467,6 +468,7 @@ test-suite integration-tests
       Pages.QueryCacheSpec
       Pages.ReportsSpec
       Pages.ShareSpec
+      Pages.WidgetSpec
       ProcessMessageSpec
       Spec
       Web.ClientMetadataSpec

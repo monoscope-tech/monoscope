@@ -26,6 +26,7 @@ module Pages.Dashboards (
   dashboardWidgetExpandGetH,
   visTypes,
   processEagerWidget,
+  fetchWidgetData,
   dashboardBulkActionPostH,
   TabRenameForm (..),
   TabRenameRes (..),
@@ -61,7 +62,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
-import Effectful.Reader.Static (ask)
+import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -738,6 +739,17 @@ processWidget pid now timeRange allParams widgetBase = do
       pure $ widget' & #children ?~ processedChildren
 
 
+-- | Fetch widget data based on widget type (for stat and chart widgets)
+fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
+fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
+  Widget.WTStat -> do
+    stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
+  _ -> do
+    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    pure $ widget & #dataset ?~ Widget.toWidgetDataset metricsD
+
+
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
@@ -756,9 +768,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
                   (AnomalyList.issueColumns issue.projectId)
                   vm
           )
-  Widget.WTStat -> do
-    stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-    pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
+  Widget.WTStat -> fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget
   Widget.WTTable -> do
     -- Fetch table data
     tableData <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
@@ -784,9 +794,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
       $ widget
       & #html
         ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
-  _ -> do
-    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-    pure $ widget & #dataset ?~ Widget.toWidgetDataset metricsD
+  _ -> fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget
 
 
 -- | Populate widgets with their alert statuses

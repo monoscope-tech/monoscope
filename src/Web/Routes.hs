@@ -1,16 +1,17 @@
 {-# LANGUAGE PackageImports #-}
 
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH) where
 
 -- Standard library imports
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Map qualified as Map
+import Data.Ord (clamp)
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import GHC.TypeLits (Symbol)
-import Relude
+import Relude hiding (ask)
 
 -- Database imports
 import Database.PostgreSQL.Simple qualified as PGS
@@ -22,6 +23,7 @@ import Effectful (runPureEff)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (runReader)
+import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
@@ -43,7 +45,13 @@ import Web.Cookie (SetCookie)
 
 -- System and configuration imports
 import Deriving.Aeson qualified as DAE
-import System.Config (AuthContext)
+import Pages.Bots.Utils (verifyWidgetSignature)
+import Pkg.Components.TimePicker qualified as TimePicker
+import System.Config (AuthContext (..), EnvConfig (..))
+import System.Exit (ExitCode (..))
+import System.Logging qualified as Log
+import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
+import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Web.Auth (APItoolkitAuthContext, authHandler)
 import Web.Auth qualified as Auth
@@ -191,6 +199,7 @@ data Routes mode = Routes
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   }
   deriving stock (Generic)
 
@@ -411,6 +420,7 @@ server pool =
     , chartsDataShot = Charts.queryMetrics
     , rrwebPost = Replay.replayPostH
     , avatarGet = avatarGetH
+    , widgetPngGet = widgetPngGetH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -646,27 +656,65 @@ avatarGetH userId = do
 -- Widget GET handler that accepts dashboard parameters
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
-  -- Parse the widgetJSON parameter
   let v = fromMaybe "" widgetJsonM
   widget <- case AE.eitherDecode (encodeUtf8 v) of
     Right w -> pure w
-    Left err -> do
-      Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
+    Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
 
-  -- Get the current time for processing
   now <- Time.currentTime
-
-  -- Process the widget with dashboard parameters (similar to how processWidget works in Dashboards)
   let widgetWithPid = widget & #_projectId ?~ pid
 
-  -- Process eager widgets (tables, stats, etc.) with dashboard parameters
   processedWidget <-
     if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
-      else pure widgetWithPid
+      else do
+        metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
+        pure $ widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
 
-  -- Return the processed widget
   addRespHeaders processedWidget
+
+
+-- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
+widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let v = fromMaybe "" widgetJsonM
+      width = clamp (100, 2000) $ fromMaybe 900 widthM
+      height = clamp (100, 2000) $ fromMaybe 300 heightM
+
+  Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
+
+  whenLeft_ (verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err ->
+    Error.throwError $ err403{errBody = err}
+
+  widget <- case AE.eitherDecode (encodeUtf8 v) of
+    Right w -> pure w
+    Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
+
+  let widgetWithPid = widget & #_projectId ?~ pid & #eager ?~ True
+  processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widgetWithPid
+  let input =
+        AE.encode
+          $ AE.object
+            [ "echarts" AE..= Widget.widgetToECharts processedWidget
+            , "width" AE..= width
+            , "height" AE..= height
+            , "theme" AE..= fromMaybe "default" processedWidget.theme
+            ]
+      processConfig = setStdin (byteStringInput input) $ proc "./chart-cli" []
+      timeoutMicros = 30000000 -- 30 seconds
+  resultM <- liftIO $ timeout timeoutMicros $ readProcess processConfig
+  pngBytes <- case resultM of
+    Nothing -> do
+      Log.logAttention "widgetPngGetH: chart render timed out" $ AE.object ["widgetId" AE..= processedWidget.id, "width" AE..= width, "height" AE..= height]
+      Error.throwError $ err504{errBody = "Chart rendering timed out"}
+    Just (ExitSuccess, bytes, _) -> pure bytes
+    Just (ExitFailure code, _, errOut) -> do
+      Log.logAttention "widgetPngGetH: chart render failed" $ AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id]
+      Error.throwError $ err500{errBody = "Chart rendering failed"}
+
+  let cacheHeader = if isJust fromDStr && isJust toDStr then "public, max-age=31536000, immutable" else "public, max-age=300"
+  pure $ addHeader @"Cache-Control" cacheHeader $ addHeader @"Content-Type" "image/png" pngBytes
 
 
 -- flamegraph GET handler

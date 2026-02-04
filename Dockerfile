@@ -30,6 +30,11 @@ COPY config/workbox-config.js ./config/
 
 RUN npm install -g workbox-cli@6.5.4 \
  && workbox generateSW config/workbox-config.js
+
+# Build chart-cli standalone binary (for widget PNG rendering)
+RUN npm install -g bun && \
+  cd web-components && bun build --compile --target=bun-linux-x64 src/chart-cli.ts --outfile ../chart-cli
+
 # Stage 2: Build Haskell application
 FROM haskell:9.12.2 AS haskell-builder
 
@@ -105,6 +110,7 @@ WORKDIR /opt/monoscope
 # Copy artifacts
 COPY --from=haskell-builder /build/dist/monoscope ./
 COPY --from=frontend-builder /build/static ./static
+COPY --from=frontend-builder /build/chart-cli ./
 
 # Set ownership and permissions
 RUN chown -R monoscope:monoscope /opt/monoscope && \
