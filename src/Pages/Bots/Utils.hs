@@ -9,9 +9,9 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
+import Data.Default (def)
 import Data.Effectful.Wreq (Options, header)
 import Data.List.NonEmpty qualified as NE
-import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
@@ -297,6 +297,8 @@ verifyWidgetSignature secret pid widgetJson = \case
 
 -- | Report query intent detection
 data ReportType = DailyReport | WeeklyReport deriving (Eq, Show)
+
+
 data QueryIntent = ReportIntent ReportType | GeneralQueryIntent deriving (Eq, Show)
 
 
@@ -315,7 +317,7 @@ detectReportIntent query =
 -- | Process report query - retrieves latest report from DB
 processReportQuery :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> ReportType -> EnvConfig -> Eff es (Either Text (Reports.Report, Text, Text))
 processReportQuery pid reportType envCfg = do
-  let typeTxt = case reportType of {DailyReport -> "daily"; WeeklyReport -> "weekly"}
+  let typeTxt = case reportType of DailyReport -> "daily"; WeeklyReport -> "weekly"
   reportM <- Reports.getLatestReportByType pid typeTxt
   case reportM of
     Nothing -> pure $ Left $ "No " <> typeTxt <> " report found. Reports are generated automatically on schedule."
@@ -335,14 +337,19 @@ formatReportForSlack report pid envCfg eventsUrl errorsUrl channelId =
       endTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
       (totalEvents, totalErrors) = parseReportStats report.reportJson
    in AE.object
-        [ "blocks" AE..= AE.Array (V.fromList
-            [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> reportUrl <> "|" <> T.toTitle report.reportType <> " Report>")]]
-            , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTxt)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*To:* " <> endTxt)]])]
-            , AE.object ["type" AE..= "image", "image_url" AE..= eventsUrl, "alt_text" AE..= "Events chart", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Total Events: " <> show totalEvents)]]
-            , AE.object ["type" AE..= "image", "image_url" AE..= errorsUrl, "alt_text" AE..= "Errors chart", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Total Errors: " <> show totalErrors)]]
-            , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View Full Report"], "url" AE..= reportUrl]])]
-            ])
-        , "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True
+        [ "blocks"
+            AE..= AE.Array
+              ( V.fromList
+                  [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> reportUrl <> "|" <> T.toTitle report.reportType <> " Report>")]]
+                  , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTxt)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*To:* " <> endTxt)]])]
+                  , AE.object ["type" AE..= "image", "image_url" AE..= eventsUrl, "alt_text" AE..= "Events chart", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Total Events: " <> show totalEvents)]]
+                  , AE.object ["type" AE..= "image", "image_url" AE..= errorsUrl, "alt_text" AE..= "Errors chart", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Total Errors: " <> show totalErrors)]]
+                  , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View Full Report"], "url" AE..= reportUrl]])]
+                  ]
+              )
+        , "response_type" AE..= "in_channel"
+        , "replace_original" AE..= True
+        , "delete_original" AE..= True
         ]
 
 
@@ -355,13 +362,16 @@ formatReportForDiscord report pid envCfg eventsUrl errorsUrl =
       (totalEvents, totalErrors) = parseReportStats report.reportJson
    in AE.object
         [ "flags" AE..= (32768 :: Int)
-        , "components" AE..= AE.Array (V.fromList
-            [ AE.object ["type" AE..= (10 :: Int), "content" AE..= ("## 📊 " <> T.toTitle report.reportType <> " Report")]
-            , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("**From:** " <> startTxt <> "  **To:** " <> endTxt)]
-            , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 20 " " <> "Total Errors: **" <> show totalErrors <> "**")]
-            , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.fromList [AE.object ["media" AE..= AE.object ["url" AE..= eventsUrl, "description" AE..= "Events"]], AE.object ["media" AE..= AE.object ["url" AE..= errorsUrl, "description" AE..= "Errors"]]])]
-            , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= (2 :: Int), "label" AE..= "Open report", "url" AE..= reportUrl, "style" AE..= (5 :: Int)]])]
-            ])
+        , "components"
+            AE..= AE.Array
+              ( V.fromList
+                  [ AE.object ["type" AE..= (10 :: Int), "content" AE..= ("## 📊 " <> T.toTitle report.reportType <> " Report")]
+                  , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("**From:** " <> startTxt <> "  **To:** " <> endTxt)]
+                  , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 20 " " <> "Total Errors: **" <> show totalErrors <> "**")]
+                  , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.fromList [AE.object ["media" AE..= AE.object ["url" AE..= eventsUrl, "description" AE..= "Events"]], AE.object ["media" AE..= AE.object ["url" AE..= errorsUrl, "description" AE..= "Errors"]]])]
+                  , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= (2 :: Int), "label" AE..= "Open report", "url" AE..= reportUrl, "style" AE..= (5 :: Int)]])]
+                  ]
+              )
         ]
 
 

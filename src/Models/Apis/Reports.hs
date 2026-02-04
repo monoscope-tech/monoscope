@@ -79,5 +79,6 @@ reportHistoryByProject pid page = PG.query q (pid, offset)
 getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
 getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportType)
   where
-    q = [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time
+    q =
+      [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time
               FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]
