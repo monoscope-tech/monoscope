@@ -13,8 +13,9 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
+import System.Logging qualified as Log
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
@@ -131,15 +132,17 @@ formatSpans spans =
    in "```\n" <> unlines (hd : rows) <> "```"
 
 
--- | Construct signed URL for widget PNG endpoint. Returns Left if URL exceeds 8000 chars.
-widgetPngUrl :: Text -> Text -> Projects.ProjectId -> Widget.Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Either Text Text
+-- | Construct signed URL for widget PNG endpoint. Logs error and returns empty string if URL exceeds 8000 chars.
+widgetPngUrl :: (Log :> es, IOE :> es) => Text -> Text -> Projects.ProjectId -> Widget.Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
       sig = signWidgetUrl secret pid widgetJson
       timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", from), ("to", to)] :: [(Text, Maybe Text)])
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
-   in if T.length url > 8000 then Left "Widget configuration too large for URL. Try simplifying the query." else Right url
+   in if T.length url > 8000
+        then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure ""
+        else pure url
 
 
 data TableData = TableData

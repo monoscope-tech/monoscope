@@ -281,8 +281,8 @@ discordInteractionsH rawBody signatureM timestampM = do
                       whenJust dashboardM $ \dashboard -> do
                         let widgetM = find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets
                         whenJust widgetM $ \w -> do
-                          let chartUrl' = fromRight "" $ widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
-                              url = envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId
+                          chartUrl' <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
+                          let url = envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId
                               content = sharedWidgetContent widget chartUrl' url
                           sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
                 _ -> pass
@@ -367,8 +367,8 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
           question = case options of
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> "[?]"
-          imageUrl = fromRight "" $ widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} (Just from) Nothing Nothing
-          content = getBotContentWithUrl question query query_url imageUrl
+      imageUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} (Just from) Nothing Nothing
+      let content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of
       Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
