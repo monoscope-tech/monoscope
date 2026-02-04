@@ -1253,7 +1253,7 @@ widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget 
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
       input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
-      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of { Widget.WTTimeseries -> "timeseries"; Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries" }]
+      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of Widget.WTTimeseries -> "timeseries"; Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
 
       -- Alert name field
       fieldset_ [class_ "fieldset"] do

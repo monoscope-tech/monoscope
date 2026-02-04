@@ -495,7 +495,8 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
           span_ [class_ "text text-sm"] "Teams"
           span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
         textarea_ [class_ "input max-h-max w-full mt-2 resize-none", name_ "teams"] ""
-      script_ [text|
+      script_
+        [text|
         window.addEventListener('DOMContentLoaded', () => {
           const tagify = createTagify('#${formId} textarea[name="teams"]', {
             tagTextProp: 'name',
