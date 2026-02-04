@@ -429,28 +429,13 @@ getBotContentWithUrl question query query_url imageUrl =
     [ "blocks"
         AE..= AE.Array
           ( V.fromList
-              [ AE.object ["type" AE..= "header", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "chart" <> " " <> T.take 140 question), "emoji" AE..= True]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Query:* `" <> query <> "`")]]
-              , AE.object ["type" AE..= "divider"]
-              , AE.object ["type" AE..= "image", "image_url" AE..= imageUrl, "alt_text" AE..= ("Chart visualization for: " <> T.take 100 question)]
-              , AE.object
-                  [ "type" AE..= "actions"
-                  , "elements"
-                      AE..= AE.Array
-                        ( V.fromList
-                            [ AE.object
-                                [ "type" AE..= "button"
-                                , "action_id" AE..= "view-log-explorer-chart"
-                                , "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True]
-                                , "url" AE..= query_url
-                                , "style" AE..= "primary"
-                                ]
-                            ]
-                        )
-                  ]
+              [ AE.object ["type" AE..= ("header" :: Text), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= (botEmoji "chart" <> " " <> question), "emoji" AE..= True]]
+              , AE.object ["type" AE..= ("image" :: Text), "image_url" AE..= imageUrl, "alt_text" AE..= ("Chart: " <> question)]
+              , AE.object ["type" AE..= ("context" :: Text), "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= ("mrkdwn" :: Text), "text" AE..= ("*Query:* `" <> query <> "`")]])]
+              , AE.object ["type" AE..= ("actions" :: Text), "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= ("button" :: Text), "action_id" AE..= ("view-log-explorer" :: Text), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True], "url" AE..= query_url]])]
               ]
           )
-    , "response_type" AE..= "in_channel"
+    , "response_type" AE..= ("in_channel" :: Text)
     , "replace_original" AE..= True
     , "delete_original" AE..= True
     ]
