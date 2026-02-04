@@ -1,16 +1,19 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
+import Data.Aeson.Key (fromText)
+import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
+import Data.Default (def)
 import Data.Effectful.Wreq (Options, header)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -21,6 +24,7 @@ import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Lucid
 import Models.Apis.Fields.Facets qualified as Facets
+import Models.Apis.Reports qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
@@ -202,9 +206,9 @@ installedSuccess botPlatform = do
                       span_ [class_ "text-white font-bold text-lg"] "?"
                   div_ [class_ "flex-1"] do
                     div_ [class_ "flex items-center space-x-2 mb-3"] do
-                      span_ [class_ "monospace bg-fillBrand-weak text-textBrand px-3 py-1 rounded-lg font-semibold"] "/ask"
+                      span_ [class_ "monospace bg-fillBrand-weak text-textBrand px-3 py-1 rounded-lg font-semibold"] "/monoscope"
                       span_ [class_ "bg-fillBrand-strong text-white text-xs px-2 py-1 rounded-full"] "AI Powered"
-                    p_ [class_ "text-textStrong text-sm"] $ toHtml $ "Ask questions about your API in natural language and get instant insights with logs and charts delivered right to " <> botPlatform <> "."
+                    p_ [class_ "text-textStrong text-sm"] $ toHtml $ "Ask questions about your API, get reports, and get instant insights with logs and charts delivered right to " <> botPlatform <> "."
               div_ [class_ "bg-gradient-to-br from-fillSuccess-weak to-fillWeaker rounded-2xl p-6 border border-strokeSuccess-weak"] do
                 div_ [class_ "flex items-start space-x-4"] do
                   div_ [class_ "flex-shrink-0"] do
@@ -289,3 +293,106 @@ verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Eit
 verifyWidgetSignature secret pid widgetJson = \case
   Nothing -> Left "Missing signature"
   Just sig -> let expected = signWidgetUrl secret pid widgetJson in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expected :: ByteString) then Right () else Left "Invalid signature"
+
+
+-- | Report query intent detection
+data ReportType = DailyReport | WeeklyReport deriving (Eq, Show)
+
+
+data QueryIntent = ReportIntent ReportType | GeneralQueryIntent deriving (Eq, Show)
+
+
+-- | Detect if user query is requesting a report. Requires action verb + "report/summary".
+detectReportIntent :: Text -> QueryIntent
+detectReportIntent query =
+  let q = T.toLower $ T.strip query
+      hasActionVerb = any (`T.isInfixOf` q) ["send", "get", "show", "give", "fetch", "retrieve"]
+      hasReportWord = any (`T.isInfixOf` q) ["report", "summary"]
+      isWeekly = any (`T.isInfixOf` q) ["weekly", "week"]
+   in if hasActionVerb && hasReportWord
+        then ReportIntent (if isWeekly then WeeklyReport else DailyReport)
+        else GeneralQueryIntent
+
+
+-- | Process report query - retrieves latest report from DB
+processReportQuery :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> ReportType -> EnvConfig -> Eff es (Either Text (Reports.Report, Text, Text))
+processReportQuery pid reportType envCfg = do
+  let typeTxt = case reportType of DailyReport -> "daily"; WeeklyReport -> "weekly"
+  reportM <- Reports.getLatestReportByType pid typeTxt
+  case reportM of
+    Nothing -> pure $ Left $ "No " <> typeTxt <> " report found. Reports are generated automatically on schedule."
+    Just report -> do
+      let startTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" report.startTime
+          endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" report.endTime
+      eventsUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"} Nothing (Just startTxt) (Just endTxt)
+      errorsUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"} Nothing (Just startTxt) (Just endTxt)
+      pure $ Right (report, eventsUrl, errorsUrl)
+
+
+-- | Format report for Slack
+formatReportForSlack :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> Text -> AE.Value
+formatReportForSlack report pid envCfg eventsUrl errorsUrl channelId =
+  let reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+      startTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.startTime
+      endTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
+      (totalEvents, totalErrors) = parseReportStats report.reportJson
+   in AE.object
+        [ "blocks"
+            AE..= AE.Array
+              ( V.fromList
+                  [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> reportUrl <> "|" <> T.toTitle report.reportType <> " Report>")]]
+                  , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTxt)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*To:* " <> endTxt)]])]
+                  , AE.object ["type" AE..= "image", "image_url" AE..= eventsUrl, "alt_text" AE..= "Events chart", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Total Events: " <> show totalEvents)]]
+                  , AE.object ["type" AE..= "image", "image_url" AE..= errorsUrl, "alt_text" AE..= "Errors chart", "title" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= ("Total Errors: " <> show totalErrors)]]
+                  , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View Full Report"], "url" AE..= reportUrl]])]
+                  ]
+              )
+        , "response_type" AE..= "in_channel"
+        , "replace_original" AE..= True
+        , "delete_original" AE..= True
+        ]
+
+
+-- | Format report for Discord
+formatReportForDiscord :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text -> Text -> AE.Value
+formatReportForDiscord report pid envCfg eventsUrl errorsUrl =
+  let reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+      startTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.startTime
+      endTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
+      (totalEvents, totalErrors) = parseReportStats report.reportJson
+   in AE.object
+        [ "flags" AE..= (32768 :: Int)
+        , "components"
+            AE..= AE.Array
+              ( V.fromList
+                  [ AE.object ["type" AE..= (10 :: Int), "content" AE..= ("## 📊 " <> T.toTitle report.reportType <> " Report")]
+                  , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("**From:** " <> startTxt <> "  **To:** " <> endTxt)]
+                  , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 20 " " <> "Total Errors: **" <> show totalErrors <> "**")]
+                  , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.fromList [AE.object ["media" AE..= AE.object ["url" AE..= eventsUrl, "description" AE..= "Events"]], AE.object ["media" AE..= AE.object ["url" AE..= errorsUrl, "description" AE..= "Errors"]]])]
+                  , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= (2 :: Int), "label" AE..= "Open report", "url" AE..= reportUrl, "style" AE..= (5 :: Int)]])]
+                  ]
+              )
+        ]
+
+
+-- | Format report for WhatsApp
+formatReportForWhatsApp :: Reports.Report -> Projects.ProjectId -> EnvConfig -> Text
+formatReportForWhatsApp report pid envCfg =
+  let reportUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+      startTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.startTime
+      endTxt = T.take 10 $ toText $ formatTime defaultTimeLocale "%Y-%m-%d" report.endTime
+      (totalEvents, totalErrors) = parseReportStats report.reportJson
+   in "📊 " <> T.toTitle report.reportType <> " Report\nPeriod: " <> startTxt <> " - " <> endTxt <> "\nTotal Events: " <> show totalEvents <> "\nTotal Errors: " <> show totalErrors <> "\nView: " <> reportUrl
+
+
+-- | Parse total events and errors from report JSON
+parseReportStats :: AE.Value -> (Int, Int)
+parseReportStats json = case json of
+  AE.Object o ->
+    let getTotal key = case KEM.lookup (fromText key) o of
+          Just (AE.Object inner) -> case KEM.lookup "total" inner of
+            Just (AE.Number n) -> round n
+            _ -> 0
+          _ -> 0
+     in (getTotal "events", getTotal "errors")
+  _ -> (0, 0)

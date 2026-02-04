@@ -5,6 +5,7 @@ module Models.Apis.Reports (
   addReport,
   reportHistoryByProject,
   getReportById,
+  getLatestReportByType,
 ) where
 
 import Data.Aeson qualified as AE
@@ -69,9 +70,15 @@ reportHistoryByProject pid page = PG.query q (pid, offset)
     offset = page * 20
     q =
       [sql| SELECT id, created_at, project_id, report_type FROM apis.reports
-    WHERE project_id = ? 
+    WHERE project_id = ?
     ORDER BY created_at DESC
     LIMIT 20 OFFSET ?;
   |]
 
---   selectManyByField [field| project_id |] pid
+
+getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
+getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportType)
+  where
+    q =
+      [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time
+              FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]
