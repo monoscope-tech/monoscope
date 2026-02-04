@@ -422,20 +422,31 @@ data SlackInteraction = SlackInteraction
   deriving anyclass (AE.FromJSON, FromForm)
 
 
--- | Build Slack message content with a chart image URL using attachments (more reliable for slash commands)
+-- | Build Slack message content with a chart image URL using Block Kit
 getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
 getBotContentWithUrl question query query_url imageUrl =
   AE.object
-    [ "attachments"
+    [ "blocks"
         AE..= AE.Array
           ( V.fromList
-              [ AE.object
-                  [ "color" AE..= ("#0068ff" :: Text)
-                  , "title" AE..= (botEmoji "chart" <> " " <> question)
-                  , "title_link" AE..= query_url
-                  , "image_url" AE..= imageUrl
-                  , "fields" AE..= AE.Array (V.fromList [AE.object ["title" AE..= ("Query" :: Text), "value" AE..= ("`" <> query <> "`"), "short" AE..= False]])
-                  , "footer" AE..= (botEmoji "search" <> " Click title to view in Log Explorer" :: Text)
+              [ AE.object ["type" AE..= "header", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "chart" <> " " <> T.take 140 question), "emoji" AE..= True]]
+              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Query:* `" <> query <> "`")]]
+              , AE.object ["type" AE..= "divider"]
+              , AE.object ["type" AE..= "image", "image_url" AE..= imageUrl, "alt_text" AE..= ("Chart visualization for: " <> T.take 100 question)]
+              , AE.object
+                  [ "type" AE..= "actions"
+                  , "elements"
+                      AE..= AE.Array
+                        ( V.fromList
+                            [ AE.object
+                                [ "type" AE..= "button"
+                                , "action_id" AE..= "view-log-explorer-chart"
+                                , "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True]
+                                , "url" AE..= query_url
+                                , "style" AE..= "primary"
+                                ]
+                            ]
+                        )
                   ]
               ]
           )

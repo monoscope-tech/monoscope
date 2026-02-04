@@ -48,9 +48,9 @@ data BotType = Discord | Slack | WhatsApp
 -- | Status emoji constants for visual indicators (always paired with text for accessibility)
 botEmoji :: Text -> Text
 botEmoji = \case
-  "success" -> "✅"
-  "warning" -> "⚠️"
-  "error" -> "❌"
+  "success" -> "🟢"
+  "warning" -> "🟡"
+  "error" -> "🔴"
   "chart" -> "📊"
   "search" -> "🔍"
   "table" -> "📋"
@@ -176,7 +176,7 @@ padRight n s = T.take n (s <> T.replicate n " ")
 
 
 formatSpanRow :: TableData -> Text
-formatSpanRow spn = padRight 18 spn.timestamp <> " " <> padRight 15 spn.servicename <> " " <> padRight 20 spn.spanname <> " " <> padRight 8 spn.duration <> " " <> (if spn.hasErrors then "❌" else "✅")
+formatSpanRow spn = padRight 18 spn.timestamp <> " " <> padRight 15 spn.servicename <> " " <> padRight 20 spn.spanname <> " " <> padRight 8 spn.duration <> " " <> (if spn.hasErrors then "🔴" else "🟢")
 
 
 formatSpans :: [TableData] -> Text
@@ -301,12 +301,16 @@ processAIQuery pid userQuery threadCtx apiKey = do
   facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
   let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx}
   result <- AI.runAgenticQuery config userQuery apiKey
-  pure $ result <&> \AI.ChatLLMResponse{..} ->
-    let from' = timeRange >>= viaNonEmpty head
-        to' = timeRange >>= viaNonEmpty last
-        (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
-        (from, to) = fromMaybe ("", "") rangeM
-     in AIQueryResult{query, visualization, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
+  case result of
+    Left err -> do
+      Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
+      pure $ Left err
+    Right AI.ChatLLMResponse{..} ->
+      let from' = timeRange >>= viaNonEmpty head
+          to' = timeRange >>= viaNonEmpty last
+          (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
+          (from, to) = fromMaybe ("", "") rangeM
+       in pure $ Right AIQueryResult{query, visualization, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
 
 
 formatThreadsWithMemory :: Int -> Text -> [LLM.Message] -> IO Text

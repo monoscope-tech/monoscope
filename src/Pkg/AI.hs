@@ -106,7 +106,8 @@ getNormalTupleReponse response =
 
 getAskLLMResponse :: Text -> Either Text ChatLLMResponse
 getAskLLMResponse response =
-  let responseBS = encodeUtf8 response
+  let cleaned = fixTrailingCommas response
+      responseBS = encodeUtf8 cleaned
       decoded = AE.eitherDecode (fromStrict responseBS)
    in case decoded of
         Left err -> Left $ "JSON Decode Error: " <> toText err
@@ -114,6 +115,11 @@ getAskLLMResponse response =
           let vType = parseVisualizationType $ fromMaybe "" apiResponse.visualization
               apiResponse' = apiResponse{visualization = vType}
            in Right apiResponse'
+
+
+-- | Fix trailing commas in JSON (common LLM output issue)
+fixTrailingCommas :: Text -> Text
+fixTrailingCommas = T.replace ",\n}" "\n}" . T.replace ", }" "}" . T.replace ",}" "}" . T.replace ",\n]" "\n]" . T.replace ", ]" "]" . T.replace ",]" "]"
 
 
 parseVisualizationType :: Text -> Maybe Text
