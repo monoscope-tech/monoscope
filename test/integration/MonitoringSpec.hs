@@ -116,6 +116,13 @@ spec = aroundAll withTestResources do
               , warningRecoveryThreshold = Nothing
               , frequency = Nothing
               , title = "Cascade Test Alert"
+              , timeWindow = Nothing
+              , conditionType = Nothing
+              , severity = Nothing
+              , subject = Nothing
+              , message = Nothing
+              , recipientEmailAll = Nothing
+              , teams = []
               }
       _ <- testServant tr $ Dashboards.widgetAlertUpsertH testPid "cascade-test-widget" (Just $ unUUIDId dashId) alertForm
 
@@ -160,6 +167,13 @@ spec = aroundAll withTestResources do
               , warningRecoveryThreshold = Nothing
               , frequency = Nothing
               , title = "Sync Test Alert"
+              , timeWindow = Nothing
+              , conditionType = Nothing
+              , severity = Nothing
+              , subject = Nothing
+              , message = Nothing
+              , recipientEmailAll = Nothing
+              , teams = []
               }
       _ <- testServant tr $ Dashboards.widgetAlertUpsertH testPid "sync-test-widget" (Just $ unUUIDId dashId) alertForm
 
