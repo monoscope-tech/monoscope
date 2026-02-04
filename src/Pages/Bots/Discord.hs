@@ -36,7 +36,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, contentTypeHeader, detectReportIntent, formatHistoryAsContext, formatReportForDiscord, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (AIQueryResult (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForDiscord, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -147,6 +147,14 @@ data DiscordThreadChannel = DiscordThreadChannel
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripSuffix "_"]] DiscordThreadChannel
 
 
+data InteractionOption = InteractionOption
+  { name :: Text
+  , value :: AE.Value
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 -- Slash command data
 data InteractionData
   = CommandData
@@ -159,6 +167,7 @@ data InteractionData
       , values :: [Text]
       }
   deriving (Generic, Show)
+  deriving anyclass (AE.ToJSON)
 
 
 instance AE.FromJSON InteractionData where
@@ -181,14 +190,6 @@ instance AE.FromJSON InteractionData where
           AE..:? "options"
 
 
-data InteractionOption = InteractionOption
-  { name :: Text
-  , value :: AE.Value
-  }
-  deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON)
-
-
 getDiscordChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es [Channel]
 getDiscordChannels token guildId = do
   let url = "https://discord.com/api/v10/guilds/" <> toString guildId <> "/channels"
@@ -208,6 +209,7 @@ discordInteractionsH rawBody signatureM timestampM = do
   let envCfg = authCtx.env
   validateSignature envCfg signatureM timestampM rawBody
   interaction <- parseInteraction rawBody
+  Log.logTrace ("Discord interaction received" :: Text) $ AE.object ["type" AE..= show interaction.interaction_type, "guild_id" AE..= interaction.guild_id, "channel_id" AE..= interaction.channel_id, "data" AE..= interaction.data_i]
 
   case interaction.interaction_type of
     Ping -> pure $ AE.object ["type" AE..= 1]
@@ -226,7 +228,7 @@ discordInteractionsH rawBody signatureM timestampM = do
         Just cmd -> pure cmd
       discordData <- getDiscordData (fromMaybe "" (maybe interaction.guild_id (\c -> c.guild_id) interaction.channel))
       case discordData of
-        Nothing -> pure $ contentResponse "Sorry, there was an error processing your request"
+        Nothing -> pure $ AE.object ["type" AE..= (4 :: Int), "data" AE..= formatBotError Discord ServiceError]
         Just d -> handleCommand cmdData interaction envCfg authCtx d
 
     parseInteraction :: BS.ByteString -> ATBaseCtx DiscordInteraction
@@ -247,7 +249,7 @@ discordInteractionsH rawBody signatureM timestampM = do
               case (interaction.channel_id, interaction.guild_id) of
                 (Just channelId, Just guildId) -> do
                   _ <- updateDiscordNotificationChannel guildId channelId
-                  pure $ contentResponse "Got it, notifications and alerts on your project will now be sent to this channel"
+                  pure $ hereSuccessResponse
                 _ -> pure $ contentResponse "No channel ID provided"
             "dashboard" -> do
               handleDashboard options interaction envCfg authCtx discordData
@@ -331,14 +333,14 @@ discordInteractionsH rawBody signatureM timestampM = do
             result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiApiKey
             Issues.insertChatMessage discordData.projectId convId "user" userQuery Nothing Nothing
             case result of
-              Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
+              Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
               Right AIQueryResult{..} -> do
                 Issues.insertChatMessage discordData.projectId convId "assistant" query Nothing Nothing
                 sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
           _ -> do
             result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
             case result of
-              Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
+              Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
               Right AIQueryResult{..} -> sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
 
 
@@ -357,7 +359,7 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
       let content = getBotContentWithUrl question query query_url imageUrl
       sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
     Nothing -> case parseQueryToAST query of
-      Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
+      Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord (QueryParseError query))
       Right query' -> do
         tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
         sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
@@ -365,6 +367,34 @@ sendDiscordResponse options interaction envCfg authCtx discordData query visuali
 
 contentResponse :: Text -> AE.Value
 contentResponse msg = AE.object ["type" AE..= 4, "data" AE..= AE.object ["content" AE..= msg]]
+
+
+-- | Structured success response for /here command
+hereSuccessResponse :: AE.Value
+hereSuccessResponse =
+  AE.object
+    [ "type" AE..= (4 :: Int)
+    , "data"
+        AE..= AE.object
+          [ "flags" AE..= (32768 :: Int)
+          , "components"
+              AE..= AE.Array
+                ( V.singleton
+                    $ AE.object
+                      [ "type" AE..= (17 :: Int)
+                      , "accent_color" AE..= (5763719 :: Int) -- Green accent
+                      , "components"
+                          AE..= AE.Array
+                            ( V.fromList
+                                [ AE.object ["type" AE..= (10 :: Int), "content" AE..= (botEmoji "success" <> " **Notification channel set**")]
+                                , AE.object ["type" AE..= (10 :: Int), "content" AE..= "This channel will now receive:"]
+                                , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections")]
+                                ]
+                            )
+                      ]
+                )
+          ]
+    ]
 
 
 sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
@@ -375,8 +405,9 @@ sendDeferredResponse interactionId interactionToken botToken = do
   pass
 
 
-sendJsonFollowupResponse :: HTTP :> es => Text -> Text -> Text -> AE.Value -> Eff es ()
+sendJsonFollowupResponse :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> AE.Value -> Eff es ()
 sendJsonFollowupResponse appId interactionToken botToken content = do
+  Log.logTrace ("Discord followup response" :: Text) content
   let followupUrl = toString $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") followupUrl content
   pass
@@ -449,20 +480,20 @@ getThreadStarterMessage interaction botToken = do
 getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
 getBotContentWithUrl question query query_url imageUrl =
   AE.object
-    [ "flags" AE..= 32768
+    [ "flags" AE..= (32768 :: Int)
     , "components"
         AE..= AE.Array
           ( V.singleton
               $ AE.object
-                [ "type" AE..= 17
-                , "accent_color" AE..= 26879
+                [ "type" AE..= (17 :: Int)
+                , "accent_color" AE..= (26879 :: Int)
                 , "components"
                     AE..= AE.Array
                       ( V.fromList
-                          [ AE.object ["type" AE..= 10, "content" AE..= ("### " <> question)]
-                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= imageUrl]])]
-                          , AE.object ["type" AE..= 10, "content" AE..= ("**Query used:** " <> query)]
-                          , AE.object ["type" AE..= 1, "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open explorer", "url" AE..= query_url, "style" AE..= 5]])]
+                          [ AE.object ["type" AE..= (10 :: Int), "content" AE..= (botEmoji "chart" <> " **" <> question <> "**")]
+                          , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= imageUrl], "description" AE..= ("Chart visualization: " <> question)])]
+                          , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("**Query:** `" <> query <> "`")]
+                          , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= (2 :: Int), "label" AE..= (botEmoji "search" <> " View in Log Explorer"), "url" AE..= query_url, "style" AE..= (5 :: Int)]])]
                           ]
                       )
                 ]
@@ -473,19 +504,19 @@ getBotContentWithUrl question query query_url imageUrl =
 sharedWidgetContent :: Text -> Text -> Text -> AE.Value
 sharedWidgetContent widgetTitle chartUrl dashboardUrl =
   AE.object
-    [ "flags" AE..= 32768
+    [ "flags" AE..= (32768 :: Int)
     , "components"
         AE..= AE.Array
           ( V.singleton
               $ AE.object
-                [ "type" AE..= 17
-                , "accent_color" AE..= 26879
+                [ "type" AE..= (17 :: Int)
+                , "accent_color" AE..= (26879 :: Int)
                 , "components"
                     AE..= AE.Array
                       ( V.fromList
-                          [ AE.object ["type" AE..= 10, "content" AE..= ("### " <> widgetTitle)]
-                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= chartUrl]])]
-                          , AE.object ["type" AE..= 1, "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open dashboard", "url" AE..= dashboardUrl, "style" AE..= 5]])]
+                          [ AE.object ["type" AE..= (10 :: Int), "content" AE..= (botEmoji "chart" <> " **" <> widgetTitle <> "**")]
+                          , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= chartUrl], "description" AE..= ("Dashboard widget: " <> widgetTitle)])]
+                          , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= (2 :: Int), "label" AE..= "Open dashboard", "url" AE..= dashboardUrl, "style" AE..= (5 :: Int)]])]
                           ]
                       )
                 ]

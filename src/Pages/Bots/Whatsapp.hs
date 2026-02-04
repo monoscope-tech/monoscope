@@ -10,6 +10,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
+import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -18,7 +19,7 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
-import Pages.Bots.Utils (AIQueryResult (..), BotType (..), QueryIntent (..), detectReportIntent, formatReportForWhatsApp, handleTableResponse, processAIQuery, processReportQuery)
+import Pages.Bots.Utils (AIQueryResult (..), BotType (..), QueryIntent (..), botEmoji, detectReportIntent, formatReportForWhatsApp, handleTableResponse, processAIQuery, processReportQuery)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -36,6 +37,7 @@ joiner = "___"
 
 whatsappIncomingPostH :: TwilioWhatsAppMessage -> ATBaseCtx AE.Value
 whatsappIncomingPostH val = do
+  Log.logTrace ("WhatsApp interaction received" :: Text) $ AE.object ["from" AE..= val.from, "body" AE..= val.body]
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
   let fromN = T.dropWhile (/= '+') val.from
@@ -100,7 +102,7 @@ whatsappIncomingPostH val = do
           result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiApiKey
           case result of
             Left _ -> do
-              _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Sorry, I couldn't proess your request")
+              _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
               pass
             Right AIQueryResult{..} -> do
               let (from, to) = timeRangeStr
@@ -113,7 +115,7 @@ whatsappIncomingPostH val = do
                   _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
                   pass
                 Nothing -> case parseQueryToAST query of
-                  Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Error processing query")
+                  Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'")
                   Right query' -> do
                     tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromTime, toTime) [] Nothing Nothing
                     let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
@@ -243,6 +245,7 @@ instance FromForm TwilioWhatsAppMessage where
 
 sendWhatsappResponse :: AE.Value -> Text -> Text -> Maybe Text -> ATBaseCtx ()
 sendWhatsappResponse contentVariables to template bodyM = do
+  Log.logTrace ("WhatsApp response" :: Text) $ AE.object ["to" AE..= to, "template" AE..= template, "body" AE..= bodyM, "contentVariables" AE..= contentVariables]
   appCtx <- Effectful.Reader.Static.ask @AuthContext
   let from = appCtx.config.whatsappFromNumber
       accountSid = appCtx.config.twilioAccountSid
