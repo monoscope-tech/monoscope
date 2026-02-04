@@ -47,3 +47,5 @@ stack-work
 tests.log
 tests_optimized.log
 .playwright-mcp/
+chart-cli
+web-components/bun.lock

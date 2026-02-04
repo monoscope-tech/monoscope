@@ -114,4 +114,10 @@ show-ghc-version:
 	@echo "GHC Version: $(GHC_VERSION)"
 
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-doctests
+build-chart-cli:
+	cd web-components && bun build --compile src/chart-cli.ts --outfile ../chart-cli
+
+build-chart-cli-linux:
+	cd web-components && bun build --compile --target=bun-linux-x64 src/chart-cli.ts --outfile ../chart-cli
+
+.PHONY: all test fmt lint fix-lint live-reload live-reload-doctests build-chart-cli build-chart-cli-linux

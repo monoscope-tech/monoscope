@@ -701,7 +701,7 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allPa
             , "height" AE..= height
             , "theme" AE..= fromMaybe "default" processedWidget.theme
             ]
-      processConfig = setStdin (byteStringInput input) $ proc "bun" ["run", "web-components/src/chart-cli.ts"]
+      processConfig = setStdin (byteStringInput input) $ proc "./chart-cli" []
       timeoutMicros = 30000000 -- 30 seconds
   resultM <- liftIO $ timeout timeoutMicros $ readProcess processConfig
   pngBytes <- case resultM of

@@ -3,7 +3,7 @@
 // Colors are now set server-side in Haskell (Utils.getSeriesColorHex)
 // Usage: echo '{"echarts": {...}}' | bun run chart-cli.ts
 
-import { createCanvas } from "canvas";
+import { createCanvas } from "@napi-rs/canvas";
 import * as echarts from "echarts";
 
 interface RenderInput {
