@@ -422,17 +422,21 @@ data SlackInteraction = SlackInteraction
   deriving anyclass (AE.FromJSON, FromForm)
 
 
--- | Build Slack message content with a chart image URL using Block Kit
+-- | Build Slack message content with a chart image URL using attachments (more reliable for slash commands)
 getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
 getBotContentWithUrl question query query_url imageUrl =
   AE.object
-    [ "blocks"
+    [ "attachments"
         AE..= AE.Array
           ( V.fromList
-              [ AE.object ["type" AE..= "header", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= T.take 150 (botEmoji "chart" <> " " <> question), "emoji" AE..= True]]
-              , AE.object ["type" AE..= "image", "image_url" AE..= imageUrl, "alt_text" AE..= ("Chart: " <> T.take 200 question)]
-              , AE.object ["type" AE..= "context", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Query:* `" <> query <> "`")]])]
-              , AE.object ["type" AE..= "actions", "elements" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "button", "action_id" AE..= "view-log-explorer", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "search" <> " View in Log Explorer"), "emoji" AE..= True], "url" AE..= query_url]])]
+              [ AE.object
+                  [ "color" AE..= ("#0068ff" :: Text)
+                  , "title" AE..= (botEmoji "chart" <> " " <> question)
+                  , "title_link" AE..= query_url
+                  , "image_url" AE..= imageUrl
+                  , "fields" AE..= AE.Array (V.fromList [AE.object ["title" AE..= ("Query" :: Text), "value" AE..= ("`" <> query <> "`"), "short" AE..= False]])
+                  , "footer" AE..= (botEmoji "search" <> " Click title to view in Log Explorer" :: Text)
+                  ]
               ]
           )
     , "response_type" AE..= "in_channel"
