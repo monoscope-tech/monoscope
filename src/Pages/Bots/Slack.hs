@@ -37,7 +37,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery, widgetPngUrl)
+import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), contentTypeHeader, detectReportIntent, formatHistoryAsContext, formatReportForSlack, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
@@ -150,27 +150,34 @@ slackInteractionsH interaction = do
     handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> ATBaseCtx ()
     handleAskCommand inter slackData authCtx = do
       let envCfg = authCtx.env
-      result <- processAIQuery slackData.projectId inter.text Nothing envCfg.openaiApiKey
-      case result of
-        Left _ -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
-        Right AIQueryResult{..} -> do
-          let (from, _to) = timeRangeStr
-          case visualization of
-            Just vizType -> do
-              let wType = Widget.mapChatTypeToWidgetType vizType
-                  chartType = Widget.mapWidgetTypeToChartType wType
-                  query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} (Just from) Nothing Nothing
-              let content' = getBotContentWithUrl inter.text query query_url imageUrl
-                  content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
-              _ <- sendSlackFollowupResponse inter.response_url content
-              pass
-            Nothing -> case parseQueryToAST query of
-              Left _ -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
-              Right query' -> do
-                tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTime, toTime) [] Nothing Nothing
-                _ <- sendSlackFollowupResponse inter.response_url $ handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
-                pass
+      case detectReportIntent inter.text of
+        ReportIntent reportType -> do
+          reportResult <- processReportQuery slackData.projectId reportType envCfg
+          case reportResult of
+            Left err -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= err, "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True])
+            Right (report, eventsUrl, errorsUrl) -> sendSlackFollowupResponse inter.response_url $ formatReportForSlack report slackData.projectId envCfg eventsUrl errorsUrl inter.channel_id
+        GeneralQueryIntent -> do
+          result <- processAIQuery slackData.projectId inter.text Nothing envCfg.openaiApiKey
+          case result of
+            Left _ -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+            Right AIQueryResult{..} -> do
+              let (from, to) = timeRangeStr
+              case visualization of
+                Just vizType -> do
+                  let wType = Widget.mapChatTypeToWidgetType vizType
+                      chartType = Widget.mapWidgetTypeToChartType wType
+                      query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+                  imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
+                  let content' = getBotContentWithUrl inter.text query query_url imageUrl
+                      content = AE.object ["attachments" AE..= content', "response_type" AE..= "in_channel", "replace_original" AE..= True, "delete_original" AE..= True]
+                  _ <- sendSlackFollowupResponse inter.response_url content
+                  pass
+                Nothing -> case parseQueryToAST query of
+                  Left _ -> sendSlackFollowupResponse inter.response_url (AE.object ["text" AE..= "Error: something went wrong"])
+                  Right query' -> do
+                    tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTime, toTime) [] Nothing Nothing
+                    _ <- sendSlackFollowupResponse inter.response_url $ handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
+                    pass
 
 
 newtype SlackActionForm = SlackActionForm {payload :: Text}
@@ -574,13 +581,13 @@ slackEventsPostH payload = do
           Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing
           Issues.insertChatMessage slackData.projectId convId "assistant" query Nothing Nothing
 
-          let (from, _to) = timeRangeStr
+          let (from, to) = timeRangeStr
           case visualization of
             Just vizType -> do
               let wType = Widget.mapChatTypeToWidgetType vizType
                   chartType = Widget.mapWidgetTypeToChartType wType
                   query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} (Just from) Nothing Nothing
+              imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
               let content' = getBotContentWithUrl event.text query query_url imageUrl
                   content = AE.object ["attachments" AE..= content', "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
               _ <- sendSlackChatMessage envCfg.slackBotToken content
