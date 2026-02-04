@@ -340,6 +340,7 @@ library
     , text-display
     , time
     , tmp-postgres
+    , typed-process
     , unliftio
     , unordered-containers
     , uuid

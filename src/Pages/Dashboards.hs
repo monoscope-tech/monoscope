@@ -1227,7 +1227,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
     div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
-      widgetAlertConfig_ pid alertFormId alertEndpoint widgetPreviewId sourceWid widgetToUse
+      widgetAlertConfig_ pid alertFormId alertEndpoint wid sourceWid widgetToUse
 
 
 -- | Widget alert configuration form
