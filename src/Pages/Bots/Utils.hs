@@ -315,7 +315,7 @@ detectReportIntent query =
 
 
 -- | Process report query - retrieves latest report from DB
-processReportQuery :: (DB es, IOE :> es, Log :> es) => Projects.ProjectId -> ReportType -> EnvConfig -> Eff es (Either Text (Reports.Report, Text, Text))
+processReportQuery :: (DB es, Log :> es) => Projects.ProjectId -> ReportType -> EnvConfig -> Eff es (Either Text (Reports.Report, Text, Text))
 processReportQuery pid reportType envCfg = do
   let typeTxt = case reportType of DailyReport -> "daily"; WeeklyReport -> "weekly"
   reportM <- Reports.getLatestReportByType pid typeTxt
