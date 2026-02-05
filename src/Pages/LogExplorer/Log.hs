@@ -60,6 +60,7 @@ import Pkg.AI qualified as AI
 import BackgroundJobs qualified
 import Data.Pool (withResource)
 import OddJobs.Job (createJob)
+import Pages.Bots.Utils qualified as BotUtils
 
 
 -- $setup
@@ -486,8 +487,16 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
         colors = getServiceColors (V.catMaybes serviceNames)
         patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
-        page =
-          ApiLogsPageData
+
+      -- Build widgets with PNG URLs
+      let baseChartWidget = logChartWidget pid effectiveVizType pTargetM
+          baseLatencyWidget = logLatencyWidget pid
+      chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
+      latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
+      let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
+          latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
+
+      let page = ApiLogsPageData
             { pid
             , resultCount
             , requestVecs = finalVecs
@@ -521,6 +530,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             , targetPattern = pTargetM
             , project = project
             , teams
+            , chartWidget
+            , latencyWidget
             }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount (V.length requestVecs)
@@ -543,6 +554,47 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
 textToUTC :: Text -> Maybe UTCTime
 textToUTC = iso8601ParseM . toString
+
+
+-- Widget definitions for log explorer charts
+logChartWidget :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Widget.Widget
+logChartWidget pid vizType targetPattern = (def :: Widget.Widget)
+  { Widget.wType = tp
+  , Widget.query = Just query
+  , Widget.unit = Just "rows"
+  , Widget.title = Just title
+  , Widget.legendPosition = Just "top-right"
+  , Widget.legendSize = Just "xs"
+  , Widget._projectId = Just pid
+  , Widget.standalone = Just True
+  , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+  , Widget.allowZoom = Just True
+  , Widget.showMarkArea = Just True
+  , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+  }
+  where
+    patternTarget = fromMaybe "log_pattern" targetPattern
+    nm = fromMaybe "Log" $ viaNonEmpty head $ T.splitOn "_" patternTarget
+    (tp, query, title) = case vizType of
+      Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
+      _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
+
+
+logLatencyWidget :: Projects.ProjectId -> Widget.Widget
+logLatencyWidget pid = (def :: Widget.Widget)
+  { Widget.wType = WTTimeseriesLine
+  , Widget.standalone = Just True
+  , Widget.title = Just "Latency percentiles"
+  , Widget.hideSubtitle = Just True
+  , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+  , Widget.summarizeBy = Just Widget.SBMax
+  , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+  , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
+  , Widget.unit = Just "ns"
+  , Widget.legendPosition = Just "top-right"
+  , Widget.legendSize = Just "xs"
+  , Widget._projectId = Just pid
+  }
 
 
 data LogsGet
@@ -607,6 +659,8 @@ data ApiLogsPageData = ApiLogsPageData
   , targetPattern :: Maybe Text
   , project :: Projects.Project
   , teams :: V.Vector ManageMembers.Team
+  , chartWidget :: Widget.Widget
+  , latencyWidget :: Widget.Widget
   }
 
 
@@ -670,28 +724,8 @@ apiLogsPage page = do
           }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
-        let patternTarget = fromMaybe "log_pattern" page.targetPattern
-            nm = fromMaybe "Log" $ viaNonEmpty head $ T.splitOn "_" patternTarget
-        let (tp, query, title) = case page.vizType of
-              Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
-              _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
-        Widget.widget_ $ (def :: Widget.Widget){Widget.wType = tp, Widget.query = Just query, Widget.unit = Just "rows", Widget.title = Just title, Widget.legendPosition = Just "top-right", Widget.legendSize = Just "xs", Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
-        unless (page.vizType == Just "patterns")
-          $ Widget.widget_
-          $ (def :: Widget.Widget)
-            { Widget.wType = WTTimeseriesLine
-            , Widget.standalone = Just True
-            , Widget.title = Just "Latency percentiles"
-            , Widget.hideSubtitle = Just True
-            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-            , Widget.summarizeBy = Just Widget.SBMax
-            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-            , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
-            , Widget.unit = Just "ns"
-            , Widget.legendPosition = Just "top-right"
-            , Widget.legendSize = Just "xs"
-            , Widget._projectId = Just page.pid
-            }
+        Widget.widget_ page.chartWidget
+        unless (page.vizType == Just "patterns") $ Widget.widget_ page.latencyWidget
     whenJust page.patterns \patternsData ->
       div_ [class_ "overflow-y-auto max-h-96 border border-strokeWeak rounded mt-3"] do
         patternList patternsData page.pid page.patternsToSkip False page.targetPattern
