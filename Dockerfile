@@ -114,7 +114,7 @@ COPY --from=frontend-builder /build/chart-cli ./
 
 # Set ownership and permissions
 RUN chown -R monoscope:monoscope /opt/monoscope && \
-  chmod +x monoscope
+  chmod +x monoscope chart-cli
 
 USER monoscope
 
