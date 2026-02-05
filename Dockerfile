@@ -1,41 +1,8 @@
-# Stage 1: Build frontend assets
-FROM node:22-alpine AS frontend-builder
+# Single build stage using pre-built deps image
+# Contains: GHC, Node.js, bun, all npm/cabal deps pre-installed, chart-cli pre-built
+FROM ghcr.io/monoscope-tech/monoscope-deps:latest AS builder
 
-WORKDIR /build
-
-# Copy package files
-COPY package*.json ./
-COPY web-components/package*.json ./web-components/
-
-# Install dependencies
-RUN --mount=type=cache,target=/root/.npm \
-  npm ci --prefer-offline --no-audit && \
-  cd web-components && npm ci --prefer-offline --no-audit
-
-# Copy source files
-COPY config/tailwind.config.js ./config/
-COPY static ./static
-COPY web-components ./web-components
-# Copy Haskell source files for Tailwind CSS scanning
-COPY src ./src
-
-# Build assets
-RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
-  cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false
-
-# Copy workbox config
-COPY config/workbox-config.js ./config/
-
-RUN npm install -g workbox-cli@6.5.4 \
- && workbox generateSW config/workbox-config.js
-
-# Stage 2: Build Haskell application
-# Uses pre-built deps image with all Haskell dependencies compiled
-# Falls back gracefully if deps not cached
-FROM ghcr.io/monoscope-tech/monoscope-deps:latest AS haskell-builder
-
-# Install system dependencies if not using deps image
-# These are no-ops if already installed in deps image
+# Install system dependencies if not using deps image (no-ops if already installed)
 RUN apt-get update && apt-get install -y --no-install-recommends \
   curl ca-certificates lsb-release gnupg \
   libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
@@ -63,13 +30,13 @@ RUN rm -rf /var/lib/apt/lists/* || true
 
 WORKDIR /build
 
-# Copy git metadata for GitHash (actual git info from the repo)
+# Copy git metadata for GitHash
 COPY .git .git
 
 # Copy cabal files for dependency caching
 COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
 
-# Build dependencies with parallel jobs (fast if using deps image)
+# Build Haskell dependencies (fast - already cached in deps image)
 RUN --mount=type=cache,target=/root/.cabal/store \
   --mount=type=cache,target=/build/dist-newstyle \
   cabal update && \
@@ -81,21 +48,25 @@ COPY test ./test
 COPY app ./app
 COPY proto ./proto
 
-# Copy built frontend assets from frontend-builder stage
-COPY --from=frontend-builder /build/static ./static
+# Build frontend assets (npm deps already installed in deps image)
+COPY config ./config
+COPY static ./static
+RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
+  cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false && \
+  cd .. && workbox generateSW config/workbox-config.js
 
-# Build executable
+# Build Haskell executable
 RUN --mount=type=cache,target=/root/.cabal/store \
   --mount=type=cache,target=/build/dist-newstyle \
   cabal build exe:monoscope -j$(nproc) && \
   mkdir -p /build/dist && \
   find dist-newstyle -name monoscope -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
 
-# Stage 3: Final runtime image using debian slim
+# Final runtime image
 FROM debian:12-slim
 
-# Install only essential runtime dependencies
-# Graphics libs (libcairo2, libpango, etc.) are needed for @napi-rs/canvas in chart-cli
+# Install runtime dependencies
+# Graphics libs needed for @napi-rs/canvas in chart-cli
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   libgmp10 \
@@ -121,9 +92,9 @@ RUN useradd -m -U -s /bin/false monoscope
 WORKDIR /opt/monoscope
 
 # Copy artifacts
-COPY --from=haskell-builder /build/dist/monoscope ./
-COPY --from=frontend-builder /build/static ./static
-COPY --from=haskell-builder /usr/local/bin/chart-cli ./
+COPY --from=builder /build/dist/monoscope ./
+COPY --from=builder /build/static ./static
+COPY --from=builder /usr/local/bin/chart-cli ./
 
 # Set ownership and permissions
 RUN chown -R monoscope:monoscope /opt/monoscope && \
