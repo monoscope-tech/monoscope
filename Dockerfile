@@ -26,8 +26,6 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # Copy workbox config
 COPY config/workbox-config.js ./config/
 
-
-
 RUN npm install -g workbox-cli@6.5.4 \
  && workbox generateSW config/workbox-config.js
 
@@ -36,25 +34,36 @@ RUN npm install -g bun && \
   cd web-components && bun build --compile --target=bun-linux-x64 src/chart-cli.ts --outfile ../chart-cli
 
 # Stage 2: Build Haskell application
-FROM haskell:9.12.2 AS haskell-builder
+# Uses pre-built deps image with all Haskell dependencies compiled
+# Falls back gracefully if deps not cached
+FROM ghcr.io/monoscope-tech/monoscope-deps:latest AS haskell-builder
 
-# Install system dependencies (combined into single layer)
-RUN apt-get update && apt-get install -y \
+# Install system dependencies if not using deps image
+# These are no-ops if already installed in deps image
+RUN apt-get update && apt-get install -y --no-install-recommends \
   curl ca-certificates lsb-release gnupg \
   libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
   libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev \
   pkg-config git wget unzip \
-  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg \
-  && echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
-  && apt-get update && apt-get install -y postgresql-client-16 \
-  && rm -rf /var/lib/apt/lists/*
+  || true
 
-# Install protoc (simplified)
-RUN PROTOC_VERSION=29.3 && \
+# Install protoc if not present
+RUN which protoc || ( \
+  PROTOC_VERSION=29.3 && \
   ARCH=$(dpkg --print-architecture | sed 's/arm64/aarch_64/;s/amd64/x86_64/') && \
   wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${ARCH}.zip && \
   unzip -q protoc-${PROTOC_VERSION}-linux-${ARCH}.zip -d /usr/local && \
-  rm protoc-${PROTOC_VERSION}-linux-${ARCH}.zip
+  rm protoc-${PROTOC_VERSION}-linux-${ARCH}.zip \
+  )
+
+# Install postgresql-client if not present
+RUN which psql || ( \
+  curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg && \
+  echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list && \
+  apt-get update && apt-get install -y postgresql-client-16 \
+  )
+
+RUN rm -rf /var/lib/apt/lists/* || true
 
 WORKDIR /build
 
@@ -64,7 +73,7 @@ COPY .git .git
 # Copy cabal files for dependency caching
 COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
 
-# Build dependencies with parallel jobs
+# Build dependencies with parallel jobs (fast if using deps image)
 RUN --mount=type=cache,target=/root/.cabal/store \
   --mount=type=cache,target=/build/dist-newstyle \
   cabal update && \
