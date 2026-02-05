@@ -153,6 +153,7 @@ data Widget = Widget
   , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   , description :: Maybe Text -- Help text shown in info icon tooltip
+  , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -460,6 +461,15 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               |]
             ]
             "Copy KQL"
+        whenJust widget.pngUrl \url -> li_
+          $ a_
+            [ class_ "p-2 w-full text-left block cursor-pointer"
+            , data_ "tippy-content" "Download widget as PNG image"
+            , href_ url
+            , download_ $ maybeToMonoid widget.title <> ".png"
+            , target_ "_blank"
+            ]
+            "Download PNG"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do

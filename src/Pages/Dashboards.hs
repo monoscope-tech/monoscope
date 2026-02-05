@@ -59,7 +59,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Reader.Static (Reader, ask)
@@ -82,6 +82,7 @@ import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
@@ -101,8 +102,9 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.FilePath.Posix (takeDirectory)
+import Effectful.Log (Log)
 import System.Logging qualified as Log
 import System.Types
 import Text.Slugify (slugify)
@@ -819,6 +821,12 @@ populateWidgetAlertStatuses widgets = do
           }
 
 
+populateWidgetPngUrls :: (IOE :> es, Log :> es) => Text -> Text -> Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [Widget.Widget] -> Eff es [Widget.Widget]
+populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w -> do
+  url <- BotUtils.widgetPngUrl secret hostUrl pid w sinceStr fromDStr toDStr
+  pure $ if T.null url then w else w{Widget.pngUrl = Just url}
+
+
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
   (_, dash) <- getDashAndVM dashId Nothing
@@ -998,9 +1006,10 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
       -- Process widgets concurrently
       processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
-      -- Populate alert statuses for widgets
+      -- Populate alert statuses and PNG URLs for widgets
       widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-      let dash'' = dash' & #widgets .~ widgetsWithAlerts
+      widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+      let dash'' = dash' & #widgets .~ widgetsWithPngUrls
 
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
@@ -2177,7 +2186,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
             -- Process widgets concurrently for faster initial page load
             processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
             widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-            pure $ tab & #widgets .~ widgetsWithAlerts
+            widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+            pure $ tab & #widgets .~ widgetsWithPngUrls
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs
     Nothing -> pure dash'
@@ -2212,6 +2222,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
 -- This returns only the tab content panel for htmx swapping
 dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
 dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
+  appCtx <- ask @AuthContext
   now <- Time.currentTime
   (_dashVM, dash) <- getDashAndVM dashId fileM
   let timeParams = (sinceStr, fromDStr, toDStr)
@@ -2239,11 +2250,12 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
         widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+        widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
 
         -- Render tab content panel + OOB modal if variable needs prompting + OOB form URL update
         let widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug
         addRespHeaders $ do
-          tabContentPanel_ pid dashId.toText idx tab.name widgetsWithAlerts True True
+          tabContentPanel_ pid dashId.toText idx tab.name widgetsWithPngUrls True True
           whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
           -- OOB swap to update widget-order-trigger form's hx-patch URL for the current tab
           form_
