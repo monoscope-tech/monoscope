@@ -6,6 +6,8 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
+import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
 import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
@@ -15,7 +17,11 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
+import Effectful (Eff, IOE, (:>))
+import Effectful.Log (Log)
+import Effectful.Reader.Static qualified
 import Language.Haskell.TH.Syntax qualified as THS
+import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
@@ -27,21 +33,15 @@ import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Relude
-import Data.ByteArray qualified as BA
-import Data.ByteString.Base16 qualified as B16
-import Effectful (Eff, IOE, (:>))
-import Effectful.Log (Log)
-import Effectful.Reader.Static qualified
-import Log qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import "cryptonite" Crypto.Hash (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 -- Generic instance for parsing JSON arrays from form data
