@@ -1,3 +1,5 @@
+{-# LANGUAGE PackageImports #-}
+
 module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTraceDataTable, renderTableWithDataAndParams) where
 
 import Control.Lens
@@ -25,7 +27,16 @@ import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Relude
+import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
+import Effectful (Eff, IOE, (:>))
+import Effectful.Log (Log)
+import Effectful.Reader.Static qualified
+import Log qualified
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils
@@ -277,8 +288,28 @@ renderRowClickScript tableId onRowClick columns = do
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
-widgetPostH :: Projects.ProjectId -> Widget -> ATAuthCtx (RespHeaders Widget)
-widgetPostH pid widget = addRespHeaders (widget & (#_projectId ?~ pid))
+widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget -> ATAuthCtx (RespHeaders Widget)
+widgetPostH pid sinceM fromM toM widget = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  let widgetWithPid = widget & #_projectId ?~ pid
+  pngUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid widgetWithPid sinceM fromM toM
+  addRespHeaders $ if T.null pngUrl then widgetWithPid else widgetWithPid{pngUrl = Just pngUrl}
+
+
+widgetPngUrl :: (IOE :> es, Log :> es) => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
+widgetPngUrl secret hostUrl pid widget since from to =
+  let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
+      encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
+      sig = signWidgetUrl secret pid widgetJson
+      timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", from), ("to", to)] :: [(Text, Maybe Text)])
+      url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
+   in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure "" else pure url
+
+
+signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
+signWidgetUrl secret pid widgetJson =
+  let payload = pid.toText <> ":" <> widgetJson
+   in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
 
 
 -- use either index or the xxhash as id
@@ -849,6 +880,9 @@ widgetToECharts widget =
       gridLinesVisibility = not isStat
       legendVisibility = not isStat && widget.hideLegend /= Just True
       seriesNames = extractSeriesNamesFromDataset widget.dataset
+      -- Detect categorical widget types (no time axis)
+      isCategorical = widget.wType `elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel]
+      xAxisType = if isCategorical then "category" else "time"
    in AE.object
         [ "tooltip"
             AE..= AE.object
@@ -902,19 +936,21 @@ widgetToECharts widget =
               ]
         , "xAxis"
             AE..= AE.object
-              [ "type" AE..= ("time" :: Text)
-              , "scale" AE..= True
-              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just) -- Already in ms from queryMetrics
-              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
-              , "boundaryGap" AE..= ([0, 0.01] :: [Double])
-              , "splitLine"
-                  AE..= AE.object
-                    [ "show" AE..= False
-                    ]
-              , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
-              , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just))]
-              , "show" AE..= (axisVisibility || fromMaybe False (widget ^? #xAxis . _Just . #showAxisLabel . _Just))
-              ]
+              ( [ "type" AE..= xAxisType
+                , "scale" AE..= True
+                , "boundaryGap" AE..= if isCategorical then AE.Bool True else AE.Array (V.fromList [AE.Number 0, AE.Number 0.01])
+                , "splitLine" AE..= AE.object ["show" AE..= False]
+                , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
+                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just))]
+                , "show" AE..= (axisVisibility || fromMaybe False (widget ^? #xAxis . _Just . #showAxisLabel . _Just))
+                ]
+                  <> if isCategorical
+                    then [] -- For categorical, ECharts will derive categories from dataset
+                    else
+                      [ "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
+                      , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
+                      ]
+              )
         , "yAxis"
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)

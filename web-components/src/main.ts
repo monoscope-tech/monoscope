@@ -22,12 +22,12 @@ const getDashboardConstants = (el?: Element | null): Record<string, string> => {
 };
 (window as any).getDashboardConstants = getDashboardConstants;
 
-// HTMX extension to forward current page query parameters and dashboard constants to GET requests
+// HTMX extension to forward current page query parameters and dashboard constants to GET/POST requests
 (window as any).htmx.defineExtension('forward-page-params', {
   onEvent: function (name: string, evt: any) {
     if (name === 'htmx:configRequest') {
-      // Only process GET requests
-      if (evt.detail.verb === 'get') {
+      // Process GET and POST requests (add params to URL query string)
+      if (evt.detail.verb === 'get' || evt.detail.verb === 'post') {
         const url = new URL(evt.detail.path, window.location.origin);
         const currentParams = new URLSearchParams(window.location.search);
 

@@ -806,7 +806,7 @@ apiLogsPage page = do
               , hxTarget_ "this"
               , hxSwap_ "innerHTML"
               , hxVals_ "js:{...widgetJSON}"
-              , hxExt_ "json-enc"
+              , hxExt_ "json-enc,forward-page-params"
               , term "hx-sync" "this:replace"
               ]
               ""
