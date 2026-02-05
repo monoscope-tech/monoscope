@@ -693,10 +693,11 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allPa
 
   let widgetWithPid = widget & #_projectId ?~ pid & #eager ?~ True
   processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widgetWithPid
-  let input =
+  let staticWidget = processedWidget & #_staticRender ?~ True
+      input =
         AE.encode
           $ AE.object
-            [ "echarts" AE..= Widget.widgetToECharts processedWidget
+            [ "echarts" AE..= Widget.widgetToECharts staticWidget
             , "width" AE..= width
             , "height" AE..= height
             , "theme" AE..= fromMaybe "default" processedWidget.theme

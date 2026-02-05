@@ -154,6 +154,7 @@ data Widget = Widget
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
+  , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -877,8 +878,9 @@ widgetToECharts widget =
                       "md" -> (14, 12, 12, [4, 8, 4, 8])
                       "lg" -> (16, 14, 14, [5, 10, 5, 10])
                       _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
+                    isStatic = widget._staticRender == Just True
                  in [ "show" AE..= legendVisibility
-                    , "type" AE..= "scroll"
+                    , "type" AE..= if isStatic then "plain" else "scroll"
                     , "top" AE..= vPos
                     , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number (fromIntegral fontSize), "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
                     , "itemWidth" AE..= AE.Number (fromIntegral itemSize)
