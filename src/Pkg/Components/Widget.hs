@@ -461,15 +461,16 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               |]
             ]
             "Copy KQL"
-        whenJust widget.pngUrl \url -> li_
-          $ a_
-            [ class_ "p-2 w-full text-left block cursor-pointer"
-            , data_ "tippy-content" "Download widget as PNG image"
-            , href_ url
-            , download_ $ maybeToMonoid widget.title <> ".png"
-            , target_ "_blank"
-            ]
-            "Download PNG"
+        whenJust widget.pngUrl \url ->
+          li_
+            $ a_
+              [ class_ "p-2 w-full text-left block cursor-pointer"
+              , data_ "tippy-content" "Download widget as PNG image"
+              , href_ url
+              , download_ $ maybeToMonoid widget.title <> ".png"
+              , target_ "_blank"
+              ]
+              "Download PNG"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do

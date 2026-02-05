@@ -62,6 +62,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
+import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -104,7 +105,6 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.FilePath.Posix (takeDirectory)
-import Effectful.Log (Log)
 import System.Logging qualified as Log
 import System.Types
 import Text.Slugify (slugify)
