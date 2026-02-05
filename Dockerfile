@@ -29,22 +29,6 @@ COPY config/workbox-config.js ./config/
 RUN npm install -g workbox-cli@6.5.4 \
  && workbox generateSW config/workbox-config.js
 
-# Stage 1b: Build chart-cli on Debian (glibc) for @napi-rs/canvas compatibility
-FROM node:22-slim AS chartcli-builder
-
-WORKDIR /build
-
-# Install bun
-RUN npm install -g bun
-
-# Copy web-components package files and install deps
-COPY web-components/package*.json ./web-components/
-RUN cd web-components && npm ci --prefer-offline --no-audit
-
-# Copy source and build
-COPY web-components ./web-components
-RUN cd web-components && bun build --compile src/chart-cli.ts --outfile ../chart-cli
-
 # Stage 2: Build Haskell application
 # Uses pre-built deps image with all Haskell dependencies compiled
 # Falls back gracefully if deps not cached
@@ -139,7 +123,7 @@ WORKDIR /opt/monoscope
 # Copy artifacts
 COPY --from=haskell-builder /build/dist/monoscope ./
 COPY --from=frontend-builder /build/static ./static
-COPY --from=chartcli-builder /build/chart-cli ./
+COPY --from=haskell-builder /usr/local/bin/chart-cli ./
 
 # Set ownership and permissions
 RUN chown -R monoscope:monoscope /opt/monoscope && \

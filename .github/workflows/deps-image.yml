@@ -9,6 +9,8 @@ on:
       - '*.cabal'
       - 'cabal.project*'
       - 'Dockerfile.deps'
+      - 'web-components/package*.json'
+      - 'web-components/src/chart-cli.ts'
     branches: [master]
 
 jobs:

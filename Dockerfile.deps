@@ -22,6 +22,12 @@ RUN PROTOC_VERSION=29.3 && \
   unzip -q protoc-${PROTOC_VERSION}-linux-${ARCH}.zip -d /usr/local && \
   rm protoc-${PROTOC_VERSION}-linux-${ARCH}.zip
 
+# Install Node.js and bun for chart-cli
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+  apt-get install -y nodejs && \
+  npm install -g bun && \
+  rm -rf /var/lib/apt/lists/*
+
 WORKDIR /build
 
 # Copy only files needed for dependency resolution
@@ -31,8 +37,17 @@ COPY *.cabal cabal.project* Setup.hs LICENSE ./
 RUN cabal update && \
   cabal build --only-dependencies exe:monoscope -j$(nproc)
 
+# Build chart-cli (pre-compiled for faster deployments)
+COPY web-components/package*.json ./web-components/
+RUN cd web-components && npm ci --prefer-offline --no-audit
+
+COPY web-components ./web-components
+RUN cd web-components && bun build --compile src/chart-cli.ts --outfile /usr/local/bin/chart-cli && \
+  chmod +x /usr/local/bin/chart-cli
+
 # The resulting image contains:
 # - All system libraries
 # - GHC 9.12.2
 # - protoc
+# - Node.js, bun, and pre-built chart-cli
 # - All Haskell dependencies pre-compiled in ~/.cabal/store
