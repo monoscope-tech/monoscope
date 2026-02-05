@@ -99,6 +99,7 @@ RUN --mount=type=cache,target=/root/.cabal/store \
 FROM debian:12-slim
 
 # Install only essential runtime dependencies
+# Graphics libs (libcairo2, libpango, etc.) are needed for @napi-rs/canvas in chart-cli
 RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   libgmp10 \
@@ -109,6 +110,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   libzstd1 \
   libsasl2-2 \
   libldap-2.5-0 \
+  libcairo2 \
+  libpango-1.0-0 \
+  libpangocairo-1.0-0 \
+  libjpeg62-turbo \
+  libgif7 \
+  fontconfig \
+  fonts-dejavu-core \
   && rm -rf /var/lib/apt/lists/*
 
 # Create non-root user
