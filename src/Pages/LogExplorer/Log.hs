@@ -496,43 +496,44 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
           latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
 
-      let page = ApiLogsPageData
-            { pid
-            , resultCount
-            , requestVecs = finalVecs
-            , cols = curatedColNames
-            , colIdxMap
-            , nextLogsURL
-            , resetLogsURL
-            , recentLogsURL
-            , currentRange
-            , exceededFreeTier = freeTierExceeded
-            , query = queryM'
-            , cursor = reqLastCreatedAtM
-            , isTestLog = Nothing
-            , emptyStateUrl = Nothing
-            , source
-            , targetSpans = targetSpansM
-            , serviceColors = colors
-            , daysCountDown = Nothing
-            , queryLibRecent
-            , queryLibSaved
-            , fromD
-            , toD
-            , detailsWidth = detailWM
-            , targetEvent = targetEventM
-            , showTrace = showTraceM
-            , facets = facetSummary
-            , vizType = effectiveVizType
-            , alert = alertDM
-            , patterns = patterns
-            , patternsToSkip
-            , targetPattern = pTargetM
-            , project = project
-            , teams
-            , chartWidget
-            , latencyWidget
-            }
+      let page =
+            ApiLogsPageData
+              { pid
+              , resultCount
+              , requestVecs = finalVecs
+              , cols = curatedColNames
+              , colIdxMap
+              , nextLogsURL
+              , resetLogsURL
+              , recentLogsURL
+              , currentRange
+              , exceededFreeTier = freeTierExceeded
+              , query = queryM'
+              , cursor = reqLastCreatedAtM
+              , isTestLog = Nothing
+              , emptyStateUrl = Nothing
+              , source
+              , targetSpans = targetSpansM
+              , serviceColors = colors
+              , daysCountDown = Nothing
+              , queryLibRecent
+              , queryLibSaved
+              , fromD
+              , toD
+              , detailsWidth = detailWM
+              , targetEvent = targetEventM
+              , showTrace = showTraceM
+              , facets = facetSummary
+              , vizType = effectiveVizType
+              , alert = alertDM
+              , patterns = patterns
+              , patternsToSkip
+              , targetPattern = pTargetM
+              , project = project
+              , teams
+              , chartWidget
+              , latencyWidget
+              }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount (V.length requestVecs)
       addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
@@ -558,20 +559,21 @@ textToUTC = iso8601ParseM . toString
 
 -- Widget definitions for log explorer charts
 logChartWidget :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Widget.Widget
-logChartWidget pid vizType targetPattern = (def :: Widget.Widget)
-  { Widget.wType = tp
-  , Widget.query = Just query
-  , Widget.unit = Just "rows"
-  , Widget.title = Just title
-  , Widget.legendPosition = Just "top-right"
-  , Widget.legendSize = Just "xs"
-  , Widget._projectId = Just pid
-  , Widget.standalone = Just True
-  , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-  , Widget.allowZoom = Just True
-  , Widget.showMarkArea = Just True
-  , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-  }
+logChartWidget pid vizType targetPattern =
+  (def :: Widget.Widget)
+    { Widget.wType = tp
+    , Widget.query = Just query
+    , Widget.unit = Just "rows"
+    , Widget.title = Just title
+    , Widget.legendPosition = Just "top-right"
+    , Widget.legendSize = Just "xs"
+    , Widget._projectId = Just pid
+    , Widget.standalone = Just True
+    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+    , Widget.allowZoom = Just True
+    , Widget.showMarkArea = Just True
+    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+    }
   where
     patternTarget = fromMaybe "log_pattern" targetPattern
     nm = fromMaybe "Log" $ viaNonEmpty head $ T.splitOn "_" patternTarget
@@ -581,20 +583,21 @@ logChartWidget pid vizType targetPattern = (def :: Widget.Widget)
 
 
 logLatencyWidget :: Projects.ProjectId -> Widget.Widget
-logLatencyWidget pid = (def :: Widget.Widget)
-  { Widget.wType = WTTimeseriesLine
-  , Widget.standalone = Just True
-  , Widget.title = Just "Latency percentiles"
-  , Widget.hideSubtitle = Just True
-  , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-  , Widget.summarizeBy = Just Widget.SBMax
-  , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-  , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
-  , Widget.unit = Just "ns"
-  , Widget.legendPosition = Just "top-right"
-  , Widget.legendSize = Just "xs"
-  , Widget._projectId = Just pid
-  }
+logLatencyWidget pid =
+  (def :: Widget.Widget)
+    { Widget.wType = WTTimeseriesLine
+    , Widget.standalone = Just True
+    , Widget.title = Just "Latency percentiles"
+    , Widget.hideSubtitle = Just True
+    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+    , Widget.summarizeBy = Just Widget.SBMax
+    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+    , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
+    , Widget.unit = Just "ns"
+    , Widget.legendPosition = Just "top-right"
+    , Widget.legendSize = Just "xs"
+    , Widget._projectId = Just pid
+    }
 
 
 data LogsGet
