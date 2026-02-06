@@ -336,7 +336,6 @@ library
     , text-builder-linear
     , text-display
     , time
-    , typed-process
     , tmp-postgres
     , unliftio
     , unordered-containers

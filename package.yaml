@@ -218,7 +218,6 @@ library:
     - odd-jobs
     - parser-combinators
     - pg-entity
-    - pg-transact
     - postgresql-migration
     - postgresql-simple
     - regex-tdfa
@@ -226,7 +225,6 @@ library:
     - resource-pool
     - resourcet
     - scientific
-    - sendgrid-v3 >= 0.3.0.0 # todo delete
     - servant
     - servant-htmx
     - servant-lucid
@@ -266,7 +264,6 @@ library:
     - hs-opentelemetry-api
     - hs-opentelemetry-instrumentation-wai
     - hs-opentelemetry-instrumentation-auto
-    - hs-opentelemetry-instrumentation-postgresql-simple
     - postgresql-libpq
     - ki-effectful
     - grapesy
@@ -343,7 +340,6 @@ tests:
       - time
       - uuid
       - uuid-quasi
-      - pg-transact
       - vector
       - cache
       - data-default
