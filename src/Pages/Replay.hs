@@ -4,15 +4,16 @@ module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySe
 
 import Conduit (runConduit)
 import Data.Aeson qualified as AE
-import Data.ByteString.Lazy qualified as BL
 import Data.Aeson.Types qualified as AET
+import Data.ByteString.Lazy qualified as BL
 import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
 import Data.HashMap.Strict qualified as HM
-import Data.Time (UTCTime, getCurrentTime, formatTime, defaultTimeLocale)
+import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, runEff, type (:>))
+import Effectful.Log (Log, object)
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
@@ -21,11 +22,11 @@ import Pkg.Queue (publishJSONToKafka)
 import Relude
 import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config), EnvConfig (..))
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import Utils (eitherStrToText)
-import UnliftIO.Exception (tryAny)
 import System.Logging qualified as Log
-import Effectful.Log (Log, object)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
+import UnliftIO.Exception (tryAny)
+import Utils (eitherStrToText)
+
 
 data ReplayPost = ReplayPost
   { events :: AE.Value
