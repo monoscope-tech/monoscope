@@ -36,7 +36,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForDiscord, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (AIQueryResult (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForDiscord, formatTextResponse, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -336,33 +336,39 @@ discordInteractionsH rawBody signatureM timestampM = do
               Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
               Right AIQueryResult{..} -> do
                 Issues.insertChatMessage discordData.projectId convId "assistant" query Nothing Nothing
-                sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
+                sendDiscordResponse options interaction envCfg authCtx discordData query visualization outputType commentary fromTime toTime timeRangeStr now
           _ -> do
             result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
             case result of
               Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
-              Right AIQueryResult{..} -> sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
+              Right AIQueryResult{..} -> sendDiscordResponse options interaction envCfg authCtx discordData query visualization outputType commentary fromTime toTime timeRangeStr now
 
 
-sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> Text -> Maybe Text -> Maybe Time.UTCTime -> Maybe Time.UTCTime -> (Text, Text) -> Time.UTCTime -> ATBaseCtx ()
-sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTimeM toTimeM timeRangeStr now = do
-  let (from, to) = timeRangeStr
-  case visualization of
-    Just vizType -> do
-      let widgetType = Widget.mapChatTypeToWidgetType vizType
-          chartType = Widget.mapWidgetTypeToChartType widgetType
-          query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
-          question = case options of
-            Just (InteractionOption{value = AE.String q} : _) -> q
-            _ -> "[?]"
-      imageUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} Nothing (Just from) (Just to)
-      let content = getBotContentWithUrl question query query_url imageUrl
-      sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
-    Nothing -> case parseQueryToAST query of
-      Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord (QueryParseError query))
-      Right query' -> do
-        tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
-        sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
+sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> Text -> Maybe Text -> AI.AIOutputType -> Maybe Text -> Maybe Time.UTCTime -> Maybe Time.UTCTime -> (Text, Text) -> Time.UTCTime -> ATBaseCtx ()
+sendDiscordResponse options interaction envCfg authCtx discordData query visualization outType commentaryM fromTimeM toTimeM (from, to) now =
+  case outType of
+    AI.AOText -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord (fromMaybe "No insights available" commentaryM)
+    AI.AOWidget -> handleWidgetResponse
+    AI.AOBoth -> do
+      handleWidgetResponse
+      whenJust commentaryM \c -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord c
+  where
+    handleWidgetResponse = case visualization of
+      Just vizType -> do
+        let widgetType = Widget.mapChatTypeToWidgetType vizType
+            chartType = Widget.mapWidgetTypeToChartType widgetType
+            query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
+            question = case options of
+              Just (InteractionOption{value = AE.String q} : _) -> q
+              _ -> "[?]"
+        imageUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} Nothing (Just from) (Just to)
+        let content = getBotContentWithUrl question query query_url imageUrl
+        sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+      Nothing -> case parseQueryToAST query of
+        Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord (QueryParseError query))
+        Right query' -> do
+          tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
 
 
 contentResponse :: Text -> AE.Value

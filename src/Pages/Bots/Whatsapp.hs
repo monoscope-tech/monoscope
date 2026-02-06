@@ -20,6 +20,7 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
 import Pages.Bots.Utils (AIQueryResult (..), BotType (..), QueryIntent (..), botEmoji, detectReportIntent, formatReportForWhatsApp, handleTableResponse, processAIQuery, processReportQuery)
+import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -101,29 +102,34 @@ whatsappIncomingPostH val = do
         GeneralQueryIntent -> do
           result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiApiKey
           case result of
-            Left _ -> do
-              _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
-              pass
+            Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
             Right AIQueryResult{..} -> do
               let (from, to) = timeRangeStr
-              case visualization of
-                Just vizType -> do
-                  let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                      opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
-                      query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                      content' = getBotContent reqBody.body query query_url opts
-                  _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
-                  pass
-                Nothing -> case parseQueryToAST query of
-                  Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'")
-                  Right query' -> do
-                    tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromTime, toTime) [] Nothing Nothing
-                    let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
-                          AE.Object o -> case KEM.lookup "body" o of
-                            Just (AE.String c) -> c
-                            _ -> "Error processing query"
-                          _ -> "Error processing query"
-                    sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
+              case outputType of
+                AI.AOText -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ fromMaybe "No insights available" commentary)
+                AI.AOWidget -> handleWidgetResponse now reqBody envCfg project query visualization from to fromTime toTime
+                AI.AOBoth -> do
+                  handleWidgetResponse now reqBody envCfg project query visualization from to fromTime toTime
+                  whenJust commentary \c -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just c)
+
+    handleWidgetResponse now reqBody envCfg project query visualization from to fromTimeM toTimeM = case visualization of
+      Just vizType -> do
+        let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+            opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+            query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+            content' = getBotContent reqBody.body query query_url opts
+        _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
+        pass
+      Nothing -> case parseQueryToAST query of
+        Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'")
+        Right query' -> do
+          tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
+                AE.Object o -> case KEM.lookup "body" o of
+                  Just (AE.String c) -> c
+                  _ -> "Error processing query"
+                _ -> "Error processing query"
+          sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
 
 
 data BodyType

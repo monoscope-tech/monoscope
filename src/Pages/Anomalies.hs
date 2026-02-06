@@ -26,7 +26,7 @@ module Pages.Anomalies (
 where
 
 import Data.Aeson qualified as AE
-import Data.Aeson.Types (parseMaybe)
+import Data.Aeson.Types (Parser, parseMaybe)
 import Data.Default (def)
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -379,11 +379,9 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
             div_ [class_ "transition-opacity duration-200 mx-1", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
             div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] w-1/2 w-c-scroll overflow-x-hidden overflow-y-auto", id_ "log_details_container"] do
               span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
-              let (spanId, createdAt) = case spanRecs V.!? 0 of
-                    Just sr -> (sr.uSpanId, formatUTC sr.timestamp)
-                    Nothing -> ("", "")
-              let url = "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> createdAt <> "/detailed"
-              div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
+              whenJust (spanRecs V.!? 0) \sr -> do
+                let url = "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed"
+                div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
           div_ [id_ "log-content", class_ "hidden err-tab-content"] do
             div_ [class_ "flex flex-col gap-4"] do
@@ -412,7 +410,7 @@ newtype AIChatForm = AIChatForm {query :: Text}
 
 -- | AI response structure from OpenAI
 data AIInvestigationResponse = AIInvestigationResponse
-  { explanation :: Text
+  { explanation :: Maybe Text
   , widgets :: Maybe [Widget.Widget]
   , suggestedQuery :: Maybe Text
   }
@@ -481,18 +479,22 @@ anomalySystemPrompt =
     , "1. Explain the likely root cause based on the error type and stack trace"
     , "2. Consider the context (service, method, path) for better insights"
     , "3. Suggest specific debugging steps or fixes"
-    , "4. When helpful, suggest KQL queries to find related logs or data"
+    , "4. ONLY use tools when the user explicitly asks for data not in the provided context"
+    , ""
+    , "IMPORTANT - TOOL USAGE GUIDELINES:"
+    , "- For analysis questions (e.g., 'What could cause this?', 'Suggest a fix'), answer DIRECTLY from the provided context WITHOUT calling tools"
+    , "- For chart/visualization requests (e.g., 'plot errors over time', 'show a chart of...'), construct the KQL query directly from the schema - do NOT call tools"
+    , "- Only use tools when you need to fetch ACTUAL DATA values to include in your response (e.g., 'what are the top 5 services by error count?' where you need real numbers)"
+    , "- The schema above tells you all available fields - use it to build queries without calling get_schema or get_field_values"
+    , ""
+    , "OUTPUT PRIORITY: For chart/visualization requests, focus on returning the correct widget with proper KQL query. Keep explanation minimal."
     , ""
     , Schema.generateSchemaForAI Schema.telemetrySchema
     , ""
-    , "You can include widget configurations to visualize data. Available widget types:"
-    , "- logs: Show log entries matching a query"
-    , "- timeseries: Bar chart visualization"
-    , "- timeseries_line: Line chart visualization"
-    , "- stat: Single statistic value"
+    , AI.kqlGuide
     , ""
-    , "Widget structure:"
-    , "{ \"widgetType\": \"logs|timeseries|timeseries_line|stat\","
+    , "Widget structure for visualizations:"
+    , "{ \"type\": \"logs|timeseries|timeseries_line|stat\","
     , "  \"query\": \"KQL query string\","
     , "  \"title\": \"Widget title\" }"
     , ""
@@ -511,7 +513,7 @@ anomalySystemPrompt =
 -- | Handle AI chat POST request
 aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 aiChatPostH pid issueId form
-  | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing
+  | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing
   | otherwise = do
       (sess, project) <- Sessions.sessionAndProject pid
       appCtx <- ask @AuthContext
@@ -526,7 +528,7 @@ aiChatPostH pid issueId form
           let response = "Issue not found. Unable to analyze."
           Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
           Issues.insertChatMessage pid convId "assistant" response Nothing Nothing
-          addRespHeaders $ aiChatResponse_ pid form.query response Nothing
+          addRespHeaders $ aiChatResponse_ pid form.query response Nothing Nothing
         Just issue -> do
           errorM <- case issue.issueType of
             Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
@@ -548,35 +550,43 @@ aiChatPostH pid issueId form
             Nothing -> pure (Nothing, V.empty)
 
           let context = buildAIContext issue errorM traceDataM spans
-              anomalyContext = unlines [anomalySystemPrompt, "", "--- ISSUE CONTEXT ---", context]
+              issueContext = unlines ["--- ISSUE CONTEXT ---", context]
               dayAgo = addUTCTime (-86400) now
           facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
           let config =
                 (AI.defaultAgenticConfig pid)
                   { AI.facetContext = facetSummaryM
-                  , AI.customContext = Just anomalyContext
+                  , AI.customContext = Just issueContext
                   , AI.conversationId = Just convId
                   , AI.conversationType = Just Issues.CTAnomaly
+                  , AI.systemPromptOverride = Just anomalySystemPrompt
                   }
 
-          Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
           result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
 
           case result of
             Left err -> do
               let errorResponse = "I encountered an error while analyzing this issue: " <> err
               Issues.insertChatMessage pid convId "assistant" errorResponse Nothing Nothing
-              addRespHeaders $ aiChatResponse_ pid form.query errorResponse Nothing
-            Right responseText -> do
-              let parsed = AE.eitherDecode (fromStrict $ encodeUtf8 responseText) :: Either String AIInvestigationResponse
+              addRespHeaders $ aiChatResponse_ pid form.query errorResponse Nothing Nothing
+            Right chatResult -> do
+              let cleaned = AI.stripCodeBlock chatResult.response
+                  toolCallsInfo = chatResult.toolCalls
+                  metadata = if null toolCallsInfo then Nothing else Just $ AE.toJSON toolCallsInfo
+                  parsed = AE.eitherDecode (fromStrict $ encodeUtf8 cleaned) :: Either String AIInvestigationResponse
               case parsed of
                 Left _ -> do
-                  Issues.insertChatMessage pid convId "assistant" responseText Nothing Nothing
-                  addRespHeaders $ aiChatResponse_ pid form.query responseText Nothing
+                  Issues.insertChatMessage pid convId "assistant" chatResult.response Nothing metadata
+                  addRespHeaders $ aiChatResponse_ pid form.query chatResult.response Nothing (Just toolCallsInfo)
                 Right aiResp -> do
-                  let limitedWidgets = take 10 <$> aiResp.widgets -- max 10 to prevent abuse
-                  Issues.insertChatMessage pid convId "assistant" aiResp.explanation (Just $ AE.toJSON limitedWidgets) Nothing
-                  addRespHeaders $ aiChatResponse_ pid form.query aiResp.explanation limitedWidgets
+                  let limitedWidgets = take 10 <$> aiResp.widgets
+                      hasWidgets = maybe False (not . null) limitedWidgets
+                      explanationText = case aiResp.explanation of
+                        Just t | not (T.null t) -> t
+                        _ | hasWidgets -> "Here are the requested visualizations:"
+                        _ -> chatResult.response
+                  Issues.insertChatMessage pid convId "assistant" explanationText (Just $ AE.toJSON limitedWidgets) metadata
+                  addRespHeaders $ aiChatResponse_ pid form.query explanationText limitedWidgets (Just toolCallsInfo)
 
 
 -- | Handle AI chat history GET request
@@ -589,21 +599,40 @@ aiChatHistoryGetH pid issueId = do
 
 
 -- | Render a single chat response (user question + AI answer)
-aiChatResponse_ :: Projects.ProjectId -> Text -> Text -> Maybe [Widget.Widget] -> Html ()
-aiChatResponse_ pid userQuery explanation widgetsM =
-  div_ [class_ "surface-raised rounded-2xl p-6 animate-fade-in max-w-3xl mx-auto"] do
+aiChatResponse_ :: Projects.ProjectId -> Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Html ()
+aiChatResponse_ pid userQuery explanation widgetsM toolCallsM =
+  div_ [class_ "surface-raised rounded-2xl p-6 animate-fade-in max-w-3xl mx-auto w-full"] do
     -- User question
     div_ [class_ "flex items-start gap-3 mb-4 pb-4 border-b border-strokeWeak"] do
       div_ [class_ "p-2 rounded-lg bg-fillWeak shrink-0"] $ faSprite_ "user" "regular" "w-4 h-4 text-iconNeutral"
       p_ [class_ "text-sm text-textStrong"] $ toHtml userQuery
+    -- Behind the scenes section (at top)
+    whenJust toolCallsM \toolCalls ->
+      unless (null toolCalls)
+        $ details_ [class_ "mb-4 border border-strokeWeak rounded-lg"] do
+          summary_ [class_ "cursor-pointer px-4 py-2 text-sm text-textWeak hover:bg-fillWeaker list-none flex items-center gap-2"] do
+            faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4"
+            toHtml $ "Behind the scenes: " <> show (length toolCalls) <> " tool calls"
+          div_ [class_ "px-4 py-3 border-t border-strokeWeak bg-fillWeaker/50"] $ forM_ toolCalls toolCallView_
     -- AI response
     div_ [class_ "flex items-start gap-3"] do
       div_ [class_ "p-2 rounded-lg bg-fillBrand-weak shrink-0"] $ faSprite_ "sparkles" "regular" "w-4 h-4 text-iconBrand"
       div_ [class_ "flex-1 flex flex-col gap-4"] do
         div_ [class_ "prose prose-sm text-textStrong max-w-none"] $ renderMarkdown explanation
-    whenJust widgetsM \widgets ->
-      div_ [class_ "grid grid-cols-1 gap-4 mt-4"] do
-        forM_ widgets \widget -> Widget.widget_ widget{Widget._projectId = Just pid}
+    whenJust widgetsM \widgets -> do
+      let processedWidgets = maybe widgets (`processWidgetsWithToolData` widgets) toolCallsM
+      div_ [class_ "grid grid-cols-1 gap-4 mt-4"] $ forM_ processedWidgets \widget ->
+        div_ [class_ "w-full aspect-[3/1]"] $ Widget.widget_ widget{Widget._projectId = Just pid}
+
+
+-- | Render a single tool call
+toolCallView_ :: AI.ToolCallInfo -> Html ()
+toolCallView_ tc =
+  div_ [class_ "flex flex-col gap-1 py-2 border-b border-strokeWeak last:border-0"] do
+    div_ [class_ "flex items-center gap-2 flex-wrap"] do
+      span_ [class_ "font-mono text-xs px-2 py-0.5 bg-fillWeak rounded"] $ toHtml tc.name
+      whenJust (Map.lookup "query" tc.args) \q -> span_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ show q
+    unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
 
 
 renderMarkdown :: Text -> Html ()
@@ -612,20 +641,59 @@ renderMarkdown md = case MMark.parse "" md of
   Right doc -> toHtmlRaw $ MMark.render doc
 
 
--- | Parse widgets from stored JSON
-parseStoredWidgets :: Maybe (Aeson AE.Value) -> Maybe [Widget.Widget]
-parseStoredWidgets = (>>= parseMaybe AE.parseJSON . getAeson)
+parseStoredJSON :: AE.FromJSON a => Maybe (Aeson AE.Value) -> Maybe a
+parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
 
 
--- | Render chat history, pairing user messages with their following assistant response
-aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
-aiChatHistoryView_ pid = go
+-- | Process widgets to use cached tool call data (no re-query)
+processWidgetsWithToolData :: [AI.ToolCallInfo] -> [Widget.Widget] -> [Widget.Widget]
+processWidgetsWithToolData toolCalls = map \w -> case w.query >>= findToolCallData toolCalls of
+  Nothing -> w
+  Just rawJson -> maybe w (\ds -> w{Widget.dataset = Just ds, Widget.eager = Just True}) (toolDataToDataset rawJson)
+
+
+-- | Find matching tool call data for a widget query
+findToolCallData :: [AI.ToolCallInfo] -> Text -> Maybe AE.Value
+findToolCallData toolCalls widgetQuery = listToMaybe [rd | tc <- toolCalls, tc.name == "run_query", Just q <- [Map.lookup "query" tc.args >>= getText], normalizeQuery q == normalizeQuery widgetQuery, Just rd <- [tc.rawData]]
   where
-    go (u : a : rest) | u.role == "user" && a.role == "assistant" = do
-      aiChatResponse_ pid u.content a.content (parseStoredWidgets a.widgets)
-      go rest
-    go (_ : rest) = go rest -- skip unpaired/malformed messages
-    go [] = pass
+    getText (AE.String t) = Just t
+    getText _ = Nothing
+
+
+-- | Normalize query for comparison (remove whitespace variations)
+normalizeQuery :: Text -> Text
+normalizeQuery = T.unwords . T.words
+
+
+-- | Convert tool call raw data to WidgetDataset
+toolDataToDataset :: AE.Value -> Maybe Widget.WidgetDataset
+toolDataToDataset json = flip parseMaybe json $ AE.withObject "RawData" \obj -> do
+  headers <- obj AE..: "headers" :: Parser [Text]
+  dataRows <- obj AE..: "data" :: Parser (V.Vector (V.Vector AE.Value))
+  count <- obj AE..:? "count"
+  let source = AE.toJSON $ V.cons (AE.toJSON <$> V.fromList headers) (fmap AE.toJSON <$> dataRows)
+  pure Widget.WidgetDataset{source, rowsPerMin = Nothing, value = count, from = Nothing, to = Nothing, stats = Nothing}
+
+
+-- | Render chat history using forM_ over paired messages
+aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
+aiChatHistoryView_ pid msgs = forM_ (pairUserAssistant msgs) \(u, a) -> do
+  let (explanation, widgets) = parseStoredContent a.content a.widgets
+  aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata)
+
+-- | Pair user messages with their following assistant responses, skipping unpaired
+pairUserAssistant :: [Issues.AIChatMessage] -> [(Issues.AIChatMessage, Issues.AIChatMessage)]
+pairUserAssistant (u : a : rest) | u.role == "user" && a.role == "assistant" = (u, a) : pairUserAssistant rest
+pairUserAssistant (_ : rest) = pairUserAssistant rest
+pairUserAssistant [] = []
+
+-- | Parse stored content - try JSON format first (stripping code blocks), fall back to plain text
+parseStoredContent :: Text -> Maybe (Aeson AE.Value) -> (Text, Maybe [Widget.Widget])
+parseStoredContent content storedWidgets =
+  let cleaned = AI.stripCodeBlock content
+  in case AE.eitherDecode (fromStrict $ encodeUtf8 cleaned) :: Either String AIInvestigationResponse of
+    Right aiResp -> (fromMaybe "" aiResp.explanation, aiResp.widgets)
+    Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
 -- | AI Chat Component with inline responses and floating input
@@ -638,6 +706,7 @@ anomalyAIChat_ pid issueId = do
     , class_ "flex flex-col gap-4"
     , hxGet_ $ "/p/" <> pid.toText <> "/anomalies/" <> issueIdT <> "/ai_chat/history"
     , hxTrigger_ "load"
+    , term "hx-on::after-swap" "window.evalScriptsFromContent && window.evalScriptsFromContent(event.detail.elt === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: 'smooth', block: 'start'})"
     ]
     ""
   -- Floating input bar

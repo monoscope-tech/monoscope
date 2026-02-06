@@ -887,6 +887,8 @@ aiSearchH pid requestBody = do
                 $ AE.object
                   [ "query" AE..= query
                   , "visualization_type" AE..= visualization
+                  , "commentary" AE..= commentary
+                  , "output_type" AE..= outputType
                   ]
 
 

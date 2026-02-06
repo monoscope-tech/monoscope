@@ -37,7 +37,7 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (AIQueryResult (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForSlack, getLoadingMessage, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (AIQueryResult (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForSlack, formatTextResponse, getLoadingMessage, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
@@ -199,29 +199,42 @@ slackInteractionsH interaction = do
               Log.logTrace ("Slack followup response (AI error)" :: Text) resp
               sendSlackFollowupResponse inter.response_url resp
             Right AIQueryResult{..} -> do
-              Log.logTrace ("Slack AI query result" :: Text) $ AE.object ["query" AE..= query, "visualization" AE..= visualization]
+              Log.logTrace ("Slack AI query result" :: Text) $ AE.object ["query" AE..= query, "visualization" AE..= visualization, "outputType" AE..= show outputType, "commentary" AE..= commentary]
               let (from, to) = timeRangeStr
-              case visualization of
-                Just vizType -> do
-                  let wType = Widget.mapChatTypeToWidgetType vizType
-                      chartType = Widget.mapWidgetTypeToChartType wType
-                      query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
-                  let content = getBotContentWithUrl inter.text query query_url imageUrl
-                  Log.logTrace ("Slack followup response (chart)" :: Text) content
-                  _ <- sendSlackFollowupResponse inter.response_url content
-                  pass
-                Nothing -> case parseQueryToAST query of
-                  Left err -> do
-                    let resp = formatBotError Slack (QueryParseError query)
-                    Log.logTrace ("Slack followup response (parse error)" :: Text) resp
+              case outputType of
+                AI.AOText -> do
+                  let resp = formatTextResponse Slack (fromMaybe "No insights available" commentary)
+                  Log.logTrace ("Slack followup response (text)" :: Text) resp
+                  sendSlackFollowupResponse inter.response_url resp
+                AI.AOWidget -> handleWidgetResponse envCfg inter slackData query visualization from to fromTime toTime
+                AI.AOBoth -> do
+                  handleWidgetResponse envCfg inter slackData query visualization from to fromTime toTime
+                  whenJust commentary \c -> do
+                    let resp = formatTextResponse Slack c
+                    Log.logTrace ("Slack followup response (commentary)" :: Text) resp
                     sendSlackFollowupResponse inter.response_url resp
-                  Right query' -> do
-                    tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTime, toTime) [] Nothing Nothing
-                    let resp = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
-                    Log.logTrace ("Slack followup response (table)" :: Text) resp
-                    _ <- sendSlackFollowupResponse inter.response_url resp
-                    pass
+
+    handleWidgetResponse envCfg inter slackData query visualization from to fromTime toTime = case visualization of
+      Just vizType -> do
+        let wType = Widget.mapChatTypeToWidgetType vizType
+            chartType = Widget.mapWidgetTypeToChartType wType
+            query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
+        let content = getBotContentWithUrl inter.text query query_url imageUrl
+        Log.logTrace ("Slack followup response (chart)" :: Text) content
+        _ <- sendSlackFollowupResponse inter.response_url content
+        pass
+      Nothing -> case parseQueryToAST query of
+        Left _ -> do
+          let resp = formatBotError Slack (QueryParseError query)
+          Log.logTrace ("Slack followup response (parse error)" :: Text) resp
+          sendSlackFollowupResponse inter.response_url resp
+        Right query' -> do
+          tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTime, toTime) [] Nothing Nothing
+          let resp = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
+          Log.logTrace ("Slack followup response (table)" :: Text) resp
+          _ <- sendSlackFollowupResponse inter.response_url resp
+          pass
 
 
 newtype SlackActionForm = SlackActionForm {payload :: Text}
@@ -633,26 +646,34 @@ slackEventsPostH payload = do
           Issues.insertChatMessage slackData.projectId convId "assistant" query Nothing Nothing
 
           let (from, to) = timeRangeStr
-          case visualization of
-            Just vizType -> do
-              let wType = Widget.mapChatTypeToWidgetType vizType
-                  chartType = Widget.mapWidgetTypeToChartType wType
-                  query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-              imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
-              let content' = getBotContentWithUrl event.text query query_url imageUrl
-                  content = mergeSlackContent content' (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
-              _ <- sendSlackChatMessage envCfg.slackBotToken content
-              pass
-            Nothing -> case parseQueryToAST query of
-              Left _ -> sendSlackChatMessage envCfg.slackBotToken (mergeSlackContent (formatBotError Slack (QueryParseError query)) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
-              Right query' -> do
-                tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTime, toTime) [] Nothing Nothing
-                let content' = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
-                    content = case content' of
-                      AE.Object o -> AE.Object (o <> KEMP.fromList [("channel", AE.String event.channel), ("thread_ts", AE.String threadTs)])
-                      _ -> content'
-                _ <- sendSlackChatMessage envCfg.slackBotToken content
-                pass
+              addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
+          case outputType of
+            AI.AOText -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack (fromMaybe "No insights available" commentary)
+            AI.AOWidget -> handleWidgetResponse envCfg slackData event query visualization from to fromTime toTime threadTs
+            AI.AOBoth -> do
+              handleWidgetResponse envCfg slackData event query visualization from to fromTime toTime threadTs
+              whenJust commentary \c -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack c
+
+    handleWidgetResponse envCfg slackData event query visualization from to fromTimeM toTimeM threadTs = case visualization of
+      Just vizType -> do
+        let wType = Widget.mapChatTypeToWidgetType vizType
+            chartType = Widget.mapWidgetTypeToChartType wType
+            query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
+        let content' = getBotContentWithUrl event.text query query_url imageUrl
+            content = mergeSlackContent content' (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
+        _ <- sendSlackChatMessage envCfg.slackBotToken content
+        pass
+      Nothing -> case parseQueryToAST query of
+        Left _ -> sendSlackChatMessage envCfg.slackBotToken (mergeSlackContent (formatBotError Slack (QueryParseError query)) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
+        Right query' -> do
+          tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          let content' = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
+              content = case content' of
+                AE.Object o -> AE.Object (o <> KEMP.fromList [("channel", AE.String event.channel), ("thread_ts", AE.String threadTs)])
+                _ -> content'
+          _ <- sendSlackChatMessage envCfg.slackBotToken content
+          pass
 
 
 data SlackThreadedMessage = SlackThreadedMessage

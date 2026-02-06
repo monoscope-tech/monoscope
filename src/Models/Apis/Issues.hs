@@ -638,7 +638,7 @@ insertChatMessage pid convId role content widgetsM metadataM = void $ PG.execute
     params = (pid, convId, role, content, Aeson <$> widgetsM, Aeson <$> metadataM)
 
 
--- | Select chat history for a conversation (oldest first, limited to 20)
+-- | Select chat history for a conversation (oldest first)
 selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
 selectChatHistory convId = PG.query q (Only convId)
   where
@@ -648,7 +648,7 @@ selectChatHistory convId = PG.query q (Only convId)
       FROM apis.ai_chat_messages
       WHERE conversation_id = ?
       ORDER BY created_at ASC
-      LIMIT 20
+      LIMIT 200
     |]
 
 

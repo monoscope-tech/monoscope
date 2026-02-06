@@ -339,8 +339,8 @@ library
     , text-builder-linear
     , text-display
     , time
-    , tmp-postgres
     , typed-process
+    , tmp-postgres
     , unliftio
     , unordered-containers
     , uuid

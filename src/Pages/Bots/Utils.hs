@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -287,6 +287,8 @@ data Channel = Channel
 data AIQueryResult = AIQueryResult
   { query :: Text
   , visualization :: Maybe Text
+  , outputType :: AI.AIOutputType
+  , commentary :: Maybe Text
   , fromTime :: Maybe UTCTime
   , toTime :: Maybe UTCTime
   , timeRangeStr :: (Text, Text)
@@ -310,7 +312,9 @@ processAIQuery pid userQuery threadCtx apiKey = do
           to' = timeRange >>= viaNonEmpty last
           (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
           (from, to) = fromMaybe ("", "") rangeM
-       in pure $ Right AIQueryResult{query, visualization, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
+          finalQuery = fromMaybe "" query
+          finalOutputType = fromMaybe AI.AOWidget outputType
+       in pure $ Right AIQueryResult{query = finalQuery, visualization, outputType = finalOutputType, commentary, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
 
 
 formatThreadsWithMemory :: Int -> Text -> [LLM.Message] -> IO Text
@@ -460,3 +464,16 @@ parseReportStats json = case json of
           _ -> 0
      in (getTotal "events", getTotal "errors")
   _ -> (0, 0)
+
+
+-- | Format text response for different bot platforms
+formatTextResponse :: BotType -> Text -> AE.Value
+formatTextResponse Discord txt = AE.object ["content" AE..= txt]
+formatTextResponse WhatsApp txt = AE.object ["body" AE..= txt]
+formatTextResponse Slack txt =
+  AE.object
+    [ "blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= txt]]])
+    , "response_type" AE..= "in_channel"
+    , "replace_original" AE..= True
+    , "delete_original" AE..= True
+    ]

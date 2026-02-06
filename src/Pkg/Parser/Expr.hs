@@ -490,6 +490,10 @@ pValues =
 --
 -- >>> parse pTerm "" "email matches /.*@company\\\\.com/"
 -- Right (Matches (Subject "email" "email" []) ".*@company\\.com")
+--
+-- Standalone subject is treated as isnotempty check (KQL spec):
+-- >>> parse pTerm "" "x.y.z"
+-- Right (BoolFunc (ScalarFunc "isnotempty" [Field (Subject "x.y.z" "x" [FieldKey "y",FieldKey "z"])]))
 pTerm :: Parser Expr
 pTerm =
   (Paren <$> parens pExpr)
@@ -520,6 +524,7 @@ pTerm =
     <|> try (Matches <$> pSubject <* space <* void (symbol "matches") <* space <*> (toText <$> (char '/' *> manyTill L.charLiteral (char '/'))))
     <|> try regexParser
     <|> try (BoolFunc <$> pBoolScalarFunc) -- Standalone boolean functions: isnull(x), isnotnull(x), etc.
+    <|> (BoolFunc . ScalarFunc "isnotempty" . pure . Field <$> pSubject) -- Standalone subject = isnotempty check per KQL spec
 
 
 -- >>> parse regexParser "" "abc=~/abc.*/"
