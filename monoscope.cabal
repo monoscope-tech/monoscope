@@ -277,7 +277,6 @@ library
     , hashtables
     , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto
-    , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-sdk
     , http-api-data
@@ -309,7 +308,6 @@ library
     , parallel
     , parser-combinators
     , pg-entity
-    , pg-transact
     , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
@@ -325,7 +323,6 @@ library
     , safe-exceptions
     , scientific
     , scotty
-    , sendgrid-v3 >=0.3.0.0
     , servant
     , servant-htmx
     , servant-lucid
@@ -527,7 +524,6 @@ test-suite integration-tests
     , monoscope
     , odd-jobs
     , pg-entity
-    , pg-transact
     , postgresql-simple
     , proto-lens
     , relude >=1.2.0.0
