@@ -44,7 +44,6 @@ module Pkg.AI (
 ) where
 
 import Data.Aeson qualified as AE
-import Deriving.Aeson qualified as DAE
 import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Effectful.LLM qualified as ELLM
 import Data.HashMap.Strict qualified as HM
@@ -52,6 +51,7 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
 import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Log qualified as Log
@@ -101,7 +101,7 @@ data AgenticChatResult = AgenticChatResult
   , toolCalls :: [ToolCallInfo]
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.ToJSON, AE.FromJSON)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
 data ChatLLMResponse = ChatLLMResponse

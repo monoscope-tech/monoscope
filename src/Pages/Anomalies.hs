@@ -681,19 +681,21 @@ aiChatHistoryView_ pid msgs = forM_ (pairUserAssistant msgs) \(u, a) -> do
   let (explanation, widgets) = parseStoredContent a.content a.widgets
   aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata)
 
+
 -- | Pair user messages with their following assistant responses, skipping unpaired
 pairUserAssistant :: [Issues.AIChatMessage] -> [(Issues.AIChatMessage, Issues.AIChatMessage)]
 pairUserAssistant (u : a : rest) | u.role == "user" && a.role == "assistant" = (u, a) : pairUserAssistant rest
 pairUserAssistant (_ : rest) = pairUserAssistant rest
 pairUserAssistant [] = []
 
+
 -- | Parse stored content - try JSON format first (stripping code blocks), fall back to plain text
 parseStoredContent :: Text -> Maybe (Aeson AE.Value) -> (Text, Maybe [Widget.Widget])
 parseStoredContent content storedWidgets =
   let cleaned = AI.stripCodeBlock content
-  in case AE.eitherDecode (fromStrict $ encodeUtf8 cleaned) :: Either String AIInvestigationResponse of
-    Right aiResp -> (fromMaybe "" aiResp.explanation, aiResp.widgets)
-    Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
+   in case AE.eitherDecode (fromStrict $ encodeUtf8 cleaned) :: Either String AIInvestigationResponse of
+        Right aiResp -> (fromMaybe "" aiResp.explanation, aiResp.widgets)
+        Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
 -- | AI Chat Component with inline responses and floating input
