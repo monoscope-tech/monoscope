@@ -419,26 +419,13 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
   pass
 
 
-verifyDiscordSignature
-  :: ByteString
-  -> ByteString
-  -> ByteString
-  -> ByteString
-  -> Bool
-verifyDiscordSignature publicKey signatureHex timestamp rawBody =
-  case Base16.decode signatureHex of
-    Right s ->
-      case Ed25519.signature s of
-        Crypto.CryptoFailed _ -> False
-        Crypto.CryptoPassed sig -> case Base16.decode publicKey of
-          Right pkBytes ->
-            case Ed25519.publicKey pkBytes of
-              Crypto.CryptoFailed e -> False
-              Crypto.CryptoPassed pk ->
-                let message = timestamp <> rawBody
-                 in Ed25519.verify pk message sig
-          _ -> False
-    _ -> False
+verifyDiscordSignature :: ByteString -> ByteString -> ByteString -> ByteString -> Bool
+verifyDiscordSignature publicKey signatureHex timestamp rawBody = fromRight False $ do
+  s <- first show $ Base16.decode signatureHex
+  sig <- first show $ Crypto.eitherCryptoError $ Ed25519.signature s
+  pkBytes <- first show $ Base16.decode publicKey
+  pk <- first show $ Crypto.eitherCryptoError $ Ed25519.publicKey pkBytes
+  pure $ Ed25519.verify pk (timestamp <> rawBody) sig
 
 
 -- Data types for Discord API responses

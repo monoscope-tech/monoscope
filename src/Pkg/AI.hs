@@ -169,24 +169,14 @@ fixTrailingCommas = T.replace ",\n}" "\n}" . T.replace ", }" "}" . T.replace ",}
 
 
 parseVisualizationType :: Text -> Maybe Text
-parseVisualizationType = \case
-  "bar" -> Just "timeseries"
-  "line" -> Just "timeseries_line"
-  "logs" -> Nothing
-  "timeseries" -> Just "timeseries"
-  "timeseries_line" -> Just "timeseries_line"
-  "bar chart" -> Just "timeseries"
-  "line chart" -> Just "timeseries_line"
-  "time series" -> Just "timeseries"
-  "time series line" -> Just "timeseries_line"
-  "distribution" -> Just "distribution"
-  "pie_chart" -> Just "pie_chart"
-  "pie" -> Just "pie_chart"
-  "top_list" -> Just "top_list"
-  "table" -> Just "table"
-  "stat" -> Just "stat"
-  "heatmap" -> Just "heatmap"
-  _ -> Nothing
+parseVisualizationType t = Map.lookup t vizTypeMap
+  where
+    vizTypeMap = Map.fromList
+      [ ("bar", "timeseries"), ("line", "timeseries_line"), ("timeseries", "timeseries"), ("timeseries_line", "timeseries_line")
+      , ("bar chart", "timeseries"), ("line chart", "timeseries_line"), ("time series", "timeseries"), ("time series line", "timeseries_line")
+      , ("distribution", "distribution"), ("pie_chart", "pie_chart"), ("pie", "pie_chart")
+      , ("top_list", "top_list"), ("table", "table"), ("stat", "stat"), ("heatmap", "heatmap")
+      ]
 
 
 -- | KQL documentation for AI prompts - shared between Log Explorer and Anomalies

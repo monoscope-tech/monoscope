@@ -2,10 +2,9 @@
 
 module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
 
-import Control.Lens ((.~))
+import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Key (fromText)
-import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
@@ -192,7 +191,7 @@ widgetPngUrl secret hostUrl pid widget since from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
       sig = signWidgetUrl secret pid widgetJson
-      timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", from), ("to", to)] :: [(Text, Maybe Text)])
+      timeParams = mconcat $ catMaybes [("&since=" <>) <$> since, ("&from=" <>) <$> from, ("&to=" <>) <$> to]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000
         then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure ""
@@ -455,15 +454,8 @@ formatReportForWhatsApp report pid envCfg =
 
 -- | Parse total events and errors from report JSON
 parseReportStats :: AE.Value -> (Int, Int)
-parseReportStats json = case json of
-  AE.Object o ->
-    let getTotal key = case KEM.lookup (fromText key) o of
-          Just (AE.Object inner) -> case KEM.lookup "total" inner of
-            Just (AE.Number n) -> round n
-            _ -> 0
-          _ -> 0
-     in (getTotal "events", getTotal "errors")
-  _ -> (0, 0)
+parseReportStats json = (getTotal "events", getTotal "errors")
+  where getTotal k = fromMaybe 0 $ json ^? key k . key "total" . _Number <&> round
 
 
 -- | Format text response for different bot platforms
