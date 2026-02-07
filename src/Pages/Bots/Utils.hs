@@ -455,7 +455,8 @@ formatReportForWhatsApp report pid envCfg =
 -- | Parse total events and errors from report JSON
 parseReportStats :: AE.Value -> (Int, Int)
 parseReportStats json = (getTotal "events", getTotal "errors")
-  where getTotal k = fromMaybe 0 $ json ^? key k . key "total" . _Number <&> round
+  where
+    getTotal k = fromMaybe 0 $ json ^? key k . key "total" . _Number <&> round
 
 
 -- | Format text response for different bot platforms
