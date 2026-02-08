@@ -656,7 +656,7 @@ runAgenticLoopRaw config openAI chatHistory params iteration accumulated
         Log.logTrace "AI final response" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
         pure $ Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
   | otherwise = do
-      let userQuery = maybe "" LLM.content $ lastMay $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
+      let userQuery = maybe "" LLM.content $ viaNonEmpty last $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
       Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
       liftIO (LLM.chat openAI chatHistory $ Just params) >>= either handleError \responseMsg ->
         maybe (logFinalResponse responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
@@ -695,7 +695,7 @@ runAgenticLoop config openAI chatHistory params iteration
         Log.logTrace "AI final response" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
         pure $ parseResponse $ LLM.content responseMsg
   | otherwise = do
-      let userQuery = maybe "" LLM.content $ lastMay $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
+      let userQuery = maybe "" LLM.content $ viaNonEmpty last $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
       Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
       liftIO (LLM.chat openAI chatHistory $ Just params) >>= either handleError \responseMsg ->
         maybe (logFinalResponse responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)

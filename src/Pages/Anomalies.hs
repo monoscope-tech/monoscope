@@ -533,13 +533,13 @@ buildSystemPromptForIssue pid issue now = do
       unlines
         $ catMaybes
           [ Just "## Issue Details"
-          , Just $ "- **Title**: " <> issue.title
-          , Just $ "- **Type**: " <> show issue.issueType
-          , Just $ "- **Severity**: " <> issue.severity
-          , Just $ "- **Service**: " <> issue.service
-          , Just $ "- **Affected Requests**: " <> show issue.affectedRequests
-          , Just $ "- **Affected Clients**: " <> show issue.affectedClients
-          , Just $ "- **Recommended Action**: " <> issue.recommendedAction
+          , Just $ "- **Title**: " <> iss.title
+          , Just $ "- **Type**: " <> show iss.issueType
+          , Just $ "- **Severity**: " <> iss.severity
+          , Just $ "- **Service**: " <> iss.service
+          , Just $ "- **Affected Requests**: " <> show iss.affectedRequests
+          , Just $ "- **Affected Clients**: " <> show iss.affectedClients
+          , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
           , errM >>= \err ->
               Just

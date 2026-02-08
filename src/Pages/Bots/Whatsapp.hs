@@ -1,4 +1,4 @@
-module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage) where
+module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..)) where
 
 import Control.Lens ((?~))
 import Control.Lens.Setter ((.~))

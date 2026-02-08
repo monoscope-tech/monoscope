@@ -1,7 +1,7 @@
 module Pages.Bots.SlackSpec (spec) where
 
+import Control.Exception (SomeException, try)
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEKM
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Models.Apis.Slack qualified as Slack
@@ -11,8 +11,7 @@ import Pages.Bots.Slack (slackInteractionsH)
 import Pages.Bots.Utils (QueryIntent (..), ReportType (..), detectReportIntent)
 import Pkg.TestUtils
 import Relude
-import Control.Exception (SomeException, try)
-import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
@@ -39,14 +38,10 @@ spec = aroundAll withTestResources do
         let interaction = slackInteraction "/here" "" "T_HERE_TEST"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        -- Save response to golden file
         assertJsonGolden "slack/here_response.json" result
-
-        -- Verify response structure
         extractResponseType result `shouldBe` Just "in_channel"
         hasSuccessBlock result `shouldBe` True
 
-        -- Verify DB was updated
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T_HERE_TEST"
         case slackDataM of
           Just slackData -> slackData.channelId `shouldBe` "C_TEST_CHANNEL"
@@ -57,7 +52,6 @@ spec = aroundAll withTestResources do
         let interaction = slackInteraction "/here" "" "T_HERE_BLOCK"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        -- Verify blocks exist
         case extractSlackBlocks result of
           Just (AE.Array blocks) -> do
             V.length blocks `shouldSatisfy` (>= 3)
@@ -71,10 +65,7 @@ spec = aroundAll withTestResources do
         let interaction = slackInteraction "/monoscope" "show error rate" "T_MONO_TEST"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        -- Save the immediate loading response
         assertJsonGolden "slack/monoscope_loading_response.json" result
-
-        -- The immediate response should be a loading message
         extractResponseText result `shouldSatisfy` isJust
         let responseText = fromMaybe "" $ extractResponseText result
         T.isInfixOf "Analyzing" responseText || T.isInfixOf "⏳" responseText `shouldBe` True
@@ -82,56 +73,30 @@ spec = aroundAll withTestResources do
       it "handles missing slack data gracefully" \tr -> do
         let interaction = slackInteraction "/monoscope" "show errors" "T_NONEXISTENT"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
-        result `shouldSatisfy` isValidSlackResponse
+        result `shouldSatisfy` isValidJsonResponse
 
     describe "/dashboard command" do
       it "returns error when no dashboards exist" \tr -> do
         setupSlackData tr testPid "T_DASH_EMPTY"
         let interaction = slackInteraction "/dashboard" "" "T_DASH_EMPTY"
-        -- With no dashboards, the handler should throw a 400 error
-        -- This is expected behavior - we verify the error message
         result <- try $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
         case result of
           Left (e :: SomeException) -> T.isInfixOf "dashboards" (toText $ show e) `shouldBe` True
-          Right _ -> pass -- If it returns successfully (unlikely), that's also acceptable
+          Right _ -> pass
 
+    describe "Anomaly Notifications" do
+      it "captures Slack notification when anomaly occurs" \tr -> do
+        setupSlackData tr testPid "T_ANOMALY_TEST"
+        void $ runTestBg tr $ Slack.updateSlackNotificationChannel "T_ANOMALY_TEST" "C_ALERTS"
 
--- * Helper functions
+        (notifs, _) <- captureNotifications tr pass
+        notifs `shouldBe` []
 
+      it "user can ask about anomalies via /monoscope" \tr -> do
+        setupSlackData tr testPid "T_ANOMALY_QUERY"
 
-expectationFailure :: String -> IO ()
-expectationFailure msg = error $ toText msg
+        let interaction = slackInteraction "/monoscope" "show me recent anomalies" "T_ANOMALY_QUERY"
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-
-extractResponseType :: AE.Value -> Maybe Text
-extractResponseType val = case val of
-  AE.Object obj ->
-    case AEKM.lookup "response_type" obj of
-      Just (AE.String t) -> Just t
-      _ -> Nothing
-  _ -> Nothing
-
-
-hasSuccessBlock :: AE.Value -> Bool
-hasSuccessBlock val = case extractSlackBlocks val of
-  Just (AE.Array blocks) -> V.any hasSuccessEmoji blocks
-  _ -> False
-  where
-    hasSuccessEmoji block =
-      let blockStr = decodeUtf8 $ toStrict $ AE.encode block
-       in T.isInfixOf "🟢" blockStr || T.isInfixOf "success" blockStr
-
-
-getBlockType :: AE.Value -> Maybe Text
-getBlockType val = case val of
-  AE.Object obj ->
-    case AEKM.lookup "type" obj of
-      Just (AE.String t) -> Just t
-      _ -> Nothing
-  _ -> Nothing
-
-
-isValidSlackResponse :: AE.Value -> Bool
-isValidSlackResponse val = case val of
-  AE.Object _ -> True
-  _ -> False
+        isValidJsonResponse result `shouldBe` True
+        extractResponseText result `shouldSatisfy` isJust

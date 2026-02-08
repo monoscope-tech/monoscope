@@ -41,6 +41,7 @@ data EnvConfig = EnvConfig
   , auth0LogoutRedirect :: Text
   , auth0Callback :: Text
   , testEmail :: Maybe Text
+  , testPhoneNumber :: Maybe Text
   , apiKeyEncryptionSecretKey :: Text
   , messagesPerPubsubPullBatch :: Int
   , migrateAndInitializeOnStart :: Bool

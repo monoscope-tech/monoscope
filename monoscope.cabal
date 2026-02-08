@@ -455,12 +455,12 @@ test-suite integration-tests
       Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.Bots.AgenticSpec
-      Pages.Bots.AnomalyNotificationSpec
       Pages.Bots.BotFixtures
       Pages.Bots.BotTestHelpers
       Pages.Bots.DiscordSpec
       Pages.Bots.SlackSpec
       Pages.Bots.WhatsappSpec
+      Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
       Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
@@ -512,25 +512,36 @@ test-suite integration-tests
     , proto-lens-protoc:proto-lens-protoc
   build-depends:
       aeson
+    , aeson-pretty
     , aeson-qq
     , base
+    , base16-bytestring
     , base64
     , bytestring
     , cache
     , clock
     , containers
+    , cryptonite
     , data-default
+    , directory
     , effectful
+    , effectful-core
+    , effectful-postgresql
     , generic-lens
     , grapesy
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , http-client
+    , ki
+    , ki-effectful
     , lens
     , lens-aeson
+    , memory
+    , monad-time-effectful
     , monoscope
     , odd-jobs
     , pg-entity
+    , pg-transact
     , postgresql-simple
     , proto-lens
     , relude >=1.2.0.0

@@ -1,8 +1,6 @@
 module Pages.Bots.DiscordSpec (spec) where
 
-import Control.Lens ((^?), each, filtered, has, lengthOf, to)
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens (key, _Array, _Number)
 import Data.ByteString qualified as BS
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
@@ -22,7 +20,7 @@ spec = aroundAll withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
         result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
-        getResponseType result `shouldBe` Just 1
+        getDiscordResponseType result `shouldBe` Just 1
 
     describe "/here command" do
       it "returns structured success response" \tr -> do
@@ -34,9 +32,7 @@ spec = aroundAll withTestResources do
             testCtx = tr.trATCtx{Config.env = testConfig}
 
         result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
-
-        -- Verify the response type is 4 (CHANNEL_MESSAGE_WITH_SOURCE)
-        getResponseType result `shouldBe` Just 4
+        getDiscordResponseType result `shouldBe` Just 4
 
       it "matches golden file format" \tr -> do
         setupDiscordData tr testPid "guild_here_golden"
@@ -59,24 +55,22 @@ spec = aroundAll withTestResources do
             testCtx = tr.trATCtx{Config.env = testConfig}
 
         result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
-
-        -- The monoscope command returns empty object (deferred response)
         isEmptyResponse result `shouldBe` True
 
       it "handles thread context for conversations" \tr -> do
         setupDiscordData tr testPid "guild_thread_test"
-
-        -- Verify thread interaction payload structure
         let threadPayload = discordThreadInteraction "monoscope" "show errors" "thread_123"
         BS.length threadPayload `shouldSatisfy` (> 0)
 
     describe "/dashboard command" do
       it "returns select menu for dashboards" \tr -> do
         setupDiscordData tr testPid "guild_dash_test"
-
-        -- Dashboard command returns empty (deferred) then sends followup with select
-        let deferredResponse = AE.object []
-        isEmptyResponse deferredResponse `shouldBe` True
+        let payload = discordCommandInteraction "dashboard" ""
+            (body, sig, ts) = signDiscordPayload payload "1706745607"
+            testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
+            testCtx = tr.trATCtx{Config.env = testConfig}
+        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result `shouldSatisfy` isValidJsonResponse
 
     describe "Response format" do
       it "/here response includes Components v2 flag" \tr -> do
@@ -105,25 +99,3 @@ spec = aroundAll withTestResources do
             testCtx = tr.trATCtx{Config.env = testConfig}
         result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
         countTextComponents result `shouldSatisfy` (>= 3)
-
-
--- * Helper functions
-
-
-getResponseType :: AE.Value -> Maybe Int
-getResponseType val = val ^? key "type" . _Number . to round
-
-isEmptyResponse :: AE.Value -> Bool
-isEmptyResponse (AE.Object o) = null o
-isEmptyResponse _ = False
-
-hasComponentsV2Flag :: AE.Value -> Bool
-hasComponentsV2Flag val = val ^? key "data" . key "flags" . _Number . to round == Just (32768 :: Int)
-
-hasContainerComponent :: AE.Value -> Bool
-hasContainerComponent val = has (key "data" . key "components" . _Array . each . filtered isContainer) val
-  where isContainer v = v ^? key "type" . _Number . to round == Just (17 :: Int)
-
-countTextComponents :: AE.Value -> Int
-countTextComponents val = lengthOf (key "data" . key "components" . _Array . each . key "components" . _Array . each . filtered isText) val
-  where isText v = v ^? key "type" . _Number . to round == Just (10 :: Int)

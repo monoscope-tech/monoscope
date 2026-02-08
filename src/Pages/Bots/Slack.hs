@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..)) where
 
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
@@ -655,8 +655,8 @@ slackEventsPostH payload = do
           Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing
           whenJust resp.query \q -> Issues.insertChatMessage slackData.projectId convId "assistant" q Nothing Nothing
 
-          now <- Time.currentTime
-          let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+          currentTime <- Time.currentTime
+          let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange currentTime) resp.timeRange
               (from, to) = fromMaybe ("", "") rangeM
               query = fromMaybe "" resp.query
               hasQuery = isJust resp.query

@@ -355,6 +355,17 @@ tests:
       - bytestring
       - containers
       - text
+      - cryptonite
+      - aeson-pretty
+      - memory
+      - base16-bytestring
+      - directory
+      - pg-transact
+      - monad-time-effectful
+      - ki
+      - ki-effectful
+      - effectful-core
+      - effectful-postgresql
   unit-tests:
     main: Main.hs
     source-dirs: test/unit
