@@ -50,6 +50,7 @@ botEmojiMap :: HM.HashMap Text Text
 botEmojiMap = HM.fromList [("success", "🟢"), ("warning", "🟡"), ("error", "🔴"), ("chart", "📊"), ("search", "🔍"), ("table", "📋"), ("loading", "⏳"), ("bell", "🔔")]
 {-# NOINLINE botEmojiMap #-}
 
+
 botEmoji :: Text -> Text
 botEmoji = HM.lookupDefault "" ?? botEmojiMap
 

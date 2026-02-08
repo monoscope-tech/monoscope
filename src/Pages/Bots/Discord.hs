@@ -3,7 +3,6 @@
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Data.Aeson qualified as AE
-import Effectful.Ki qualified as Ki
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
@@ -11,6 +10,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
+import Effectful.Ki qualified as Ki
 import Effectful.Reader.Static (ask, asks)
 import Models.Apis.Slack (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
@@ -114,6 +114,7 @@ instance AE.FromJSON InteractionType where
 -- Discord response type helpers
 pongResponse :: AE.Value
 pongResponse = AE.object ["type" AE..= (1 :: Int)]
+
 
 deferredResponse :: AE.Value
 deferredResponse = AE.object ["type" AE..= (5 :: Int)]
@@ -466,7 +467,7 @@ data DiscordMessage = DiscordMessage
   deriving anyclass (AE.FromJSON)
 
 
-getThreadStarterMessage :: (HTTP :> es, Log.Log :> es, Ki.StructuredConcurrency :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
+getThreadStarterMessage :: (HTTP :> es, Ki.StructuredConcurrency :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
