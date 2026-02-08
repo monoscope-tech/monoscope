@@ -885,7 +885,8 @@ syncWidgetAlert pid widgetId widget = do
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
-          updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery}
+          Monitors.QueryMonitor{id = monitorId, widgetId = monitorWidgetId, ..} = monitor
+          updatedMonitor = Monitors.QueryMonitor{id = monitorId, widgetId = monitorWidgetId, logQuery = newQuery, logQueryAsSql = newSqlQuery, ..}
       void $ Monitors.queryMonitorUpsert updatedMonitor
 
 
@@ -1984,16 +1985,17 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
       existingMonitorM <- Monitors.queryMonitorByWidgetId (normalizeWidgetId widgetId)
       newAlertIdM <- forM existingMonitorM \monitor -> do
         newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
-        let newMonitor =
-              (monitor :: Monitors.QueryMonitor)
-                { Monitors.id = newMonitorId
-                , Monitors.createdAt = now
-                , Monitors.updatedAt = now
-                , Monitors.widgetId = Just newWidgetId
-                , Monitors.alertLastTriggered = Nothing
-                , Monitors.warningLastTriggered = Nothing
-                , Monitors.currentStatus = Monitors.MSNormal
-                }
+        let Monitors.QueryMonitor{id = _, widgetId = _, createdAt = _, updatedAt = _, alertLastTriggered = _, warningLastTriggered = _, currentStatus = _, ..} = monitor
+            newMonitor = Monitors.QueryMonitor
+              { id = newMonitorId
+              , createdAt = now
+              , updatedAt = now
+              , widgetId = Just newWidgetId
+              , alertLastTriggered = Nothing
+              , warningLastTriggered = Nothing
+              , currentStatus = Monitors.MSNormal
+              , ..
+              }
         void $ Monitors.queryMonitorUpsert newMonitor
         pure newMonitorId.toText
 

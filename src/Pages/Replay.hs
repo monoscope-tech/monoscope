@@ -13,7 +13,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful (Eff, IOE, runEff, type (:>))
-import Effectful.Log (Log, object)
+import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
