@@ -308,7 +308,7 @@ outputFormatInstructions =
   - "widgets": Array of widget configs (optional)
   - "time_range": Use snake_case fields (optional):
     - Preferred: {"since": "2H"} for relative ranges (2H, 30M, 7D, etc.)
-    - Alternative: {"from": "ISO8601", "to": "ISO8601"} for absolute ranges
+    - Alternative: {"from": "1970-01-01T00:00:00Z", "to": "1970-01-01T12:00:00Z"} for absolute ranges (ISO8601 format, these are examples - use valid dates based on current time)
     - 'since' replaces 'from'/'to' when user wants recent data
 
   WORKFLOW:
@@ -322,7 +322,7 @@ outputFormatInstructions =
     "query": "<KQL query>",
     "visualization": "<timeseries|distribution|pie_chart|top_list|table|stat|heatmap|logs>",
     "widgets": [{"type": "timeseries", "query": "...", "title": "..."}],
-    "time_range": {"since": "2H"} OR {"from": "ISO8601", "to": "ISO8601"}
+    "time_range": {"since": "2H"} OR {"from": "1970-01-01T00:00:00Z", "to": "1970-01-01T12:00:00Z"}
   }
 
   Widget structure for visualizations:

@@ -3,6 +3,7 @@
 module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..)) where
 
 import BackgroundJobs qualified as BgJobs
+import Control.Exception.Annotated (try)
 import Control.Lens ((.~), (^.))
 import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
@@ -20,6 +21,7 @@ import Data.Effectful.Wreq (
  )
 import Data.Pool (withResource)
 import Data.Text qualified as T
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
@@ -169,9 +171,10 @@ slackInteractionsH interaction = do
     _ -> do
       slackDataM <- getSlackDataByTeamId interaction.team_id
       void $ forkIO $ do
-        case slackDataM of
+        resultE <- try @SomeException $ case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError)
           Just slackData -> handleAskCommand interaction slackData authCtx
+        either (\err -> Log.logAttention "Slack slash command background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= interaction.team_id]) (const pass) resultE
       let loadingMsg = getLoadingMessage (detectReportIntent interaction.text)
           resp = AE.object ["text" AE..= loadingMsg, "replace_original" AE..= True, "delete_original" AE..= True]
       Log.logTrace ("Slack interaction response" :: Text) resp
@@ -201,8 +204,7 @@ slackInteractionsH interaction = do
               sendSlackFollowupResponse inter.response_url resp
             Right resp -> do
               now <- Time.currentTime
-              let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
-                  (from, to) = fromMaybe ("", "") rangeM
+              let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
                   query = fromMaybe "" resp.query
                   hasQuery = isJust resp.query
                   hasExplanation = isJust resp.explanation
@@ -212,9 +214,9 @@ slackInteractionsH interaction = do
                   let response = formatTextResponse Slack (fromMaybe "No insights available" resp.explanation)
                   Log.logTrace ("Slack followup response (text)" :: Text) response
                   sendSlackFollowupResponse inter.response_url response
-                (True, False) -> handleWidgetResponse envCfg inter slackData query resp.visualization from to fromTimeM toTimeM
+                (True, False) -> handleWidgetResponse envCfg inter slackData query resp.visualization fromTimeM toTimeM
                 (True, True) -> do
-                  handleWidgetResponse envCfg inter slackData query resp.visualization from to fromTimeM toTimeM
+                  handleWidgetResponse envCfg inter slackData query resp.visualization fromTimeM toTimeM
                   whenJust resp.explanation \c -> do
                     let response = formatTextResponse Slack c
                     Log.logTrace ("Slack followup response (commentary)" :: Text) response
@@ -223,12 +225,14 @@ slackInteractionsH interaction = do
                   let response = formatTextResponse Slack "No response available"
                   sendSlackFollowupResponse inter.response_url response
 
-    handleWidgetResponse envCfg inter slackData query visualization from to fromTimeM toTimeM = case visualization of
+    handleWidgetResponse envCfg inter slackData query visualization fromTimeM toTimeM = case visualization of
       Just vizType -> do
         let wType = Widget.mapChatTypeToWidgetType vizType
             chartType = Widget.mapWidgetTypeToChartType wType
             query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
+            fromISO = toText . iso8601Show <$> fromTimeM
+            toISO = toText . iso8601Show <$> toTimeM
+        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing fromISO toISO
         let content = getBotContentWithUrl inter.text query query_url imageUrl
         Log.logTrace ("Slack followup response (chart)" :: Text) content
         _ <- sendSlackFollowupResponse inter.response_url content
@@ -602,7 +606,9 @@ slackEventsPostH payload = do
   case payload of
     UrlVerification (UrlVerificationData _ challenge) -> pure $ AE.object ["challenge" AE..= challenge]
     EventCallback cb -> do
-      void $ forkIO $ handleEventCallback envCfg cb.event cb.team_id now
+      void $ forkIO $ do
+        resultE <- try @SomeException $ handleEventCallback envCfg cb.event cb.team_id now
+        either (\err -> Log.logAttention "Slack event callback background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= cb.team_id]) (const pass) resultE
       pure $ AE.object []
   where
     handleEventCallback envCfg event teamId now =
@@ -651,26 +657,27 @@ slackEventsPostH payload = do
           whenJust resp.query \q -> Issues.insertChatMessage slackData.projectId convId "assistant" q Nothing Nothing
 
           currentTime <- Time.currentTime
-          let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange currentTime) resp.timeRange
-              (from, to) = fromMaybe ("", "") rangeM
+          let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange currentTime) resp.timeRange
               query = fromMaybe "" resp.query
               hasQuery = isJust resp.query
               hasExplanation = isJust resp.explanation
               addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
           case (hasQuery, hasExplanation) of
             (False, True) -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack (fromMaybe "No insights available" resp.explanation)
-            (True, False) -> handleWidgetResponse envCfg slackData event query resp.visualization from to fromTimeM toTimeM threadTs
+            (True, False) -> handleWidgetResponse envCfg slackData event query resp.visualization fromTimeM toTimeM threadTs
             (True, True) -> do
-              handleWidgetResponse envCfg slackData event query resp.visualization from to fromTimeM toTimeM threadTs
+              handleWidgetResponse envCfg slackData event query resp.visualization fromTimeM toTimeM threadTs
               whenJust resp.explanation $ sendSlackChatMessage envCfg.slackBotToken . addThread . formatTextResponse Slack
             (False, False) -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack "No response available"
 
-    handleWidgetResponse envCfg slackData event query visualization from to fromTimeM toTimeM threadTs = case visualization of
+    handleWidgetResponse envCfg slackData event query visualization fromTimeM toTimeM threadTs = case visualization of
       Just vizType -> do
         let wType = Widget.mapChatTypeToWidgetType vizType
             chartType = Widget.mapWidgetTypeToChartType wType
             query_url = envCfg.hostUrl <> "p/" <> slackData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing (Just from) (Just to)
+            fromISO = toText . iso8601Show <$> fromTimeM
+            toISO = toText . iso8601Show <$> toTimeM
+        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl slackData.projectId def{Widget.wType = wType, Widget.query = Just query} Nothing fromISO toISO
         let content' = getBotContentWithUrl event.text query query_url imageUrl
             content = mergeSlackContent content' (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
         _ <- sendSlackChatMessage envCfg.slackBotToken content

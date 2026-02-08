@@ -188,7 +188,8 @@ widgetPngUrl secret hostUrl pid widget since from to =
   let widgetJsonBS = toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True widgetJsonBS
       sig = signWidgetUrl secret pid (decodeUtf8 @Text widgetJsonBS)
-      timeParams = mconcat $ catMaybes [("&since=" <>) <$> since, ("&from=" <>) <$> from, ("&to=" <>) <$> to]
+      encodeParam = decodeUtf8 @Text . urlEncode True . encodeUtf8
+      timeParams = mconcat $ catMaybes [("&since=" <>) . encodeParam <$> since, ("&from=" <>) . encodeParam <$> from, ("&to=" <>) . encodeParam <$> to]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000
         then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure ""
