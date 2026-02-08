@@ -885,8 +885,21 @@ syncWidgetAlert pid widgetId widget = do
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
-          Monitors.QueryMonitor{id = monitorId, widgetId = monitorWidgetId, ..} = monitor
-          updatedMonitor = Monitors.QueryMonitor{id = monitorId, widgetId = monitorWidgetId, logQuery = newQuery, logQueryAsSql = newSqlQuery, ..}
+          updatedMonitor = Monitors.QueryMonitor
+            { Monitors.id = monitor.id, Monitors.createdAt = monitor.createdAt, Monitors.updatedAt = monitor.updatedAt
+            , Monitors.projectId = monitor.projectId, Monitors.checkIntervalMins = monitor.checkIntervalMins
+            , Monitors.alertThreshold = monitor.alertThreshold, Monitors.warningThreshold = monitor.warningThreshold
+            , Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery
+            , Monitors.lastEvaluated = monitor.lastEvaluated, Monitors.warningLastTriggered = monitor.warningLastTriggered
+            , Monitors.alertLastTriggered = monitor.alertLastTriggered, Monitors.triggerLessThan = monitor.triggerLessThan
+            , Monitors.thresholdSustainedForMins = monitor.thresholdSustainedForMins, Monitors.alertConfig = monitor.alertConfig
+            , Monitors.deactivatedAt = monitor.deactivatedAt, Monitors.deletedAt = monitor.deletedAt
+            , Monitors.visualizationType = monitor.visualizationType, Monitors.teams = monitor.teams
+            , Monitors.widgetId = monitor.widgetId, Monitors.dashboardId = monitor.dashboardId
+            , Monitors.alertRecoveryThreshold = monitor.alertRecoveryThreshold
+            , Monitors.warningRecoveryThreshold = monitor.warningRecoveryThreshold
+            , Monitors.currentStatus = monitor.currentStatus, Monitors.currentValue = monitor.currentValue
+            }
       void $ Monitors.queryMonitorUpsert updatedMonitor
 
 

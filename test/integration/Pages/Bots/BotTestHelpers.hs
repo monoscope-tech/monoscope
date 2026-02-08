@@ -177,7 +177,7 @@ shouldMatchGolden actual path = assertJsonGolden path actual
 testDiscordSecretKey :: Ed25519.SecretKey
 testDiscordSecretKey = case Ed25519.secretKey (BS.replicate 32 0x42) of
   Crypto.CryptoPassed sk -> sk
-  Crypto.CryptoFailed err -> panic $ "Failed to create test secret key: " <> show err
+  Crypto.CryptoFailed err -> error $ "Failed to create test secret key: " <> show err
 {-# NOINLINE testDiscordSecretKey #-}
 
 
