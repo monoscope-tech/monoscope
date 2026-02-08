@@ -34,6 +34,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.Projects (projectIdFromText)
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
@@ -101,32 +102,34 @@ exchangeCodeForToken clientId clientSecret redirectUri code = do
     Nothing -> return Nothing
 
 
-linkProjectGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
-linkProjectGetH pid slack_code onboardingM = do
-  envCfg <- asks env
-  pool <- asks pool
-  let client_id = envCfg.slackClientId
-  let client_secret = envCfg.slackClientSecret
-  let redirect_uri = envCfg.slackRedirectUri
-  token <- exchangeCodeForToken client_id client_secret (redirect_uri <> pid.toText <> if isJust onboardingM then "?onboarding=true" else "") (fromMaybe "" slack_code)
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Nothing
-          , currProject = Nothing
-          , pageTitle = "Slack app installed"
-          -- , enableBrowserMonitoring = envCfg.enableBrowserMonitoring
-          }
-  project <- Projects.projectById pid
-  case (token, project) of
-    (Just token', Just project') -> do
-      n <- insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
-      -- Create a background job to send the Slack notification
-      _ <- liftIO $ withResource pool $ \conn ->
-        createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
-      case onboardingM of
-        Just _ -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-        Nothing -> pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Slack"
-    (_, _) -> pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoTokenFound $ PageCtx bwconf ()
+-- | Parse state parameter: "projectId" or "projectId__onboarding"
+parseSlackState :: Maybe Text -> (Maybe Projects.ProjectId, Bool)
+parseSlackState stateM = (pidM, isOnboarding)
+  where
+    parts = maybe [] (T.splitOn "__") stateM
+    pidM = Projects.projectIdFromText =<< viaNonEmpty head parts
+    isOnboarding = length parts > 1
+
+
+linkProjectGetH :: Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
+linkProjectGetH slack_code stateM = do
+  let (pidM, isOnboarding) = parseSlackState stateM
+  let bwconf = (def :: BWConfig){sessM = Nothing, currProject = Nothing, pageTitle = "Slack app installed"}
+  case pidM of
+    Nothing -> pure $ addHeader "" $ NoTokenFound $ PageCtx bwconf ()
+    Just pid -> do
+      envCfg <- asks env
+      pool <- asks pool
+      token <- exchangeCodeForToken envCfg.slackClientId envCfg.slackClientSecret envCfg.slackRedirectUri (fromMaybe "" slack_code)
+      project <- Projects.projectById pid
+      case (token, project) of
+        (Just token', Just project') -> do
+          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
+          void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
+          if isOnboarding
+            then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
+            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Slack"
+        _ -> pure $ addHeader ("/p/" <> pid.toText <> "/integrations") $ NoTokenFound $ PageCtx bwconf ()
 
 
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value

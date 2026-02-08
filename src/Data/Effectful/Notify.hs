@@ -21,6 +21,9 @@ module Data.Effectful.Notify (
   SlackData (..),
   DiscordData (..),
   WhatsAppData (..),
+  PagerDutyData (..),
+  PagerDutyAction (..),
+  PagerDutySeverity (..),
 
   -- * Interpreters
   runNotifyProduction,
@@ -31,6 +34,7 @@ module Data.Effectful.Notify (
   slackNotification,
   whatsappNotification,
   discordNotification,
+  pagerdutyNotification,
 ) where
 
 import Control.Lens ((.~))
@@ -86,11 +90,43 @@ data WhatsAppData = WhatsAppData
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+data PagerDutyAction = PDTrigger | PDResolve
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+pdActionText :: PagerDutyAction -> Text
+pdActionText = \case PDTrigger -> "trigger"; PDResolve -> "resolve"
+
+
+data PagerDutySeverity = PDCritical | PDError | PDWarning | PDInfo
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+pdSeverityText :: PagerDutySeverity -> Text
+pdSeverityText = \case PDCritical -> "critical"; PDError -> "error"; PDWarning -> "warning"; PDInfo -> "info"
+
+
+data PagerDutyData = PagerDutyData
+  { integrationKey :: Text
+  , eventAction :: PagerDutyAction
+  , dedupKey :: Text
+  , summary :: Text
+  , severity :: PagerDutySeverity
+  , customDetails :: AE.Value
+  , monitorUrl :: Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 data Notification
   = EmailNotification EmailData
   | SlackNotification SlackData
   | DiscordNotification DiscordData
   | WhatsAppNotification WhatsAppData
+  | PagerDutyNotification PagerDutyData
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -126,6 +162,11 @@ discordNotification channelId content =
 whatsappNotification :: Text -> Text -> AE.Value -> Notification
 whatsappNotification template to contentVariables =
   WhatsAppNotification WhatsAppData{..}
+
+
+pagerdutyNotification :: Text -> PagerDutyAction -> Text -> Text -> PagerDutySeverity -> AE.Value -> Text -> Notification
+pagerdutyNotification integrationKey eventAction dedupKey summary severity customDetails monitorUrl =
+  PagerDutyNotification PagerDutyData{..}
 
 
 -- Production interpreter
@@ -195,6 +236,14 @@ runNotifyProduction = interpret $ \_ -> \case
               :: [FormParam]
       resp <- liftIO $ postWith opts url payload
       pass
+    PagerDutyNotification PagerDutyData{..} -> do
+      let links = [AE.object ["href" AE..= monitorUrl, "text" AE..= ("View Monitor" :: Text)]] :: [AE.Value]
+          triggerPayload = AEK.fromList
+            [ "payload" AE..= AE.object ["summary" AE..= summary, "source" AE..= ("monoscope" :: Text), "severity" AE..= pdSeverityText severity, "custom_details" AE..= customDetails]
+            , "links" AE..= links]
+          payload = AE.Object $ AEK.fromList ["routing_key" AE..= integrationKey, "event_action" AE..= pdActionText eventAction, "dedup_key" AE..= dedupKey] <> bool mempty triggerPayload (eventAction == PDTrigger)
+      re <- liftIO $ postWith (defaults & header "Content-Type" .~ ["application/json"]) "https://events.pagerduty.com/v2/enqueue" payload
+      unless (statusIsSuccessful (re ^. responseStatus)) $ Log.logAttention "PagerDuty notification failed" (dedupKey, show $ re ^. responseStatus)
   GetNotifications -> pure [] -- Production doesn't store notifications
 
 
@@ -215,6 +264,8 @@ runNotifyTest eff = do
                     ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
                   WhatsAppNotification whatsappData ->
                     ("WhatsApp" :: Text, whatsappData.to, Just whatsappData.template)
+                  PagerDutyNotification pagerdutyData ->
+                    ("PagerDuty" :: Text, pagerdutyData.dedupKey, Just pagerdutyData.summary)
             Log.logInfo "Notification" notifInfo
             Log.logTrace "Notification payload" notification
             liftIO $ modifyIORef ref (notification :)

@@ -69,7 +69,7 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.GitHub qualified as GitHub
-import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPagerDutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (processSpanToEntities)
@@ -842,24 +842,18 @@ buildMonitorAlert monitorE issue hostUrl =
 
 sendNotifications :: Monitors.QueryMonitorEvaled -> [ProjectMembers.Team] -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
 sendNotifications monitorE teams p alert = do
-  for_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
-  Relude.when (null teams) $ sendFallbackNotifications monitorE
+  targetTeams <- if null teams
+    then maybeToList <$> ProjectMembers.getEveryoneTeam monitorE.projectId
+    else pure teams
+  for_ targetTeams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title alert.monitorUrl (emailQueryMonitorAlert monitorE)
 
 
-sendFallbackNotifications :: Monitors.QueryMonitorEvaled -> ATBackgroundCtx ()
-sendFallbackNotifications monitorE = do
-  Relude.when monitorE.alertConfig.emailAll do
-    users <- Projects.usersByProjectId monitorE.projectId
-    forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
-  forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
-  unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
-
-
-dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
-dispatchTeamNotifications team alert projectId projectTitle emailAction = do
+dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
+dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailAction = do
   for_ team.notify_emails \email -> emailAction (CI.mk email) Nothing
   for_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
   for_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
+  for_ team.pagerduty_services \integrationKey -> sendPagerDutyAlertToService integrationKey alert projectTitle monitorUrl
 
 
 -- Send notifications
@@ -1162,6 +1156,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                           "errors": #{errosJ}
                      }|]
                 sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+            Projects.NPagerDuty -> pass -- PagerDuty is only for monitor alerts, not runtime errors
     -- Ignore other anomaly types
     _ -> pass
 
@@ -1236,6 +1231,7 @@ processAPIChangeAnomalies pid targetHashes = do
         Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
         Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
         Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+        Projects.NPagerDuty -> pass -- PagerDuty is only for monitor alerts
         Projects.NEmail -> do
           forM_ users \u -> do
             let templateVars =

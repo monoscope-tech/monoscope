@@ -93,7 +93,7 @@ onboardingGetH pid onboardingStepM = do
           hasSlack = isJust slack
           slackRedirectUri = appCtx.env.slackRedirectUri
           discordRedirectUri = appCtx.env.discordRedirectUri
-          slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=" <> "&redirect_uri=" <> slackRedirectUri <> pid.toText <> "?onboarding=true"
+          slackUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> appCtx.config.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> slackRedirectUri <> "&state=" <> pid.toText <> "__onboarding"
           discordUrl = "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> appCtx.config.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> "&state=" <> pid.toText <> "__onboarding" <> "&redirect_uri=" <> discordRedirectUri
       pure $ NotifChannelStep pid slackUrl discordUrl phone emails hasSlack hasDiscord
     "Integration" -> do

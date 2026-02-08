@@ -1,0 +1,10 @@
+{
+  "statusCode": 201,
+  "statusMessage": "Created",
+  "respBody": "{\"sid\": \"SM12345678901234567890123456789012\", \"status\": \"queued\", \"to\": \"whatsapp:+2348161115653\", \"from\": \"whatsapp:+14155238886\"}",
+  "responseHeaders": [
+    ["Content-Type", "application/json"]
+  ],
+  "originalRequest": "",
+  "responseEarlyHints": []
+}

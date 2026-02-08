@@ -184,7 +184,7 @@ data Routes mode = Routes
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> QPT "onboarding" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
@@ -373,6 +373,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Notifications
     notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders Integrations.NotificationsUpdatePost)
+  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerDutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
   , -- Onboarding routes
     onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)
@@ -568,6 +570,8 @@ projectsServer =
     , deleteGet = CreateProject.deleteProjectGetH
     , deleteProjectH = CreateProject.projectDeleteGetH
     , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
+    , pagerdutyConnect = Integrations.pagerdutyConnectH
+    , pagerdutyDisconnect = Integrations.pagerdutyDisconnectH
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH

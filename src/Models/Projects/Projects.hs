@@ -79,6 +79,7 @@ data NotificationChannel
   | NSlack
   | NDiscord
   | NPhone
+  | NPagerDuty
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "N", DAE.CamelToSnake]] NotificationChannel

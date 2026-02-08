@@ -51,6 +51,9 @@ extra-source-files:
     static/migrations/0023_anomaly_chat_messages.sql
     static/migrations/0024_ai_conversations_updated_at_trigger.sql
     static/migrations/0025_widget_alerts.sql
+    static/migrations/0026_pagerduty.sql
+    static/migrations/0027_notification_test.sql
+    static/migrations/0028_everyone_team.sql
 
 source-repository head
   type: git
@@ -138,6 +141,7 @@ library
       Pkg.Parser.Stats
       Pkg.QueryCache
       Pkg.Queue
+      Pkg.SampleAlerts
       Pkg.TestUtils
       Pkg.THUtils
       ProcessMessage
@@ -319,6 +323,7 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
+    , retry
     , safe
     , safe-exceptions
     , scientific
@@ -336,7 +341,6 @@ library
     , text-builder-linear
     , text-display
     , time
-    , typed-process
     , tmp-postgres
     , typed-process
     , unliftio

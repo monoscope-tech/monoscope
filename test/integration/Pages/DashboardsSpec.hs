@@ -101,7 +101,7 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should handle bulk add teams to dashboards" \tr -> do
-      let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], phoneNumbers = [], teamId = Nothing}
+      let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], phoneNumbers = [], pagerdutyServices = [], teamId = Nothing}
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "hii"} Nothing
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "broo"} Nothing
