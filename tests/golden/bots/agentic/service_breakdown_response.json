@@ -1,0 +1,12 @@
+{
+    "explanation": "This query retrieves the counts of log entries categorized as either 'WARN' or 'ERROR', grouped by the name of the service. This helps in identifying which services are generating warnings and errors.",
+    "query": "level in ('WARN', 'ERROR') | summarize count() by resource.service.name",
+    "visualization": "distribution",
+    "widgets": [
+        {
+            "query": "level in ('WARN', 'ERROR') | summarize count() by resource.service.name",
+            "title": "Warning and Error Counts by Service",
+            "type": "distribution"
+        }
+    ]
+}

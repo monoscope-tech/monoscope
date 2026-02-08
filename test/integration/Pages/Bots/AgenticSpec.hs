@@ -4,7 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Text qualified as T
 import Effectful qualified as Eff
-import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, hasOpenAIKey, testPid)
+import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, testPid)
 import Pages.Bots.Utils (processAIQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
@@ -72,44 +72,32 @@ spec = aroundAll withTestResources do
             null parsed.widgets `shouldBe` True
           Left err -> expectationFailure $ "Parse failed: " <> toString err
 
-    describe "Live API calls (requires OPENAI_API_KEY)" do
+    describe "Live API calls (uses golden files)" do
       it "processes error trend query and saves golden response" \tr -> do
-        let apiKey = getOpenAIKey tr
-        if not (hasOpenAIKey tr)
-          then pendingWith "OPENAI_API_KEY not configured - skipping live API test"
-          else do
-            result <- runTestBg tr $ processAIQuery testPid "plot error trend over time" Nothing apiKey
-            case result of
-              Left err -> pendingWith $ "API call failed: " <> toString err
-              Right agenticResp -> do
-                let responseJson = AE.toJSON agenticResp
-                assertJsonGolden "agentic/error_trend_response.json" responseJson
-                length agenticResp.widgets `shouldSatisfy` (>= 0)
+        result <- runTestBg tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIKey tr)
+        case result of
+          Left err -> expectationFailure $ "API call failed: " <> toString err
+          Right agenticResp -> do
+            let responseJson = AE.toJSON agenticResp
+            assertJsonGolden "agentic/error_trend_response.json" responseJson
+            length agenticResp.widgets `shouldSatisfy` (>= 0)
 
       it "processes service breakdown query and saves golden response" \tr -> do
-        let apiKey = getOpenAIKey tr
-        if not (hasOpenAIKey tr)
-          then pendingWith "OPENAI_API_KEY not configured - skipping live API test"
-          else do
-            result <- runTestBg tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing apiKey
-            case result of
-              Left err -> pendingWith $ "API call failed: " <> toString err
-              Right agenticResp -> do
-                let responseJson = AE.toJSON agenticResp
-                assertJsonGolden "agentic/service_breakdown_response.json" responseJson
+        result <- runTestBg tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing (getOpenAIKey tr)
+        case result of
+          Left err -> expectationFailure $ "API call failed: " <> toString err
+          Right agenticResp -> do
+            let responseJson = AE.toJSON agenticResp
+            assertJsonGolden "agentic/service_breakdown_response.json" responseJson
 
       it "processes explanation-only query and saves golden response" \tr -> do
-        let apiKey = getOpenAIKey tr
-        if not (hasOpenAIKey tr)
-          then pendingWith "OPENAI_API_KEY not configured - skipping live API test"
-          else do
-            result <- runTestBg tr $ processAIQuery testPid "what services have the most errors?" Nothing apiKey
-            case result of
-              Left err -> pendingWith $ "API call failed: " <> toString err
-              Right agenticResp -> do
-                let responseJson = AE.toJSON agenticResp
-                assertJsonGolden "agentic/explanation_only_response.json" responseJson
-                isJust agenticResp.explanation || not (null agenticResp.widgets) `shouldBe` True
+        result <- runTestBg tr $ processAIQuery testPid "what services have the most errors?" Nothing (getOpenAIKey tr)
+        case result of
+          Left err -> expectationFailure $ "API call failed: " <> toString err
+          Right agenticResp -> do
+            let responseJson = AE.toJSON agenticResp
+            assertJsonGolden "agentic/explanation_only_response.json" responseJson
+            isJust agenticResp.explanation || not (null agenticResp.widgets) `shouldBe` True
 
       it "handles empty API key gracefully" \tr -> do
         result <- runTestBg tr $ processAIQuery testPid "show errors" Nothing ""

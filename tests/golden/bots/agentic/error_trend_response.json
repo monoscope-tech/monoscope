@@ -1,0 +1,16 @@
+{
+    "query": "level == 'ERROR' | summarize count() by bin_auto(timestamp)",
+    "time_range": {
+        "from": null,
+        "since": "2H",
+        "to": null
+    },
+    "visualization": "timeseries",
+    "widgets": [
+        {
+            "query": "level == 'ERROR' | summarize count() by bin_auto(timestamp)",
+            "title": "Error Trend Over Time",
+            "type": "timeseries"
+        }
+    ]
+}

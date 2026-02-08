@@ -100,6 +100,8 @@ import RequestMessages qualified
 import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
+import Configuration.Dotenv qualified as Dotenv
+import Control.Exception.Safe qualified as Safe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.DB (DB)
@@ -510,10 +512,10 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   sessAndHeader <- testSessionHeader pool
   tp <- getGlobalTracerProvider
 
-  -- Load OpenAI API key from environment for tests
-  openaiKey <- fromMaybe "" <$> lookupEnv "OPENAI_API_KEY"
+  -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
+  _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
 
-  -- Load config from environment variables (including LOG_LEVEL)
+  -- Load config from environment variables
   envConfig <- decodeWithDefaults defConfig
 
   let atAuthCtx =
@@ -526,14 +528,16 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           logsPatternCache
           projectKeyCache
           ( envConfig
-              { apiKeyEncryptionSecretKey = "monoscope123456123456monoscope12"
+              { -- Override to ensure test database is used (never production DB from .env)
+                databaseUrl = "test-db-connection-from-pool"
+              , timefusionPgUrl = "test-db-connection-from-pool"
+              , apiKeyEncryptionSecretKey = "monoscope123456123456monoscope12"
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
-              , openaiApiKey = toText openaiKey
               }
           )
   f

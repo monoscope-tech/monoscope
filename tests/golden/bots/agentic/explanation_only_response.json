@@ -1,0 +1,11 @@
+{
+    "explanation": "There are currently no recorded errors in any services based on the available logs. Therefore, no services have been identified with errors at this time.",
+    "query": "level == \"ERROR\" | summarize count() by resource.service.name",
+    "time_range": {
+        "from": null,
+        "since": null,
+        "to": null
+    },
+    "visualization": "distribution",
+    "widgets": []
+}
