@@ -17,7 +17,7 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Language.Haskell.TH.Syntax qualified as THS

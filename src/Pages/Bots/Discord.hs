@@ -36,8 +36,9 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForDiscord, formatTextResponse, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForDiscord, formatTextResponse, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
+import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -47,6 +48,7 @@ import Servant.Server (ServerError (errBody), err400, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
+import Utils qualified
 
 
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
@@ -334,26 +336,32 @@ discordInteractionsH rawBody signatureM timestampM = do
             Issues.insertChatMessage discordData.projectId convId "user" userQuery Nothing Nothing
             case result of
               Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
-              Right AIQueryResult{..} -> do
-                Issues.insertChatMessage discordData.projectId convId "assistant" query Nothing Nothing
-                sendDiscordResponse options interaction envCfg authCtx discordData query visualization outputType commentary fromTime toTime timeRangeStr now
+              Right resp -> do
+                whenJust resp.query \q -> Issues.insertChatMessage discordData.projectId convId "assistant" q Nothing Nothing
+                sendDiscordResponse options interaction envCfg authCtx discordData resp now
           _ -> do
             result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
             case result of
               Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
-              Right AIQueryResult{..} -> sendDiscordResponse options interaction envCfg authCtx discordData query visualization outputType commentary fromTime toTime timeRangeStr now
+              Right resp -> sendDiscordResponse options interaction envCfg authCtx discordData resp now
 
 
-sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> Text -> Maybe Text -> AI.AIOutputType -> Maybe Text -> Maybe Time.UTCTime -> Maybe Time.UTCTime -> (Text, Text) -> Time.UTCTime -> ATBaseCtx ()
-sendDiscordResponse options interaction envCfg authCtx discordData query visualization outType commentaryM fromTimeM toTimeM (from, to) now =
-  case outType of
-    AI.AOText -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord (fromMaybe "No insights available" commentaryM)
-    AI.AOWidget -> handleWidgetResponse
-    AI.AOBoth -> do
-      handleWidgetResponse
-      whenJust commentaryM \c -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord c
+sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> AI.LLMResponse -> Time.UTCTime -> ATBaseCtx ()
+sendDiscordResponse options interaction envCfg authCtx discordData resp now =
+  let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+      (from, to) = fromMaybe ("", "") rangeM
+      query = fromMaybe "" resp.query
+      hasQuery = isJust resp.query
+      hasExplanation = isJust resp.explanation
+   in case (hasQuery, hasExplanation) of
+        (False, True) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord (fromMaybe "No insights available" resp.explanation)
+        (True, False) -> handleWidgetResponse query fromTimeM toTimeM from to
+        (True, True) -> do
+          handleWidgetResponse query fromTimeM toTimeM from to
+          whenJust resp.explanation \c -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord c
+        (False, False) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord "No response available"
   where
-    handleWidgetResponse = case visualization of
+    handleWidgetResponse query fromTimeM toTimeM from to = case resp.visualization of
       Just vizType -> do
         let widgetType = Widget.mapChatTypeToWidgetType vizType
             chartType = Widget.mapWidgetTypeToChartType widgetType

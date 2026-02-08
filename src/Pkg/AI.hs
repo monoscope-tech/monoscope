@@ -1,4 +1,5 @@
 {-# LANGUAGE GADTs #-}
+{-# LANGUAGE MultilineStrings #-}
 
 -- |
 -- Module      : Pkg.AI
@@ -8,13 +9,13 @@
 -- The LLM decides when to use tools based on the query complexity.
 module Pkg.AI (
   -- * Response Types
-  ChatLLMResponse (..),
-  AIOutputType (..),
+  LLMResponse (..),
   ToolCallInfo (..),
   AgenticChatResult (..),
 
   -- * Response Parsing
-  getAskLLMResponse,
+  parseLLMResponse,
+  parseAgenticResponse,
   getNormalTupleReponse,
 
   -- * Basic LLM Calls
@@ -24,6 +25,7 @@ module Pkg.AI (
   -- * System Prompt
   systemPrompt,
   kqlGuide,
+  outputFormatInstructions,
 
   -- * Agentic Configuration
   AgenticConfig (..),
@@ -65,18 +67,17 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
+import NeatInterpolation (text)
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
 import OpenAI.V1.Models qualified as Models
 import OpenAI.V1.Tool qualified as OAITool
+import Pkg.Components.TimePicker (TimePicker)
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Parser (parseQueryToAST)
 import Relude
 import System.Types (DB)
-
-
-data AIOutputType = AOText | AOWidget | AOBoth
-  deriving stock (Eq, Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "AO", DAE.CamelToSnake]] AIOutputType
+import Utils (unwrapJsonPrimValue)
 
 
 -- | Information about a tool call made during agentic execution
@@ -104,15 +105,17 @@ data AgenticChatResult = AgenticChatResult
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data ChatLLMResponse = ChatLLMResponse
-  { query :: Maybe Text
-  , outputType :: Maybe AIOutputType
-  , visualization :: Maybe Text
-  , commentary :: Maybe Text
-  , timeRange :: Maybe [Text]
+-- | Unified LLM response type for all AI interactions
+data LLMResponse = LLMResponse
+  { explanation :: Maybe Text -- Markdown analysis/commentary
+  , query :: Maybe Text -- Primary KQL query
+  , visualization :: Maybe Text -- Chart type
+  , widgets :: [Widget.Widget] -- Widget configs
+  , timeRange :: Maybe TimePicker -- Time range (relative or absolute)
+  , toolCalls :: Maybe [ToolCallInfo] -- Tool execution results (for widget data reuse)
   }
-  deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LLMResponse
 
 
 callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Eff es (Either Text Text)
@@ -144,23 +147,41 @@ getNormalTupleReponse response =
         else Right (cleanedQuery, vizTypeM)
 
 
-getAskLLMResponse :: Text -> Either Text ChatLLMResponse
-getAskLLMResponse response =
-  let cleaned = fixTrailingCommas response
+-- | Parse LLM response from plain text (no tool calls)
+--
+-- Converts raw LLM JSON text into structured LLMResponse. Sets toolCalls to Nothing.
+--
+-- Use this when:
+-- - Parsing stored chat messages from database
+-- - Testing with mock responses
+-- - Processing non-agentic LLM calls (no tools available)
+--
+-- The function handles common LLM output issues:
+-- - Strips markdown code blocks (```json ... ```)
+-- - Fixes trailing commas in JSON
+parseLLMResponse :: Text -> Either Text LLMResponse
+parseLLMResponse response =
+  let cleaned = fixTrailingCommas $ stripCodeBlock response
       responseBS = encodeUtf8 cleaned
-      decoded = AE.eitherDecode (fromStrict responseBS)
-   in case decoded of
-        Left err -> Left $ "JSON Decode Error: " <> toText err
-        Right apiResponse -> do
-          let vType = parseVisualizationType $ fromMaybe "" apiResponse.visualization
-              -- Default outputType based on whether query/commentary are present
-              defaultOutputType = case (apiResponse.query, apiResponse.commentary) of
-                (Just _, Just _) -> Just AOBoth
-                (Just _, Nothing) -> Just AOWidget
-                (Nothing, Just _) -> Just AOText
-                (Nothing, Nothing) -> Just AOWidget -- fallback
-              apiResponse' = apiResponse{visualization = vType, outputType = apiResponse.outputType <|> defaultOutputType}
-           in Right apiResponse'
+   in first (("JSON Decode Error: " <>) . toText) $ AE.eitherDecode (fromStrict responseBS)
+
+
+-- | Parse agentic execution result (preserves tool call metadata)
+--
+-- Wraps parseLLMResponse but PRESERVES tool execution history from agentic chat.
+-- This is critical for widget data reuse - tool calls contain cached query results
+-- in their rawData field, avoiding re-execution of expensive queries.
+--
+-- Use this when:
+-- - Processing live agentic chat results (runAgenticChatWithHistory)
+-- - Need tool call debugging info
+-- - Widgets should reuse tool-executed query data
+--
+-- Flow: AgenticChatResult (response + tool calls) → parse text → inject tool metadata → LLMResponse
+parseAgenticResponse :: AgenticChatResult -> Either Text LLMResponse
+parseAgenticResponse (AgenticChatResult{response, toolCalls = tcs}) = do
+  LLMResponse{explanation, query, visualization, widgets, timeRange} <- parseLLMResponse response
+  pure LLMResponse{explanation, query, visualization, widgets, timeRange, toolCalls = Just tcs}
 
 
 -- | Fix trailing commas in JSON (common LLM output issue)
@@ -194,96 +215,106 @@ parseVisualizationType t = Map.lookup t vizTypeMap
 -- | KQL documentation for AI prompts - shared between Log Explorer and Anomalies
 kqlGuide :: Text
 kqlGuide =
-  unlines
-    [ "KQL (Kusto Query Language) SYNTAX:"
-    , ""
-    , "Available Operators:"
-    , "- Comparison: == != > < >= <="
-    , "- Set operations: in !in (e.g., method in (\"GET\", \"POST\"))"
-    , "- Text search: has !has (case-insensitive word search)"
-    , "- Text collections: has_any has_all (e.g., tags has_any [\"urgent\", \"critical\"])"
-    , "- String operations: contains !contains startswith !startswith endswith !endswith"
-    , "- Pattern matching: matches =~ (regex, e.g., email matches /.*@company\\.com/)"
-    , "- Logical: AND OR (or lowercase and or)"
-    , "- Duration values: 100ms 5s 2m 1h (nanoseconds, microseconds, milliseconds, seconds, minutes, hours)"
-    , ""
-    , "VISUALIZATION TYPES (use these exact strings):"
-    , "- \"timeseries\": Bar chart with time on X-axis. Use bin_auto(timestamp) in query."
-    , "- \"timeseries_line\": Line chart with time. Use bin_auto(timestamp) in query."
-    , "- \"distribution\": Categorical bar chart (no time). Use summarize...by without bin(). For GROUP BY on non-time fields."
-    , "- \"pie_chart\": Pie chart for proportions. Use summarize...by without bin()."
-    , "- \"top_list\": Ranked list of values."
-    , "- \"table\": Raw data rows as table."
-    , "- \"stat\": Single numeric value display."
-    , "- \"heatmap\": Latency distribution heatmap."
-    , "- \"logs\": Log entries list (default when no chart needed)."
-    , ""
-    , "CATEGORICAL vs TIME-SERIES CHARTS:"
-    , "- Time-series: Use bin_auto(timestamp) or bin(timestamp, interval) in GROUP BY -> visualization: 'timeseries' or 'timeseries_line'"
-    , "- Categorical: GROUP BY a field WITHOUT time binning -> visualization: 'distribution' or 'pie_chart'"
-    , "- Example: 'show requests by service' -> | summarize count() by resource.service.name (no bin!) -> visualization: 'distribution'"
-    , "- Example: 'show errors over time' -> | summarize count() by bin_auto(timestamp) -> visualization: 'timeseries'"
-    , ""
-    , "The summarize statement can use various aggregation functions like count(), sum(...), avg(...), min(...), max(...), median(...), etc."
-    , ""
-    , "TIME BINNING:"
-    , "- Use bin_auto(timestamp) by DEFAULT - the system will automatically determine the appropriate bin size based on the time range"
-    , "- Only use bin(timestamp, <size>) when the user EXPLICITLY specifies a time interval (e.g., 'by hour', 'per minute', 'in 5m intervals')"
-    , "- Examples of when to use hardcoded bins: 'show errors by hour' -> bin(timestamp, 1h), 'count per 30 seconds' -> bin(timestamp, 30s)"
-    , "- Examples of when to use bin_auto: 'show error trend', 'graph response times', 'chart requests over time' -> bin_auto(timestamp)"
-    , "- IMPORTANT: For categorical grouping (by service, method, etc.), do NOT use bin() at all!"
-    , ""
-    , "KQL Query Examples:"
-    , "- \"show me errors\" -> level == \"ERROR\" (visualization: logs)"
-    , "- \"Show me error count over time\" -> query: level == \"ERROR\" | summarize count() by bin_auto(timestamp), visualization: timeseries"
-    , "- \"show requests by service\" -> query: | summarize count() by resource.service.name, visualization: distribution"
-    , "- \"which services have the most errors?\" -> query: level == \"ERROR\" | summarize count() by resource.service.name, visualization: distribution"
-    , ""
-    , "IMPORTANT: ONLY use field names from the schema. Do NOT invent or hallucinate field names like 'value', 'count', 'total', etc. If unsure about a field name, use get_schema or get_field_values tools to discover available fields."
-    ]
+  [text|
+  KQL (Kusto Query Language) SYNTAX:
+
+  Available Operators:
+  - Comparison: == != > < >= <=
+  - Set operations: in !in (e.g., method in ("GET", "POST"))
+  - Text search: has !has (case-insensitive word search)
+  - Text collections: has_any has_all (e.g., tags has_any ["urgent", "critical"])
+  - String operations: contains !contains startswith !startswith endswith !endswith
+  - Pattern matching: matches =~ (regex, e.g., email matches /.*@company\.com/)
+  - Logical: AND OR (or lowercase and or)
+  - Duration values: 100ms 5s 2m 1h (nanoseconds, microseconds, milliseconds, seconds, minutes, hours)
+
+  VISUALIZATION TYPES (use these exact strings):
+  - "timeseries": Bar chart with time on X-axis. Use bin_auto(timestamp) in query.
+  - "timeseries_line": Line chart with time. Use bin_auto(timestamp) in query.
+  - "distribution": Categorical bar chart (no time). Use summarize...by without bin(). For GROUP BY on non-time fields.
+  - "pie_chart": Pie chart for proportions. Use summarize...by without bin().
+  - "top_list": Ranked list of values.
+  - "table": Raw data rows as table.
+  - "stat": Single numeric value display.
+  - "heatmap": Latency distribution heatmap.
+  - "logs": Log entries list (default when no chart needed).
+
+  CATEGORICAL vs TIME-SERIES CHARTS:
+  - Time-series: Use bin_auto(timestamp) or bin(timestamp, interval) in GROUP BY -> visualization: 'timeseries' or 'timeseries_line'
+  - Categorical: GROUP BY a field WITHOUT time binning -> visualization: 'distribution' or 'pie_chart'
+  - Example: 'show requests by service' -> | summarize count() by resource.service.name (no bin!) -> visualization: 'distribution'
+  - Example: 'show errors over time' -> | summarize count() by bin_auto(timestamp) -> visualization: 'timeseries'
+
+  The summarize statement can use various aggregation functions like count(), sum(...), avg(...), min(...), max(...), median(...), etc.
+
+  TIME BINNING:
+  - Use bin_auto(timestamp) by DEFAULT - the system will automatically determine the appropriate bin size based on the time range
+  - Only use bin(timestamp, <size>) when the user EXPLICITLY specifies a time interval (e.g., 'by hour', 'per minute', 'in 5m intervals')
+  - Examples of when to use hardcoded bins: 'show errors by hour' -> bin(timestamp, 1h), 'count per 30 seconds' -> bin(timestamp, 30s)
+  - Examples of when to use bin_auto: 'show error trend', 'graph response times', 'chart requests over time' -> bin_auto(timestamp)
+  - IMPORTANT: For categorical grouping (by service, method, etc.), do NOT use bin() at all!
+
+  KQL Query Examples:
+  - "show me errors" -> level == "ERROR" (visualization: logs)
+  - "Show me error count over time" -> query: level == "ERROR" | summarize count() by bin_auto(timestamp), visualization: timeseries
+  - "show requests by service" -> query: | summarize count() by resource.service.name, visualization: distribution
+  - "which services have the most errors?" -> query: level == "ERROR" | summarize count() by resource.service.name, visualization: distribution
+
+  IMPORTANT: ONLY use field names from the schema. Do NOT invent or hallucinate field names like 'value', 'count', 'total', etc. If unsure about a field name, use get_schema or get_field_values tools to discover available fields.
+  |]
 
 
-systemPrompt :: Text
-systemPrompt =
+-- | Shared output format instructions for all AI interactions
+outputFormatInstructions :: Text
+outputFormatInstructions =
+  [text|
+  OUTPUT FORMAT:
+  Return a JSON object with these fields:
+  - "explanation": Your analysis/explanation in markdown (optional)
+  - "query": KQL query string (optional)
+  - "visualization": widget type string (optional)
+  - "widgets": Array of widget configs (optional)
+  - "time_range": Use snake_case fields (optional):
+    - Preferred: {"since": "2H"} for relative ranges (2H, 30M, 7D, etc.)
+    - Alternative: {"from": "ISO8601", "to": "ISO8601"} for absolute ranges
+    - 'since' replaces 'from'/'to' when user wants recent data
+
+  WORKFLOW:
+  1. For widget requests, return query + visualization
+  2. For analysis requests, use tools to get data, then provide explanation
+  3. For complex requests, provide both explanation and widgets
+
+  Response format:
+  {
+    "explanation": "<Markdown analysis>",
+    "query": "<KQL query>",
+    "visualization": "<timeseries|distribution|pie_chart|top_list|table|stat|heatmap|logs>",
+    "widgets": [{"type": "timeseries", "query": "...", "title": "..."}],
+    "time_range": {"since": "2H"} OR {"from": "ISO8601", "to": "ISO8601"}
+  }
+
+  Widget structure for visualizations:
+  { "type": "logs|timeseries|timeseries_line|stat",
+    "query": "KQL query string",
+    "title": "Widget title" }
+
+  IMPORTANT: Do not use code blocks or backticks. Return raw JSON only.
+  |]
+
+
+systemPrompt :: UTCTime -> Text
+systemPrompt now =
   unlines
     [ "You are a helpful assistant that converts natural language queries to KQL (Kusto Query Language) filter expressions."
+    , ""
+    , "CURRENT TIME (UTC): " <> show now
+    , "Use this to interpret relative time requests (e.g., 'last 2 hours' → {\"since\": \"2H\"})"
     , ""
     , Schema.generateSchemaForAI Schema.telemetrySchema
     , ""
     , kqlGuide
     , ""
-    , "OUTPUT FORMAT:"
-    , "Return a JSON object with these fields:"
-    , "- \"outputType\": \"text\" | \"widget\" | \"both\" (required - use 'text' for AOText, 'widget' for AOWidget, 'both' for AOBoth)"
-    , "- \"visualization\": widget type string (required if outputType includes widget)"
-    , "- \"query\": KQL query string (required if outputType includes widget)"
-    , "- \"commentary\": Your analysis/explanation (required if outputType includes text)"
-    , "- \"timeRange\": [from, to] ISO8601 timestamps (optional)"
-    , ""
-    , "WORKFLOW:"
-    , "1. If user wants a WIDGET ONLY (e.g., 'show errors over time'), return query directly with outputType='widget'"
-    , "2. If user wants TEXT or ANALYSIS (e.g., 'what's my error rate?'), use available tools to get actual data first, then provide insights with outputType='text'"
-    , "3. If user wants BOTH (e.g., 'analyze my traffic patterns'), provide widget + commentary with outputType='both'"
-    , ""
-    , "Time range rules:"
-    , "DO NOT include timeRange if not requested by the user"
-    , "DO NOT make up a time range if not specified by the user"
-    , "DO NOT include timeRange field if the array is empty or incomplete"
-    , "DO NOT use code blocks or backticks in your response. Return the raw query directly."
-    , ""
-    , "Response format:"
-    , "Always return JSON in the following structure:"
-    , "{"
-    , "  \"outputType\": \"<text|widget|both>\","
-    , "  \"query\": \"<KQL filter/query string>\","
-    , "  \"visualization\": \"<logs|timeseries|timeseries_line|distribution|pie_chart|top_list|table|stat|heatmap>\","
-    , "  \"commentary\": \"<Your analysis/explanation if outputType is text or both>\","
-    , "  \"timeRange\": [\"<From: ISO8601>\", \"<To: ISO8601>\"]"
-    , "}"
-    , ""
-    , "IMPORTANT: Do not include timeRange if not requested by the user"
-    , "IMPORTANT: If timerange is empty or incomplete, do not include the timeRange field"
-    , "IMPORTANT: Do not use code blocks or backticks in your response. Return the raw query directly."
+    , outputFormatInstructions
     ]
 
 
@@ -369,19 +400,21 @@ vIntercalate sep = V.ifoldl' (\acc i x -> if i == 0 then x else acc <> sep <> x)
 formatSummarizeResults :: V.Vector (V.Vector AE.Value) -> Text
 formatSummarizeResults = vIntercalate ", " . V.mapMaybe formatRow
   where
+    formatRow :: V.Vector AE.Value -> Maybe Text
     formatRow row
-      | V.length row == 2 = Just $ "\"" <> jsonToText (row V.! 0) <> "\" (" <> jsonToText (row V.! 1) <> ")"
+      | V.length row == 2 = Just $ "\"" <> unwrapJsonPrimValue True (row V.! 0) <> "\" (" <> unwrapJsonPrimValue True (row V.! 1) <> ")"
       | otherwise = Nothing
 
 
 formatSampleLogs :: Int -> V.Vector (V.Vector AE.Value) -> Text
 formatSampleLogs maxBody = vIntercalate "\n" . V.mapMaybe formatRow
   where
+    formatRow :: V.Vector AE.Value -> Maybe Text
     formatRow row
       | V.length row >= 4 =
           let (lvl, nm, svc) = (row V.! 0, row V.! 1, row V.! 2)
-              body = vIntercalate " " $ V.map jsonToText $ V.drop 3 row
-           in Just $ "  - [" <> jsonToText lvl <> "] " <> jsonToText nm <> " (" <> jsonToText svc <> "): " <> T.take maxBody body
+              body = vIntercalate " " $ V.map (unwrapJsonPrimValue True) $ V.drop 3 row
+           in Just $ "  - [" <> unwrapJsonPrimValue True lvl <> "] " <> unwrapJsonPrimValue True nm <> " (" <> unwrapJsonPrimValue True svc <> "): " <> T.take maxBody body
       | otherwise = Nothing
 
 
@@ -391,17 +424,8 @@ formatQueryResults maxRows results count =
       truncated = if count > maxRows then "\n... +" <> show (count - maxRows) <> " more" else ""
    in "Results (" <> show count <> " rows):\n" <> formatted <> truncated
   where
-    formatRow row = "  " <> vIntercalate " | " (V.map jsonToText row)
-
-
-jsonToText :: AE.Value -> Text
-jsonToText = \case
-  AE.String s -> s
-  AE.Number n -> show n
-  AE.Bool b -> bool "false" "true" b
-  AE.Null -> "null"
-  AE.Array arr -> "[" <> T.intercalate ", " (V.toList $ V.map jsonToText arr) <> "]"
-  AE.Object _ -> "{...}"
+    formatRow :: V.Vector AE.Value -> Text
+    formatRow row = "  " <> vIntercalate " | " (V.map (unwrapJsonPrimValue True) row)
 
 
 formatFacetSummary :: FacetSummary -> Text
@@ -512,9 +536,9 @@ allToolDefs =
 -- * Main Entry Point
 
 
-buildSystemPrompt :: AgenticConfig -> Text
-buildSystemPrompt config =
-  let basePrompt = fromMaybe systemPrompt config.systemPromptOverride
+buildSystemPrompt :: AgenticConfig -> UTCTime -> Text
+buildSystemPrompt config now =
+  let basePrompt = fromMaybe (systemPrompt now) config.systemPromptOverride
       facetSection = formatFacetContext config.facetContext
       customSection = fromMaybe "" config.customContext
    in basePrompt <> facetSection <> customSection
@@ -529,21 +553,15 @@ stripCodeBlock t
     stripped = T.strip t
 
 
-parseResponse :: Text -> Either Text ChatLLMResponse
-parseResponse responseText =
-  let cleaned = stripCodeBlock responseText
-   in getAskLLMResponse cleaned
+parseResponse :: Text -> Either Text LLMResponse
+parseResponse = parseLLMResponse . stripCodeBlock
 
 
-runAgenticQuery
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Text
-  -> Text
-  -> Eff es (Either Text ChatLLMResponse)
+runAgenticQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery apiKey = do
+  now <- Time.currentTime
   let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
-      sysPrompt = buildSystemPrompt config
+      sysPrompt = buildSystemPrompt config now
       systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       chatHistory = systemMsg :| [userMsg]
@@ -576,11 +594,11 @@ runAgenticQueryWithHistory
   => AgenticConfig
   -> Text
   -> Text
-  -> Eff es (Either Text ChatLLMResponse)
+  -> Eff es (Either Text LLMResponse)
 runAgenticQueryWithHistory config userQuery apiKey = do
-  let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
-      sysPrompt = buildSystemPrompt config
-      systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
+  now <- Time.currentTime
+  let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
+      systemMsg = LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       params =
         OpenAIV1._CreateChatCompletion
@@ -591,19 +609,12 @@ runAgenticQueryWithHistory config userQuery apiKey = do
   case config.conversationId of
     Nothing -> runAgenticLoop config openAI (systemMsg :| [userMsg]) params 0
     Just convId -> do
-      -- Load existing chat history from DB
-      dbMessages <- Issues.selectChatHistory convId
-      let historyMsgs = map dbMessageToLLMMessage dbMessages
-          chatHistory = systemMsg :| (historyMsgs <> [userMsg])
-      -- Save user message to DB
+      historyMsgs <- map dbMessageToLLMMessage <$> Issues.selectChatHistory convId
+      let chatHistory = systemMsg :| (historyMsgs <> [userMsg])
       Issues.insertChatMessage config.projectId convId "user" userQuery Nothing Nothing
-      -- Run the agentic loop
       result <- runAgenticLoop config openAI chatHistory params 0
-      -- Save assistant response to DB
-      case result of
-        Right resp -> whenJust resp.query \q -> Issues.insertChatMessage config.projectId convId "assistant" q Nothing Nothing
-        Left _ -> pass
-      pure result
+      result <$ for_ result \resp -> for_ resp.query \q ->
+        Issues.insertChatMessage config.projectId convId "assistant" q Nothing Nothing
 
 
 -- | Run agentic chat with DB-persisted history, returns response with tool call info
@@ -615,8 +626,9 @@ runAgenticChatWithHistory
   -> Text
   -> Eff es (Either Text AgenticChatResult)
 runAgenticChatWithHistory config userQuery apiKey = do
+  now <- Time.currentTime
   let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
-      sysPrompt = buildSystemPrompt config
+      sysPrompt = buildSystemPrompt config now
       systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       params =
@@ -636,48 +648,32 @@ runAgenticChatWithHistory config userQuery apiKey = do
 
 
 -- | Raw agentic loop that returns the response with tool call history
-runAgenticLoopRaw
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> OpenAI.OpenAI
-  -> LLM.ChatHistory
-  -> OpenAIV1.CreateChatCompletion
-  -> Int
-  -> [ToolCallInfo]
-  -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> OpenAI.OpenAI -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
 runAgenticLoopRaw config openAI chatHistory params iteration accumulated
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
-      let paramsNoTools = params{OpenAIV1.tools = Nothing}
-      result <- liftIO $ LLM.chat openAI chatHistory (Just paramsNoTools)
-      case result of
-        Left err -> do
-          Log.logAttention "LLM API error in final iteration" (AE.object ["error" AE..= show @Text err])
-          pure $ Left "LLM service temporarily unavailable"
-        Right responseMsg -> do
-          Log.logTrace "AI final response received" (AE.object ["responseLength" AE..= T.length (LLM.content responseMsg)])
-          pure $ Right $ AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
+      liftIO (LLM.chat openAI chatHistory $ Just params{OpenAIV1.tools = Nothing}) >>= either handleError \responseMsg -> do
+        Log.logTrace "AI final response" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
+        pure $ Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
   | otherwise = do
-      Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory])
-      result <- liftIO $ LLM.chat openAI chatHistory (Just params)
-      case result of
-        Left err -> do
-          Log.logAttention "LLM API error in runAgenticLoopRaw" (AE.object ["error" AE..= show @Text err])
-          pure $ Left "LLM service temporarily unavailable"
-        Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
-          Nothing -> do
-            Log.logTrace "AI response received (no tool calls)" (AE.object ["iteration" AE..= iteration, "responseLength" AE..= T.length (LLM.content responseMsg)])
-            pure $ Right $ AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
-          Just toolCallList -> do
-            let toolNames = map (LLM.toolFunctionName . LLM.toolCallFunction) toolCallList
-            Log.logTrace "AI requesting tool calls" (AE.object ["iteration" AE..= iteration, "tools" AE..= toolNames])
-            toolResults <- traverse (executeToolCall config) toolCallList
-            let newToolInfos = zipWith mkToolCallInfo toolCallList toolResults
-                accumulatedCalls = accumulated <> newToolInfos
-                assistantMsg = responseMsg
-                toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
-            newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (assistantMsg : toolMsgs)
-            runAgenticLoopRaw config openAI newMessages params (iteration + 1) accumulatedCalls
+      let userQuery = maybe "" LLM.content $ lastMay $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
+      Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
+      liftIO (LLM.chat openAI chatHistory $ Just params) >>= either handleError \responseMsg ->
+        maybe (logFinalResponse responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
+  where
+    handleError err = Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err]) $> Left "LLM service temporarily unavailable"
+
+    logFinalResponse responseMsg = do
+      Log.logTrace "AI final response (no tool calls)" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
+      pure $ Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
+
+    processToolCalls responseMsg toolCallList = do
+      Log.logTrace "AI requesting tool calls" (AE.object ["iteration" AE..= iteration, "tools" AE..= map (LLM.toolFunctionName . LLM.toolCallFunction) toolCallList])
+      toolResults <- traverse (executeToolCall config) toolCallList
+      let newToolInfos = zipWith mkToolCallInfo toolCallList toolResults
+      Log.logTrace "AI tool calls completed" (AE.object ["iteration" AE..= iteration, "toolCount" AE..= length toolResults, "resultsPreview" AE..= map (\r -> T.take 200 r.formatted) toolResults])
+      newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (responseMsg : zipWith mkToolResultMsg toolCallList toolResults)
+      runAgenticLoopRaw config openAI newMessages params (iteration + 1) (accumulated <> newToolInfos)
 
 
 -- | Create ToolCallInfo from a tool call and its result
@@ -691,45 +687,31 @@ mkToolCallInfo tc result =
     }
 
 
-runAgenticLoop
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> OpenAI.OpenAI
-  -> LLM.ChatHistory
-  -> OpenAIV1.CreateChatCompletion
-  -> Int
-  -> Eff es (Either Text ChatLLMResponse)
+runAgenticLoop :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> OpenAI.OpenAI -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> Eff es (Either Text LLMResponse)
 runAgenticLoop config openAI chatHistory params iteration
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
-      let paramsNoTools = params{OpenAIV1.tools = Nothing}
-      result <- liftIO $ LLM.chat openAI chatHistory (Just paramsNoTools)
-      case result of
-        Left err -> do
-          Log.logAttention "LLM API error in final iteration" (AE.object ["error" AE..= show @Text err])
-          pure $ Left "LLM service temporarily unavailable"
-        Right responseMsg -> do
-          Log.logTrace "AI final response received" (AE.object ["responseLength" AE..= T.length (LLM.content responseMsg)])
-          pure $ parseResponse $ LLM.content responseMsg
+      liftIO (LLM.chat openAI chatHistory $ Just params{OpenAIV1.tools = Nothing}) >>= either handleError \responseMsg -> do
+        Log.logTrace "AI final response" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
+        pure $ parseResponse $ LLM.content responseMsg
   | otherwise = do
-      Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory])
-      result <- liftIO $ LLM.chat openAI chatHistory (Just params)
-      case result of
-        Left err -> do
-          Log.logAttention "LLM API error in runAgenticLoop" (AE.object ["error" AE..= show @Text err])
-          pure $ Left "LLM service temporarily unavailable"
-        Right responseMsg -> case LLM.toolCalls (LLM.messageData responseMsg) of
-          Nothing -> do
-            Log.logTrace "AI response received (no tool calls)" (AE.object ["iteration" AE..= iteration, "responseLength" AE..= T.length (LLM.content responseMsg)])
-            pure $ parseResponse $ LLM.content responseMsg
-          Just toolCallList -> do
-            let toolNames = map (LLM.toolFunctionName . LLM.toolCallFunction) toolCallList
-            Log.logTrace "AI requesting tool calls" (AE.object ["iteration" AE..= iteration, "tools" AE..= toolNames])
-            toolResults <- traverse (executeToolCall config) toolCallList
-            let assistantMsg = responseMsg
-                toolMsgs = zipWith mkToolResultMsg toolCallList toolResults
-            newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (assistantMsg : toolMsgs)
-            runAgenticLoop config openAI newMessages params (iteration + 1)
+      let userQuery = maybe "" LLM.content $ lastMay $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
+      Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
+      liftIO (LLM.chat openAI chatHistory $ Just params) >>= either handleError \responseMsg ->
+        maybe (logFinalResponse responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
+  where
+    handleError err = Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err]) $> Left "LLM service temporarily unavailable"
+
+    logFinalResponse responseMsg = do
+      Log.logTrace "AI final response (no tool calls)" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
+      pure $ parseResponse $ LLM.content responseMsg
+
+    processToolCalls responseMsg toolCallList = do
+      Log.logTrace "AI requesting tool calls" (AE.object ["iteration" AE..= iteration, "tools" AE..= map (LLM.toolFunctionName . LLM.toolCallFunction) toolCallList])
+      toolResults <- traverse (executeToolCall config) toolCallList
+      Log.logTrace "AI tool calls completed" (AE.object ["iteration" AE..= iteration, "toolCount" AE..= length toolResults, "resultsPreview" AE..= map (\r -> T.take 200 r.formatted) toolResults])
+      newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (responseMsg : zipWith mkToolResultMsg toolCallList toolResults)
+      runAgenticLoop config openAI newMessages params (iteration + 1)
 
 
 mkToolResultMsg :: LLM.ToolCall -> ToolResult -> LLM.Message
@@ -744,16 +726,11 @@ mkToolResultMsg tc result =
 addMessagesToMemory :: Int -> LLM.ChatHistory -> [LLM.Message] -> IO LLM.ChatHistory
 addMessagesToMemory maxTokens history newMsgs = do
   let allMsgs = maybe history (history <>) (nonEmpty newMsgs)
-      memory = TokenBufferMemory{maxTokens, tokenBufferMessages = allMsgs}
-  result <- messages memory
+  result <- messages TokenBufferMemory{maxTokens, tokenBufferMessages = allMsgs}
   pure $ fromMaybe allMsgs (rightToMaybe result)
 
 
-executeToolCall
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> LLM.ToolCall
-  -> Eff es ToolResult
+executeToolCall :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> LLM.ToolCall -> Eff es ToolResult
 executeToolCall config tc = do
   let funcName = LLM.toolFunctionName (LLM.toolCallFunction tc)
       args = LLM.toolFunctionArguments (LLM.toolCallFunction tc)
@@ -780,11 +757,7 @@ toolError :: Text -> Text -> Map.Map Text AE.Value -> Text
 toolError tool msg args = "Error in " <> tool <> ": " <> msg <> " (received: " <> show (Map.keys args) <> ")"
 
 
-executeGetFieldValues
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Map.Map Text AE.Value
-  -> Eff es Text
+executeGetFieldValues :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeGetFieldValues config args = case getTextArg "field" args of
   Just field -> do
     let lim = getLimitArg "limit" config.limits.maxFieldValues config.limits.defaultFieldLimit args
@@ -801,11 +774,7 @@ executeGetServices config = do
     "Available services: " <> formatSummarizeResults results
 
 
-executeCountQuery
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Map.Map Text AE.Value
-  -> Eff es Text
+executeCountQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeCountQuery config args = case getTextArg "query" args of
   Just kqlQuery ->
     runKqlAndFormat config kqlQuery [] $ \(_, _, count) ->
@@ -813,11 +782,7 @@ executeCountQuery config args = case getTextArg "query" args of
   _ -> pure $ toolError "count_query" "missing 'query'" args
 
 
-executeSampleLogs
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Map.Map Text AE.Value
-  -> Eff es Text
+executeSampleLogs :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSampleLogs config args = case getTextArg "query" args of
   Just kqlQuery -> do
     let lim = getLimitArg "limit" config.limits.maxSampleLogs config.limits.defaultSampleLimit args
@@ -832,13 +797,7 @@ executeGetFacets :: AgenticConfig -> Text
 executeGetFacets config = maybe "No facet data available" formatFacetSummary config.facetContext
 
 
-runKqlWithRawData
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Text
-  -> [Text]
-  -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value))
-  -> Eff es ToolResult
+runKqlWithRawData :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> (Text, AE.Value)) -> Eff es ToolResult
 runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
   Left parseErr -> pure $ ToolResult ("Error: Query parse failed - " <> show parseErr) Nothing
   Right queryAST -> do
@@ -848,11 +807,7 @@ runKqlWithRawData config kqlQuery cols formatResult = case parseQueryToAST kqlQu
       Right res -> let (txt, raw) = formatResult res in ToolResult txt (Just raw)
 
 
-executeRunQuery
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Map.Map Text AE.Value
-  -> Eff es ToolResult
+executeRunQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es ToolResult
 executeRunQuery config args = case getTextArg "query" args of
   Just query -> do
     let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
@@ -864,11 +819,7 @@ executeRunQuery config args = case getTextArg "query" args of
   _ -> pure $ ToolResult (toolError "run_query" "missing 'query'" args) Nothing
 
 
-executeSqlQuery
-  :: DB es
-  => AgenticConfig
-  -> Map.Map Text AE.Value
-  -> Eff es Text
+executeSqlQuery :: DB es => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSqlQuery config args = case getTextArg "query" args of
   Just query -> do
     let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args
@@ -881,13 +832,7 @@ executeSqlQuery config args = case getTextArg "query" args of
   _ -> pure $ toolError "run_sql_query" "missing 'query'" args
 
 
-runKqlAndFormat
-  :: (DB es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Text
-  -> [Text]
-  -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text)
-  -> Eff es Text
+runKqlAndFormat :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> [Text] -> ((V.Vector (V.Vector AE.Value), [Text], Int) -> Text) -> Eff es Text
 runKqlAndFormat config kqlQuery cols formatResult = case parseQueryToAST kqlQuery of
   Left parseErr -> pure $ "Error: Query parse failed - " <> show parseErr
   Right queryAST -> do

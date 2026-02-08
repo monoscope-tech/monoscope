@@ -8,7 +8,6 @@ module Pages.Anomalies (
   unAcknowledgeAnomalyGetH,
   archiveAnomalyGetH,
   unArchiveAnomalyGetH,
-  anomalyListSlider,
   anomalyDetailGetH,
   AnomalyBulkForm (..),
   AnomalyListGet (..),
@@ -27,10 +26,13 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -44,20 +46,21 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
-import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields.Facets qualified as Facets
+import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
-import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Charts.Charts qualified as Charts
 import Pages.Components (emptyState_, resizer_, statBox_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
@@ -408,72 +411,15 @@ newtype AIChatForm = AIChatForm {query :: Text}
   deriving anyclass (FromForm)
 
 
--- | AI response structure from OpenAI
-data AIInvestigationResponse = AIInvestigationResponse
-  { explanation :: Maybe Text
-  , widgets :: Maybe [Widget.Widget]
-  , suggestedQuery :: Maybe Text
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
-
-
--- | Build comprehensive context for AI from issue, error, and trace data
-buildAIContext :: Issues.Issue -> Maybe Anomalies.ATError -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Text
-buildAIContext issue errM trDataM spans =
-  unlines
-    $ catMaybes
-      [ Just "## Issue Details"
-      , Just $ "- **Title**: " <> issue.title
-      , Just $ "- **Type**: " <> show issue.issueType
-      , Just $ "- **Severity**: " <> issue.severity
-      , Just $ "- **Service**: " <> issue.service
-      , Just $ "- **Affected Requests**: " <> show issue.affectedRequests
-      , Just $ "- **Affected Clients**: " <> show issue.affectedClients
-      , Just $ "- **Recommended Action**: " <> issue.recommendedAction
-      , errM >>= \err ->
-          Just
-            $ unlines
-              [ ""
-              , "## Error Details"
-              , "- **Error Type**: " <> err.errorType
-              , "- **Message**: " <> err.message
-              , "- **Stack Trace**:"
-              , "```"
-              , err.errorData.stackTrace
-              , "```"
-              , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-              , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-              , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-              ]
-      , trDataM >>= \tr ->
-          Just
-            $ unlines
-              [ ""
-              , "## Trace Context"
-              , "- **Trace ID**: " <> tr.traceId
-              , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
-              , "- **Span Count**: " <> show (V.length spans)
-              ]
-      , if V.null spans
-          then Nothing
-          else
-            Just
-              $ unlines
-                [ ""
-                , "## Span Breakdown"
-                , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
-                    "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
-                ]
-      ]
-
-
 -- | System prompt for anomaly investigation AI
-anomalySystemPrompt :: Text
-anomalySystemPrompt =
+anomalySystemPrompt :: UTCTime -> Text
+anomalySystemPrompt now =
   unlines
     [ "You are an expert debugging assistant helping to investigate application issues and anomalies."
     , "You have access to issue details, error information, stack traces, and trace data."
+    , ""
+    , "CURRENT TIME (UTC): " <> show now
+    , "Use this to interpret relative time requests (e.g., 'last 2 hours' → {\"since\": \"2H\"})"
     , ""
     , "When analyzing issues:"
     , "1. Explain the likely root cause based on the error type and stack trace"
@@ -493,120 +439,241 @@ anomalySystemPrompt =
     , ""
     , AI.kqlGuide
     , ""
-    , "Widget structure for visualizations:"
-    , "{ \"type\": \"logs|timeseries|timeseries_line|stat\","
-    , "  \"query\": \"KQL query string\","
-    , "  \"title\": \"Widget title\" }"
-    , ""
-    , "Respond with JSON in this structure:"
-    , "{"
-    , "  \"explanation\": \"Your detailed analysis and recommendations in markdown format\","
-    , "  \"widgets\": [optional array of widget configs],"
-    , "  \"suggestedQuery\": \"optional KQL query for further investigation\""
-    , "}"
-    , ""
-    , "Keep explanations concise but helpful. Use markdown formatting for readability."
-    , "IMPORTANT: Respond with valid JSON only, no code blocks or additional text."
+    , AI.outputFormatInstructions
     ]
 
 
 -- | Handle AI chat POST request
+-- Designed to power the AI chat in the anomalies page. The chat thread is loaded via htmx and theres an input which when submitted gets sent here.
 aiChatPostH :: Projects.ProjectId -> Issues.IssueId -> AIChatForm -> ATAuthCtx (RespHeaders (Html ()))
 aiChatPostH pid issueId form
-  | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing
+  | T.length form.query > 4000 = addRespHeaders $ aiChatResponse_ pid form.query "Query too long. Maximum 4000 characters allowed." Nothing Nothing Nothing
   | otherwise = do
-      (sess, project) <- Sessions.sessionAndProject pid
       appCtx <- ask @AuthContext
       now <- Time.currentTime
-
       let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
-      _ <- Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
-
+      void $ Issues.getOrCreateConversation pid convId Issues.CTAnomaly (AE.object ["issue_id" AE..= issueId])
       issueM <- Issues.selectIssueById issueId
-      case issueM of
-        Nothing -> do
-          let response = "Issue not found. Unable to analyze."
-          Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
-          Issues.insertChatMessage pid convId "assistant" response Nothing Nothing
-          addRespHeaders $ aiChatResponse_ pid form.query response Nothing Nothing
-        Just issue -> do
-          errorM <- case issue.issueType of
-            Issues.RuntimeException -> Anomalies.errorByHash pid issue.endpointHash
-            _ -> pure Nothing
+      maybe (respond Nothing convId "Issue not found. Unable to analyze." Nothing Nothing True) (processIssue appCtx now convId) issueM
+  where
+    respond systemPromptM convId response widgets toolCalls includeUserMsg = do
+      when includeUserMsg $ Issues.insertChatMessage pid convId "user" form.query Nothing Nothing
+      Issues.insertChatMessage pid convId "assistant" response (AE.toJSON <$> widgets) (AE.toJSON <$> toolCalls)
+      addRespHeaders $ aiChatResponse_ pid form.query response widgets toolCalls systemPromptM
 
-          (traceDataM, spans) <- case errorM of
-            Just err -> do
-              let targetTIdM = err.recentTraceId
-                  targetTime = zonedTimeToUTC err.updatedAt
-              case targetTIdM of
-                Just tId -> do
-                  trM <- Telemetry.getTraceDetails pid tId (Just targetTime) now
-                  case trM of
-                    Just trData -> do
-                      spanRecs <- Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
-                      pure (Just trData, V.fromList spanRecs)
-                    Nothing -> pure (Nothing, V.empty)
-                Nothing -> pure (Nothing, V.empty)
-            Nothing -> pure (Nothing, V.empty)
+    processIssue appCtx now convId issue = do
+      -- Build system prompt (shared logic)
+      fullSystemPrompt <- buildSystemPromptForIssue pid issue now
+      let systemPrompt = anomalySystemPrompt now
+          config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just systemPrompt}
+      result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
+      either
+        (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
+        (handleChatResult (Just fullSystemPrompt) convId)
+        result
 
-          let context = buildAIContext issue errorM traceDataM spans
-              issueContext = unlines ["--- ISSUE CONTEXT ---", context]
-              dayAgo = addUTCTime (-86400) now
-          facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-          let config =
-                (AI.defaultAgenticConfig pid)
-                  { AI.facetContext = facetSummaryM
-                  , AI.customContext = Just issueContext
-                  , AI.conversationId = Just convId
-                  , AI.conversationType = Just Issues.CTAnomaly
-                  , AI.systemPromptOverride = Just anomalySystemPrompt
-                  }
-
-          result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
-
-          case result of
-            Left err -> do
-              let errorResponse = "I encountered an error while analyzing this issue: " <> err
-              Issues.insertChatMessage pid convId "assistant" errorResponse Nothing Nothing
-              addRespHeaders $ aiChatResponse_ pid form.query errorResponse Nothing Nothing
-            Right chatResult -> do
-              let cleaned = AI.stripCodeBlock chatResult.response
-                  toolCallsInfo = chatResult.toolCalls
-                  metadata = if null toolCallsInfo then Nothing else Just $ AE.toJSON toolCallsInfo
-                  parsed = AE.eitherDecode (fromStrict $ encodeUtf8 cleaned) :: Either String AIInvestigationResponse
-              case parsed of
-                Left _ -> do
-                  Issues.insertChatMessage pid convId "assistant" chatResult.response Nothing metadata
-                  addRespHeaders $ aiChatResponse_ pid form.query chatResult.response Nothing (Just toolCallsInfo)
-                Right aiResp -> do
-                  let limitedWidgets = take 10 <$> aiResp.widgets
-                      hasWidgets = maybe False (not . null) limitedWidgets
-                      explanationText = case aiResp.explanation of
-                        Just t | not (T.null t) -> t
-                        _ | hasWidgets -> "Here are the requested visualizations:"
-                        _ -> chatResult.response
-                  Issues.insertChatMessage pid convId "assistant" explanationText (Just $ AE.toJSON limitedWidgets) metadata
-                  addRespHeaders $ aiChatResponse_ pid form.query explanationText limitedWidgets (Just toolCallsInfo)
+    handleChatResult systemPromptM convId chatResult =
+      either
+        (\_ -> respond systemPromptM convId chatResult.response Nothing (Just chatResult.toolCalls) False)
+        ( \aiResp ->
+            let ws = if null aiResp.widgets then Nothing else Just (take 10 aiResp.widgets)
+                txt = fromMaybe (bool chatResult.response "Here are the requested visualizations:" $ isJust ws) $ mfilter (not . T.null) aiResp.explanation
+             in respond systemPromptM convId txt ws (Just chatResult.toolCalls) False
+        )
+        (AI.parseAgenticResponse chatResult)
 
 
 -- | Handle AI chat history GET request
 aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
 aiChatHistoryGetH pid issueId = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
-  messages <- Issues.selectChatHistory convId
-  addRespHeaders $ aiChatHistoryView_ pid messages
+  now <- Time.currentTime
+  -- Get issue to build system prompt
+  issueM <- Issues.selectIssueById issueId
+  case issueM of
+    Nothing -> addRespHeaders $ aiChatHistoryView_ pid []
+    Just issue -> do
+      -- Build system prompt context (reuse logic from aiChatPostH)
+      systemPrompt <- buildSystemPromptForIssue pid issue now
+      -- Load chat history
+      let convId = UUIDId issueId.unUUIDId :: UUIDId "conversation"
+      messages <- Issues.selectChatHistory convId
+      -- Render with system prompt prepended
+      addRespHeaders $ aiChatHistoryWithSystemPrompt_ pid systemPrompt messages
+
+
+-- | Build complete system prompt for an issue (shared between POST and GET)
+buildSystemPromptForIssue :: Projects.ProjectId -> Issues.Issue -> UTCTime -> ATAuthCtx Text
+buildSystemPromptForIssue pid issue now = do
+  errorM <- bool (pure Nothing) (Anomalies.errorByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
+  (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) fetchTrace errorM
+  alertContextM <- case (issue.issueType, AE.fromJSON @Issues.QueryAlertData (getAeson issue.issueData)) of
+    (Issues.QueryAlert, AE.Success alertData) -> do
+      let twoDaysAgo = addUTCTime (-172800) now
+      monitorM <- runMaybeT do
+        monitorId <- MaybeT $ pure $ UUID.fromText alertData.queryId
+        MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
+      metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing []
+      pure $ Just (alertData, monitorM, metricsData)
+    _ -> pure Nothing
+  let issueContext = unlines ["--- ISSUE CONTEXT ---", buildAIContext issue errorM traceDataM spans alertContextM]
+      dayAgo = addUTCTime (-86400) now
+  facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+  let systemPrompt = anomalySystemPrompt now
+      fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
+  pure fullSystemPrompt
+  where
+    fetchTrace err = fromMaybe (Nothing, V.empty) <$> runMaybeT do
+      tId <- MaybeT $ pure err.recentTraceId
+      trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
+      spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
+      pure (Just trData, V.fromList spans)
+    buildAIContext issue errM trDataM spans alertContextM =
+      unlines
+        $ catMaybes
+          [ Just "## Issue Details"
+          , Just $ "- **Title**: " <> issue.title
+          , Just $ "- **Type**: " <> show issue.issueType
+          , Just $ "- **Severity**: " <> issue.severity
+          , Just $ "- **Service**: " <> issue.service
+          , Just $ "- **Affected Requests**: " <> show issue.affectedRequests
+          , Just $ "- **Affected Clients**: " <> show issue.affectedClients
+          , Just $ "- **Recommended Action**: " <> issue.recommendedAction
+          , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
+          , errM >>= \err ->
+              Just
+                $ unlines
+                  [ ""
+                  , "## Error Details"
+                  , "- **Error Type**: " <> err.errorType
+                  , "- **Message**: " <> err.message
+                  , "- **Stack Trace**:"
+                  , "```"
+                  , err.errorData.stackTrace
+                  , "```"
+                  , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+                  , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+                  , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
+                  ]
+          , trDataM >>= \tr ->
+              Just
+                $ unlines
+                  [ ""
+                  , "## Trace Context"
+                  , "- **Trace ID**: " <> tr.traceId
+                  , "- **Duration**: " <> show tr.traceDurationNs <> "ns"
+                  , "- **Span Count**: " <> show (V.length spans)
+                  ]
+          , if V.null spans
+              then Nothing
+              else
+                Just
+                  $ unlines
+                    [ ""
+                    , "## Span Breakdown"
+                    , unlines $ V.toList $ flip V.map (V.take 10 spans) $ \s ->
+                        "- " <> fromMaybe "unknown" s.name <> " (" <> maybe "n/a" show s.duration <> "ns)"
+                    ]
+          ]
+    formatCompleteAlertContext alertData monitorM metricsData =
+      unlines
+        $ catMaybes
+          [ Just ""
+          , Just "## Alert Configuration"
+          , Just ""
+          , Just "### Query & Thresholds"
+          , Just $ "- **Alert Query (KQL)**: `" <> alertData.queryExpression <> "`"
+          , Just $ "- **Alert Threshold**: " <> show alertData.thresholdValue <> " (trigger when " <> alertData.thresholdType <> ")"
+          , Just $ "- **Current Value**: " <> show alertData.actualValue
+          , Just $ "- **Triggered At**: " <> formatUTC alertData.triggeredAt
+          , Just ""
+          , Just "### Execution Schedule"
+          , monitorM <&> \m -> "- **Check Interval**: Every " <> show m.checkIntervalMins <> " minutes"
+          , monitorM <&> \m -> "- **Sustained Duration Required**: " <> show m.thresholdSustainedForMins <> " minutes (threshold must be exceeded for this long)"
+          , monitorM <&> \m -> "- **Last Evaluated**: " <> formatUTC m.lastEvaluated
+          , Just ""
+          , Just "### Trigger Conditions"
+          , monitorM <&> \m -> "- **Trigger Direction**: " <> bool "Alert when value EXCEEDS threshold (>)" "Alert when value DROPS BELOW threshold (<)" m.triggerLessThan
+          , monitorM >>= (.warningThreshold) <&> \wt -> "- **Warning Threshold**: " <> show wt <> " (warning level)"
+          , monitorM >>= (.alertRecoveryThreshold) <&> \art -> "- **Alert Recovery**: Alert clears when value returns to " <> show art
+          , monitorM >>= (.warningRecoveryThreshold) <&> \wrt -> "- **Warning Recovery**: Warning clears when value returns to " <> show wrt
+          , Just ""
+          , Just "### Current Status"
+          , monitorM <&> \m -> "- **Status**: " <> show m.currentStatus <> " (last check: " <> show m.currentValue <> ")"
+          , monitorM >>= (.alertLastTriggered) <&> \t -> "- **Last Alert Triggered**: " <> formatUTC t
+          , monitorM >>= (.warningLastTriggered) <&> \t -> "- **Last Warning Triggered**: " <> formatUTC t
+          , Just ""
+          , Just "### Notification Configuration"
+          , monitorM <&> \m -> "- **Alert Title**: " <> m.alertConfig.title
+          , monitorM <&> \m -> "- **Severity**: " <> m.alertConfig.severity
+          , monitorM <&> \m -> "- **Email Recipients**: " <> if m.alertConfig.emailAll then "All project members" else T.intercalate ", " (V.toList $ fmap CI.original m.alertConfig.emails)
+          , monitorM <&> \m -> if V.null m.alertConfig.slackChannels then "" else "- **Slack Channels**: " <> T.intercalate ", " (V.toList m.alertConfig.slackChannels)
+          , guard (metricsData.rowsCount > 0) $> formatQueryResults metricsData
+          , guard (metricsData.rowsCount == 0 && isNothing monitorM) $> "\n_Note: Monitor record was deleted. Only basic alert data available._"
+          ]
+    formatQueryResults md =
+      let timestampIdx = V.findIndex (== "timestamp") md.headers
+          formatRow row = V.imap formatCell row
+          formatCell idx cellM = case cellM of
+            Just n | Just idx == timestampIdx -> formatUTC $ POSIX.posixSecondsToUTCTime $ realToFrac n
+            Just val -> show val
+            Nothing -> "N/A"
+       in unlines
+            [ ""
+            , "## Alert Query Results"
+            , ""
+            , "Recent data points from the alert query (last " <> show (floor md.rowsCount :: Int) <> " measurements):"
+            , ""
+            , maybe "" formatQueryStats md.stats
+            , ""
+            , "| " <> T.intercalate " | " (V.toList md.headers) <> " |"
+            , "|" <> T.replicate (V.length md.headers) "-------|"
+            , T.unlines $ V.toList $ flip V.map (V.take 20 md.dataset) \row ->
+                "| " <> T.intercalate " | " (V.toList $ formatRow row) <> " |"
+            , if md.rowsCount > 20 then "... (" <> show (floor md.rowsCount - 20 :: Int) <> " more rows)" else ""
+            ]
+      where
+        formatQueryStats stats =
+          unlines
+            [ "**Statistics:**"
+            , "- Min: " <> show stats.min
+            , "- Max: " <> show stats.max
+            , "- Mean: " <> show stats.mean <> " (average)"
+            , "- Sum: " <> show stats.sum
+            , "- Count: " <> show stats.count <> " data points"
+            ]
+    formatFacetSummaryForAI summary =
+      let FacetData facetMap = summary.facetJson
+          formatField (fieldName, values) =
+            let topValues = take 10 values
+                formattedValues = map (\fv -> fv.value <> " (" <> show fv.count <> ")") topValues
+                valueStr = T.intercalate ", " formattedValues
+                ellipsis = if length values > 10 then ", ..." else ""
+             in "- " <> fieldName <> ": " <> valueStr <> ellipsis
+          sortedFields = sortOn (\(_, vs) -> negate $ sum $ map (.count) vs) $ HM.toList facetMap
+          topFields = take 30 sortedFields
+       in unlines
+            $ "Available telemetry fields (top values by frequency):"
+            : map formatField topFields
+              ++ if HM.size facetMap > 30 then ["... and " <> show (HM.size facetMap - 30) <> " more fields"] else []
 
 
 -- | Render a single chat response (user question + AI answer)
-aiChatResponse_ :: Projects.ProjectId -> Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Html ()
-aiChatResponse_ pid userQuery explanation widgetsM toolCallsM =
+aiChatResponse_ :: Projects.ProjectId -> Text -> Text -> Maybe [Widget.Widget] -> Maybe [AI.ToolCallInfo] -> Maybe Text -> Html ()
+aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
   div_ [class_ "surface-raised rounded-2xl p-6 animate-fade-in max-w-3xl mx-auto w-full"] do
     -- User question
     div_ [class_ "flex items-start gap-3 mb-4 pb-4 border-b border-strokeWeak"] do
       div_ [class_ "p-2 rounded-lg bg-fillWeak shrink-0"] $ faSprite_ "user" "regular" "w-4 h-4 text-iconNeutral"
       p_ [class_ "text-sm text-textStrong"] $ toHtml userQuery
-    -- Behind the scenes section (at top)
+    -- System prompt section (collapsed by default)
+    whenJust systemPromptM \systemPrompt ->
+      details_ [class_ "mb-4 border border-strokeWeak rounded-lg"] do
+        summary_ [class_ "cursor-pointer px-4 py-2 text-sm text-textWeak hover:bg-fillWeaker list-none flex items-center gap-2"] do
+          faSprite_ "terminal" "regular" "w-4 h-4"
+          "System Prompt"
+        div_ [class_ "px-4 py-3 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $ toHtml systemPrompt
+    -- Behind the scenes section (tool calls)
     whenJust toolCallsM \toolCalls ->
       unless (null toolCalls)
         $ details_ [class_ "mb-4 border border-strokeWeak rounded-lg"] do
@@ -679,7 +746,21 @@ toolDataToDataset json = flip parseMaybe json $ AE.withObject "RawData" \obj -> 
 aiChatHistoryView_ :: Projects.ProjectId -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryView_ pid msgs = forM_ (pairUserAssistant msgs) \(u, a) -> do
   let (explanation, widgets) = parseStoredContent a.content a.widgets
-  aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata)
+  aiChatResponse_ pid u.content explanation widgets (parseStoredJSON @[AI.ToolCallInfo] a.metadata) Nothing
+
+
+-- | Render chat history with system prompt as first message
+aiChatHistoryWithSystemPrompt_ :: Projects.ProjectId -> Text -> [Issues.AIChatMessage] -> Html ()
+aiChatHistoryWithSystemPrompt_ pid systemPrompt msgs = do
+  -- Render system prompt as first message (collapsed by default)
+  div_ [class_ "surface-raised rounded-2xl p-6 max-w-3xl mx-auto w-full mb-4"] do
+    details_ [class_ ""] do
+      summary_ [class_ "cursor-pointer flex items-center gap-2 text-sm font-medium text-textStrong hover:text-textBrand transition-colors"] do
+        faSprite_ "file-text" "regular" "w-4 h-4 text-iconInformation"
+        "System Prompt"
+      div_ [class_ "mt-3 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto border border-strokeWeak rounded-lg p-4 bg-fillWeaker/50"] $ toHtml systemPrompt
+  -- Render chat history
+  aiChatHistoryView_ pid msgs
 
 
 -- | Pair user messages with their following assistant responses, skipping unpaired
@@ -692,10 +773,9 @@ pairUserAssistant [] = []
 -- | Parse stored content - try JSON format first (stripping code blocks), fall back to plain text
 parseStoredContent :: Text -> Maybe (Aeson AE.Value) -> (Text, Maybe [Widget.Widget])
 parseStoredContent content storedWidgets =
-  let cleaned = AI.stripCodeBlock content
-   in case AE.eitherDecode (fromStrict $ encodeUtf8 cleaned) :: Either String AIInvestigationResponse of
-        Right aiResp -> (fromMaybe "" aiResp.explanation, aiResp.widgets)
-        Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
+  case AI.parseLLMResponse content of
+    Right aiResp -> (fromMaybe "" aiResp.explanation, if null aiResp.widgets then Nothing else Just aiResp.widgets)
+    Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
 -- | AI Chat Component with inline responses and floating input
@@ -855,7 +935,6 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                   }
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (Just "slider", Just "true", _, _) -> ALSlider currTime pid endpointM (Just $ V.fromList $ map (IssueVM True False currTime filterV) issues)
     (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = if totalCount > 0 then Just paginationConfig else Nothing}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
@@ -863,71 +942,12 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
 data AnomalyListGet
   = ALPage (PageCtx (Table IssueVM))
   | ALRows (TableRows IssueVM)
-  | ALSlider UTCTime Projects.ProjectId (Maybe Endpoints.EndpointId) (Maybe (V.Vector IssueVM))
 
 
 instance ToHtml AnomalyListGet where
-  toHtml (ALSlider utcTime pid eid issue) = toHtmlRaw $ anomalyListSlider utcTime pid eid issue
   toHtml (ALPage pg) = toHtml pg
   toHtml (ALRows rows) = toHtml rows
   toHtmlRaw = toHtml
-
-
-anomalyListSlider :: UTCTime -> Projects.ProjectId -> Maybe Endpoints.EndpointId -> Maybe (V.Vector IssueVM) -> Html ()
-anomalyListSlider _ _ _ (Just []) = ""
-anomalyListSlider _ pid eid Nothing = do
-  div_ [hxGet_ $ "/p/" <> pid.toText <> "/anomalies?layout=slider" <> maybe "" (\x -> "&endpoint=" <> x.toText) eid, hxSwap_ "outerHTML", hxTrigger_ "load"] do
-    div_ [class_ "flex justify-between mt-5 pb-2"] do
-      div_ [class_ "flex flex-row"] do
-        a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
-        span_ [class_ "text-lg text-textStrong"] "Ongoing Issues and Monitors"
-      div_ [class_ "flex flex-row mt-2"] ""
-anomalyListSlider currTime _ _ (Just issues) = do
-  let anomalyIds = T.replace "\"" "'" $ show $ fmap (Issues.issueIdText . (\(IssueVM _ _ _ _ issue) -> issue.id)) issues
-  let totalAnomaliesTxt = toText $ if length issues > 10 then ("10+" :: Text) else show (length issues)
-  div_ do
-    script_ """var rem = (x,y)=>((x%y)==0?1:(x%y));"""
-    script_
-      [type_ "text/hyperscript"]
-      [text| init set $$currentAnomaly to 0 then set $$anomalyIds to $anomalyIds
-          def setAnomalySliderPag()
-            set #anomalySliderPagination.innerHTML to ($$currentAnomaly+1)+'/$totalAnomaliesTxt '
-          end |]
-    div_ [class_ "flex justify-between mt-5 pb-2"] do
-      div_ [class_ "flex flex-row"] do
-        a_ [href_ "#", [__|on click toggle .neg-rotate-90 on me then toggle .hidden on (next .parent-slider)|]] $ faSprite_ "chevron-down" "regular" "h-4 mr-3 mt-1 w-4"
-        span_ [class_ "text-lg text-textStrong"] "Ongoing Issues and Monitors"
-      div_ [class_ "flex items-center gap-2 mt-2"] do
-        a_
-          [ class_ "cursor-pointer"
-          , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
-                          js($currentAnomaly, $anomalyIds) return (Math.max(0, $currentAnomaly-1) % $anomalyIds.length) end then
-                          set $currentAnomaly to it then show #{$anomalyIds[$currentAnomaly]} then setAnomalySliderPag()|]
-          ]
-          $ faSprite_ "arrow-left" "regular" "h-4 w-4"
-        span_ [src_ " mx-4", id_ "anomalySliderPagination"] "1/1"
-        a_
-          [ class_ "cursor-pointer"
-          , [__|on click hide #{$anomalyIds[$currentAnomaly]} then
-                js($currentAnomaly, $anomalyIds) return (($currentAnomaly+1) % $anomalyIds.length) end then
-                set $currentAnomaly to it then show #{$anomalyIds[$currentAnomaly]} then setAnomalySliderPag()|]
-          ]
-          $ faSprite_ "arrow-right" "regular" "h-4 w-4"
-
-    div_
-      [ class_ "parent-slider"
-      , [__|init setAnomalySliderPag() then show #{$anomalyIds[$currentAnomaly]} |]
-      ]
-      $ forM_ issues renderIssueForSlider
-  where
-    renderIssueForSlider vm@(IssueVM hideByDefault _ _ _ issue) =
-      renderRowWithColumns
-        [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
-        , style_ (if hideByDefault then "display:none" else "")
-        , id_ $ Issues.issueIdText issue.id
-        ]
-        (issueColumns issue.projectId)
-        vm
 
 
 anomalyAccentColor :: Bool -> Bool -> Text
@@ -1137,20 +1157,18 @@ renderPayloadChanges issue =
             [ role_ "tabpanel"
             , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-response:checked]/payloadtabs:block"
             ]
-            do
-              if null responseChanges
-                then div_ [class_ "text-center py-8 text-textWeak"] "No response payload changes"
-                else forM_ responseChanges (renderPayloadChange True)
+            $ if null responseChanges
+              then div_ [class_ "text-center py-8 text-textWeak"] "No response payload changes"
+              else forM_ responseChanges (renderPayloadChange True)
 
           -- Request panel (visible when request tab is selected)
           div_
             [ role_ "tabpanel"
             , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-request:checked]/payloadtabs:block"
             ]
-            do
-              if null requestChanges
-                then div_ [class_ "text-center py-8 text-textWeak"] "No request payload changes"
-                else forM_ requestChanges (renderPayloadChange False)
+            $ if null requestChanges
+              then div_ [class_ "text-center py-8 text-textWeak"] "No request payload changes"
+              else forM_ requestChanges (renderPayloadChange False)
 
 
 -- Render individual payload change

@@ -1,6 +1,6 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -12,7 +12,7 @@ import Data.Default (def)
 import Data.Effectful.Wreq (Options, header)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -35,7 +35,6 @@ import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
-import Utils qualified
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -283,19 +282,9 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-data AIQueryResult = AIQueryResult
-  { query :: Text
-  , visualization :: Maybe Text
-  , outputType :: AI.AIOutputType
-  , commentary :: Maybe Text
-  , fromTime :: Maybe UTCTime
-  , toTime :: Maybe UTCTime
-  , timeRangeStr :: (Text, Text)
-  }
-  deriving (Generic, Show)
 
 
-processAIQuery :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AIQueryResult)
+processAIQuery :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQuery pid userQuery threadCtx apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
@@ -306,14 +295,7 @@ processAIQuery pid userQuery threadCtx apiKey = do
     Left err -> do
       Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
       pure $ Left err
-    Right AI.ChatLLMResponse{..} ->
-      let from' = timeRange >>= viaNonEmpty head
-          to' = timeRange >>= viaNonEmpty last
-          (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
-          (from, to) = fromMaybe ("", "") rangeM
-          finalQuery = fromMaybe "" query
-          finalOutputType = fromMaybe AI.AOWidget outputType
-       in pure $ Right AIQueryResult{query = finalQuery, visualization, outputType = finalOutputType, commentary, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
+    Right resp -> pure $ Right resp
 
 
 formatThreadsWithMemory :: Int -> Text -> [LLM.Message] -> IO Text
