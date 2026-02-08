@@ -69,7 +69,6 @@ publishReplayEvent replayData pid = do
 replayPostH :: Projects.ProjectId -> ReplayPost -> ATBaseCtx AE.Value
 replayPostH pid body@ReplayPost{..} = do
   pubResult <- publishReplayEvent body pid
-  traceShowM pubResult
   case pubResult of
     Left errMsg -> pure $ AE.object ["status" AE..= ("warning" :: Text), "message" AE..= errMsg, "sessionId" AE..= sessionId]
     Right messageId -> do pure $ AE.object ["status" AE..= ("ok" :: Text), "messageId" AE..= messageId, "sessionId" AE..= sessionId]
@@ -91,9 +90,9 @@ processReplayEvents msgs attrs = do
 
 -- | Retrieve replay events from a single MinIO/S3 object (legacy format)
 getMinioFile :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Minio.Object -> Eff es AE.Array
-getMinioFile conn bucket object = do
+getMinioFile conn bucket objKey = do
   res <- liftIO $ Minio.runMinio conn do
-    src <- Minio.getObject bucket object Minio.defaultGetObjectOptions
+    src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
     let sld = Minio.gorObjectStream src
     bs <- runConduit $ sld .| CC.foldMap fromStrict
     case AE.eitherDecode bs of
@@ -154,11 +153,11 @@ saveReplayMinio envCfg (ackId, replayData) = do
           | otherwise -> do
               now <- liftIO getCurrentTime
               let timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
-                  object = fromString $ toString $ session <> "/" <> timeStr <> ".json"
+                  objKey = fromString $ toString $ session <> "/" <> timeStr <> ".json"
                   body = AE.encode (AE.Array newEvents)
                   bodySize = BL.length body
               res <- liftIO $ Minio.runMinio conn do
-                Minio.putObject bucket object (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
+                Minio.putObject bucket objKey (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
               case res of
                 Right _ -> pure $ Just ackId
                 Left err -> do
@@ -182,7 +181,6 @@ replaySessionGetH pid sessionId = do
           sessionStr = UUID.toText sessionId
 
       result <- liftIO $ tryAny $ runEff $ getSessionEvents conn bucket sessionStr
-      traceShowM result
       case result of
         Right replayEvents -> addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
         Left err -> do
