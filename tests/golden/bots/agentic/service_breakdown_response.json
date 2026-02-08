@@ -1,12 +1,11 @@
 {
-    "explanation": "This query retrieves the counts of log entries categorized as either 'WARN' or 'ERROR', grouped by the name of the service. This helps in identifying which services are generating warnings and errors.",
-    "query": "level in ('WARN', 'ERROR') | summarize count() by resource.service.name",
-    "visualization": "distribution",
-    "widgets": [
-        {
-            "query": "level in ('WARN', 'ERROR') | summarize count() by resource.service.name",
-            "title": "Warning and Error Counts by Service",
-            "type": "distribution"
-        }
-    ]
+    "explanation": "There are currently no warning or error entries logged in the system, implying that either the services are functioning correctly or the logging level may need adjustments to capture potential issues.",
+    "query": "",
+    "time_range": {
+        "from": null,
+        "since": null,
+        "to": null
+    },
+    "visualization": "",
+    "widgets": []
 }

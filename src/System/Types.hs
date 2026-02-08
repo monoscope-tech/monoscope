@@ -81,7 +81,8 @@ type HXReswap = Maybe Text
 
 
 type CommonWebEffects =
-  '[ Effectful.Reader.Static.Reader AuthContext
+  '[ ELLM.LLM
+   , Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
    , HTTP
    , WithConnection
@@ -122,6 +123,7 @@ atAuthToBase sessionWithCookies page =
 effToServantHandler :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandler env logger tp app =
   app
+    & ELLM.runLLMReal
     & Effectful.Reader.Static.runReader env
     & runUUID
     & runHTTPWreq
@@ -140,6 +142,7 @@ effToServantHandler env logger tp app =
 effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandlerTest env logger tp app =
   app
+    & ELLM.runLLMGolden "./golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
     & runHTTPGolden "./golden/"

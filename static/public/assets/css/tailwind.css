@@ -526,13 +526,13 @@
   }
 
   /* Enhanced focus visibility with offset */
-  :focus-visible {
-    outline: 2px solid var(--color-strokeFocus);
-    outline-offset: 2px;
-  }
-  .btn:focus-visible, .input:focus-visible, .select:focus-visible, .textarea:focus-visible {
-    outline-offset: 1px;
-  }
+  /* :focus-visible { */
+  /*   outline: 2px solid var(--color-strokeFocus); */
+  /*   outline-offset: 2px; */
+  /* } */
+  /* .btn:focus-visible, .input:focus-visible, .select:focus-visible, .textarea:focus-visible { */
+  /*   outline-offset: 1px; */
+  /* } */
 
   /* Progress bar subtle glow */
   .htmx-progress.htmx-request {

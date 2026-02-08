@@ -9,6 +9,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
+import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
@@ -282,7 +283,7 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQuery pid userQuery threadCtx apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now

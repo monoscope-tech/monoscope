@@ -1,5 +1,6 @@
 {
-    "query": "level == 'ERROR' | summarize count() by bin_auto(timestamp)",
+    "explanation": "This query will display the trend of error logs over time, allowing us to observe any patterns or spikes in error occurrences.",
+    "query": "level == \"ERROR\" | summarize count() by bin_auto(timestamp)",
     "time_range": {
         "from": null,
         "since": "2H",
@@ -8,7 +9,7 @@
     "visualization": "timeseries",
     "widgets": [
         {
-            "query": "level == 'ERROR' | summarize count() by bin_auto(timestamp)",
+            "query": "level == \"ERROR\" | summarize count() by bin_auto(timestamp)",
             "title": "Error Trend Over Time",
             "type": "timeseries"
         }

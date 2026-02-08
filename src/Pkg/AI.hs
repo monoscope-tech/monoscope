@@ -61,7 +61,6 @@ import Effectful.Log (Log)
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
-import Langchain.LLM.OpenAI qualified as OpenAI
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
@@ -614,11 +613,10 @@ parseResponse :: Text -> Either Text LLMResponse
 parseResponse = parseLLMResponse . stripCodeBlock
 
 
-runAgenticQuery :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Eff es (Either Text LLMResponse)
+runAgenticQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Eff es (Either Text LLMResponse)
 runAgenticQuery config userQuery apiKey = do
   now <- Time.currentTime
-  let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
-      sysPrompt = buildSystemPrompt config now
+  let sysPrompt = buildSystemPrompt config now
       systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       chatHistory = systemMsg :| [userMsg]
@@ -628,7 +626,7 @@ runAgenticQuery config userQuery apiKey = do
           , OpenAIV1.tools = Just $ V.fromList allToolDefs
           , OpenAIV1.messages = V.empty
           }
-  runAgenticLoop config openAI chatHistory params 0
+  runAgenticLoop config apiKey chatHistory params 0
 
 
 -- | Convert a DB chat message to an LLM message
@@ -647,15 +645,14 @@ dbMessageToLLMMessage msg =
 
 -- | Run agentic query with DB-persisted chat history
 runAgenticQueryWithHistory
-  :: (DB es, Log :> es, Time.Time :> es)
+  :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es)
   => AgenticConfig
   -> Text
   -> Text
   -> Eff es (Either Text LLMResponse)
 runAgenticQueryWithHistory config userQuery apiKey = do
   now <- Time.currentTime
-  let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
-      systemMsg = LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
+  let systemMsg = LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       params =
         OpenAIV1._CreateChatCompletion
@@ -664,12 +661,12 @@ runAgenticQueryWithHistory config userQuery apiKey = do
           , OpenAIV1.messages = V.empty
           }
   case config.conversationId of
-    Nothing -> runAgenticLoop config openAI (systemMsg :| [userMsg]) params 0
+    Nothing -> runAgenticLoop config apiKey (systemMsg :| [userMsg]) params 0
     Just convId -> do
       historyMsgs <- map dbMessageToLLMMessage <$> Issues.selectChatHistory convId
       let chatHistory = systemMsg :| (historyMsgs <> [userMsg])
       Issues.insertChatMessage config.projectId convId "user" userQuery Nothing Nothing
-      result <- runAgenticLoop config openAI chatHistory params 0
+      result <- runAgenticLoop config apiKey chatHistory params 0
       result <$ for_ result \resp -> for_ resp.query \q ->
         Issues.insertChatMessage config.projectId convId "assistant" q Nothing Nothing
 
@@ -677,15 +674,14 @@ runAgenticQueryWithHistory config userQuery apiKey = do
 -- | Run agentic chat with DB-persisted history, returns response with tool call info
 -- This is more flexible than runAgenticQueryWithHistory as it doesn't parse the response
 runAgenticChatWithHistory
-  :: (DB es, Log :> es, Time.Time :> es)
+  :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es)
   => AgenticConfig
   -> Text
   -> Text
   -> Eff es (Either Text AgenticChatResult)
 runAgenticChatWithHistory config userQuery apiKey = do
   now <- Time.currentTime
-  let openAI = OpenAI.OpenAI{apiKey = apiKey, callbacks = [], baseUrl = Nothing}
-      sysPrompt = buildSystemPrompt config now
+  let sysPrompt = buildSystemPrompt config now
       systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       params =
@@ -695,27 +691,27 @@ runAgenticChatWithHistory config userQuery apiKey = do
           , OpenAIV1.messages = V.empty
           }
   case config.conversationId of
-    Nothing -> runAgenticLoopRaw config openAI (systemMsg :| [userMsg]) params 0 []
+    Nothing -> runAgenticLoopRaw config apiKey (systemMsg :| [userMsg]) params 0 []
     Just convId -> do
       dbMessages <- Issues.selectChatHistory convId
       let historyMsgs = map dbMessageToLLMMessage dbMessages
           chatHistory = systemMsg :| (historyMsgs <> [userMsg])
       Issues.insertChatMessage config.projectId convId "user" userQuery Nothing Nothing
-      runAgenticLoopRaw config openAI chatHistory params 0 []
+      runAgenticLoopRaw config apiKey chatHistory params 0 []
 
 
 -- | Raw agentic loop that returns the response with tool call history
-runAgenticLoopRaw :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> OpenAI.OpenAI -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
-runAgenticLoopRaw config openAI chatHistory params iteration accumulated
+runAgenticLoopRaw :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> [ToolCallInfo] -> Eff es (Either Text AgenticChatResult)
+runAgenticLoopRaw config apiKey chatHistory params iteration accumulated
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
-      liftIO (LLM.chat openAI chatHistory $ Just params{OpenAIV1.tools = Nothing}) >>= either handleError \responseMsg -> do
+      ELLM.callAgenticChat chatHistory params{OpenAIV1.tools = Nothing} apiKey >>= either handleError \responseMsg -> do
         Log.logTrace "AI final response" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
         pure $ Right AgenticChatResult{response = LLM.content responseMsg, toolCalls = accumulated}
   | otherwise = do
       let userQuery = maybe "" LLM.content $ viaNonEmpty last $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
       Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
-      liftIO (LLM.chat openAI chatHistory $ Just params) >>= either handleError \responseMsg ->
+      ELLM.callAgenticChat chatHistory params apiKey >>= either handleError \responseMsg ->
         maybe (logFinalResponse responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
   where
     handleError err = Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err]) $> Left "LLM service temporarily unavailable"
@@ -730,7 +726,7 @@ runAgenticLoopRaw config openAI chatHistory params iteration accumulated
       let newToolInfos = zipWith mkToolCallInfo toolCallList toolResults
       Log.logTrace "AI tool calls completed" (AE.object ["iteration" AE..= iteration, "toolCount" AE..= length toolResults, "resultsPreview" AE..= map (\r -> T.take 200 r.formatted) toolResults])
       newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (responseMsg : zipWith mkToolResultMsg toolCallList toolResults)
-      runAgenticLoopRaw config openAI newMessages params (iteration + 1) (accumulated <> newToolInfos)
+      runAgenticLoopRaw config apiKey newMessages params (iteration + 1) (accumulated <> newToolInfos)
 
 
 -- | Create ToolCallInfo from a tool call and its result
@@ -744,17 +740,17 @@ mkToolCallInfo tc result =
     }
 
 
-runAgenticLoop :: (DB es, Log :> es, Time.Time :> es) => AgenticConfig -> OpenAI.OpenAI -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> Eff es (Either Text LLMResponse)
-runAgenticLoop config openAI chatHistory params iteration
+runAgenticLoop :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> LLM.ChatHistory -> OpenAIV1.CreateChatCompletion -> Int -> Eff es (Either Text LLMResponse)
+runAgenticLoop config apiKey chatHistory params iteration
   | iteration >= config.maxIterations = do
       Log.logTrace "AI agentic loop forcing final response" (AE.object ["iteration" AE..= iteration, "maxIterations" AE..= config.maxIterations])
-      liftIO (LLM.chat openAI chatHistory $ Just params{OpenAIV1.tools = Nothing}) >>= either handleError \responseMsg -> do
+      ELLM.callAgenticChat chatHistory params{OpenAIV1.tools = Nothing} apiKey >>= either handleError \responseMsg -> do
         Log.logTrace "AI final response" (AE.object ["iteration" AE..= iteration, "response" AE..= LLM.content responseMsg, "responseLength" AE..= T.length (LLM.content responseMsg)])
         pure $ parseResponse $ LLM.content responseMsg
   | otherwise = do
       let userQuery = maybe "" LLM.content $ viaNonEmpty last $ filter (\m -> LLM.role m == LLM.User) $ toList chatHistory
       Log.logTrace "AI agentic loop iteration" (AE.object ["iteration" AE..= iteration, "historySize" AE..= length chatHistory, "userQuery" AE..= userQuery])
-      liftIO (LLM.chat openAI chatHistory $ Just params) >>= either handleError \responseMsg ->
+      ELLM.callAgenticChat chatHistory params apiKey >>= either handleError \responseMsg ->
         maybe (logFinalResponse responseMsg) (processToolCalls responseMsg) (LLM.toolCalls $ LLM.messageData responseMsg)
   where
     handleError err = Log.logAttention "LLM API error" (AE.object ["error" AE..= show @Text err]) $> Left "LLM service temporarily unavailable"
@@ -768,7 +764,7 @@ runAgenticLoop config openAI chatHistory params iteration
       toolResults <- traverse (executeToolCall config) toolCallList
       Log.logTrace "AI tool calls completed" (AE.object ["iteration" AE..= iteration, "toolCount" AE..= length toolResults, "resultsPreview" AE..= map (\r -> T.take 200 r.formatted) toolResults])
       newMessages <- liftIO $ addMessagesToMemory config.limits.maxTokenBuffer chatHistory (responseMsg : zipWith mkToolResultMsg toolCallList toolResults)
-      runAgenticLoop config openAI newMessages params (iteration + 1)
+      runAgenticLoop config apiKey newMessages params (iteration + 1)
 
 
 mkToolResultMsg :: LLM.ToolCall -> ToolResult -> LLM.Message
