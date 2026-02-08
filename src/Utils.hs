@@ -96,7 +96,7 @@ import Pkg.THUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
 import Text.Printf (printf)
-import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
+import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))
 import Text.Regex.TDFA ((=~))
 import Text.Show
 import "base64" Data.ByteString.Base64 qualified as B64

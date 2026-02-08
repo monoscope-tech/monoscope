@@ -1,4 +1,4 @@
-module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage) where
+module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..)) where
 
 import Control.Lens ((?~))
 import Control.Lens.Setter ((.~))
@@ -19,8 +19,9 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
-import Pages.Bots.Utils (AIQueryResult (..), BotType (..), QueryIntent (..), botEmoji, detectReportIntent, formatReportForWhatsApp, handleTableResponse, processAIQuery, processReportQuery)
+import Pages.Bots.Utils (BotType (..), QueryIntent (..), botEmoji, detectReportIntent, formatReportForWhatsApp, handleTableResponse, processAIQuery, processReportQuery)
 import Pkg.AI qualified as AI
+import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -103,14 +104,19 @@ whatsappIncomingPostH val = do
           result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiApiKey
           case result of
             Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
-            Right AIQueryResult{..} -> do
-              let (from, to) = timeRangeStr
-              case outputType of
-                AI.AOText -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ fromMaybe "No insights available" commentary)
-                AI.AOWidget -> handleWidgetResponse now reqBody envCfg project query visualization from to fromTime toTime
-                AI.AOBoth -> do
-                  handleWidgetResponse now reqBody envCfg project query visualization from to fromTime toTime
-                  whenJust commentary \c -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just c)
+            Right resp -> do
+              let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+                  (from, to) = fromMaybe ("", "") rangeM
+                  query = fromMaybe "" resp.query
+                  hasQuery = isJust resp.query
+                  hasExplanation = isJust resp.explanation
+              case (hasQuery, hasExplanation) of
+                (False, True) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ fromMaybe "No insights available" resp.explanation)
+                (True, False) -> handleWidgetResponse now reqBody envCfg project query resp.visualization from to fromTimeM toTimeM
+                (True, True) -> do
+                  handleWidgetResponse now reqBody envCfg project query resp.visualization from to fromTimeM toTimeM
+                  whenJust resp.explanation $ sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText . Just
+                (False, False) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just "No response available")
 
     handleWidgetResponse now reqBody envCfg project query visualization from to fromTimeM toTimeM = case visualization of
       Just vizType -> do
@@ -168,7 +174,9 @@ getWhatsappList typ body vals' skip = AE.object $ ("1" AE..= body) : vars
     vals = V.map (first (T.take 24)) (V.drop skip vals')
     paddedVals =
       let missing = 3 - V.length vals
-          duplicates' = if V.length vals == 1 then V.replicate missing (V.head vals) else V.take missing vals
+          duplicates' = case vals V.!? 0 of
+            Just v | V.length vals == 1 -> V.replicate missing v
+            _ -> V.take missing vals
           duplicates = V.imap (\i (k, v) -> (k <> " " <> show (i + 1), v <> joiner <> show (i + 1))) duplicates'
        in if missing > 0
             then vals <> duplicates

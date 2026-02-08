@@ -10,6 +10,7 @@ module Pkg.TestUtils (
   TestRequestMessages (..),
   convert,
   runTestBackground,
+  runTestBackgroundWithNotifications,
   runTestBg,
   testServant,
   runAllBackgroundJobs,
@@ -39,7 +40,9 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs qualified
+import Configuration.Dotenv qualified as Dotenv
 import Control.Exception (finally, throwIO)
+import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -424,8 +427,9 @@ runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
   runTestBackgroundWithLogger logger authCtx action
 
 
-runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackgroundWithLogger logger appCtx process = do
+-- | Run background context and return both notifications and result
+runTestBackgroundWithNotifications :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithNotifications logger appCtx process = do
   tp <- getGlobalTracerProvider
   (notifications, result) <-
     process
@@ -442,6 +446,12 @@ runTestBackgroundWithLogger logger appCtx process = do
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Effectful.runEff
+  pure (notifications, result)
+
+
+runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackgroundWithLogger logger appCtx process = do
+  (notifications, result) <- runTestBackgroundWithNotifications logger appCtx process
   -- Log the notifications that would have been sent
   forM_ notifications \notification -> do
     let notifInfo = case notification of
@@ -502,10 +512,10 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   sessAndHeader <- testSessionHeader pool
   tp <- getGlobalTracerProvider
 
-  -- Load OpenAI API key from environment for tests
-  openaiKey <- fromMaybe "" <$> lookupEnv "OPENAI_API_KEY"
+  -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
+  _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
 
-  -- Load config from environment variables (including LOG_LEVEL)
+  -- Load config from environment variables
   envConfig <- decodeWithDefaults defConfig
 
   let atAuthCtx =
@@ -518,14 +528,16 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           logsPatternCache
           projectKeyCache
           ( envConfig
-              { apiKeyEncryptionSecretKey = "monoscope123456123456monoscope12"
+              { -- Override to ensure test database is used (never production DB from .env)
+                databaseUrl = "test-db-connection-from-pool"
+              , timefusionPgUrl = "test-db-connection-from-pool"
+              , apiKeyEncryptionSecretKey = "monoscope123456123456monoscope12"
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
-              , openaiApiKey = toText openaiKey
               }
           )
   f

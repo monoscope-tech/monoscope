@@ -1,0 +1,12 @@
+{
+    "explanation": "To determine which services are generating the most errors, we can count the number of error logs categorized by service name. This will give us a clear picture of which services are encountering issues most frequently.",
+    "query": "level == \"ERROR\" | summarize error_count = count() by resource.service.name | top 10 by error_count",
+    "visualization": "distribution",
+    "widgets": [
+        {
+            "query": "level == \"ERROR\" | summarize error_count = count() by resource.service.name | top 10 by error_count",
+            "title": "Top 10 Services by Error Count",
+            "type": "distribution"
+        }
+    ]
+}

@@ -21,6 +21,7 @@ static/public/assets/css/tailwind.min.css
 .hiedb
 dist-newstyle
 .env
+.env.prod
 .envx
 env
 apitoolkit-server-exe
