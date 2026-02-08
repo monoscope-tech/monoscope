@@ -45,6 +45,7 @@ whatsappIncomingPostH val = do
   let envCfg = authCtx.config
   let fromN = T.dropWhile (/= '+') val.from
   projectM <- Projects.getProjectByPhoneNumber fromN
+  Log.logTrace ("WhatsApp project lookup" :: Text) $ AE.object ["fromN" AE..= fromN, "found" AE..= isJust projectM]
   let bodyType = parseWhatsappBody val.body
   case projectM of
     Just p -> do

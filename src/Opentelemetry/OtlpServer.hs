@@ -225,7 +225,7 @@ processList msgs !attrs = checkpoint "processList" $ do
   endTime <- liftIO getCurrentTime
   let duration = diffUTCTime endTime startTime
       eventCount = length msgs
-  Log.logInfo
+  Log.logTrace
     "processList: batch processing completed"
     ( AE.object
         [ "ce-type" AE..= HashMap.lookup "ce-type" attrs
