@@ -1,11 +1,10 @@
 {-# LANGUAGE PackageImports #-}
 
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, AIQueryResult (..), processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
 
-import Control.Lens ((.~))
+import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
-import Data.Aeson.Key (fromText)
-import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
@@ -13,7 +12,7 @@ import Data.Default (def)
 import Data.Effectful.Wreq (Options, header)
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -36,7 +35,6 @@ import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
-import Utils qualified
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -192,7 +190,7 @@ widgetPngUrl secret hostUrl pid widget since from to =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
       encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
       sig = signWidgetUrl secret pid widgetJson
-      timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", from), ("to", to)] :: [(Text, Maybe Text)])
+      timeParams = mconcat $ catMaybes [("&since=" <>) <$> since, ("&from=" <>) <$> from, ("&to=" <>) <$> to]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000
         then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure ""
@@ -284,19 +282,7 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-data AIQueryResult = AIQueryResult
-  { query :: Text
-  , visualization :: Maybe Text
-  , outputType :: AI.AIOutputType
-  , commentary :: Maybe Text
-  , fromTime :: Maybe UTCTime
-  , toTime :: Maybe UTCTime
-  , timeRangeStr :: (Text, Text)
-  }
-  deriving (Generic, Show)
-
-
-processAIQuery :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AIQueryResult)
+processAIQuery :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AI.LLMResponse)
 processAIQuery pid userQuery threadCtx apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
@@ -307,14 +293,7 @@ processAIQuery pid userQuery threadCtx apiKey = do
     Left err -> do
       Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
       pure $ Left err
-    Right AI.ChatLLMResponse{..} ->
-      let from' = timeRange >>= viaNonEmpty head
-          to' = timeRange >>= viaNonEmpty last
-          (fromT, toT, rangeM) = Utils.parseTime from' to' Nothing now
-          (from, to) = fromMaybe ("", "") rangeM
-          finalQuery = fromMaybe "" query
-          finalOutputType = fromMaybe AI.AOWidget outputType
-       in pure $ Right AIQueryResult{query = finalQuery, visualization, outputType = finalOutputType, commentary, fromTime = fromT, toTime = toT, timeRangeStr = (from, to)}
+    Right resp -> pure $ Right resp
 
 
 formatThreadsWithMemory :: Int -> Text -> [LLM.Message] -> IO Text
@@ -455,15 +434,9 @@ formatReportForWhatsApp report pid envCfg =
 
 -- | Parse total events and errors from report JSON
 parseReportStats :: AE.Value -> (Int, Int)
-parseReportStats json = case json of
-  AE.Object o ->
-    let getTotal key = case KEM.lookup (fromText key) o of
-          Just (AE.Object inner) -> case KEM.lookup "total" inner of
-            Just (AE.Number n) -> round n
-            _ -> 0
-          _ -> 0
-     in (getTotal "events", getTotal "errors")
-  _ -> (0, 0)
+parseReportStats json = (getTotal "events", getTotal "errors")
+  where
+    getTotal k = fromMaybe 0 $ json ^? key k . key "total" . _Number <&> round
 
 
 -- | Format text response for different bot platforms

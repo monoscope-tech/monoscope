@@ -338,6 +338,7 @@ library
     , time
     , typed-process
     , tmp-postgres
+    , typed-process
     , unliftio
     , unordered-containers
     , uuid
@@ -454,6 +455,13 @@ test-suite integration-tests
       Opentelemetry.OtlpServerSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec
+      Pages.Bots.AgenticSpec
+      Pages.Bots.AnomalyNotificationSpec
+      Pages.Bots.BotFixtures
+      Pages.Bots.BotTestHelpers
+      Pages.Bots.DiscordSpec
+      Pages.Bots.SlackSpec
+      Pages.Bots.WhatsappSpec
       Pages.BusinessFlowsSpec
       Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec

@@ -234,6 +234,7 @@ library:
     - text
     - text-display
     - text-builder-linear
+    - typed-process
     - unliftio
     - time
     - unordered-containers

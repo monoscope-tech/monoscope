@@ -56,7 +56,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Relude.Unsafe as Unsafe (read)
 import Text.RE.Replace (matched)
-import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
+import Text.RE.TDFA (RE, re, (?=~))
 import Utils (DBField (), replaceAllFormats, toXXHash)
 
 

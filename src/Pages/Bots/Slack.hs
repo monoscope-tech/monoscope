@@ -37,8 +37,9 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (AIQueryResult (..), BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForSlack, formatTextResponse, getLoadingMessage, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForSlack, formatTextResponse, getLoadingMessage, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
+import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
@@ -50,6 +51,7 @@ import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
+import Utils qualified
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -198,23 +200,31 @@ slackInteractionsH interaction = do
               let resp = formatBotError Slack ServiceError
               Log.logTrace ("Slack followup response (AI error)" :: Text) resp
               sendSlackFollowupResponse inter.response_url resp
-            Right AIQueryResult{..} -> do
-              Log.logTrace ("Slack AI query result" :: Text) $ AE.object ["query" AE..= query, "visualization" AE..= visualization, "outputType" AE..= show outputType, "commentary" AE..= commentary]
-              let (from, to) = timeRangeStr
-              case outputType of
-                AI.AOText -> do
-                  let resp = formatTextResponse Slack (fromMaybe "No insights available" commentary)
-                  Log.logTrace ("Slack followup response (text)" :: Text) resp
-                  sendSlackFollowupResponse inter.response_url resp
-                AI.AOWidget -> handleWidgetResponse envCfg inter slackData query visualization from to fromTime toTime
-                AI.AOBoth -> do
-                  handleWidgetResponse envCfg inter slackData query visualization from to fromTime toTime
-                  whenJust commentary \c -> do
-                    let resp = formatTextResponse Slack c
-                    Log.logTrace ("Slack followup response (commentary)" :: Text) resp
-                    sendSlackFollowupResponse inter.response_url resp
+            Right resp -> do
+              now <- Time.currentTime
+              let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+                  (from, to) = fromMaybe ("", "") rangeM
+                  query = fromMaybe "" resp.query
+                  hasQuery = isJust resp.query
+                  hasExplanation = isJust resp.explanation
+              Log.logTrace ("Slack AI query result" :: Text) $ AE.object ["query" AE..= resp.query, "visualization" AE..= resp.visualization, "hasQuery" AE..= hasQuery, "hasExplanation" AE..= hasExplanation]
+              case (hasQuery, hasExplanation) of
+                (False, True) -> do
+                  let response = formatTextResponse Slack (fromMaybe "No insights available" resp.explanation)
+                  Log.logTrace ("Slack followup response (text)" :: Text) response
+                  sendSlackFollowupResponse inter.response_url response
+                (True, False) -> handleWidgetResponse envCfg inter slackData query resp.visualization from to fromTimeM toTimeM
+                (True, True) -> do
+                  handleWidgetResponse envCfg inter slackData query resp.visualization from to fromTimeM toTimeM
+                  whenJust resp.explanation \c -> do
+                    let response = formatTextResponse Slack c
+                    Log.logTrace ("Slack followup response (commentary)" :: Text) response
+                    sendSlackFollowupResponse inter.response_url response
+                (False, False) -> do
+                  let response = formatTextResponse Slack "No response available"
+                  sendSlackFollowupResponse inter.response_url response
 
-    handleWidgetResponse envCfg inter slackData query visualization from to fromTime toTime = case visualization of
+    handleWidgetResponse envCfg inter slackData query visualization from to fromTimeM toTimeM = case visualization of
       Just vizType -> do
         let wType = Widget.mapChatTypeToWidgetType vizType
             chartType = Widget.mapWidgetTypeToChartType wType
@@ -230,7 +240,7 @@ slackInteractionsH interaction = do
           Log.logTrace ("Slack followup response (parse error)" :: Text) resp
           sendSlackFollowupResponse inter.response_url resp
         Right query' -> do
-          tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTime, toTime) [] Nothing Nothing
+          tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
           let resp = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
           Log.logTrace ("Slack followup response (table)" :: Text) resp
           _ <- sendSlackFollowupResponse inter.response_url resp
@@ -640,19 +650,25 @@ slackEventsPostH payload = do
       result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiApiKey
       case result of
         Left _ -> sendSlackChatMessage envCfg.slackBotToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
-        Right AIQueryResult{..} -> do
+        Right resp -> do
           -- Save user message and bot response to DB
           Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing
-          Issues.insertChatMessage slackData.projectId convId "assistant" query Nothing Nothing
+          whenJust resp.query \q -> Issues.insertChatMessage slackData.projectId convId "assistant" q Nothing Nothing
 
-          let (from, to) = timeRangeStr
+          now <- Time.currentTime
+          let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+              (from, to) = fromMaybe ("", "") rangeM
+              query = fromMaybe "" resp.query
+              hasQuery = isJust resp.query
+              hasExplanation = isJust resp.explanation
               addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
-          case outputType of
-            AI.AOText -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack (fromMaybe "No insights available" commentary)
-            AI.AOWidget -> handleWidgetResponse envCfg slackData event query visualization from to fromTime toTime threadTs
-            AI.AOBoth -> do
-              handleWidgetResponse envCfg slackData event query visualization from to fromTime toTime threadTs
-              whenJust commentary \c -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack c
+          case (hasQuery, hasExplanation) of
+            (False, True) -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack (fromMaybe "No insights available" resp.explanation)
+            (True, False) -> handleWidgetResponse envCfg slackData event query resp.visualization from to fromTimeM toTimeM threadTs
+            (True, True) -> do
+              handleWidgetResponse envCfg slackData event query resp.visualization from to fromTimeM toTimeM threadTs
+              whenJust resp.explanation \c -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack c
+            (False, False) -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack "No response available"
 
     handleWidgetResponse envCfg slackData event query visualization from to fromTimeM toTimeM threadTs = case visualization of
       Just vizType -> do

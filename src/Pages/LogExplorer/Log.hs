@@ -882,13 +882,12 @@ aiSearchH pid requestBody = do
             Left errMsg -> do
               addErrorToast "AI search failed" (Just errMsg)
               throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-            Right AI.ChatLLMResponse{..} -> do
+            Right resp -> do
               addRespHeaders
                 $ AE.object
-                  [ "query" AE..= query
-                  , "visualization_type" AE..= visualization
-                  , "commentary" AE..= commentary
-                  , "output_type" AE..= outputType
+                  [ "query" AE..= resp.query
+                  , "visualization_type" AE..= resp.visualization
+                  , "commentary" AE..= resp.explanation
                   ]
 
 

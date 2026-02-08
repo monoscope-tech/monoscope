@@ -1,0 +1,29 @@
+{
+    "blocks": [
+        {
+            "text": {
+                "emoji": true,
+                "text": "🟢 Notification channel set",
+                "type": "plain_text"
+            },
+            "type": "header"
+        },
+        {
+            "text": {
+                "text": "*#general* will now receive:",
+                "type": "mrkdwn"
+            },
+            "type": "section"
+        },
+        {
+            "text": {
+                "text": "• 🔴 Error alerts\n• 📊 Daily & weekly reports\n• 🟡 Anomaly detections",
+                "type": "mrkdwn"
+            },
+            "type": "section"
+        }
+    ],
+    "delete_original": true,
+    "replace_original": true,
+    "response_type": "in_channel"
+}

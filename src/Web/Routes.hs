@@ -46,7 +46,6 @@ import Web.Cookie (SetCookie)
 -- System and configuration imports
 import Deriving.Aeson qualified as DAE
 import Pages.Bots.Utils (verifyWidgetSignature)
-import Pkg.Components.TimePicker qualified as TimePicker
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
@@ -72,7 +71,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Users.Users qualified as Users
-import UnliftIO.Exception (try)
+import UnliftIO.Exception (handle)
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
@@ -609,11 +608,10 @@ statusH :: ATBaseCtx Status
 statusH = do
   let q = [sql| select version(); |]
   versionM <- listToMaybe <$> PG.query_ q
-  let version = versionM <&> \(PGS.Only v) -> v
   let gi = $$tGitInfoCwd
   pure
     Status
-      { dbVersion = version
+      { dbVersion = versionM <&> \(PGS.Only v) -> v
       , gitHash = toText $ giHash gi
       , gitCommitDate = toText $ giCommitDate gi
       }
@@ -624,53 +622,46 @@ pingH = pure "pong"
 
 
 avatarGetH :: Users.UserId -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-avatarGetH userId = do
-  userM <- Users.userById userId
-  case userM of
-    Nothing -> fetchGravatar "" "?"
-    Just user -> do
-      let imageUrl = user.displayImageUrl
-          email = CI.original user.email
-      if T.null imageUrl
-        then fetchGravatar email (user.firstName <> " " <> user.lastName)
-        else do
-          result <- try $ Wreq.get (toString imageUrl)
-          case result of
-            Right resp -> do
-              let body = resp ^. Wreq.responseBody
-              pure $ addHeader @"Cache-Control" "public, max-age=604800, immutable" $ addHeader @"Content-Type" "image/jpeg" body
-            Left (_ :: SomeException) -> fetchGravatar email (user.firstName <> " " <> user.lastName)
+avatarGetH userId =
+  Users.userById userId >>= maybe (fetchGravatar "" "?") \user ->
+    let email = CI.original user.email
+        name = user.firstName <> " " <> user.lastName
+     in if T.null user.displayImageUrl
+          then fetchGravatar email name
+          else fetchImage user.displayImageUrl "image/jpeg" "public, max-age=604800, immutable" (fetchGravatar email name)
   where
-    fetchGravatar email name = do
-      let emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ T.toLower email
-          sanitizedName = T.replace " " "+" name
-          gravatarUrl = "https://www.gravatar.com/avatar/" <> emailMd5 <> "?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/" <> sanitizedName <> "/128"
-      result <- try $ Wreq.get (toString gravatarUrl)
-      case result of
-        Right resp -> do
-          let body = resp ^. Wreq.responseBody
-          pure $ addHeader @"Cache-Control" "public, max-age=604800" $ addHeader @"Content-Type" "image/png" body
-        Left (_ :: SomeException) -> pure $ addHeader @"Cache-Control" "public, max-age=60" $ addHeader @"Content-Type" "image/png" ""
+    fetchGravatar email name =
+      fetchImage
+        (mkGravatarUrl email name)
+        "image/png"
+        "public, max-age=604800"
+        (pure $ addImageHeaders "image/png" "public, max-age=60" "")
+
+    fetchImage url ct cache fallback =
+      handle
+        (\(_ :: SomeException) -> fallback)
+        (Wreq.get (toString url) <&> addImageHeaders ct cache . (^. Wreq.responseBody))
+
+    toMd5 msg = decodeUtf8 $ MD5.hash $ encodeUtf8 $ T.toLower msg
+    mkGravatarUrl email name = "https://www.gravatar.com/avatar/" <> toMd5 email <> "?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/" <> T.replace " " "+" name <> "/128"
+    addImageHeaders ct cache body = addHeader @"Cache-Control" cache $ addHeader @"Content-Type" ct body
 
 
 -- Widget GET handler that accepts dashboard parameters
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
-  let v = fromMaybe "" widgetJsonM
-  widget <- case AE.eitherDecode (encodeUtf8 v) of
-    Right w -> pure w
-    Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
-
+  widget <-
+    AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJsonM)
+      & either (\_ -> Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   now <- Time.currentTime
   let widgetWithPid = widget & #_projectId ?~ pid
-
+      isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
   processedWidget <-
-    if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
+    if isEager
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
-      else do
-        metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
-        pure $ widgetWithPid & #dataset ?~ Widget.toWidgetDataset metricsD
-
+      else
+        Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
+          <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
   addRespHeaders processedWidget
 
 
@@ -683,39 +674,27 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allPa
       height = clamp (100, 2000) $ fromMaybe 300 heightM
 
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
+  whenLeft_ (verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
 
-  whenLeft_ (verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err ->
-    Error.throwError $ err403{errBody = err}
+  widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
+  processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
 
-  widget <- case AE.eitherDecode (encodeUtf8 v) of
-    Right w -> pure w
-    Left _ -> Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
-
-  let widgetWithPid = widget & #_projectId ?~ pid & #eager ?~ True
-  processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widgetWithPid
-  let staticWidget = processedWidget & #_staticRender ?~ True
-      input =
+  let input =
         AE.encode
           $ AE.object
-            [ "echarts" AE..= Widget.widgetToECharts staticWidget
+            [ "echarts" AE..= Widget.widgetToECharts (processedWidget & #_staticRender ?~ True)
             , "width" AE..= width
             , "height" AE..= height
             , "theme" AE..= fromMaybe "default" processedWidget.theme
             ]
-      processConfig = setStdin (byteStringInput input) $ proc "./chart-cli" []
-      timeoutMicros = 30000000 -- 30 seconds
-  resultM <- liftIO $ timeout timeoutMicros $ readProcess processConfig
-  pngBytes <- case resultM of
-    Nothing -> do
-      Log.logAttention "widgetPngGetH: chart render timed out" $ AE.object ["widgetId" AE..= processedWidget.id, "width" AE..= width, "height" AE..= height]
-      Error.throwError $ err504{errBody = "Chart rendering timed out"}
-    Just (ExitSuccess, bytes, _) -> pure bytes
-    Just (ExitFailure code, _, errOut) -> do
-      Log.logAttention "widgetPngGetH: chart render failed" $ AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id]
-      Error.throwError $ err500{errBody = "Chart rendering failed"}
 
-  let cacheHeader = if isJust fromDStr && isJust toDStr then "public, max-age=31536000, immutable" else "public, max-age=300"
-  pure $ addHeader @"Cache-Control" cacheHeader $ addHeader @"Content-Type" "image/png" pngBytes
+  pngBytes <-
+    liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc "./chart-cli" []) >>= \case
+      Nothing -> Error.throwError err504{errBody = "Chart rendering timed out"} <* Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= processedWidget.id, "width" AE..= width, "height" AE..= height])
+      Just (ExitSuccess, bytes, _) -> pure bytes
+      Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id])
+
+  pure $ addHeader @"Cache-Control" (bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) $ addHeader @"Content-Type" "image/png" pngBytes
 
 
 -- flamegraph GET handler
@@ -725,28 +704,21 @@ flamegraphGetH pid trId shapeViewM = do
   spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
   let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList spanRecords'
       serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
-  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
-  sp <- case shapeViewM of
-    Just _ -> do
-      shapesAvgs <- Telemetry.getTraceShapes pid $ V.singleton trId
-      let spansJson =
-            ( \x ->
-                let targ = find (\(_, n, _, _) -> n == x.spanName) shapesAvgs
-                 in getSpanJson targ x
-            )
-              <$> spanRecords
-      pure spansJson
-    Nothing -> do
-      let spansJson = getSpanJson Nothing <$> spanRecords
-      pure spansJson
+      colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
+
+  sp <-
+    maybe
+      (pure $ getSpanJson Nothing <$> spanRecords)
+      (\_ -> Telemetry.getTraceShapes pid (V.singleton trId) <&> \shapesAvgs -> (\x -> getSpanJson (find (\(_, n, _, _) -> n == x.spanName) shapesAvgs) x) <$> spanRecords)
+      shapeViewM
+
   let spjson = decodeUtf8 $ AE.encode sp
   addRespHeaders $ do
     div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ "time-container"] pass
     div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> trId] pass
-    div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
-      div_ [class_ "relative h-full"] do
-        div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
-        div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
+    div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] $ div_ [class_ "relative h-full"] $ do
+      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
+      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
     script_ [text|flameGraphChart($spjson, "a$trId", $colorsJson);|]
 
 
