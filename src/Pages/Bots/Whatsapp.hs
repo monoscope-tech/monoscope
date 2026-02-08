@@ -7,6 +7,7 @@ import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
@@ -105,23 +106,24 @@ whatsappIncomingPostH val = do
           case result of
             Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
             Right resp -> do
-              let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
-                  (from, to) = fromMaybe ("", "") rangeM
+              let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
                   query = fromMaybe "" resp.query
                   hasQuery = isJust resp.query
                   hasExplanation = isJust resp.explanation
               case (hasQuery, hasExplanation) of
                 (False, True) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ fromMaybe "No insights available" resp.explanation)
-                (True, False) -> handleWidgetResponse now reqBody envCfg project query resp.visualization from to fromTimeM toTimeM
+                (True, False) -> handleWidgetResponse now reqBody envCfg project query resp.visualization fromTimeM toTimeM
                 (True, True) -> do
-                  handleWidgetResponse now reqBody envCfg project query resp.visualization from to fromTimeM toTimeM
+                  handleWidgetResponse now reqBody envCfg project query resp.visualization fromTimeM toTimeM
                   whenJust resp.explanation $ sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText . Just
                 (False, False) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just "No response available")
 
-    handleWidgetResponse now reqBody envCfg project query visualization from to fromTimeM toTimeM = case visualization of
+    handleWidgetResponse now reqBody envCfg project query visualization fromTimeM toTimeM = case visualization of
       Just vizType -> do
         let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-            opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
+            fromISO = maybe "" (toText . iso8601Show) fromTimeM
+            toISO = maybe "" (toText . iso8601Show) toTimeM
+            opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr fromISO <> "&to=" <> toUriStr toISO
             query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
             content' = getBotContent reqBody.body query query_url opts
         _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
