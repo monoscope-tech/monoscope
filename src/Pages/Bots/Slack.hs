@@ -662,7 +662,7 @@ slackEventsPostH payload = do
             (True, False) -> handleWidgetResponse envCfg slackData event query resp.visualization from to fromTimeM toTimeM threadTs
             (True, True) -> do
               handleWidgetResponse envCfg slackData event query resp.visualization from to fromTimeM toTimeM threadTs
-              whenJust resp.explanation \c -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack c
+              whenJust resp.explanation $ sendSlackChatMessage envCfg.slackBotToken . addThread . formatTextResponse Slack
             (False, False) -> sendSlackChatMessage envCfg.slackBotToken $ addThread $ formatTextResponse Slack "No response available"
 
     handleWidgetResponse envCfg slackData event query visualization from to fromTimeM toTimeM threadTs = case visualization of

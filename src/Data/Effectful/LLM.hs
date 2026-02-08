@@ -4,7 +4,6 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE RankNTypes #-}
 {-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE StandaloneDeriving #-}
 {-# LANGUAGE TypeOperators #-}
 
 module Data.Effectful.LLM (
@@ -182,7 +181,7 @@ hashCacheKey messages model hasTools =
 
 -- Helper to check if CreateChatCompletion has tools (via JSON inspection)
 hasToolsInParams :: OpenAIV1.CreateChatCompletion -> Bool
-hasToolsInParams p = isJust $ (AE.toJSON p) ^? key "tools"
+hasToolsInParams p = isJust $ AE.toJSON p ^? key "tools"
 
 
 -- | Get or create a golden response for an agentic chat call

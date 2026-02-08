@@ -115,7 +115,7 @@ whatsappIncomingPostH val = do
                 (True, False) -> handleWidgetResponse now reqBody envCfg project query resp.visualization from to fromTimeM toTimeM
                 (True, True) -> do
                   handleWidgetResponse now reqBody envCfg project query resp.visualization from to fromTimeM toTimeM
-                  whenJust resp.explanation \c -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just c)
+                  whenJust resp.explanation $ sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText . Just
                 (False, False) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just "No response available")
 
     handleWidgetResponse now reqBody envCfg project query visualization from to fromTimeM toTimeM = case visualization of

@@ -511,7 +511,7 @@ buildSystemPromptForIssue pid issue now = do
     (Issues.QueryAlert, AE.Success alertData) -> do
       let twoDaysAgo = addUTCTime (-172800) now
       monitorM <- runMaybeT do
-        monitorId <- MaybeT $ pure $ UUID.fromText alertData.queryId
+        monitorId <- MaybeT . pure $ UUID.fromText alertData.queryId
         MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
       metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing []
       pure $ Just (alertData, monitorM, metricsData)
@@ -525,7 +525,7 @@ buildSystemPromptForIssue pid issue now = do
   where
     fetchTrace err =
       fromMaybe (Nothing, V.empty) <$> runMaybeT do
-        tId <- MaybeT $ pure err.recentTraceId
+        tId <- MaybeT . pure $ err.recentTraceId
         trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
         spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
         pure (Just trData, V.fromList spans)
@@ -614,7 +614,7 @@ buildSystemPromptForIssue pid issue now = do
           ]
     formatQueryResults md =
       let timestampIdx = V.findIndex (== "timestamp") md.headers
-          formatRow row = V.imap formatCell row
+          formatRow = V.imap formatCell
           formatCell idx cellM = case cellM of
             Just n | Just idx == timestampIdx -> formatUTC $ POSIX.posixSecondsToUTCTime $ realToFrac n
             Just val -> show val
@@ -629,7 +629,7 @@ buildSystemPromptForIssue pid issue now = do
             , ""
             , "| " <> T.intercalate " | " (V.toList md.headers) <> " |"
             , "|" <> T.replicate (V.length md.headers) "-------|"
-            , T.unlines $ V.toList $ flip V.map (V.take 20 md.dataset) \row ->
+            , unlines $ V.toList $ flip V.map (V.take 20 md.dataset) \row ->
                 "| " <> T.intercalate " | " (V.toList $ formatRow row) <> " |"
             , if md.rowsCount > 20 then "... (" <> show (floor md.rowsCount - 20 :: Int) <> " more rows)" else ""
             ]
@@ -656,7 +656,7 @@ buildSystemPromptForIssue pid issue now = do
        in unlines
             $ "Available telemetry fields (top values by frequency):"
             : map formatField topFields
-              ++ if HM.size facetMap > 30 then ["... and " <> show (HM.size facetMap - 30) <> " more fields"] else []
+              ++ ["... and " <> show (HM.size facetMap - 30) <> " more fields" | HM.size facetMap > 30]
 
 
 -- | Render a single chat response (user question + AI answer)
@@ -699,7 +699,7 @@ toolCallView_ tc =
   div_ [class_ "flex flex-col gap-1 py-2 border-b border-strokeWeak last:border-0"] do
     div_ [class_ "flex items-center gap-2 flex-wrap"] do
       span_ [class_ "font-mono text-xs px-2 py-0.5 bg-fillWeak rounded"] $ toHtml tc.name
-      whenJust (Map.lookup "query" tc.args) \q -> span_ [class_ "text-xs text-textWeak break-all"] $ toHtml $ show q
+      whenJust (Map.lookup "query" tc.args) $ span_ [class_ "text-xs text-textWeak break-all"] . toHtml . show
     unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
 
 
@@ -730,7 +730,7 @@ findToolCallData toolCalls widgetQuery = listToMaybe [rd | tc <- toolCalls, tc.n
 
 -- | Normalize query for comparison (remove whitespace variations)
 normalizeQuery :: Text -> Text
-normalizeQuery = T.unwords . T.words
+normalizeQuery = unwords . words
 
 
 -- | Convert tool call raw data to WidgetDataset

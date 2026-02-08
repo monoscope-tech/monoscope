@@ -263,7 +263,7 @@ discordInteractionsH rawBody signatureM timestampM = do
               case (interaction.channel_id, interaction.guild_id) of
                 (Just channelId, Just guildId) -> do
                   _ <- updateDiscordNotificationChannel guildId channelId
-                  pure $ hereSuccessResponse
+                  pure hereSuccessResponse
                 _ -> pure $ contentResponse "No channel ID provided"
             "dashboard" -> do
               handleDashboard options interaction envCfg authCtx discordData
@@ -371,7 +371,7 @@ sendDiscordResponse options interaction envCfg authCtx discordData resp now =
         (True, False) -> handleWidgetResponse query fromTimeM toTimeM from to
         (True, True) -> do
           handleWidgetResponse query fromTimeM toTimeM from to
-          whenJust resp.explanation \c -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord c
+          whenJust resp.explanation $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken . formatTextResponse Discord
         (False, False) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord "No response available"
   where
     handleWidgetResponse query fromTimeM toTimeM from to = case resp.visualization of

@@ -170,7 +170,7 @@ parseLLMResponse response =
       partialDecode = case AE.eitherDecode @AE.Value (fromStrict responseBS) of
         Left _ -> Left "Not valid JSON"
         Right val ->
-          let widgetList = fromMaybe [] $ val ^? key "widgets" . _Array <&> \arr -> V.toList arr >>= \v -> case AE.fromJSON @Widget.Widget v of AE.Success w -> [w]; _ -> []
+          let widgetList = maybe [] (V.toList >=> \v -> case AE.fromJSON @Widget.Widget v of AE.Success w -> [w]; _ -> []) (val ^? key "widgets" . _Array)
               timePicker = val ^? key "time_range" >>= \v -> case AE.fromJSON v of AE.Success tp -> Just tp; _ -> Nothing
            in Right
                 LLMResponse
