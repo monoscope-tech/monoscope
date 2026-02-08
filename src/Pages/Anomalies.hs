@@ -523,11 +523,12 @@ buildSystemPromptForIssue pid issue now = do
       fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
   pure fullSystemPrompt
   where
-    fetchTrace err = fromMaybe (Nothing, V.empty) <$> runMaybeT do
-      tId <- MaybeT $ pure err.recentTraceId
-      trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
-      spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
-      pure (Just trData, V.fromList spans)
+    fetchTrace err =
+      fromMaybe (Nothing, V.empty) <$> runMaybeT do
+        tId <- MaybeT $ pure err.recentTraceId
+        trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
+        spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
+        pure (Just trData, V.fromList spans)
     buildAIContext issue errM trDataM spans alertContextM =
       unlines
         $ catMaybes
