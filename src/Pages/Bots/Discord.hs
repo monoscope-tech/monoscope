@@ -7,6 +7,7 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Text qualified as T
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
@@ -361,20 +362,19 @@ discordInteractionsH rawBody signatureM timestampM = do
 
 sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> AI.LLMResponse -> Time.UTCTime -> ATBaseCtx ()
 sendDiscordResponse options interaction envCfg authCtx discordData resp now =
-  let (fromTimeM, toTimeM, rangeM) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
-      (from, to) = fromMaybe ("", "") rangeM
+  let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
       query = fromMaybe "" resp.query
       hasQuery = isJust resp.query
       hasExplanation = isJust resp.explanation
    in case (hasQuery, hasExplanation) of
         (False, True) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord (fromMaybe "No insights available" resp.explanation)
-        (True, False) -> handleWidgetResponse query fromTimeM toTimeM from to
+        (True, False) -> handleWidgetResponse query fromTimeM toTimeM
         (True, True) -> do
-          handleWidgetResponse query fromTimeM toTimeM from to
+          handleWidgetResponse query fromTimeM toTimeM
           whenJust resp.explanation $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken . formatTextResponse Discord
         (False, False) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord "No response available"
   where
-    handleWidgetResponse query fromTimeM toTimeM from to = case resp.visualization of
+    handleWidgetResponse query fromTimeM toTimeM = case resp.visualization of
       Just vizType -> do
         let widgetType = Widget.mapChatTypeToWidgetType vizType
             chartType = Widget.mapWidgetTypeToChartType widgetType
@@ -382,7 +382,9 @@ sendDiscordResponse options interaction envCfg authCtx discordData resp now =
             question = case options of
               Just (InteractionOption{value = AE.String q} : _) -> q
               _ -> "[?]"
-        imageUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} Nothing (Just from) (Just to)
+            fromISO = toText . iso8601Show <$> fromTimeM
+            toISO = toText . iso8601Show <$> toTimeM
+        imageUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} Nothing fromISO toISO
         let content = getBotContentWithUrl question query query_url imageUrl
         sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
       Nothing -> case parseQueryToAST query of
