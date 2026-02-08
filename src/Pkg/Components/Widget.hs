@@ -1066,7 +1066,18 @@ createSeries widgetType colIdx name =
         ]
 
 
--- Helper: Map widget type to ECharts chart type
+-- | Map widget type to ECharts chart type
+--
+-- >>> mapWidgetTypeToChartType WTTimeseries
+-- "bar"
+-- >>> mapWidgetTypeToChartType WTTimeseriesLine
+-- "line"
+-- >>> mapWidgetTypeToChartType WTDistribution
+-- "bar"
+-- >>> mapWidgetTypeToChartType WTHeatmap
+-- "heatmap"
+-- >>> mapWidgetTypeToChartType WTServiceMap
+-- "graph"
 mapWidgetTypeToChartType :: WidgetType -> Text
 mapWidgetTypeToChartType WTTimeseries = "bar"
 mapWidgetTypeToChartType WTTimeseriesLine = "line"

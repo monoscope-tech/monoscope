@@ -45,7 +45,9 @@ module Pkg.AI (
   stripCodeBlock,
 ) where
 
+import Control.Lens ((^?))
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens (key, _Array, _String)
 import Data.Effectful.LLM (callOpenAIAPI)
 import Data.Effectful.LLM qualified as ELLM
 import Data.HashMap.Strict qualified as HM
@@ -163,7 +165,30 @@ parseLLMResponse :: Text -> Either Text LLMResponse
 parseLLMResponse response =
   let cleaned = fixTrailingCommas $ stripCodeBlock response
       responseBS = encodeUtf8 cleaned
-   in first (("JSON Decode Error: " <>) . toText) $ AE.eitherDecode (fromStrict responseBS)
+      -- Try decoding as full JSON first
+      fullDecode = first toText $ AE.eitherDecode (fromStrict responseBS)
+      -- If that fails, try partial decode (handle missing widgets field)
+      partialDecode = case AE.eitherDecode @AE.Value (fromStrict responseBS) of
+        Left _ -> Left "Not valid JSON"
+        Right val ->
+          let widgetList = fromMaybe [] $ val ^? key "widgets" . _Array <&> \arr -> V.toList arr >>= \v -> case AE.fromJSON @Widget.Widget v of AE.Success w -> [w]; _ -> []
+              timePicker = val ^? key "time_range" >>= \v -> case AE.fromJSON v of AE.Success tp -> Just tp; _ -> Nothing
+           in Right
+                LLMResponse
+                  { explanation = val ^? key "explanation" . _String
+                  , query = val ^? key "query" . _String
+                  , visualization = val ^? key "visualization" . _String
+                  , widgets = widgetList
+                  , timeRange = timePicker
+                  , toolCalls = Nothing
+                  }
+      -- Fallback: treat plain text as explanation-only response
+      textFallback = Right LLMResponse{explanation = Just cleaned, query = Nothing, visualization = Nothing, widgets = [], timeRange = Nothing, toolCalls = Nothing}
+   in case fullDecode of
+        Right r -> Right r
+        Left _ -> case partialDecode of
+          Right r -> Right r
+          Left _ -> textFallback
 
 
 -- | Parse agentic execution result (preserves tool call metadata)
@@ -213,6 +238,11 @@ parseVisualizationType t = Map.lookup t vizTypeMap
 
 
 -- | KQL documentation for AI prompts - shared between Log Explorer and Anomalies
+--
+-- >>> Data.Text.isInfixOf "KQL" kqlGuide
+-- True
+-- >>> Data.Text.isInfixOf "summarize" kqlGuide
+-- True
 kqlGuide :: Text
 kqlGuide =
   [text|
@@ -334,6 +364,24 @@ data ToolLimits = ToolLimits
   }
 
 
+-- | Default tool limits for agentic queries
+--
+-- >>> defaultLimits.maxFieldValues
+-- 20
+-- >>> defaultLimits.maxSampleLogs
+-- 5
+-- >>> defaultLimits.maxServices
+-- 20
+-- >>> defaultLimits.defaultFieldLimit
+-- 10
+-- >>> defaultLimits.defaultSampleLimit
+-- 3
+-- >>> defaultLimits.maxQueryResults
+-- 100
+-- >>> defaultLimits.maxDisplayRows
+-- 20
+-- >>> defaultLimits.maxBodyPreview
+-- 100
 defaultLimits :: ToolLimits
 defaultLimits =
   ToolLimits
@@ -362,6 +410,7 @@ data AgenticConfig = AgenticConfig
   }
 
 
+-- | Default agentic configuration with reasonable defaults (maxIterations=5, facetContext=Nothing)
 defaultAgenticConfig :: Projects.ProjectId -> AgenticConfig
 defaultAgenticConfig pid =
   AgenticConfig
@@ -381,15 +430,15 @@ defaultAgenticConfig pid =
 
 
 getIntArg :: Text -> Map.Map Text AE.Value -> Maybe Int
-getIntArg key args = Map.lookup key args >>= \case AE.Number n -> Just (round n); _ -> Nothing
+getIntArg k args = Map.lookup k args >>= \case AE.Number n -> Just (round n); _ -> Nothing
 
 
 getTextArg :: Text -> Map.Map Text AE.Value -> Maybe Text
-getTextArg key args = Map.lookup key args >>= \case AE.String s -> Just s; _ -> Nothing
+getTextArg k args = Map.lookup k args >>= \case AE.String s -> Just s; _ -> Nothing
 
 
 getLimitArg :: Text -> Int -> Int -> Map.Map Text AE.Value -> Int
-getLimitArg key maxVal defVal args = min maxVal $ fromMaybe defVal (getIntArg key args)
+getLimitArg k maxVal defVal args = min maxVal $ fromMaybe defVal (getIntArg k args)
 
 
 -- | Join Vector of Text with separator using fold (avoids intermediate list)
@@ -544,6 +593,14 @@ buildSystemPrompt config now =
    in basePrompt <> facetSection <> customSection
 
 
+-- | Strip markdown code blocks from LLM responses
+--
+-- >>> stripCodeBlock "```json\n{\"key\": \"value\"}\n```"
+-- "{\"key\": \"value\"}"
+-- >>> stripCodeBlock "```\n{\"key\": \"value\"}\n```"
+-- "{\"key\": \"value\"}"
+-- >>> stripCodeBlock "{\"key\": \"value\"}"
+-- "{\"key\": \"value\"}"
 stripCodeBlock :: Text -> Text
 stripCodeBlock t
   | "```json" `T.isPrefixOf` stripped = T.strip $ T.dropWhileEnd (== '`') $ T.drop 7 stripped

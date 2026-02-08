@@ -10,6 +10,7 @@ module Pkg.TestUtils (
   TestRequestMessages (..),
   convert,
   runTestBackground,
+  runTestBackgroundWithNotifications,
   runTestBg,
   testServant,
   runAllBackgroundJobs,
@@ -424,8 +425,9 @@ runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
   runTestBackgroundWithLogger logger authCtx action
 
 
-runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackgroundWithLogger logger appCtx process = do
+-- | Run background context and return both notifications and result
+runTestBackgroundWithNotifications :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithNotifications logger appCtx process = do
   tp <- getGlobalTracerProvider
   (notifications, result) <-
     process
@@ -442,6 +444,12 @@ runTestBackgroundWithLogger logger appCtx process = do
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Effectful.runEff
+  pure (notifications, result)
+
+
+runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackgroundWithLogger logger appCtx process = do
+  (notifications, result) <- runTestBackgroundWithNotifications logger appCtx process
   -- Log the notifications that would have been sent
   forM_ notifications \notification -> do
     let notifInfo = case notification of

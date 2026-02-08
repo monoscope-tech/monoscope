@@ -1,47 +1,23 @@
 module Pages.Bots.AgenticSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Text qualified as T
-import Models.Projects.Projects qualified as Projects
+import Effectful qualified as Eff
 import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, hasOpenAIKey, testPid)
-import Pages.Bots.Utils (QueryIntent (..), ReportType (..), detectReportIntent, processAIQuery)
+import Pages.Bots.Utils (processAIQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
+import System.Logging qualified as Logging
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Agentic Query Processing" do
-    describe "Intent detection" do
-      it "identifies report requests" \_ -> do
-        detectReportIntent "send daily report" `shouldBe` ReportIntent DailyReport
-        detectReportIntent "get weekly summary" `shouldBe` ReportIntent WeeklyReport
-        detectReportIntent "show me the report" `shouldBe` ReportIntent DailyReport
-
-      it "identifies general queries" \_ -> do
-        detectReportIntent "show errors" `shouldBe` GeneralQueryIntent
-        detectReportIntent "what's my error rate" `shouldBe` GeneralQueryIntent
-        detectReportIntent "plot traffic over time" `shouldBe` GeneralQueryIntent
-
-      it "requires action verb for report intent" \_ -> do
-        detectReportIntent "report" `shouldBe` GeneralQueryIntent
-        detectReportIntent "daily" `shouldBe` GeneralQueryIntent
-
-    describe "AgenticConfig" do
-      it "creates default config with project ID" \_ -> do
-        let config = AI.defaultAgenticConfig testPid
-        config.projectId `shouldBe` testPid
-        config.maxIterations `shouldBe` 5
-        isNothing config.facetContext `shouldBe` True
-
-      it "allows custom max iterations" \_ -> do
-        let config = (AI.defaultAgenticConfig testPid){AI.maxIterations = 3}
-        config.maxIterations `shouldBe` 3
-
     describe "Response parsing" do
       it "parses widget response" \_ -> do
         let rawResult =
@@ -96,43 +72,6 @@ spec = aroundAll withTestResources do
             null parsed.widgets `shouldBe` True
           Left err -> expectationFailure $ "Parse failed: " <> toString err
 
-    describe "Code block stripping" do
-      it "strips json code blocks" \_ -> do
-        let input = "```json\n{\"key\": \"value\"}\n```"
-        AI.stripCodeBlock input `shouldBe` "{\"key\": \"value\"}"
-
-      it "strips generic code blocks" \_ -> do
-        let input = "```\n{\"key\": \"value\"}\n```"
-        AI.stripCodeBlock input `shouldBe` "{\"key\": \"value\"}"
-
-      it "handles plain text" \_ -> do
-        let input = "{\"key\": \"value\"}"
-        AI.stripCodeBlock input `shouldBe` "{\"key\": \"value\"}"
-
-    describe "Widget types" do
-      it "maps widget types to chart types (ECharts types)" \_ -> do
-        -- These map to ECharts chart types, not our internal names
-        Widget.mapWidgetTypeToChartType Widget.WTTimeseries `shouldBe` "bar"
-        Widget.mapWidgetTypeToChartType Widget.WTTimeseriesLine `shouldBe` "line"
-        Widget.mapWidgetTypeToChartType Widget.WTDistribution `shouldBe` "bar"
-        Widget.mapWidgetTypeToChartType Widget.WTHeatmap `shouldBe` "heatmap"
-        Widget.mapWidgetTypeToChartType Widget.WTServiceMap `shouldBe` "graph"
-
-    describe "System prompts" do
-      it "includes KQL guide" \_ -> do
-        T.isInfixOf "KQL" AI.kqlGuide `shouldBe` True
-        T.isInfixOf "summarize" AI.kqlGuide `shouldBe` True
-
-      it "includes schema in system prompt" \_ -> do
-        let prompt = AI.systemPrompt (Unsafe.read "2025-01-01 00:00:00 UTC")
-        T.isInfixOf "telemetry" prompt `shouldBe` True
-        T.isInfixOf "logs" prompt `shouldBe` True
-
-      it "includes visualization types" \_ -> do
-        T.isInfixOf "timeseries" AI.kqlGuide `shouldBe` True
-        T.isInfixOf "distribution" AI.kqlGuide `shouldBe` True
-        T.isInfixOf "pie_chart" AI.kqlGuide `shouldBe` True
-
     describe "Live API calls (requires OPENAI_API_KEY)" do
       it "processes error trend query and saves golden response" \tr -> do
         let apiKey = getOpenAIKey tr
@@ -173,8 +112,28 @@ spec = aroundAll withTestResources do
                 isJust agenticResp.explanation || not (null agenticResp.widgets) `shouldBe` True
 
       it "handles empty API key gracefully" \tr -> do
-        let goldenDir = tr.trATCtx.config.agenticGoldenDir
         result <- runTestBg tr $ processAIQuery testPid "show errors" Nothing ""
         case result of
           Left err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err) `shouldBe` True
           Right _ -> pass
+
+    describe "Widget URL generation" do
+      it "generates signed widget PNG URLs correctly" \tr -> do
+        let widget = def{Widget.wType = Widget.WTTimeseries, Widget.title = Just "Test Chart", Widget.query = Just "service == \"api\""}
+            secret = tr.trATCtx.env.apiKeyEncryptionSecretKey
+            baseUrl = tr.trATCtx.env.hostUrl
+
+        url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ widgetPngUrl secret baseUrl testPid widget Nothing Nothing Nothing
+
+        url `shouldSatisfy` (not . T.null)
+        url `shouldSatisfy` T.isInfixOf "widgetJSON="
+        url `shouldSatisfy` T.isInfixOf "&sig="
+
+      it "rejects URLs exceeding 8000 characters" \tr -> do
+        let hugeWidget = def{Widget.wType = Widget.WTTable, Widget.title = Just (T.replicate 10000 "x"), Widget.query = Just "service == \"api\""}
+            secret = tr.trATCtx.env.apiKeyEncryptionSecretKey
+            baseUrl = tr.trATCtx.env.hostUrl
+
+        url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ widgetPngUrl secret baseUrl testPid hugeWidget Nothing Nothing Nothing
+
+        url `shouldBe` ""

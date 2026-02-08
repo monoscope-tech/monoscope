@@ -48,7 +48,6 @@ import Servant.Server (ServerError (errBody), err400, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
-import Utils qualified
 
 
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)

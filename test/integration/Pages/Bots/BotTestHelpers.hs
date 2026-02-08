@@ -30,9 +30,7 @@ module Pages.Bots.BotTestHelpers (
   extractResponseText,
 
   -- * Notification Helpers
-  captureNotifications,
-  assertSlackNotification,
-  assertDiscordNotification,
+  -- (Use runTestBackgroundWithNotifications from Pkg.TestUtils instead)
 
   -- * JSON Response Helpers
   isValidJsonResponse,
@@ -238,33 +236,7 @@ extractResponseText val = case val of
 
 
 -- * Notification Helpers
-
-
--- Capture notifications by using runNotifyTest directly
-captureNotifications :: TestResources -> ATBackgroundCtx a -> IO ([Notification], a)
-captureNotifications TestResources{..} action =
-  action
-    & Notify.runNotifyTest
-    & Effectful.Reader.runReader trATCtx
-    & runWithConnectionPool trPool
-    & runLabeled @"timefusion" (runWithConnectionPool trATCtx.timefusionPgPool)
-    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
-    & Logging.runLog ("test-bg:" <> show trATCtx.config.environment) trLogger trATCtx.config.logLevel
-    & Tracing.runTracing trTracerProvider
-    & runUUID
-    & runHTTPWreq
-    & ELLM.runLLMGolden "./tests/golden/"
-    & runConcurrent
-    & Ki.runStructuredConcurrency
-    & runEff
-
-
-assertSlackNotification :: [Notification] -> Text -> Expectation
-assertSlackNotification _ _ = pass  -- Not yet implemented
-
-
-assertDiscordNotification :: [Notification] -> Text -> Expectation
-assertDiscordNotification _ _ = pass  -- Not yet implemented
+-- Note: Use runTestBackgroundWithNotifications from Pkg.TestUtils to capture notifications
 
 
 -- * JSON Response Helpers

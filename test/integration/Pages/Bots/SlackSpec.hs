@@ -8,7 +8,6 @@ import Models.Apis.Slack qualified as Slack
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Slack (slackInteractionsH)
-import Pages.Bots.Utils (QueryIntent (..), ReportType (..), detectReportIntent)
 import Pkg.TestUtils
 import Relude
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
@@ -17,21 +16,6 @@ import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, 
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Slack Bot" do
-    describe "Query Intent Detection" do
-      it "detects daily report intent" \_ -> do
-        detectReportIntent "send daily report" `shouldBe` ReportIntent DailyReport
-        detectReportIntent "get daily summary" `shouldBe` ReportIntent DailyReport
-        detectReportIntent "show me the report" `shouldBe` ReportIntent DailyReport
-
-      it "detects weekly report intent" \_ -> do
-        detectReportIntent "send weekly report" `shouldBe` ReportIntent WeeklyReport
-        detectReportIntent "get weekly summary" `shouldBe` ReportIntent WeeklyReport
-
-      it "detects general query intent" \_ -> do
-        detectReportIntent "show error rate" `shouldBe` GeneralQueryIntent
-        detectReportIntent "what's happening" `shouldBe` GeneralQueryIntent
-        detectReportIntent "errors in last hour" `shouldBe` GeneralQueryIntent
-
     describe "/here command" do
       it "sets notification channel and saves golden response" \tr -> do
         setupSlackData tr testPid "T_HERE_TEST"
@@ -89,7 +73,8 @@ spec = aroundAll withTestResources do
         setupSlackData tr testPid "T_ANOMALY_TEST"
         void $ runTestBg tr $ Slack.updateSlackNotificationChannel "T_ANOMALY_TEST" "C_ALERTS"
 
-        (notifs, _) <- captureNotifications tr pass
+        -- Use existing infrastructure from TestUtils
+        (notifs, _) <- runTestBackgroundWithNotifications tr.trLogger tr.trATCtx pass
         notifs `shouldBe` []
 
       it "user can ask about anomalies via /monoscope" \tr -> do

@@ -340,6 +340,21 @@ data QueryIntent = ReportIntent ReportType | GeneralQueryIntent deriving (Eq, Sh
 
 
 -- | Detect if user query is requesting a report. Requires action verb + "report/summary".
+--
+-- >>> detectReportIntent "send daily report"
+-- ReportIntent DailyReport
+-- >>> detectReportIntent "get weekly summary"
+-- ReportIntent WeeklyReport
+-- >>> detectReportIntent "show me the report"
+-- ReportIntent DailyReport
+-- >>> detectReportIntent "show errors"
+-- GeneralQueryIntent
+-- >>> detectReportIntent "what's my error rate"
+-- GeneralQueryIntent
+-- >>> detectReportIntent "report"
+-- GeneralQueryIntent
+-- >>> detectReportIntent "daily"
+-- GeneralQueryIntent
 detectReportIntent :: Text -> QueryIntent
 detectReportIntent query =
   let q = T.toLower $ T.strip query
