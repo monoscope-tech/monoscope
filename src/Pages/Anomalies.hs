@@ -529,7 +529,7 @@ buildSystemPromptForIssue pid issue now = do
         trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
         spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
         pure (Just trData, V.fromList spans)
-    buildAIContext issue errM trDataM spans alertContextM =
+    buildAIContext iss errM trDataM spans alertContextM =
       unlines
         $ catMaybes
           [ Just "## Issue Details"

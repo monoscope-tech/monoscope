@@ -40,7 +40,9 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs qualified
+import Configuration.Dotenv qualified as Dotenv
 import Control.Exception (finally, throwIO)
+import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -100,8 +102,6 @@ import RequestMessages qualified
 import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
-import Configuration.Dotenv qualified as Dotenv
-import Control.Exception.Safe qualified as Safe
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
 import System.DB (DB)
