@@ -242,8 +242,10 @@ runNotifyProduction = interpret $ \_ -> \case
     PagerdutyNotification PagerdutyData{..} -> do
       let actionText = display eventAction
           severityText = display severity
-          payload = if eventAction == PDTrigger
-            then [aesonQQ|{
+          payload =
+            if eventAction == PDTrigger
+              then
+                [aesonQQ|{
               "routing_key": #{integrationKey},
               "event_action": #{actionText},
               "dedup_key": #{dedupKey},
@@ -255,7 +257,8 @@ runNotifyProduction = interpret $ \_ -> \case
               },
               "links": [{"href": #{monitorUrl}, "text": "View Monitor"}]
             }|]
-            else [aesonQQ|{
+              else
+                [aesonQQ|{
               "routing_key": #{integrationKey},
               "event_action": #{actionText},
               "dedup_key": #{dedupKey}

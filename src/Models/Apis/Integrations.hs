@@ -144,7 +144,8 @@ getPagerdutyByProjectId pid = listToMaybe <$> PG.query q (Only pid)
 insertPagerdutyData :: DB es => Projects.ProjectId -> Text -> Eff es Int64
 insertPagerdutyData pid integrationKey = PG.execute q (pid, integrationKey)
   where
-    q = [sql|INSERT INTO apis.pagerduty (project_id, integration_key) VALUES (?, ?)
+    q =
+      [sql|INSERT INTO apis.pagerduty (project_id, integration_key) VALUES (?, ?)
             ON CONFLICT (project_id) DO UPDATE SET integration_key = EXCLUDED.integration_key|]
 
 

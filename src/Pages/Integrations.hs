@@ -15,22 +15,22 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Error.Static (throwError)
+import Effectful.Log qualified as Log
 import Effectful.PostgreSQL qualified as DB
+import Effectful.Reader.Static (ask)
 import Lucid
-import System.Config qualified as Config
-import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Apis.Integrations (DiscordData (..), PagerdutyData (..), SlackData (..), getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData)
+import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Projects.ProjectMembers (Team (..), getTeamsById)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Mail (sendDiscordAlert, sendPagerdutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.SampleAlerts (sampleAlert, sampleReport)
-import Effectful.Log qualified as Log
-import Effectful.Reader.Static (ask)
 import Relude hiding (Reader, State, ask)
-import Utils (faSprite_)
 import Servant (err400, err404, errBody)
+import System.Config qualified as Config
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -70,8 +70,8 @@ notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeade
 notificationsTestPostH pid TestForm{..} = do
   -- Rate limit: check if test was sent in last 60 seconds
   recentTests <- DB.query [sql|SELECT COUNT(*) FROM apis.notification_test_history WHERE project_id = ? AND created_at > now() - interval '60 seconds'|] (Only pid)
-  when (maybe 0 fromOnly (listToMaybe recentTests) > (0 :: Int)) $
-    throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
+  when (maybe 0 fromOnly (listToMaybe recentTests) > (0 :: Int))
+    $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
   project <- Projects.projectById pid >>= maybe (throwError err404) pure
   let alert = bool (sampleAlert (fromMaybe APIChange $ parseIssueType issueType) project.title) (sampleReport project.title) (issueType == "report")
@@ -98,8 +98,10 @@ notificationsTestPostH pid TestForm{..} = do
     ("pagerduty", Nothing) -> getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title projectUrl
     _ -> throwError err400{errBody = "Unknown notification channel"}
 
-  void $ DB.execute [sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (?, ?, ?, ?, ?, ?)|]
-    (pid, issueType, channel, "" :: Text, "sent" :: Text, Nothing :: Maybe Text)
+  void
+    $ DB.execute
+      [sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (?, ?, ?, ?, ?, ?)|]
+      (pid, issueType, channel, "" :: Text, "sent" :: Text, Nothing :: Maybe Text)
 
   Log.logTrace "Test notification sent" (channel, pid)
   addSuccessToast ("Test " <> channel <> " notification sent!") Nothing >> addRespHeaders mempty

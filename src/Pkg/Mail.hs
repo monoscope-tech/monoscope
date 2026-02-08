@@ -16,8 +16,8 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Relude hiding (Reader, ask)
@@ -352,9 +352,9 @@ sendPagerdutyAlertToService integrationKey (MonitorsAlert monitorTitle monitorUr
 sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
   let endpointUrl = projectUrl <> "/anomalies/by_hash/" <> hash
       endpointNames = T.intercalate ", " $ V.toList endpoints
-  in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
 sendPagerdutyAlertToService integrationKey (RuntimeErrorAlert issueId errorData) projectTitle projectUrl =
   let errorUrl = projectUrl <> "/anomalies/by_hash/" <> fromMaybe issueId errorData.hash
-  in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
 sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
 sendPagerdutyAlertToService _ ShapeAlert _ _ = pass

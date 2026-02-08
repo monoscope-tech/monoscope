@@ -17,8 +17,8 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
-import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Integrations qualified as Slack
+import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
