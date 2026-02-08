@@ -1,7 +1,7 @@
 module Models.Apis.Integrations (
   SlackData (..),
   DiscordData (..),
-  PagerDutyData (..),
+  PagerdutyData (..),
   insertAccessToken,
   getSlackDataByTeamId,
   insertDiscordData,
@@ -13,9 +13,9 @@ module Models.Apis.Integrations (
   getDashboardsForSlack,
   getDashboardsForWhatsapp,
   getDiscordData,
-  getPagerDutyByProjectId,
-  insertPagerDutyData,
-  deletePagerDutyData,
+  getPagerdutyByProjectId,
+  insertPagerdutyData,
+  deletePagerdutyData,
 ) where
 
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -127,7 +127,7 @@ getDashboardsForDiscord guildId = PG.query q (Only guildId)
     q = [sql|SELECT d.title, d.id::text FROM projects.dashboards d JOIN apis.discord dd ON d.project_id = dd.project_id where guild_id=?|]
 
 
-data PagerDutyData = PagerDutyData
+data PagerdutyData = PagerdutyData
   { projectId :: Projects.ProjectId
   , integrationKey :: Text
   }
@@ -135,20 +135,20 @@ data PagerDutyData = PagerDutyData
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-getPagerDutyByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe PagerDutyData)
-getPagerDutyByProjectId pid = listToMaybe <$> PG.query q (Only pid)
+getPagerdutyByProjectId :: DB es => Projects.ProjectId -> Eff es (Maybe PagerdutyData)
+getPagerdutyByProjectId pid = listToMaybe <$> PG.query q (Only pid)
   where
     q = [sql|SELECT project_id, integration_key FROM apis.pagerduty WHERE project_id = ?|]
 
 
-insertPagerDutyData :: DB es => Projects.ProjectId -> Text -> Eff es Int64
-insertPagerDutyData pid integrationKey = PG.execute q (pid, integrationKey)
+insertPagerdutyData :: DB es => Projects.ProjectId -> Text -> Eff es Int64
+insertPagerdutyData pid integrationKey = PG.execute q (pid, integrationKey)
   where
     q = [sql|INSERT INTO apis.pagerduty (project_id, integration_key) VALUES (?, ?)
             ON CONFLICT (project_id) DO UPDATE SET integration_key = EXCLUDED.integration_key|]
 
 
-deletePagerDutyData :: DB es => Projects.ProjectId -> Eff es Int64
-deletePagerDutyData pid = PG.execute q (Only pid)
+deletePagerdutyData :: DB es => Projects.ProjectId -> Eff es Int64
+deletePagerdutyData pid = PG.execute q (Only pid)
   where
     q = [sql|DELETE FROM apis.pagerduty WHERE project_id = ?|]

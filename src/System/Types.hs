@@ -25,6 +25,7 @@ module System.Types (
   effToServantHandlerTest,
   effToHandler,
   atAuthToBase,
+  atAuthToBaseTest,
 )
 where
 
@@ -115,6 +116,17 @@ atAuthToBase :: Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATA
 atAuthToBase sessionWithCookies page =
   page
     & Data.Effectful.Notify.runNotifyProduction
+    & State.evalState Map.empty -- TriggerEvents
+    & State.evalState Nothing -- HXRedirectDest
+    & State.evalState Nothing -- XWidgetJSON
+    & Effectful.Reader.Static.runReader sessionWithCookies
+
+
+-- | Test variant that captures notifications in provided IORef
+atAuthToBaseTest :: IORef [Data.Effectful.Notify.Notification] -> Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
+atAuthToBaseTest notifRef sessionWithCookies page =
+  page
+    & Data.Effectful.Notify.runNotifyTest notifRef
     & State.evalState Map.empty -- TriggerEvents
     & State.evalState Nothing -- HXRedirectDest
     & State.evalState Nothing -- XWidgetJSON

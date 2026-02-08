@@ -79,7 +79,7 @@ data NotificationChannel
   | NSlack
   | NDiscord
   | NPhone
-  | NPagerDuty
+  | NPagerduty
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "N", DAE.CamelToSnake]] NotificationChannel
@@ -339,11 +339,11 @@ deleteProject pid = PG.execute q (Only pid)
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 
-updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> Eff es Int64
-updateNotificationsChannel pid channels phones = PG.execute q (list, V.fromList phones, pid)
+updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> [Text] -> Eff es Int64
+updateNotificationsChannel pid channels phones emails = PG.execute q (list, V.fromList phones, V.fromList emails, pid)
   where
     list = V.fromList channels
-    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=? WHERE id=?;|]
+    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=?, notify_emails=? WHERE id=?;|]
 
 
 updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64

@@ -21,9 +21,9 @@ module Data.Effectful.Notify (
   SlackData (..),
   DiscordData (..),
   WhatsAppData (..),
-  PagerDutyData (..),
-  PagerDutyAction (..),
-  PagerDutySeverity (..),
+  PagerdutyData (..),
+  PagerdutyAction (..),
+  PagerdutySeverity (..),
 
   -- * Interpreters
   runNotifyProduction,
@@ -44,6 +44,7 @@ import Control.Retry (exponentialBackoff, limitRetries, retrying)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
+import Data.Text.Display (Display, display)
 import Effectful
 import Effectful.Dispatch.Dynamic
 import Effectful.Log (Log)
@@ -51,6 +52,7 @@ import Effectful.Reader.Static (Reader, ask)
 import Effectful.TH
 import Network.HTTP.Types (statusIsSuccessful)
 import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith, responseStatus)
+import Pkg.DBUtils (WrappedEnumSC (..))
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -68,7 +70,7 @@ data EmailData = EmailData
 
 data SlackData = SlackData
   { channelId :: Text
-  , message :: AE.Value
+  , payload :: AE.Value
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -76,7 +78,7 @@ data SlackData = SlackData
 
 data DiscordData = DiscordData
   { channelId :: Text
-  , content :: AE.Value
+  , payload :: AE.Value
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -91,30 +93,24 @@ data WhatsAppData = WhatsAppData
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
-data PagerDutyAction = PDTrigger | PDResolve
+data PagerdutyAction = PDTrigger | PDResolve
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (Display) via WrappedEnumSC "PD" PagerdutyAction
 
 
-pdActionText :: PagerDutyAction -> Text
-pdActionText = \case PDTrigger -> "trigger"; PDResolve -> "resolve"
-
-
-data PagerDutySeverity = PDCritical | PDError | PDWarning | PDInfo
+data PagerdutySeverity = PDCritical | PDError | PDWarning | PDInfo
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (Display) via WrappedEnumSC "PD" PagerdutySeverity
 
 
-pdSeverityText :: PagerDutySeverity -> Text
-pdSeverityText = \case PDCritical -> "critical"; PDError -> "error"; PDWarning -> "warning"; PDInfo -> "info"
-
-
-data PagerDutyData = PagerDutyData
+data PagerdutyData = PagerdutyData
   { integrationKey :: Text
-  , eventAction :: PagerDutyAction
+  , eventAction :: PagerdutyAction
   , dedupKey :: Text
   , summary :: Text
-  , severity :: PagerDutySeverity
+  , severity :: PagerdutySeverity
   , customDetails :: AE.Value
   , monitorUrl :: Text
   }
@@ -127,7 +123,7 @@ data Notification
   | SlackNotification SlackData
   | DiscordNotification DiscordData
   | WhatsAppNotification WhatsAppData
-  | PagerDutyNotification PagerDutyData
+  | PagerdutyNotification PagerdutyData
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -151,12 +147,12 @@ emailNotification receiver templateOptions subjectMessage =
 
 
 slackNotification :: Text -> AE.Value -> Notification
-slackNotification channelId message =
+slackNotification channelId payload =
   SlackNotification SlackData{..}
 
 
 discordNotification :: Text -> AE.Value -> Notification
-discordNotification channelId content =
+discordNotification channelId payload =
   DiscordNotification DiscordData{..}
 
 
@@ -165,9 +161,9 @@ whatsappNotification template to contentVariables =
   WhatsAppNotification WhatsAppData{..}
 
 
-pagerdutyNotification :: Text -> PagerDutyAction -> Text -> Text -> PagerDutySeverity -> AE.Value -> Text -> Notification
+pagerdutyNotification :: Text -> PagerdutyAction -> Text -> Text -> PagerdutySeverity -> AE.Value -> Text -> Notification
 pagerdutyNotification integrationKey eventAction dedupKey summary severity customDetails monitorUrl =
-  PagerDutyNotification PagerDutyData{..}
+  PagerdutyNotification PagerdutyData{..}
 
 
 -- Production interpreter
@@ -178,31 +174,37 @@ runNotifyProduction = interpret $ \_ -> \case
       appCtx <- ask @Config.AuthContext
       let url = if isJust templateOptions then "https://api.postmarkapp.com/email/withTemplate" else "https://api.postmarkapp.com/email"
       let apiKey = encodeUtf8 appCtx.config.postmarkToken
+      let fromAddress = appCtx.config.postmarkFromEmail
       let (subject, message) = fromMaybe ("", "") subjectMessage
       let payload = case templateOptions of
             Just (template, templateVars) ->
               [aesonQQ|{
-                "From": "hello@apitoolkit.io",
+                "From": #{fromAddress},
                 "To": #{receiver},
                 "TemplateAlias": #{template},
                 "TemplateModel": #{templateVars}
               }|]
             _ ->
               [aesonQQ|{
-                "From": "hello@apitoolkit.io",
+                "From": #{fromAddress},
                 "Subject": #{subject},
                 "To": #{receiver},
                 "TextBody": #{message},
                 "HtmlBody": "<p>#{message}</p>",
                 "MessageStream": "outbound"
               }|]
+      let logData = case templateOptions of
+            Just (template, _) -> AE.object ["from" AE..= fromAddress, "to" AE..= receiver, "template" AE..= template, "via" AE..= ("postmark" :: Text)]
+            Nothing -> AE.object ["from" AE..= fromAddress, "to" AE..= receiver, "subject" AE..= subject, "via" AE..= ("postmark" :: Text)]
+      Log.logTrace "Sending email notification" logData
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
       _ <- liftIO $ postWith opts url payload
+      Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver])
       pass
     SlackNotification SlackData{..} -> do
       appCtx <- ask @Config.AuthContext
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
-      case message of
+      case payload of
         AE.Object obj -> do
           let msg = AE.Object $ AEK.insert "channel" (AE.String channelId) obj
           re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" msg
@@ -210,13 +212,13 @@ runNotifyProduction = interpret $ \_ -> \case
             $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
           pass
         _ -> do
-          Log.logAttention "Slack notification message is not an object" (channelId, show message)
+          Log.logAttention "Slack notification message is not an object" (channelId, show payload)
           pass
     DiscordNotification DiscordData{..} -> do
       appCtx <- ask @Config.AuthContext
       let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
-      re <- liftIO $ postWith opts url content
+      re <- liftIO $ postWith opts url payload
       unless (statusIsSuccessful (re ^. responseStatus))
         $ Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
       pass
@@ -237,12 +239,27 @@ runNotifyProduction = interpret $ \_ -> \case
               :: [FormParam]
       resp <- liftIO $ postWith opts url payload
       pass
-    PagerDutyNotification PagerDutyData{..} -> do
-      let links = [AE.object ["href" AE..= monitorUrl, "text" AE..= ("View Monitor" :: Text)]] :: [AE.Value]
-          triggerPayload = AEK.fromList
-            [ "payload" AE..= AE.object ["summary" AE..= summary, "source" AE..= ("monoscope" :: Text), "severity" AE..= pdSeverityText severity, "custom_details" AE..= customDetails]
-            , "links" AE..= links]
-          payload = AE.Object $ AEK.fromList ["routing_key" AE..= integrationKey, "event_action" AE..= pdActionText eventAction, "dedup_key" AE..= dedupKey] <> bool mempty triggerPayload (eventAction == PDTrigger)
+    PagerdutyNotification PagerdutyData{..} -> do
+      let actionText = display eventAction
+          severityText = display severity
+          payload = if eventAction == PDTrigger
+            then [aesonQQ|{
+              "routing_key": #{integrationKey},
+              "event_action": #{actionText},
+              "dedup_key": #{dedupKey},
+              "payload": {
+                "summary": #{summary},
+                "source": "monoscope",
+                "severity": #{severityText},
+                "custom_details": #{customDetails}
+              },
+              "links": [{"href": #{monitorUrl}, "text": "View Monitor"}]
+            }|]
+            else [aesonQQ|{
+              "routing_key": #{integrationKey},
+              "event_action": #{actionText},
+              "dedup_key": #{dedupKey}
+            }|]
           opts = defaults & header "Content-Type" .~ ["application/json"]
           policy = exponentialBackoff 1000000 <> limitRetries 3
       re <- liftIO $ retrying policy (\_ r -> pure $ not $ statusIsSuccessful (r ^. responseStatus)) \_ -> postWith opts "https://events.pagerduty.com/v2/enqueue" payload
@@ -250,32 +267,17 @@ runNotifyProduction = interpret $ \_ -> \case
   GetNotifications -> pure [] -- Production doesn't store notifications
 
 
--- Test interpreter
-runNotifyTest :: (IOE :> es, Log :> es) => Eff (Notify ': es) a -> Eff es ([Notification], a)
-runNotifyTest eff = do
-  ref <- liftIO $ newIORef []
-  result <-
-    interpret
-      ( \_ -> \case
-          SendNotification notification -> do
-            let notifInfo = case notification of
-                  EmailNotification emailData ->
-                    ("Email" :: Text, emailData.receiver, fmap fst emailData.templateOptions)
-                  SlackNotification slackData ->
-                    ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
-                  DiscordNotification discordData ->
-                    ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
-                  WhatsAppNotification whatsappData ->
-                    ("WhatsApp" :: Text, whatsappData.to, Just whatsappData.template)
-                  PagerDutyNotification pagerdutyData ->
-                    ("PagerDuty" :: Text, pagerdutyData.dedupKey, Just pagerdutyData.summary)
-            Log.logInfo "Notification" notifInfo
-            Log.logTrace "Notification payload" notification
-            liftIO $ modifyIORef ref (notification :)
-          GetNotifications -> do
-            notifications <- liftIO $ readIORef ref
-            pure (reverse notifications)
-      )
-      eff
-  notifications <- liftIO $ readIORef ref
-  pure (reverse notifications, result)
+-- Test interpreter that stores notifications in provided IORef
+runNotifyTest :: (IOE :> es, Log :> es) => IORef [Notification] -> Eff (Notify ': es) a -> Eff es a
+runNotifyTest ref = interpret \_ -> \case
+  SendNotification notification -> do
+    let notifInfo = case notification of
+          EmailNotification emailData -> ("Email" :: Text, emailData.receiver, fmap fst emailData.templateOptions)
+          SlackNotification slackData -> ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
+          DiscordNotification discordData -> ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
+          WhatsAppNotification whatsappData -> ("WhatsApp" :: Text, whatsappData.to, Just whatsappData.template)
+          PagerdutyNotification pagerdutyData -> ("PagerDuty" :: Text, pagerdutyData.dedupKey, Just pagerdutyData.summary)
+    Log.logInfo "Notification" notifInfo
+    Log.logTrace "Notification payload" notification
+    liftIO $ modifyIORef ref (notification :)
+  GetNotifications -> liftIO $ reverse <$> readIORef ref

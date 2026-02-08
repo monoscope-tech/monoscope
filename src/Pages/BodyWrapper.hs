@@ -433,7 +433,7 @@ bodyWrapper bcfg child = do
                 sideNav'
                 section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
                   when
-                    (currUser.email == "hello@apitoolkit.io")
+                    (currUser.email == "hello@monoscope.tech")
                     loginBanner
                   unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
@@ -683,7 +683,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , target_ "blank"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Documentation"
-      , href_ "https://apitoolkit.io/docs/"
+      , href_ "https://monoscope.tech/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
@@ -793,7 +793,7 @@ loginBanner = do
       span_ [class_ "font-medium text-textStrong"] "Demo Project"
       span_ [class_ "hidden sm:inline text-textWeak"] "· Explore APIToolkit's features"
     div_ [class_ "flex items-center gap-3"] do
-      a_ [class_ "text-textBrand hover:underline underline-offset-2", href_ "https://apitoolkit.io/docs/onboarding/"] "Docs"
+      a_ [class_ "text-textBrand hover:underline underline-offset-2", href_ "https://monoscope.tech/docs/onboarding/"] "Docs"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login"] "Start Free Trial"
 

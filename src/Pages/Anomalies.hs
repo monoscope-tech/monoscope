@@ -871,7 +871,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                         , title = "No Issues Or Errors."
                         , description = "Start monitoring errors that happened during a request."
                         , actionText = "Error reporting guide"
-                        , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#reporting-errors-to-apitoolkit"
+                        , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#reporting-errors-to-monoscope"
                         }
                 }
           }

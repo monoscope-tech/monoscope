@@ -165,7 +165,7 @@ craftSessionCookie (PersistentSessionId content) rememberSession =
 emptySessionCookie :: SetCookie
 emptySessionCookie =
   defaultSetCookie
-    { setCookieName = "apitoolkit_session"
+    { setCookieName = "monoscope_session"
     , setCookieValue = ""
     , setCookieMaxAge = Just 0
     }

@@ -12,8 +12,7 @@ module Pages.Projects (
   NotifListForm (..),
   integrationsSettingsGetH,
   updateNotificationsChannel,
-  NotificationsUpdatePost (..),
-  PagerDutyConnectForm (..),
+  PagerdutyConnectForm (..),
   pagerdutyConnectH,
   pagerdutyDisconnectH,
   -- ManageMembers
@@ -59,6 +58,7 @@ import Data.Default (Default (..))
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq
 import Data.Effectful.Wreq qualified as W
+import Data.List (partition)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -77,7 +77,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Integrations (SlackData, deletePagerDutyData, getDiscordDataByProjectId, getPagerDutyByProjectId, getProjectSlackData, insertPagerDutyData)
+import Models.Apis.Integrations (SlackData, deletePagerdutyData, getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData, insertPagerdutyData)
 import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
@@ -262,7 +262,7 @@ integrationsSettingsGetH pid = do
           , dailyNotifs = if project.dailyNotif then Just "on" else Nothing
           }
   slackInfo <- getProjectSlackData pid
-  pagerDutyInfo <- getPagerDutyByProjectId pid
+  pagerdutyInfo <- getPagerdutyByProjectId pid
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
   addRespHeaders
@@ -276,39 +276,32 @@ integrationsSettingsGetH pid = do
         , createForm = createProj
         , notifChannel = Just project.notificationsChannel
         , phones = project.whatsappNumbers
+        , emails = project.notifyEmails
         , slackData = slackInfo
-        , pagerDutyData = pagerDutyInfo
+        , pagerdutyData = pagerdutyInfo
         }
 
 
 data NotifListForm = NotifListForm
   { notificationsChannel :: [Text]
   , phones :: [Text]
+  , emails :: [Text]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
 
 
-newtype NotificationsUpdatePost = NotificationsUpdatePost ()
-  deriving stock (Generic, Show)
-
-
-instance ToHtml NotificationsUpdatePost where
-  toHtml _ = ""
-  toHtmlRaw = toHtml
-
-
-updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders NotificationsUpdatePost)
-updateNotificationsChannel pid NotifListForm{notificationsChannel, phones} = do
+updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
+updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, emails} = do
   validationResult <- validateNotificationChannels pid notificationsChannel phones
   case validationResult of
     Left errorMessage -> do
       addErrorToast errorMessage Nothing
-      addRespHeaders $ NotificationsUpdatePost ()
+      integrationsSettingsGetH pid
     Right () -> do
-      _ <- Projects.updateNotificationsChannel pid notificationsChannel phones
+      _ <- Projects.updateNotificationsChannel pid notificationsChannel phones emails
       addSuccessToast "Updated Notification Channels Successfully" Nothing
-      addRespHeaders $ NotificationsUpdatePost ()
+      integrationsSettingsGetH pid
 
 
 validateNotificationChannels :: Projects.ProjectId -> [Text] -> [Text] -> ATAuthCtx (Either Text ())
@@ -345,27 +338,27 @@ validateWhatsapp :: [Text] -> [Text] -> Either Text ()
 validateWhatsapp notificationsChannel numbers = if "phone" `elem` notificationsChannel && null numbers then Left "Provide at least one whatsapp number" else Right ()
 
 
-newtype PagerDutyConnectForm = PagerDutyConnectForm {integrationKey :: Text}
+newtype PagerdutyConnectForm = PagerdutyConnectForm {integrationKey :: Text}
   deriving stock (Generic)
   deriving anyclass (FromForm)
 
 
-pagerdutyConnectH :: Projects.ProjectId -> PagerDutyConnectForm -> ATAuthCtx (RespHeaders (Html ()))
+pagerdutyConnectH :: Projects.ProjectId -> PagerdutyConnectForm -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyConnectH pid form = do
   let key = T.strip form.integrationKey
-  if T.length key < 20 || not (T.all isAlphaNum key)
-    then addErrorToast "Invalid PagerDuty integration key format" Nothing >> addRespHeaders (renderPagerDutyIntegration pid.toText Nothing)
+  if T.length key < 20 || T.null key
+    then addErrorToast "PagerDuty integration key is too short" Nothing >> integrationsSettingsGetH pid
     else do
-      void $ insertPagerDutyData pid key
+      void $ insertPagerdutyData pid key
       addSuccessToast "PagerDuty connected" Nothing
-      addRespHeaders $ renderPagerDutyIntegration pid.toText (Just $ Slack.PagerDutyData pid key)
+      integrationsSettingsGetH pid
 
 
 pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyDisconnectH pid = do
-  void $ deletePagerDutyData pid
+  void $ deletePagerdutyData pid
   addSuccessToast "PagerDuty disconnected" Nothing
-  addRespHeaders $ renderPagerDutyIntegration pid.toText Nothing
+  integrationsSettingsGetH pid
 
 
 data IntegrationsConfig = IntegrationsConfig
@@ -376,45 +369,91 @@ data IntegrationsConfig = IntegrationsConfig
   , createForm :: CreateProjectForm
   , notifChannel :: Maybe (V.Vector Projects.NotificationChannel)
   , phones :: V.Vector Text
+  , emails :: V.Vector Text
   , slackData :: Maybe SlackData
-  , pagerDutyData :: Maybe Slack.PagerDutyData
+  , pagerdutyData :: Maybe Slack.PagerdutyData
   }
 
 
 integrationsBody :: IntegrationsConfig -> Html ()
 integrationsBody IntegrationsConfig{..} = do
   section_ [id_ "main-content", class_ "p-3 py-5 sm:p-6 overflow-y-scroll h-full"] do
-    div_ [class_ "mx-auto", style_ "max-width:1000px"] do
+    div_ [class_ "mx-auto", style_ "max-width:1200px"] do
       let pid = projectId.toText
-      div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong mb-6 mt-10"] do
+      -- Info banner - using common region to group related info
+      div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong mb-8"] do
         faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
-        "Channels configured here are available to the "
+        "Channels configured here are automatically included in the "
         a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
-        " team. Alerts targeting @everyone will notify all members and channels below."
-      div_
-        [ class_ ""
-        , hxPost_ [text|/p/$pid/notifications-channels|]
-        , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags()}"
-        , hxSwap_ "none"
-        , hxTrigger_ "submit"
-        , id_ "notifsForm"
-        ]
-        do
-          h2_ [class_ "text-textStrong text-3xl font-medium mb-5"] "Project Notifications"
-          div_ [class_ "flex flex-col gap-4"] do
-            p_ [] "Select channels to receive updates on this project."
-            renderNotificationOption "Email Notifications" "Receive project updates via email" "email" Projects.NEmail notifChannel (faSprite_ "envelope" "solid" "h-6 w-6") ""
-            renderNotificationOption "Slack" "Send notifications to Slack channels" "slack" Projects.NSlack notifChannel (faSprite_ "slack" "solid" "h-6 w-6") (renderSlackIntegration envConfig pid slackData)
-            renderNotificationOption "Discord" "Send notifications to Discord servers" "discord" Projects.NDiscord notifChannel (faSprite_ "discord" "solid" "h-6 w-6") (renderDiscordIntegration envConfig pid)
-            renderNotificationOption "WhatsApp" "Send notification via WhatsApp" "phone" Projects.NPhone notifChannel (faSprite_ "whatsapp" "solid" "h-6 w-6") renderWhatsappIntegration
-            renderNotificationOption "PagerDuty" "Page on-call engineers for monitor alerts" "pagerduty" Projects.NPagerDuty notifChannel (faSprite_ "pager" "solid" "h-6 w-6") (renderPagerDutyIntegration projectId.toText pagerDutyData)
-            button_ [class_ "btn btn-primary w-max", [__| on click htmx.trigger("#notifsForm", "submit")|]] "Save Selections"
+        " team."
+
+      -- Integration form
+      div_ [id_ "integrations-form-section"] do
+        div_
+          [ class_ ""
+          , hxPost_ [text|/p/$pid/notifications-channels|]
+          , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags(), emails: getEmails()}"
+          , hxSwap_ "none"
+          , hxTrigger_ "submit"
+          , id_ "notifsForm"
+          ]
+          do
+            h2_ [class_ "text-textStrong text-3xl font-medium mb-2"] "Integrations"
+            p_ [class_ "text-textWeak mb-8"] "Through what channels can we reach you?"
+
+            -- Group integrations by connection status
+            let integrations =
+                  [ ("email", "Email Notifications", "Receive project updates via email", Projects.NEmail, True, faSprite_ "envelope" "solid" "h-8 w-8", renderEmailIntegration)
+                  , ("slack", "Slack", "Send notifications to Slack channels", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-8 w-8", renderSlackIntegration envConfig pid slackData)
+                  , ("discord", "Discord", "Send notifications to Discord servers", Projects.NDiscord, True, faSprite_ "discord" "solid" "h-8 w-8", renderDiscordIntegration envConfig pid)
+                  , ("phone", "WhatsApp", "Send notification via WhatsApp", Projects.NPhone, not $ V.null phones, faSprite_ "whatsapp" "solid" "h-8 w-8", renderWhatsappIntegration)
+                  , ("pagerduty", "PagerDuty", "Page on-call engineers for monitor alerts", Projects.NPagerduty, isJust pagerdutyData, faSprite_ "pager" "solid" "h-8 w-8", renderPagerdutyIntegration projectId.toText pagerdutyData)
+                  ]
+                (connected, available) = partition (\(_, _, _, channel, configured, _, _) -> configured && channel `elem` fromMaybe [] notifChannel) integrations
+
+            -- Connected integrations section - using proximity to group connected items
+            unless (null connected) do
+              h3_ [class_ "text-textStrong text-lg font-medium mb-4"] "Connected"
+              div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-4"] do
+                forM_ connected \(val, title, desc, channel, configured, icon, content) ->
+                  renderNotificationOption pid title desc val channel notifChannel configured icon content
+
+            -- Available integrations section - increased spacing for clear visual separation
+            let availableToShow = if null connected then integrations else available
+            unless (null availableToShow) do
+              h3_ [class_ "text-textStrong text-lg font-medium mb-4 mt-12"] $ if null connected then "Available Integrations" else "Available"
+              div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-4"] do
+                forM_ availableToShow \(val, title, desc, channel, configured, icon, content) ->
+                  renderNotificationOption pid title desc val channel notifChannel configured icon content
+
+            -- Save button - clear separation from sections above
+            div_ [class_ "mt-10 pt-6 border-t border-strokeWeak"] do
+              button_
+                [ class_ "btn btn-primary w-full sm:w-auto"
+                , hxPost_ [text|/p/$pid/notifications-channels|]
+                , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags(), emails: getEmails()}"
+                , hxTarget_ "#integrations-form-section"
+                , hxSelect_ "#integrations-form-section"
+                , hxSwap_ "outerHTML swap:0.3s"
+                ]
+                "Save Selections"
+
+      -- Test History Section - major section break
+      div_ [class_ "mt-16 pt-8 border-t border-strokeWeak pb-8"] do
+        h3_ [class_ "text-textStrong text-2xl font-medium mb-6"] "Test History"
+        div_ [id_ "test-history", hxGet_ [text|/p/$pid/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
+          p_ [class_ "text-textWeak text-center py-4"] "Loading..."
+
   let tgs = decodeUtf8 $ AE.encode $ V.toList phones
+      ems = decodeUtf8 $ AE.encode $ V.toList emails
   script_
     [text|
      document.addEventListener('DOMContentLoaded', function() {
       window.tagify = createTagify('#phones_input');
       window.tagify.addTags($tgs);
+
+      window.emailTagify = createTagify('#emails_input');
+      window.emailTagify.addTags($ems);
     })
 
    function getChecked() {
@@ -423,24 +462,76 @@ integrationsBody IntegrationsConfig{..} = do
      return vals
    }
 
+   function getEmails() {
+     const tag = window.emailTagify.value
+     const values = tag.map(tag => tag.value);
+     return values || []
+   }
+
 |]
 
 
-renderNotificationOption :: Text -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Html () -> Html () -> Html ()
-renderNotificationOption title description value channel notifChannel icon extraContent = do
+renderInlineTestButton :: Text -> Text -> Html ()
+renderInlineTestButton pid channel =
+  form_ [hxPost_ [text|/p/$pid/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
+    input_ [type_ "hidden", name_ "channel", value_ channel]
+    input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
+    button_ [type_ "submit", class_ "btn btn-xs btn-outline gap-1", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] do
+      faSprite_ "flask-vial" "regular" "h-3 w-3"
+      "Test"
+
+
+renderNotificationOption :: Text -> Text -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Bool -> Html () -> Html () -> Html ()
+renderNotificationOption pid title description value channel notifChannel isConfigured icon extraContent = do
   let isChecked = channel `elem` fromMaybe [] notifChannel
-  div_ [class_ $ "bg-bgRaised rounded-lg border border-strokeWeak shadow-xs " <> if isChecked then "border-l-4 border-l-primary" else ""] do
-    div_ [class_ "p-6 pb-3"] do
-      div_ [class_ "flex items-center justify-between"] do
-        div_ [class_ "flex items-center gap-3"] do
-          div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-fillWeak"] icon
-          div_ $ do
-            h3_ [class_ "text-lg font-semibold"] $ toHtml title
-            p_ [class_ "text-sm text-textWeak"] $ toHtml description
-        label_ [class_ "relative inline-flex items-center cursor-pointer"] do
-          input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable notification via " <> toText value, class_ "toggle toggle-primary"]
-    div_ [class_ "px-4 pb-6"] do
-      extraContent
+      isActive = isChecked && isConfigured
+  div_ [class_ "bg-bgRaised rounded-lg border shadow-xs hover-only:hover:shadow-md transition-shadow duration-200", class_ $ if isActive then "border-fillBrand-weak" else "border-strokeWeak"] do
+    div_ [class_ "p-4"] do
+      -- Header: icon, title/desc, status badge
+      div_ [class_ "flex items-start justify-between gap-3 mb-3"] do
+        div_ [class_ "flex items-start gap-3 flex-1 min-w-0"] do
+          div_ [class_ "flex h-10 w-10 items-center justify-center rounded-lg shrink-0", class_ $ if isActive then "bg-fillBrand-weak" else "bg-fillWeak"] icon
+          div_ [class_ "flex-1 min-w-0"] do
+            h3_ [class_ "text-base font-semibold text-textStrong"] $ toHtml title
+            p_ [class_ "text-sm text-textWeak mt-0.5"] $ toHtml description
+        div_ $ integrationStatusBadge_ isConfigured isActive
+
+      -- Test button area and toggle (always rendered to prevent layout shift)
+      div_ [class_ "flex items-center justify-between gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
+        -- Test button area - always reserve space
+        div_ [class_ "flex-1", id_ $ value <> "-test-button"] do
+          if isActive
+            then renderInlineTestButton pid value
+            else button_ [type_ "button", disabled_ "", class_ "btn btn-xs btn-outline btn-neutral gap-1 cursor-not-allowed", Aria.label_ "Test unavailable - enable integration first"] do
+              faSprite_ "flask-vial" "regular" "h-3 w-3"
+              "Test"
+        -- Toggle
+        label_ [class_ "relative inline-flex items-center cursor-pointer tap-target", Aria.label_ $ if isChecked then "Disable " <> title else "Enable " <> title] do
+          input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable notification via " <> title, class_ "toggle toggle-primary"]
+
+    -- Configuration content
+    when (isChecked || not (T.null $ toStrict $ renderText extraContent)) do
+      div_ [class_ "px-4 pb-4 border-t border-strokeWeak pt-4"] extraContent
+
+
+integrationStatusBadge_ :: Bool -> Bool -> Html ()
+integrationStatusBadge_ isConfigured isActive
+  | isActive = span_ [class_ "badge badge-success badge-sm gap-1 shrink-0"] do
+      faSprite_ "circle-check" "solid" "h-3 w-3"
+      "Active"
+  | isConfigured = span_ [class_ "badge badge-ghost badge-sm gap-1 shrink-0"] do
+      faSprite_ "circle" "regular" "h-3 w-3"
+      "Connected"
+  | otherwise = span_ [class_ "badge badge-ghost badge-sm shrink-0"] "Configure"
+
+
+renderEmailIntegration :: Html ()
+renderEmailIntegration = do
+  div_ [class_ "flex flex-col gap-2"] $ do
+    p_ [class_ "text-xs text-textWeak mb-2"] "Project members are automatically included via the @everyone team. Add additional emails below:"
+    div_ [class_ "flex w-full items-center gap-1"] $ do
+      span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Additional email addresses"
+    input_ [class_ "input rounded-lg w-full border border-strokeStrong", term "pattern" "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", type_ "text", id_ "emails_input"]
 
 
 renderWhatsappIntegration :: Html ()
@@ -469,16 +560,28 @@ renderDiscordIntegration envCfg pid = do
     span_ [class_ "text-sm text-textStrong font-semibold"] "Add to Discord"
 
 
-renderPagerDutyIntegration :: Text -> Maybe Slack.PagerDutyData -> Html ()
-renderPagerDutyIntegration pid = div_ [id_ "pagerduty-integration"] . maybe disconnectedUI (const connectedUI)
+renderPagerdutyIntegration :: Text -> Maybe Slack.PagerdutyData -> Html ()
+renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . maybe disconnectedUI (const connectedUI)
   where
     connectedUI = do
-      p_ [class_ "text-sm text-textSuccess flex items-center gap-2"] $ faSprite_ "check-circle" "solid" "h-4 w-4" >> "Connected"
-      button_ [class_ "btn btn-sm btn-error mt-2", hxPost_ [text|/p/$pid/integrations/pagerduty/disconnect|], hxTarget_ "#pagerduty-integration", hxSwap_ "innerHTML"] "Disconnect"
-    disconnectedUI = form_ [class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/integrations/pagerduty|], hxTarget_ "#pagerduty-integration", hxSwap_ "innerHTML"] do
+      p_ [class_ "text-sm text-textSuccess flex items-center gap-2"] $ faSprite_ "circle-check" "regular" "h-4 w-4" >> "Connected"
+      button_ [class_ "btn btn-sm btn-outline mt-2", hxPost_ [text|/p/$pid/integrations/pagerduty/disconnect|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] "Disconnect"
+    disconnectedUI = form_ [class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/integrations/pagerduty|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] do
       input_ [class_ "input rounded-lg w-full border border-strokeStrong", type_ "text", name_ "integrationKey", placeholder_ "Events API v2 Integration Key"]
       p_ [class_ "text-xs text-textWeak"] "Get from: PagerDuty → Services → Integrations → Events API v2"
-      button_ [class_ "btn btn-sm btn-primary w-max", type_ "submit"] "Connect"
+      button_ [class_ "btn btn-sm btn-outline w-max", type_ "submit"] "Connect"
+
+
+renderTeamTestButton :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Bool -> Html ()
+renderTeamTestButton pid teamId channel label icon isConfigured =
+  form_ [hxPost_ [text|/p/${pid.toText}/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ $ "flex items-center justify-between " <> if not isConfigured then "opacity-50" else ""] do
+    input_ [type_ "hidden", name_ "channel", value_ channel]
+    input_ [type_ "hidden", name_ "teamId", value_ teamId]
+    input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
+    div_ [class_ "flex items-center gap-2"] do
+      faSprite_ icon "solid" "h-3.5 w-3.5 text-textWeak"
+      span_ [class_ "text-xs"] $ toHtml label
+    button_ ([type_ "submit", class_ "btn btn-xs btn-outline", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] <> bool [] [disabled_ ""] (not isConfigured)) "Test"
 
 
 --------------------------------------------------------------------------------
@@ -696,12 +799,9 @@ manageTeamsGetH pid layoutM = do
 manageTeamsPage :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberVM -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector ProjectMembers.TeamVM -> Html ()
 encodeChannels :: [BotUtils.Channel] -> Text
 encodeChannels = decodeUtf8 . AE.encode . map \x -> AE.object ["name" AE..= ("#" <> x.channelName), "value" AE..= x.channelId]
-
-
 manageTeamsPage pid projMembers channels discordChannels teams = do
   let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
       (channelWhiteList, discordWhiteList) = (encodeChannels channels, encodeChannels discordChannels)
-      (everyoneTeams, regularTeams) = V.partition (.is_everyone) teams
   section_ [id_ "main-content", class_ "w-full py-8"] do
     div_ [class_ "p-6 w-full"] do
       div_ [class_ "mb-8 w-full flex items-center justify-between"] do
@@ -712,47 +812,26 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
         teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
 
-      forM_ everyoneTeams \everyone -> everyoneTeamCard pid everyone (V.length projMembers)
-
-      unless (V.null regularTeams) do
+      unless (V.null teams) do
         let renderTeamNameCol team = nameCell pid team.name team.description team.handle
             renderModifiedCol team = span_ [class_ "monospace text-textWeak"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
             renderMembersCol team = memberCell team.members
             renderNotificationsCol = notifsCell
             tableCols = [Table.col "Name" renderTeamNameCol, Table.col "Modified" renderModifiedCol, Table.col "Members" renderMembersCol, Table.col "Notifications" renderNotificationsCol]
-            table = Table
-              { config = def{Table.elemID = "teams_table", Table.renderAsTable = True, Table.bulkActionsInHeader = Just 0}
-              , columns = tableCols
-              , rows = regularTeams
-              , features = def
-                  { Table.rowId = Just \team -> UUID.toText team.id
-                  , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-                  , Table.bulkActions = [Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}]
-                  , Table.search = Just Table.ClientSide
-                  }
-              }
+            table =
+              Table
+                { config = def{Table.elemID = "teams_table", Table.renderAsTable = True, Table.bulkActionsInHeader = Just 0}
+                , columns = tableCols
+                , rows = teams
+                , features =
+                    def
+                      { Table.rowId = Just \team -> UUID.toText team.id
+                      , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                      , Table.bulkActions = [Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}]
+                      , Table.search = Just Table.ClientSide
+                      }
+                }
         div_ [class_ "w-full mt-6"] $ toHtml table
-
-
-everyoneTeamCard :: Projects.ProjectId -> ProjectMembers.TeamVM -> Int -> Html ()
-everyoneTeamCard pid everyone memberCount = do
-  let stat_ icon iconType count label = unless (count == 0) $ div_ [class_ "flex items-center gap-2 text-textWeak"] $ faSprite_ icon iconType "h-4 w-4" >> span_ [] (toHtml $ show count <> " " <> label)
-  div_ [class_ "surface-raised rounded-2xl p-6 mb-6 border-l-4 border-l-primary"] do
-    div_ [class_ "flex items-start justify-between"] do
-      div_ [class_ "flex items-center gap-3"] do
-        div_ [class_ "flex h-10 w-10 items-center justify-center rounded-full bg-primary/10"] $ faSprite_ "globe" "solid" "h-5 w-5 text-primary"
-        div_ do
-          div_ [class_ "flex items-center gap-2"] $ span_ [class_ "text-lg font-semibold text-textStrong"] "@everyone" >> span_ [class_ "badge badge-sm badge-primary"] "Default"
-          p_ [class_ "text-sm text-textWeak mt-0.5"] "Fallback team - receives alerts when no team is specified"
-      a_ [href_ ("/p/" <> pid.toText <> "/manage_teams/everyone"), class_ "btn btn-sm btn-ghost"] (faSprite_ "eye" "regular" "h-4 w-4 mr-1" >> "View")
-    div_ [class_ "mt-4 pt-4 border-t border-strokeWeak"] do
-      div_ [class_ "flex flex-wrap gap-4 text-sm"] do
-        stat_ "users" "regular" memberCount "members"
-        stat_ "slack" "solid" (V.length everyone.slack_channels) "Slack"
-        stat_ "discord" "solid" (V.length everyone.discord_channels) "Discord"
-        stat_ "envelope" "solid" (V.length everyone.notify_emails) "emails"
-        stat_ "phone" "solid" (V.length everyone.phone_numbers) "phones"
-      p_ [class_ "text-xs text-textWeak mt-3"] $ faSprite_ "circle-info" "regular" "h-3 w-3 inline mr-1" >> "Channels configured on the " >> a_ [href_ ("/p/" <> pid.toText <> "/integrations"), class_ "text-textBrand underline"] "Integrations page" >> " are automatically included in @everyone."
 
 
 nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
@@ -827,9 +906,10 @@ teamPage pid team projMembers slackChannels discordChannels = do
     when isEveryone do
       div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong mb-6"] do
         faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
-        "@everyone is the fallback team that receives alerts when no team is specified. It automatically includes all project members. "
-        a_ [href_ ("/p/" <> pid.toText <> "/integrations"), class_ "text-textBrand underline"] "Configure integrations"
-        " to add Slack, Discord, and other notification channels."
+        "@everyone automatically includes all project members. "
+        "Channels configured on the "
+        a_ [href_ ("/p/" <> pid.toText <> "/integrations"), class_ "text-textBrand underline"] "Integrations page"
+        " are automatically included in @everyone."
     div_ [class_ "flex gap-4 h-full"] do
       div_ [class_ "w-4/12 space-y-4"] do
         card_ (faSprite_ "circle-info" "regular" "h-4 w-4" >> "Details") do
@@ -849,6 +929,15 @@ teamPage pid team projMembers slackChannels discordChannels = do
           notifRow_ "envelope" "regular" "Email" (V.toList team.notify_emails) isEveryone
           notifRow_ "slack" "solid" "Slack" (V.toList $ V.map (resolveChannel slackChannels) team.slack_channels) isEveryone
           notifRow_ "discord" "solid" "Discord" (V.toList $ V.map (resolveChannel discordChannels) team.discord_channels) isEveryone
+          notifRow_ "whatsapp" "solid" "WhatsApp" (V.toList team.phone_numbers) False
+          notifRow_ "pager" "solid" "PagerDuty" (V.toList team.pagerduty_services) False
+        unless isEveryone do
+          card_ (faSprite_ "flask-vial" "regular" "h-4 w-4" >> "Test Notifications") $ div_ [class_ "mt-3 space-y-2"] do
+            renderTeamTestButton pid (UUID.toText team.id) "slack" "Slack" "slack" (not $ V.null team.slack_channels)
+            renderTeamTestButton pid (UUID.toText team.id) "discord" "Discord" "discord" (not $ V.null team.discord_channels)
+            renderTeamTestButton pid (UUID.toText team.id) "whatsapp" "WhatsApp" "whatsapp" (not $ V.null team.phone_numbers)
+            renderTeamTestButton pid (UUID.toText team.id) "pagerduty" "PagerDuty" "pager" (not $ V.null team.pagerduty_services)
+            div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ [text|/p/${pid.toText}/integrations/history|], hxTrigger_ "testSent from:body", hxSwap_ "innerHTML"] mempty
       div_ [class_ "flex-1 space-y-4"] do
         lazySection_ "monitors-section" "bell" "Alerts" "Search alerts..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
         lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText team.id)
@@ -1073,7 +1162,7 @@ projectOnboardingH = do
       pid <- UUIDId <$> UUID.genUUID
       let pr = Projects.CreateProject{id = pid, title = "Onboarding Project", description = "", paymentPlan = "ONBOARDING", timeZone = "", subId = Nothing, firstSubItemId = Nothing, orderId = Nothing, weeklyNotif = True, dailyNotif = True, endpointAlerts = True, errorAlerts = True}
       _ <- Projects.insertProject pr
-      _ <- ProjectMembers.createEveryoneTeam pid
+      _ <- ProjectMembers.createEveryoneTeam pid sess.user.id
       projectKeyUUID <- UUID.genUUID
       let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
       pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64

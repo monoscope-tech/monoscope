@@ -374,8 +374,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , teamBulkAction :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Notifications
-    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders Integrations.NotificationsUpdatePost)
-  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerDutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
+    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
+  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
   , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
   , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Pages.Integrations.TestForm :> Post '[HTML] (RespHeaders (Html ()))
   , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Pages.Integrations.NotificationTestHistoryGet)

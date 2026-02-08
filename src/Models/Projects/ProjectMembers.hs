@@ -217,13 +217,13 @@ createTeam pid uid TeamDetails{..}
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
-createEveryoneTeam :: DB es => Projects.ProjectId -> Eff es Int64
-createEveryoneTeam pid = PG.execute q (Only pid)
+createEveryoneTeam :: DB es => Projects.ProjectId -> Users.UserId -> Eff es Int64
+createEveryoneTeam pid uid = PG.execute q (pid, uid)
   where
     q =
       [sql| INSERT INTO projects.teams
-               (project_id, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
-               VALUES (?, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
+               (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
+               VALUES (?, ?, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
                        '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
@@ -351,42 +351,7 @@ data TeamMemberVM = TeamMemberVM
 
 
 getTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
-getTeamByHandle pid handle = listToMaybe <$> PG.query q (pid, handle)
-  where
-    q =
-      [sql|
-      SELECT
-        t.id,
-        t.created_at,
-        t.updated_at,
-        t.created_by,
-        t.name,
-        t.handle,
-        t.description,
-        t.notify_emails,
-        t.slack_channels,
-        t.discord_channels,
-        t.phone_numbers,
-        t.pagerduty_services,
-        t.is_everyone,
-        COALESCE(
-          array_agg(
-            jsonb_build_object(
-              'memberId', u.id,
-              'memberName', concat_ws(' ', u.first_name, u.last_name),
-              'memberEmail', u.email,
-              'memberAvatar', '/api/avatar/' || u.id::text
-            ) ORDER BY u.first_name, u.last_name
-          ) FILTER (WHERE u.id IS NOT NULL),
-          '{}'
-        ) AS members
-      FROM projects.teams t
-      LEFT JOIN unnest(t.members) AS mid ON true
-      LEFT JOIN users.users u ON u.id = mid
-      WHERE t.project_id = ? AND t.handle = ? AND t.deleted_at IS NULL
-      GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
-               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
-    |]
+getTeamByHandle pid handle = listToMaybe <$> getTeamsByHandles pid [handle]
 
 
 deleteTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es ()

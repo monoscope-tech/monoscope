@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerDutyAlertToService) where
+module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
@@ -346,7 +346,15 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
 
 
-sendPagerDutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
-sendPagerDutyAlertToService integrationKey (MonitorsAlert monitorTitle monitorUrl) projectTitle _ =
+sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
+sendPagerdutyAlertToService integrationKey (MonitorsAlert monitorTitle monitorUrl) projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": " <> monitorTitle) Notify.PDCritical (AE.object ["url" AE..= monitorUrl]) monitorUrl
-sendPagerDutyAlertToService _ _ _ _ = pass
+sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
+  let endpointUrl = projectUrl <> "/anomalies/by_hash/" <> hash
+      endpointNames = T.intercalate ", " $ V.toList endpoints
+  in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
+sendPagerdutyAlertToService integrationKey (RuntimeErrorAlert issueId errorData) projectTitle projectUrl =
+  let errorUrl = projectUrl <> "/anomalies/by_hash/" <> fromMaybe issueId errorData.hash
+  in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
+sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
+sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
