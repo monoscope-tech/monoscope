@@ -440,7 +440,7 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
   pass
 
 
-verifyDiscordSignature :: (Log.Log :> es) => ByteString -> ByteString -> ByteString -> ByteString -> Eff es Bool
+verifyDiscordSignature :: Log.Log :> es => ByteString -> ByteString -> ByteString -> ByteString -> Eff es Bool
 verifyDiscordSignature publicKey signatureHex timestamp rawBody = do
   let result = do
         s <- first show $ Base16.decode signatureHex
