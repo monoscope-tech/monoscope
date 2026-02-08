@@ -1986,16 +1986,17 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
       newAlertIdM <- forM existingMonitorM \monitor -> do
         newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
         let Monitors.QueryMonitor{id = _, widgetId = _, createdAt = _, updatedAt = _, alertLastTriggered = _, warningLastTriggered = _, currentStatus = _, ..} = monitor
-            newMonitor = Monitors.QueryMonitor
-              { id = newMonitorId
-              , createdAt = now
-              , updatedAt = now
-              , widgetId = Just newWidgetId
-              , alertLastTriggered = Nothing
-              , warningLastTriggered = Nothing
-              , currentStatus = Monitors.MSNormal
-              , ..
-              }
+            newMonitor =
+              Monitors.QueryMonitor
+                { id = newMonitorId
+                , createdAt = now
+                , updatedAt = now
+                , widgetId = Just newWidgetId
+                , alertLastTriggered = Nothing
+                , warningLastTriggered = Nothing
+                , currentStatus = Monitors.MSNormal
+                , ..
+                }
         void $ Monitors.queryMonitorUpsert newMonitor
         pure newMonitorId.toText
 
