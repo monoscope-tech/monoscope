@@ -52,6 +52,7 @@ module Models.Apis.Issues (
   getOrCreateConversation,
   insertChatMessage,
   selectChatHistory,
+  tryAcquireChatMigrationLock,
 
   -- * Thread ID Helpers
   slackThreadToConversationId,
@@ -61,6 +62,7 @@ module Models.Apis.Issues (
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (Default, def)
+import Data.Hashable (hash)
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, getCurrentTime)
@@ -662,3 +664,15 @@ slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
 
 discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId = textToConversationId
+
+
+-- | Try to acquire an advisory lock for chat migration to prevent race conditions.
+-- Returns True if lock was acquired, False if already locked (another request is migrating).
+-- Uses PostgreSQL advisory locks which are automatically released on connection close.
+tryAcquireChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es Bool
+tryAcquireChatMigrationLock convId = do
+  -- Use conversation ID hash as lock key (pg_try_advisory_lock takes bigint)
+  let lockKey = fromIntegral @Int @Int64 $ abs $ hash $ show convId.unwrap
+  -- Try to acquire lock, returns immediately with True/False
+  result <- PG.query [sql| SELECT pg_try_advisory_lock(?) |] (Only lockKey)
+  pure $ fromMaybe False $ viaNonEmpty head result >>= \(Only acquired) -> Just acquired

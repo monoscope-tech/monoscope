@@ -3,6 +3,7 @@
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Data.Aeson qualified as AE
+import Effectful.Ki qualified as Ki
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
@@ -44,7 +45,7 @@ import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError (errBody), err400, err404)
+import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
@@ -108,6 +109,14 @@ instance AE.FromJSON InteractionType where
   parseJSON = AE.withScientific "InteractionType" \n -> case round n of
     1 -> pure Ping
     _ -> pure ApplicationCommand
+
+
+-- Discord response type helpers
+pongResponse :: AE.Value
+pongResponse = AE.object ["type" AE..= (1 :: Int)]
+
+deferredResponse :: AE.Value
+deferredResponse = AE.object ["type" AE..= (5 :: Int)]
 
 
 -- Interaction data
@@ -213,21 +222,24 @@ discordInteractionsH rawBody signatureM timestampM = do
   Log.logTrace ("Discord interaction received" :: Text) $ AE.object ["type" AE..= show interaction.interaction_type, "guild_id" AE..= interaction.guild_id, "channel_id" AE..= interaction.channel_id, "data" AE..= interaction.data_i]
 
   case interaction.interaction_type of
-    Ping -> pure $ AE.object ["type" AE..= 1]
+    Ping -> pure pongResponse
     ApplicationCommand -> handleApplicationCommand interaction envCfg authCtx
     MessageComponent -> handleApplicationCommand interaction envCfg authCtx
   where
     validateSignature envCfg (Just sig) (Just tme) body
       | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pass
-      | otherwise = throwError err404{errBody = "Invalid signature"}
-    validateSignature _ _ _ _ = throwError err404{errBody = "Invalid signature"}
+      | otherwise = throwError err401{errBody = "Invalid or missing signature"}
+    validateSignature _ _ _ _ = throwError err401{errBody = "Invalid or missing signature"}
 
     handleApplicationCommand :: DiscordInteraction -> EnvConfig -> AuthContext -> ATBaseCtx AE.Value
     handleApplicationCommand interaction envCfg authCtx = do
       cmdData <- case data_i interaction of
         Nothing -> throwError err400{errBody = "No command data provided"}
         Just cmd -> pure cmd
-      discordData <- getDiscordData (fromMaybe "" (maybe interaction.guild_id (\c -> c.guild_id) interaction.channel))
+      guildId <- case maybe interaction.guild_id (\c -> c.guild_id) interaction.channel of
+        Nothing -> throwError err400{errBody = "Missing guild_id in interaction"}
+        Just gid -> pure gid
+      discordData <- getDiscordData guildId
       case discordData of
         Nothing -> pure $ AE.object ["type" AE..= (4 :: Int), "data" AE..= formatBotError Discord ServiceError]
         Just d -> handleCommand cmdData interaction envCfg authCtx d
@@ -323,12 +335,13 @@ discordInteractionsH rawBody signatureM timestampM = do
             _ <- Issues.getOrCreateConversation discordData.projectId convId Issues.CTDiscordThread (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
             existingHistory <- Issues.selectChatHistory convId
             when (null existingHistory) $ do
-              msgs <- getThreadStarterMessage interaction envCfg.discordBotToken
-              case msgs of
-                Just messages -> forM_ messages $ \m ->
-                  let role = if m.author.username == "APItoolkit" then "assistant" else "user"
+              -- Use advisory lock to prevent race condition in thread migration
+              lockAcquired <- Issues.tryAcquireChatMigrationLock convId
+              when lockAcquired $ do
+                msgs <- getThreadStarterMessage interaction envCfg.discordBotToken
+                for_ msgs \messages -> forM_ messages \m ->
+                  let role = if m.author.username `elem` ["APItoolkit", "Monoscope"] then "assistant" else "user"
                    in Issues.insertChatMessage discordData.projectId convId role m.content Nothing Nothing
-                Nothing -> pass
             dbMessages <- Issues.selectChatHistory convId
             let threadContext = formatHistoryAsContext "Discord" $ map AI.dbMessageToLLMMessage dbMessages
             result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiApiKey
@@ -413,7 +426,7 @@ hereSuccessResponse =
 sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 sendDeferredResponse interactionId interactionToken botToken = do
   let url = toString $ "https://discord.com/api/v10/interactions/" <> interactionId <> "/" <> interactionToken <> "/callback"
-      payload = AE.encode $ AE.object ["type" AE..= 5]
+      payload = AE.encode deferredResponse
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") url payload
   pass
 
@@ -453,7 +466,7 @@ data DiscordMessage = DiscordMessage
   deriving anyclass (AE.FromJSON)
 
 
-getThreadStarterMessage :: (HTTP :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
+getThreadStarterMessage :: (HTTP :> es, Log.Log :> es, Ki.StructuredConcurrency :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
@@ -462,16 +475,17 @@ getThreadStarterMessage interaction botToken = do
             url = toString $ baseUrl <> channelId <> "/messages?limit=50"
             starterMessageUrl = toString $ baseUrl <> pId <> "/messages/" <> channelId
             opts = defaults & authHeader botToken & contentTypeHeader "application/json"
-        response <- getWith opts url
-        response' <- getWith opts starterMessageUrl
+        (response, response') <- Ki.scoped \scope -> do
+          t1 <- Ki.fork scope $ getWith opts url
+          t2 <- Ki.fork scope $ getWith opts starterMessageUrl
+          liftA2 (,) (Ki.atomically $ Ki.await t1) (Ki.atomically $ Ki.await t2)
         case AE.eitherDecode (response ^. responseBody) of
           Left err -> do
             Log.logAttention ("Error decoding Discord thread messages: " <> toText err) ()
             return Nothing
           Right messages -> do
             case AE.eitherDecode (response' ^. responseBody) of
-              Left err -> do
-                return $ Just messages
+              Left err -> return $ Just messages
               Right (message :: DiscordMessage) -> return $ Just (messages <> [message])
       _ -> pure Nothing
     Nothing -> pure Nothing

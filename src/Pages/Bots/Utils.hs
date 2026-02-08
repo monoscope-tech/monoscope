@@ -11,6 +11,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
+import Data.HashMap.Strict qualified as HM
 import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
@@ -45,17 +46,12 @@ data BotType = Discord | Slack | WhatsApp
 
 
 -- | Status emoji constants for visual indicators (always paired with text for accessibility)
+botEmojiMap :: HM.HashMap Text Text
+botEmojiMap = HM.fromList [("success", "🟢"), ("warning", "🟡"), ("error", "🔴"), ("chart", "📊"), ("search", "🔍"), ("table", "📋"), ("loading", "⏳"), ("bell", "🔔")]
+{-# NOINLINE botEmojiMap #-}
+
 botEmoji :: Text -> Text
-botEmoji = \case
-  "success" -> "🟢"
-  "warning" -> "🟡"
-  "error" -> "🔴"
-  "chart" -> "📊"
-  "search" -> "🔍"
-  "table" -> "📋"
-  "loading" -> "⏳"
-  "bell" -> "🔔"
-  _ -> ""
+botEmoji = HM.lookupDefault "" ?? botEmojiMap
 
 
 -- | Error types for contextual error messages
@@ -188,9 +184,9 @@ formatSpans spans =
 -- | Construct signed URL for widget PNG endpoint. Logs error and returns empty string if URL exceeds 8000 chars.
 widgetPngUrl :: (IOE :> es, Log :> es) => Text -> Text -> Projects.ProjectId -> Widget.Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since from to =
-  let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
-      encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
-      sig = signWidgetUrl secret pid widgetJson
+  let widgetJsonBS = toStrict $ AE.encode widget
+      encodedJson = decodeUtf8 @Text $ urlEncode True widgetJsonBS
+      sig = signWidgetUrl secret pid (decodeUtf8 @Text widgetJsonBS)
       timeParams = mconcat $ catMaybes [("&since=" <>) <$> since, ("&from=" <>) <$> from, ("&to=" <>) <$> to]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000

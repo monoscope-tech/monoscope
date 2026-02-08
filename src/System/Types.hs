@@ -142,10 +142,10 @@ effToServantHandler env logger tp app =
 effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandlerTest env logger tp app =
   app
-    & ELLM.runLLMGolden "./golden/"
+    & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
-    & runHTTPGolden "./golden/"
+    & runHTTPGolden "./tests/golden/"
     & runWithConnectionPool env.pool
     & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)

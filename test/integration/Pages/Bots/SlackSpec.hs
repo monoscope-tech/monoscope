@@ -18,22 +18,22 @@ spec = aroundAll withTestResources do
   describe "Slack Bot" do
     describe "/here command" do
       it "sets notification channel and saves golden response" \tr -> do
-        setupSlackData tr testPid "T_HERE_TEST"
-        let interaction = slackInteraction "/here" "" "T_HERE_TEST"
+        setupSlackData tr testPid "T01HEREA9X"
+        let interaction = slackInteraction "/here" "" "T01HEREA9X"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         assertJsonGolden "slack/here_response.json" result
         extractResponseType result `shouldBe` Just "in_channel"
         hasSuccessBlock result `shouldBe` True
 
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T_HERE_TEST"
+        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T01HEREA9X"
         case slackDataM of
-          Just slackData -> slackData.channelId `shouldBe` "C_TEST_CHANNEL"
+          Just slackData -> slackData.channelId `shouldBe` "C0123ABCDEF"
           Nothing -> expectationFailure "Slack data not found"
 
       it "returns correct block structure" \tr -> do
-        setupSlackData tr testPid "T_HERE_BLOCK"
-        let interaction = slackInteraction "/here" "" "T_HERE_BLOCK"
+        setupSlackData tr testPid "T02BLOCKB8Y"
+        let interaction = slackInteraction "/here" "" "T02BLOCKB8Y"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         case extractSlackBlocks result of
@@ -45,8 +45,8 @@ spec = aroundAll withTestResources do
 
     describe "/monoscope command" do
       it "returns loading message immediately" \tr -> do
-        setupSlackData tr testPid "T_MONO_TEST"
-        let interaction = slackInteraction "/monoscope" "show error rate" "T_MONO_TEST"
+        setupSlackData tr testPid "T03MONOSC0P"
+        let interaction = slackInteraction "/monoscope" "show error rate" "T03MONOSC0P"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         assertJsonGolden "slack/monoscope_loading_response.json" result
@@ -55,14 +55,14 @@ spec = aroundAll withTestResources do
         T.isInfixOf "Analyzing" responseText || T.isInfixOf "⏳" responseText `shouldBe` True
 
       it "handles missing slack data gracefully" \tr -> do
-        let interaction = slackInteraction "/monoscope" "show errors" "T_NONEXISTENT"
+        let interaction = slackInteraction "/monoscope" "show errors" "T99NONEXIST"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
         result `shouldSatisfy` isValidJsonResponse
 
     describe "/dashboard command" do
       it "returns error when no dashboards exist" \tr -> do
-        setupSlackData tr testPid "T_DASH_EMPTY"
-        let interaction = slackInteraction "/dashboard" "" "T_DASH_EMPTY"
+        setupSlackData tr testPid "T04DASHEMTY"
+        let interaction = slackInteraction "/dashboard" "" "T04DASHEMTY"
         result <- try $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
         case result of
           Left (e :: SomeException) -> T.isInfixOf "dashboards" (toText $ show e) `shouldBe` True
@@ -70,17 +70,17 @@ spec = aroundAll withTestResources do
 
     describe "Anomaly Notifications" do
       it "captures Slack notification when anomaly occurs" \tr -> do
-        setupSlackData tr testPid "T_ANOMALY_TEST"
-        void $ runTestBg tr $ Slack.updateSlackNotificationChannel "T_ANOMALY_TEST" "C_ALERTS"
+        setupSlackData tr testPid "T05ANOMALY1"
+        void $ runTestBg tr $ Slack.updateSlackNotificationChannel "T05ANOMALY1" "C06ALERTSCH"
 
         -- Use existing infrastructure from TestUtils
         (notifs, _) <- runTestBackgroundWithNotifications tr.trLogger tr.trATCtx pass
         notifs `shouldBe` []
 
       it "user can ask about anomalies via /monoscope" \tr -> do
-        setupSlackData tr testPid "T_ANOMALY_QUERY"
+        setupSlackData tr testPid "T06ANOMQRY2"
 
-        let interaction = slackInteraction "/monoscope" "show me recent anomalies" "T_ANOMALY_QUERY"
+        let interaction = slackInteraction "/monoscope" "show me recent anomalies" "T06ANOMQRY2"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         isValidJsonResponse result `shouldBe` True

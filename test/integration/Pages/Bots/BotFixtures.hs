@@ -40,29 +40,29 @@ slackInteraction cmd query teamId =
     cmd  -- command
     query  -- text
     ("https://hooks.slack.com/commands/" <> teamId <> "/response")  -- response_url
-    ("trigger_" <> teamId)  -- trigger_id
-    "C_TEST_CHANNEL"  -- channel_id
+    ("T.13579.1234567890.abcdef1234567890abcdef1234567890")  -- trigger_id (realistic format)
+    "C0123ABCDEF"  -- channel_id (realistic Slack channel ID)
     "general"  -- channel_name
-    "U_TEST_USER"  -- user_id
+    "U0123ABCDEF"  -- user_id (realistic Slack user ID)
 
 
 slackEventCallback :: Text -> Text -> Text -> Text -> Maybe Text -> AE.Value
 slackEventCallback teamId channelId userText ts threadTsM =
   [aesonQQ|{
     "type": "event_callback",
-    "token": "test_token",
+    "token": "xoxb-test-fake-token-not-real",
     "team_id": #{teamId},
-    "api_app_id": "A_TEST_APP",
+    "api_app_id": "A0123ABCDEF",
     "event": {
       "type": "message",
-      "user": "U_TEST_USER",
+      "user": "U0123ABCDEF",
       "text": #{userText},
       "ts": #{ts},
       "channel": #{channelId},
       "event_ts": #{ts},
       "thread_ts": #{maybeToJSON threadTsM}
     },
-    "event_id": "Ev_TEST",
+    "event_id": "Ev0123ABCDEF",
     "event_time": 1700000000
   }|]
   where
@@ -79,19 +79,19 @@ slackActionPayload :: Text -> AE.Value
 slackActionPayload actionType =
   [aesonQQ|{
     "type": #{actionType},
-    "token": "test_token",
-    "trigger_id": "trigger_123",
+    "token": "xoxb-test-fake-token-not-real",
+    "trigger_id": "T.13579.1234567890.abcdef1234567890abcdef1234567890",
     "view": {
-      "private_metadata": "C_TEST___proj123",
+      "private_metadata": "C0123ABCDEF___proj123",
       "blocks": [],
-      "id": "view_123",
+      "id": "V0123ABCDEF",
       "state": null
     },
     "actions": null,
     "user": {
-      "id": "U_TEST_USER",
+      "id": "U0123ABCDEF",
       "username": "testuser",
-      "team_id": "T_TEST"
+      "team_id": "T0123ABCDEF"
     }
   }|]
 
@@ -109,14 +109,14 @@ discordCommandInteraction commandName query =
     $ AE.encode
       [aesonQQ|{
     "type": 2,
-    "id": "interaction_123",
-    "token": "interaction_token",
+    "id": "1234567890123456789",
+    "token": "aW50ZXJhY3Rpb246MTIzNDU2Nzg5MDEyMzQ1Njc4OTpBYkNkRWZHaElqS2xNbk9wUXJTdFV2V3h5WkFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo",
     "data": {
       "name": #{commandName},
       "options": [{"name": "question", "value": #{query}}]
     },
-    "channel_id": "chan_123",
-    "guild_id": "guild_test_123",
+    "channel_id": "1234567890123456789",
+    "guild_id": "1234567890123456789",
     "channel": null
   }|]
 
@@ -127,21 +127,21 @@ discordThreadInteraction commandName query threadId =
     $ AE.encode
       [aesonQQ|{
     "type": 2,
-    "id": "interaction_123",
-    "token": "interaction_token",
+    "id": "1234567890123456789",
+    "token": "aW50ZXJhY3Rpb246MTIzNDU2Nzg5MDEyMzQ1Njc4OTpBYkNkRWZHaElqS2xNbk9wUXJTdFV2V3h5WkFCQ0RFRkdISUpLTE1OT1BRUlNUVVZXWFlaYWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXo",
     "data": {
       "name": #{commandName},
       "options": [{"name": "question", "value": #{query}}]
     },
     "channel_id": #{threadId},
-    "guild_id": "guild_test_123",
+    "guild_id": "1234567890123456789",
     "channel": {
       "id": #{threadId},
       "name": "test-thread",
-      "guild_id": "guild_test_123",
+      "guild_id": "1234567890123456789",
       "type": 11,
-      "parent_id": "chan_123",
-      "owner_id": "U_TEST",
+      "parent_id": "1234567890123456789",
+      "owner_id": "1234567890123456789",
       "thread_metadata": null
     }
   }|]

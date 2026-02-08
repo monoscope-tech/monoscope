@@ -198,6 +198,7 @@ library:
     - slugify
     - fmt
     - PyF
+    - retry
     - generic-lens
     - gogol
     - gogol-core

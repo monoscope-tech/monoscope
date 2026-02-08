@@ -619,23 +619,19 @@ slackEventsPostH payload = do
           let convId = Issues.slackThreadToConversationId event.channel threadTs
 
           -- Ensure conversation exists
-          _ <-
-            Issues.getOrCreateConversation
-              slackData.projectId
-              convId
-              Issues.CTSlackThread
-              (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
+          _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
 
           -- Load existing history from DB
           existingHistory <- Issues.selectChatHistory convId
 
           -- One-time migration: if DB is empty, fetch from Slack API and migrate
           when (null existingHistory) $ do
-            replies <- getChannelMessages envCfg.slackBotToken event.channel threadTs
-            case replies of
-              Just messages -> forM_ messages.messages $ \m ->
+            -- Use advisory lock to prevent race condition in thread migration
+            lockAcquired <- Issues.tryAcquireChatMigrationLock convId
+            when lockAcquired $ do
+              replies <- getChannelMessages envCfg.slackBotToken event.channel threadTs
+              for_ replies \messages -> forM_ messages.messages \m ->
                 Issues.insertChatMessage slackData.projectId convId "user" m.text Nothing Nothing
-              Nothing -> pass
 
           -- Process the current message with history from DB
           processMessages envCfg event slackData convId threadTs now
