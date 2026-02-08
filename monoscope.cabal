@@ -78,13 +78,13 @@ library
       Models.Apis.Endpoints
       Models.Apis.Fields.Facets
       Models.Apis.Fields.Types
+      Models.Apis.Integrations
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
       Models.Apis.Monitors
       Models.Apis.Reports
       Models.Apis.RequestDumps
       Models.Apis.Shapes
-      Models.Apis.Slack
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
@@ -111,6 +111,7 @@ library
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
       Pages.GitSync
+      Pages.Integrations
       Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -472,6 +473,7 @@ test-suite integration-tests
       Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
+      Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.QueryCacheSpec

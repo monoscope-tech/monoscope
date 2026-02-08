@@ -38,7 +38,7 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Slack (getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions

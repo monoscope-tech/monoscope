@@ -40,6 +40,7 @@ module Data.Effectful.Notify (
 import Control.Lens ((.~))
 import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
+import Control.Retry (exponentialBackoff, limitRetries, retrying)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
@@ -242,7 +243,9 @@ runNotifyProduction = interpret $ \_ -> \case
             [ "payload" AE..= AE.object ["summary" AE..= summary, "source" AE..= ("monoscope" :: Text), "severity" AE..= pdSeverityText severity, "custom_details" AE..= customDetails]
             , "links" AE..= links]
           payload = AE.Object $ AEK.fromList ["routing_key" AE..= integrationKey, "event_action" AE..= pdActionText eventAction, "dedup_key" AE..= dedupKey] <> bool mempty triggerPayload (eventAction == PDTrigger)
-      re <- liftIO $ postWith (defaults & header "Content-Type" .~ ["application/json"]) "https://events.pagerduty.com/v2/enqueue" payload
+          opts = defaults & header "Content-Type" .~ ["application/json"]
+          policy = exponentialBackoff 1000000 <> limitRetries 3
+      re <- liftIO $ retrying policy (\_ r -> pure $ not $ statusIsSuccessful (r ^. responseStatus)) \_ -> postWith opts "https://events.pagerduty.com/v2/enqueue" payload
       unless (statusIsSuccessful (re ^. responseStatus)) $ Log.logAttention "PagerDuty notification failed" (dedupKey, show $ re ^. responseStatus)
   GetNotifications -> pure [] -- Production doesn't store notifications
 

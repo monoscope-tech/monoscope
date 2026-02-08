@@ -1,19 +1,19 @@
 module Pkg.SampleAlerts (sampleAlert, sampleReport) where
 
 import Data.Default (def)
+import Data.Time (UTCTime (..), fromGregorian)
 import Data.Vector qualified as V
 import Models.Apis.Issues (IssueType (..))
 import Models.Apis.RequestDumps qualified as RD
 import Pkg.Mail (NotificationAlerts (..))
 import Relude
-import Relude.Unsafe qualified as Unsafe
 
 
 sampleAlert :: IssueType -> Text -> NotificationAlerts
 sampleAlert = \case
   APIChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
   RuntimeException -> const $ RuntimeErrorAlert "test-123" def
-    { RD.when = Unsafe.read "2025-01-01 00:00:00 UTC"
+    { RD.when = UTCTime (fromGregorian 2025 1 1) 0
     , RD.errorType = "🧪 TEST: TypeError"
     , RD.rootErrorType = "TypeError"
     , RD.message = "Sample error message for testing"

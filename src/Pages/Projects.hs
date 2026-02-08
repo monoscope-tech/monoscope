@@ -77,8 +77,8 @@ import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Slack (SlackData, deletePagerDutyData, getDiscordDataByProjectId, getPagerDutyByProjectId, getProjectSlackData, insertPagerDutyData)
-import Models.Apis.Slack qualified as Slack
+import Models.Apis.Integrations (SlackData, deletePagerDutyData, getDiscordDataByProjectId, getPagerDutyByProjectId, getProjectSlackData, insertPagerDutyData)
+import Models.Apis.Integrations qualified as Slack
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -352,9 +352,13 @@ newtype PagerDutyConnectForm = PagerDutyConnectForm {integrationKey :: Text}
 
 pagerdutyConnectH :: Projects.ProjectId -> PagerDutyConnectForm -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyConnectH pid form = do
-  void $ insertPagerDutyData pid form.integrationKey
-  addSuccessToast "PagerDuty connected" Nothing
-  addRespHeaders $ renderPagerDutyIntegration pid.toText (Just $ Slack.PagerDutyData pid form.integrationKey)
+  let key = T.strip form.integrationKey
+  if T.length key < 20 || not (T.all isAlphaNum key)
+    then addErrorToast "Invalid PagerDuty integration key format" Nothing >> addRespHeaders (renderPagerDutyIntegration pid.toText Nothing)
+    else do
+      void $ insertPagerDutyData pid key
+      addSuccessToast "PagerDuty connected" Nothing
+      addRespHeaders $ renderPagerDutyIntegration pid.toText (Just $ Slack.PagerDutyData pid key)
 
 
 pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))

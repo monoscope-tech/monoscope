@@ -19,6 +19,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL qualified as PG
 
 -- Effectful imports
+import Data.Effectful.Notify qualified as Notify
 import Effectful (runPureEff)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Error.Static qualified as Error
@@ -94,6 +95,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
+import Pages.Integrations qualified
 import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
@@ -375,6 +377,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
     notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders Integrations.NotificationsUpdatePost)
   , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerDutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
   , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
+  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Pages.Integrations.TestForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Pages.Integrations.NotificationTestHistoryGet)
   , -- Onboarding routes
     onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)
@@ -428,6 +432,7 @@ server pool =
           (Proxy @'[APItoolkitAuthContext])
           ( \page ->
               page
+                & Notify.runNotifyProduction
                 & State.evalState Map.empty -- TriggerEvents
                 & State.evalState Nothing -- HXRedirectDest
                 & State.evalState Nothing -- XWidgetJSON
@@ -572,6 +577,8 @@ projectsServer =
     , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
     , pagerdutyConnect = Integrations.pagerdutyConnectH
     , pagerdutyDisconnect = Integrations.pagerdutyDisconnectH
+    , notificationsTestPost = Pages.Integrations.notificationsTestPostH
+    , notificationsTestHistoryGet = Pages.Integrations.notificationsTestHistoryGetH
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH

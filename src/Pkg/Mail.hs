@@ -17,7 +17,7 @@ import Effectful (
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Relude hiding (Reader, ask)

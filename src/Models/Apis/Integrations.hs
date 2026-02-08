@@ -1,4 +1,4 @@
-module Models.Apis.Slack (
+module Models.Apis.Integrations (
   SlackData (..),
   DiscordData (..),
   PagerDutyData (..),

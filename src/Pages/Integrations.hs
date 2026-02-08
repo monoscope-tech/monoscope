@@ -6,40 +6,32 @@ module Pages.Integrations (
   NotificationTestHistoryGet (..),
 ) where
 
-import Data.Aeson qualified as AE
-import Data.Default (Default (..))
 import Data.Time (UTCTime)
 import Data.Time.Format (defaultTimeLocale, formatTime)
+import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Deriving.Aeson qualified as DAE
-import Effectful (Eff, (:>))
-import Effectful.Error.Static (Error, try)
+import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL qualified as DB
-import Effectful.Reader.Static (Reader, ask)
-import Lucid2
+import Lucid
 import Models.Apis.Issues (IssueType (..), parseIssueType)
-import Models.Apis.Slack (getDiscordDataByProjectId, getProjectSlackData)
-import Models.Projects.ProjectMembers (getTeam)
+import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
+import Models.Projects.ProjectMembers (Team (..), getTeamsById)
 import Models.Projects.Projects qualified as Projects
-import Models.Projects.Teams (TeamId)
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendSlackAlert, sendWhatsAppAlert)
+import Pkg.Mail (sendDiscordAlert, sendSlackAlert, sendWhatsAppAlert)
 import Pkg.SampleAlerts (sampleAlert, sampleReport)
 import Relude hiding (Reader, State, ask)
-import Servant (ServerError, err400)
-import Servant.API (FormUrlEncoded)
-import System.Config qualified as Config
-import System.Types (DB, RespHeaders)
+import Servant (err400, err404)
+import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Web.FormUrlEncoded (FromForm)
-import Web.Pages.Sessions qualified as Sessions
-import Web.Utils (addErrorToast, addRespHeaders, addSuccessToast)
 
 
 data TestForm = TestForm
   { issueType :: Text
   , channel :: Text
-  , teamId :: Maybe TeamId
+  , teamId :: Maybe UUID.UUID
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -64,31 +56,31 @@ newtype NotificationTestHistoryGet = NotificationTestHistoryGet {tests :: [TestH
 
 
 instance ToHtml NotificationTestHistoryGet where
-  toHtml (NotificationTestHistoryGet tests) = historyHtml_ tests
-  toHtmlRaw = toHtml
+  toHtml (NotificationTestHistoryGet tests) = toHtmlRaw $ historyHtml_ tests
+  toHtmlRaw (NotificationTestHistoryGet tests) = toHtmlRaw $ historyHtml_ tests
 
 
-notificationsTestPostH :: (DB es, Reader Config.AuthContext :> es, Error ServerError :> es) => Projects.ProjectId -> TestForm -> Eff es (RespHeaders (Html ()))
+notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeaders (Html ()))
 notificationsTestPostH pid TestForm{..} = do
-  project <- Sessions.getProject pid
+  project <- Projects.projectById pid >>= maybe (throwError err404) pure
   let alert = bool (sampleAlert (fromMaybe APIChange $ parseIssueType issueType) project.title) (sampleReport project.title) (issueType == "report")
-      sendToChannels sendFn getChannels = getChannels >>= traverse_ \cs -> forM_ cs (sendFn alert pid project.title . Just)
+      getTeam tid = listToMaybe <$> getTeamsById pid (V.singleton tid)
 
-  result <- try @SomeException $ case (channel, teamId) of
-    ("slack", Just tid) -> getTeam tid >>= sendToChannels sendSlackAlert (pure . (.slack_channels))
+  case (channel, teamId) of
+    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
     ("slack", Nothing) -> getProjectSlackData pid >>= traverse_ \s -> sendSlackAlert alert pid project.title (Just s.channelId)
-    ("discord", Just tid) -> getTeam tid >>= sendToChannels sendDiscordAlert (pure . (.discord_channels))
-    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> traverse_ (sendDiscordAlert alert pid project.title . Just) d.notifsChannelId
+    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
+    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId \c -> sendDiscordAlert alert pid project.title (Just c)
     ("whatsapp", _) -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
     _ -> throwError err400
 
   void $ DB.execute [sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (?, ?, ?, ?, ?, ?)|]
-    (pid, issueType, channel, "" :: Text, bool "failed" "sent" (isRight result), either (Just . show) (const Nothing) result)
+    (pid, issueType, channel, "" :: Text, "sent" :: Text, Nothing :: Maybe Text)
 
-  either ((`addErrorToast` Nothing) . show) (const $ addSuccessToast "Test sent!" Nothing) result >> addRespHeaders mempty
+  addSuccessToast "Test sent!" Nothing >> addRespHeaders mempty
 
 
-notificationsTestHistoryGetH :: DB es => Projects.ProjectId -> Eff es (RespHeaders NotificationTestHistoryGet)
+notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)
 notificationsTestHistoryGetH pid = do
   tests <- DB.query [sql|SELECT * FROM apis.notification_test_history WHERE project_id = ? ORDER BY created_at DESC LIMIT 20|] (Only pid)
   addRespHeaders $ NotificationTestHistoryGet tests
@@ -98,8 +90,8 @@ historyHtml_ :: [TestHistory] -> Html ()
 historyHtml_ = bool emptyMsg . div_ [class_ "space-y-2"] . foldMap renderTest <*> null
   where
     emptyMsg = p_ [class_ "text-textWeak text-center py-8"] "No tests yet"
-    renderTest t = div_ [class_ "flex items-center justify-between p-3 bg-bgRaised rounded"] do
-      div_ $ bool (span_ [class_ "badge badge-error badge-sm"] "Failed") (span_ [class_ "badge badge-success badge-sm"] "Sent") (t.status == "sent")
+    renderTest t = div_ [class_ "flex items-center justify-between p-3 bg-bgRaised rounded"] $ do
+      void $ div_ $ bool (span_ [class_ "badge badge-error badge-sm"] "Failed") (span_ [class_ "badge badge-success badge-sm"] "Sent") (t.status == "sent")
         <> span_ [class_ "ml-2 text-sm"] (toHtml $ t.channel <> " → " <> t.issueType)
         <> foldMap (\e -> p_ [class_ "text-xs text-textError mt-1"] $ toHtml e) t.error
       span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml $ formatTime defaultTimeLocale "%b %d %H:%M" t.createdAt

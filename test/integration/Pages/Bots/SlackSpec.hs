@@ -4,7 +4,7 @@ import Control.Exception (SomeException, try)
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Models.Apis.Slack qualified as Slack
+import Models.Apis.Integrations qualified as Slack
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Slack (slackInteractionsH)

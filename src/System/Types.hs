@@ -102,7 +102,8 @@ type ATBaseCtx = Effectful.Eff CommonWebEffects
 
 type ATAuthCtx =
   Effectful.Eff
-    ( State.State TriggerEvents
+    ( Data.Effectful.Notify.Notify
+        ': State.State TriggerEvents
         ': State.State HXRedirectDest
         ': State.State XWidgetJSON
         ': Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
@@ -113,6 +114,7 @@ type ATAuthCtx =
 atAuthToBase :: Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
 atAuthToBase sessionWithCookies page =
   page
+    & Data.Effectful.Notify.runNotifyProduction
     & State.evalState Map.empty -- TriggerEvents
     & State.evalState Nothing -- HXRedirectDest
     & State.evalState Nothing -- XWidgetJSON

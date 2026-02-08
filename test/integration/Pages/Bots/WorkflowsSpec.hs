@@ -2,7 +2,7 @@ module Pages.Bots.WorkflowsSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
-import Models.Apis.Slack qualified as Slack
+import Models.Apis.Integrations qualified as Slack
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Discord (discordInteractionsH)
