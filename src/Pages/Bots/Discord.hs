@@ -227,9 +227,9 @@ discordInteractionsH rawBody signatureM timestampM = do
     ApplicationCommand -> handleApplicationCommand interaction envCfg authCtx
     MessageComponent -> handleApplicationCommand interaction envCfg authCtx
   where
-    validateSignature envCfg (Just sig) (Just tme) body
-      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pass
-      | otherwise = throwError err401{errBody = "Invalid or missing signature"}
+    validateSignature envCfg (Just sig) (Just tme) body = do
+      valid <- verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body
+      unless valid $ throwError err401{errBody = "Invalid or missing signature"}
     validateSignature _ _ _ _ = throwError err401{errBody = "Invalid or missing signature"}
 
     handleApplicationCommand :: DiscordInteraction -> EnvConfig -> AuthContext -> ATBaseCtx AE.Value
@@ -440,13 +440,19 @@ sendJsonFollowupResponse appId interactionToken botToken content = do
   pass
 
 
-verifyDiscordSignature :: ByteString -> ByteString -> ByteString -> ByteString -> Bool
-verifyDiscordSignature publicKey signatureHex timestamp rawBody = fromRight False $ do
-  s <- first show $ Base16.decode signatureHex
-  sig <- first show $ Crypto.eitherCryptoError $ Ed25519.signature s
-  pkBytes <- first show $ Base16.decode publicKey
-  pk <- first show $ Crypto.eitherCryptoError $ Ed25519.publicKey pkBytes
-  pure $ Ed25519.verify pk (timestamp <> rawBody) sig
+verifyDiscordSignature :: (Log.Log :> es) => ByteString -> ByteString -> ByteString -> ByteString -> Eff es Bool
+verifyDiscordSignature publicKey signatureHex timestamp rawBody = do
+  let result = do
+        s <- first show $ Base16.decode signatureHex
+        sig <- first show $ Crypto.eitherCryptoError $ Ed25519.signature s
+        pkBytes <- first show $ Base16.decode publicKey
+        pk <- first show $ Crypto.eitherCryptoError $ Ed25519.publicKey pkBytes
+        pure $ Ed25519.verify pk (timestamp <> rawBody) sig
+  case result of
+    Right valid -> pure valid
+    Left err -> do
+      Log.logTrace ("Discord signature verification failed: " <> toText err) ()
+      pure False
 
 
 -- Data types for Discord API responses

@@ -174,7 +174,9 @@ getWhatsappList typ body vals' skip = AE.object $ ("1" AE..= body) : vars
     vals = V.map (first (T.take 24)) (V.drop skip vals')
     paddedVals =
       let missing = 3 - V.length vals
-          duplicates' = if V.length vals == 1 then V.replicate missing (V.head vals) else V.take missing vals
+          duplicates' = case vals V.!? 0 of
+            Just v | V.length vals == 1 -> V.replicate missing v
+            _ -> V.take missing vals
           duplicates = V.imap (\i (k, v) -> (k <> " " <> show (i + 1), v <> joiner <> show (i + 1))) duplicates'
        in if missing > 0
             then vals <> duplicates

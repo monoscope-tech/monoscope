@@ -65,7 +65,7 @@ import Pages.Components (emptyState_, resizer_, statBox_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, renderRowWithColumns, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask)
@@ -511,7 +511,7 @@ buildSystemPromptForIssue pid issue now = do
     (Issues.QueryAlert, AE.Success alertData) -> do
       let twoDaysAgo = addUTCTime (-172800) now
       monitorM <- runMaybeT do
-        monitorId <- MaybeT . pure $ UUID.fromText alertData.queryId
+        monitorId <- hoistMaybe $ UUID.fromText alertData.queryId
         MaybeT $ Monitors.queryMonitorById (Monitors.QueryMonitorId monitorId)
       metricsData <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just alertData.queryExpression) Nothing Nothing (Just $ show twoDaysAgo) (Just $ show now) Nothing []
       pure $ Just (alertData, monitorM, metricsData)
@@ -525,7 +525,7 @@ buildSystemPromptForIssue pid issue now = do
   where
     fetchTrace err =
       fromMaybe (Nothing, V.empty) <$> runMaybeT do
-        tId <- MaybeT . pure $ err.recentTraceId
+        tId <- hoistMaybe err.recentTraceId
         trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
         spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
         pure (Just trData, V.fromList spans)

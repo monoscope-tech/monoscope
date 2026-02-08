@@ -26,7 +26,6 @@ import Effectful.Dispatch.Dynamic
 import Langchain.LLM.Core qualified as LLMCore
 import Langchain.LLM.OpenAI qualified as OpenAI
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
-import OpenAI.V1.Models qualified as Models
 import Relude
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
