@@ -441,7 +441,7 @@ runTestBackgroundWithNotifications logger appCtx process = do
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
-      & runHTTPWreq
+      & runHTTPGolden "./tests/golden/"
       & ELLM.runLLMGolden "./tests/golden/"
       & runConcurrent
       & Ki.runStructuredConcurrency
