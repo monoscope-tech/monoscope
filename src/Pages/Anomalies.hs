@@ -395,7 +395,7 @@ anomalySystemPrompt now =
     , "- Only use tools when you need to fetch ACTUAL DATA values to include in your response (e.g., 'what are the top 5 services by error count?' where you need real numbers)"
     , "- The schema above tells you all available fields - use it to build queries without calling get_schema or get_field_values"
     , ""
-    , "OUTPUT PRIORITY: For chart/visualization requests, focus on returning the correct widget with proper KQL query. Keep explanation minimal."
+    , "OUTPUT PRIORITY: For chart/visualization requests, ensure the KQL query is correct and the explanation analyzes patterns in the data."
     , ""
     , Schema.generateSchemaForAI Schema.telemetrySchema
     , ""

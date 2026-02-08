@@ -312,13 +312,23 @@ outputFormatInstructions =
     - 'since' replaces 'from'/'to' when user wants recent data
 
   WORKFLOW:
-  1. For widget requests, return query + visualization
-  2. For analysis requests, use tools to get data, then provide explanation
-  3. For complex requests, provide both explanation and widgets
+  1. For chart/visualization requests:
+     a. First call run_query to execute the query and get actual data
+     b. Analyze the results for patterns, trends, spikes, or anomalies
+     c. Return query + visualization + data-driven explanation
+  2. For analysis-only requests, use tools to get data, then provide explanation
+  3. For simple KQL translation requests without charts, return just the query
+
+  EXPLANATION GUIDELINES:
+  - Focus on WHAT THE DATA SHOWS, not what the query does
+  - Highlight: top contributors, unusual patterns, trends over time, notable values
+  - Be specific with numbers from the actual results
+  - BAD: "This query will aggregate events over time..."
+  - GOOD: "Traffic peaked at 15:20 with 985 events. The 'monoscope' service accounts for 45% of total volume."
 
   Response format:
   {
-    "explanation": "<Markdown analysis>",
+    "explanation": "<Data-driven analysis in markdown>",
     "query": "<KQL query>",
     "visualization": "<timeseries|distribution|pie_chart|top_list|table|stat|heatmap|logs>",
     "widgets": [{"type": "timeseries", "query": "...", "title": "..."}],
