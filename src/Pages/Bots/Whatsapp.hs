@@ -14,8 +14,8 @@ import Effectful.Concurrent (forkIO)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import Models.Apis.Integrations (getDashboardsForWhatsapp)
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Slack (getDashboardsForWhatsapp)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)

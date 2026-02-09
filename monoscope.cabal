@@ -51,6 +51,9 @@ extra-source-files:
     static/migrations/0023_anomaly_chat_messages.sql
     static/migrations/0024_ai_conversations_updated_at_trigger.sql
     static/migrations/0025_widget_alerts.sql
+    static/migrations/0026_pagerduty.sql
+    static/migrations/0027_notification_test.sql
+    static/migrations/0028_everyone_team.sql
 
 source-repository head
   type: git
@@ -75,13 +78,13 @@ library
       Models.Apis.Endpoints
       Models.Apis.Fields.Facets
       Models.Apis.Fields.Types
+      Models.Apis.Integrations
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
       Models.Apis.Monitors
       Models.Apis.Reports
       Models.Apis.RequestDumps
       Models.Apis.Shapes
-      Models.Apis.Slack
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
@@ -108,6 +111,7 @@ library
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
       Pages.GitSync
+      Pages.Integrations
       Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
@@ -138,6 +142,7 @@ library
       Pkg.Parser.Stats
       Pkg.QueryCache
       Pkg.Queue
+      Pkg.SampleAlerts
       Pkg.TestUtils
       Pkg.THUtils
       ProcessMessage
@@ -319,6 +324,7 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
+    , retry
     , safe
     , safe-exceptions
     , scientific
@@ -336,7 +342,6 @@ library
     , text-builder-linear
     , text-display
     , time
-    , typed-process
     , tmp-postgres
     , typed-process
     , unliftio
@@ -468,6 +473,7 @@ test-suite integration-tests
       Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
+      Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.QueryCacheSpec

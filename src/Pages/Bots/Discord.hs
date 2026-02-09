@@ -13,7 +13,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Ki qualified as Ki
 import Effectful.Reader.Static (ask, asks)
-import Models.Apis.Slack (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
+import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)

@@ -165,7 +165,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthE
         Just u -> do
           if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u) || T.isInfixOf "pid=00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
             then do
-              sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@apitoolkit.io"
+              sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@monoscope.tech"
               mbPess <- join <$> mapM Sessions.getPersistentSession (Just sessId)
               let mU = mbPess <&> (.user.getUser)
               case (mU, mbPess) of

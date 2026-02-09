@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert) where
+module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
@@ -16,8 +16,8 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
+import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Relude hiding (Reader, ask)
@@ -66,54 +66,31 @@ data NotificationAlerts
 sendDiscordAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendDiscordAlert alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
-  channelIdM <- case channelIdM' of
-    Just d -> pure $ Just d
-    Nothing -> do
-      discordDataM <- getDiscordDataByProjectId pid
-      pure $ discordDataM >>= (\x -> x.notifsChannelId)
-
-  whenJust channelIdM \cid -> do
-    let send = sendAlert (Just cid)
+  channelIdM <- maybe (getDiscordDataByProjectId pid <&> (>>= (.notifsChannelId))) (pure . Just) channelIdM'
+  for_ channelIdM \cid -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-    case alert of
-      RuntimeErrorAlert{..} -> send $ discordErrorAlert errorData pTitle projectUrl
-      EndpointAlert{..} -> send $ discordNewEndpointAlert project endpoints endpointHash projectUrl
-      ShapeAlert -> pass
-      ReportAlert{..} -> send $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
-      MonitorsAlert{..} ->
-        send
-          $ AE.object
-            [ "text" AE..= ("🤖 *Log Alert triggered for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")
-            ]
-  where
-    sendAlert :: Notify.Notify :> es => Maybe Text -> AE.Value -> Eff es ()
-    sendAlert channelId content =
-      whenJust channelId $ \cid ->
-        Notify.sendNotification $ Notify.discordNotification cid content
+        mkAlert = \case
+          RuntimeErrorAlert{..} -> Just $ discordErrorAlert errorData pTitle projectUrl
+          EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
+          ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
+          MonitorsAlert{..} -> Just $ AE.object ["text" AE..= ("🤖 *Log Alert triggered for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
+          ShapeAlert -> Nothing
+    traverse_ (Notify.sendNotification . Notify.discordNotification cid) (mkAlert alert)
 
 
 sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendSlackAlert alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
-  channelIdM <- case channelM of
-    Just c -> pure $ Just c
-    Nothing -> do
-      slackDataM <- getProjectSlackData pid
-      pure $ slackDataM >>= (\x -> Just x.channelId)
-  whenJust channelIdM \cid -> do
+  channelIdM <- maybe (getProjectSlackData pid <&> fmap (.channelId)) (pure . Just) channelM
+  for_ channelIdM \cid -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-    case alert of
-      RuntimeErrorAlert{..} -> sendAlert cid $ slackErrorAlert errorData pTitle cid projectUrl
-      EndpointAlert{..} -> sendAlert cid $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
-      ShapeAlert -> pass
-      ReportAlert{..} -> sendAlert cid $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
-      MonitorsAlert{..} ->
-        sendAlert cid
-          $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
-  where
-    sendAlert :: Notify.Notify :> es => Text -> AE.Value -> Eff es ()
-    sendAlert channelId content =
-      Notify.sendNotification $ Notify.slackNotification channelId content
+        mkAlert = \case
+          RuntimeErrorAlert{..} -> Just $ slackErrorAlert errorData pTitle cid projectUrl
+          EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
+          ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
+          MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
+          ShapeAlert -> Nothing
+    traverse_ (Notify.sendNotification . Notify.slackNotification cid) (mkAlert alert)
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
@@ -367,3 +344,17 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
     explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
+
+
+sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
+sendPagerdutyAlertToService integrationKey (MonitorsAlert monitorTitle monitorUrl) projectTitle _ =
+  Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": " <> monitorTitle) Notify.PDCritical (AE.object ["url" AE..= monitorUrl]) monitorUrl
+sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
+  let endpointUrl = projectUrl <> "/anomalies/by_hash/" <> hash
+      endpointNames = T.intercalate ", " $ V.toList endpoints
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
+sendPagerdutyAlertToService integrationKey (RuntimeErrorAlert issueId errorData) projectTitle projectUrl =
+  let errorUrl = projectUrl <> "/anomalies/by_hash/" <> fromMaybe issueId errorData.hash
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
+sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
+sendPagerdutyAlertToService _ ShapeAlert _ _ = pass

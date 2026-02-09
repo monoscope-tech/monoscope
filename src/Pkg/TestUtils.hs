@@ -13,6 +13,7 @@ module Pkg.TestUtils (
   runTestBackgroundWithNotifications,
   runTestBg,
   testServant,
+  testServantWithNotifications,
   runAllBackgroundJobs,
   getPendingBackgroundJobs,
   logBackgroundJobsInfo,
@@ -110,7 +111,7 @@ import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
@@ -431,9 +432,10 @@ runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
 runTestBackgroundWithNotifications :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
 runTestBackgroundWithNotifications logger appCtx process = do
   tp <- getGlobalTracerProvider
-  (notifications, result) <-
+  notifRef <- newIORef []
+  result <-
     process
-      & Data.Effectful.Notify.runNotifyTest
+      & Data.Effectful.Notify.runNotifyTest notifRef
       & Effectful.Reader.Static.runReader appCtx
       & runWithConnectionPool appCtx.pool
       & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
@@ -446,6 +448,7 @@ runTestBackgroundWithNotifications logger appCtx process = do
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Effectful.runEff
+  notifications <- reverse <$> readIORef notifRef
   pure (notifications, result)
 
 
@@ -463,6 +466,8 @@ runTestBackgroundWithLogger logger appCtx process = do
             ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
           Data.Effectful.Notify.WhatsAppNotification whatsappData ->
             ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
+          Data.Effectful.Notify.PagerdutyNotification pdData ->
+            ("PagerDuty" :: Text, pdData.dedupKey, Just pdData.summary)
     Log.logInfo "Notification" notifInfo
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Effectful.runEff
@@ -570,6 +575,21 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
 testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+
+
+-- | Like testServant but also captures notifications sent during handler execution
+testServantWithNotifications :: TestResources -> ATAuthCtx (RespHeaders a) -> IO ([Data.Effectful.Notify.Notification], (RespHeaders a, a))
+testServantWithNotifications TestResources{..} k = do
+  tp <- getGlobalTracerProvider
+  notifRef <- newIORef []
+  headersResp <-
+    ( atAuthToBaseTest notifRef trSessAndHeader k
+        & effToServantHandlerTest trATCtx trLogger tp
+        & ServantS.runHandler
+    )
+      <&> fromRightShow
+  notifications <- reverse <$> readIORef notifRef
+  pure (notifications, (headersResp, Servant.getResponse headersResp))
 
 
 -- | Run a base context handler (like webhookPostH, replayPostH) in test context

@@ -86,6 +86,7 @@ data EnvConfig = EnvConfig
   , lemonSqueezyUrl :: Text
   , lemonSqueezyCriticalUrl :: Text
   , postmarkToken :: Text
+  , postmarkFromEmail :: Text
   , lemonSqueezyWebhookSecret :: Text
   , openaiApiKey :: Text
   , openaiBaseUrl :: Text
@@ -150,6 +151,7 @@ instance DefConfig EnvConfig where
       , smtpPort = 465
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       , showDemoProject = False -- Default to hidden
+      , postmarkFromEmail = "hello@monoscope.tech"
       }
 
 

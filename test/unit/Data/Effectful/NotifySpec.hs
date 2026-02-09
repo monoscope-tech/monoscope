@@ -47,7 +47,10 @@ spec = describe "Notify Effect" $ do
 runTestNotify :: Eff '[Notify, Log, IOE] a -> IO ([Notification], a)
 runTestNotify action = LogBulk.withBulkStdOutLogger $ \logger -> do
   logLevel <- Logging.getLogLevelFromEnv
-  action
-    & runNotifyTest
+  notifRef <- newIORef []
+  result <- action
+    & runNotifyTest notifRef
     & Logging.runLog "test" logger logLevel
     & runEff
+  notifications <- reverse <$> readIORef notifRef
+  pure (notifications, result)

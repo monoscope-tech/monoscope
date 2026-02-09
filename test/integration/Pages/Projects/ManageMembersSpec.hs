@@ -124,6 +124,7 @@ spec = aroundAll withTestResources do
             , discordChannels = V.empty
             , slackChannels = V.empty
             , phoneNumbers = V.empty
+            , pagerdutyServices = V.empty
             , teamId = Nothing
             }
 

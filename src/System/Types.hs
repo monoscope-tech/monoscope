@@ -25,6 +25,7 @@ module System.Types (
   effToServantHandlerTest,
   effToHandler,
   atAuthToBase,
+  atAuthToBaseTest,
 )
 where
 
@@ -102,7 +103,8 @@ type ATBaseCtx = Effectful.Eff CommonWebEffects
 
 type ATAuthCtx =
   Effectful.Eff
-    ( State.State TriggerEvents
+    ( Data.Effectful.Notify.Notify
+        ': State.State TriggerEvents
         ': State.State HXRedirectDest
         ': State.State XWidgetJSON
         ': Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
@@ -113,6 +115,18 @@ type ATAuthCtx =
 atAuthToBase :: Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
 atAuthToBase sessionWithCookies page =
   page
+    & Data.Effectful.Notify.runNotifyProduction
+    & State.evalState Map.empty -- TriggerEvents
+    & State.evalState Nothing -- HXRedirectDest
+    & State.evalState Nothing -- XWidgetJSON
+    & Effectful.Reader.Static.runReader sessionWithCookies
+
+
+-- | Test variant that captures notifications in provided IORef
+atAuthToBaseTest :: IORef [Data.Effectful.Notify.Notification] -> Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
+atAuthToBaseTest notifRef sessionWithCookies page =
+  page
+    & Data.Effectful.Notify.runNotifyTest notifRef
     & State.evalState Map.empty -- TriggerEvents
     & State.evalState Nothing -- HXRedirectDest
     & State.evalState Nothing -- XWidgetJSON

@@ -86,7 +86,7 @@ import Effectful.Labeled (runLabeled)
 import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.Reader.Static qualified as Effectful.Reader
 import Effectful.Time (runFrozenTime)
-import Models.Apis.Slack qualified as Slack
+import Models.Apis.Integrations qualified as Slack
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils

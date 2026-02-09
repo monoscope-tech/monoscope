@@ -130,7 +130,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] "Events"
               a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Metrics"
-          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/metrics/"
+          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/metrics/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
