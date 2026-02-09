@@ -549,9 +549,9 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
-              -- Fallback values for external services (CI mode without .env)
-              -- .env values take priority if set, otherwise use test defaults
-              , discordPublicKey = bool testDiscordPublicKeyHex envConfig.discordPublicKey (T.null envConfig.discordPublicKey)
+              , -- Fallback values for external services (CI mode without .env)
+                -- .env values take priority if set, otherwise use test defaults
+                discordPublicKey = bool testDiscordPublicKeyHex envConfig.discordPublicKey (T.null envConfig.discordPublicKey)
               , twilioAccountSid = bool "ACtest_account_sid_for_tests_only" envConfig.twilioAccountSid (T.null envConfig.twilioAccountSid)
               , twilioAuthToken = bool "test_auth_token_for_tests_only" envConfig.twilioAuthToken (T.null envConfig.twilioAuthToken)
               , whatsappFromNumber = bool "+15555551234" envConfig.whatsappFromNumber (T.null envConfig.whatsappFromNumber)
