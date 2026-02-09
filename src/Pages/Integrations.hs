@@ -87,6 +87,12 @@ notificationsTestPostH pid TestForm{..} = do
         _ -> sendPostmarkEmail email Nothing (Just ("Test Notification", "This is a test notification for " <> project.title))
 
   case (channel, teamId) of
+    ("all", Just tid) -> getTeam tid >>= traverse_ \t -> do
+      forM_ t.notify_emails sendTestEmail
+      forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
+      forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
+      when (not $ V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
+      forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
     ("email", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.notify_emails sendTestEmail
     ("email", Nothing) -> forM_ project.notifyEmails sendTestEmail
     ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
@@ -104,7 +110,8 @@ notificationsTestPostH pid TestForm{..} = do
       (pid, issueType, channel, "" :: Text, "sent" :: Text, Nothing :: Maybe Text)
 
   Log.logTrace "Test notification sent" (channel, pid)
-  addSuccessToast ("Test " <> channel <> " notification sent!") Nothing >> addRespHeaders mempty
+  let msg = if channel == "all" then "Test notification sent to all channels!" else "Test " <> channel <> " notification sent!"
+  addSuccessToast msg Nothing >> addRespHeaders mempty
 
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)
@@ -120,4 +127,4 @@ historyHtml_ tests = if null tests then emptyMsg else renderTable tests
       div_ [class_ "text-textWeak mb-2"] "No test notifications sent yet"
       p_ [class_ "text-sm text-textWeaker"] "Test your integrations to see results here"
     renderTable ts = div_ [class_ "bg-bgRaised rounded-lg border border-strokeWeak overflow-hidden"] $ table_ [class_ "table table-sm w-full"] (thead_ [class_ "text-xs text-left text-textStrong font-semibold uppercase bg-fillWeaker border-b border-strokeWeak"] (tr_ (th_ [class_ "p-3"] "Status" <> th_ [class_ "p-3"] "Channel" <> th_ [class_ "p-3"] "Alert Type" <> th_ [class_ "p-3 text-right"] "Time")) <> tbody_ [class_ "text-sm divide-y divide-strokeWeak"] (foldMap' renderRow ts))
-    renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == "sent" then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M" t.createdAt))
+    renderRow t = tr_ [class_ "hover-only:hover:bg-fillWeaker transition-colors"] (td_ [class_ "p-3"] (if t.status == "sent" then span_ [class_ "badge badge-success badge-sm gap-1"] (faSprite_ "check" "solid" "h-3 w-3" >> "Sent") else span_ [class_ "badge badge-error badge-sm gap-1"] (faSprite_ "xmark" "solid" "h-3 w-3" >> "Failed")) <> td_ [class_ "p-3 capitalize font-medium"] (toHtml $ if t.channel == "all" then "All channels" else t.channel) <> td_ [class_ "p-3 text-textWeak"] (toHtml $ T.replace "_" " " t.issueType) <> td_ [class_ "p-3 text-right tabular-nums text-textWeak"] (toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M" t.createdAt))
