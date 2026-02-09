@@ -218,15 +218,15 @@ withExternalDBSetup f = do
 
     -- Forcefully terminate any remaining connections to test database
     masterConn' <- connectPostgreSQL masterConnStr
-    void $
-      execute
+    void
+      $ execute
         masterConn'
         (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" <> testDbName <> "' AND pid <> pg_backend_pid()")
         ()
 
     -- Now drop the database
-    void $
-      execute
+    void
+      $ execute
         masterConn'
         (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> testDbName)
         ()

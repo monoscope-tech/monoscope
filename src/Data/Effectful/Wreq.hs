@@ -218,17 +218,18 @@ getOrCreateGoldenResponse goldenDir fileName action = do
       case AE.decode content of
         Just response -> return $ toWreqResponse response
         Nothing -> error $ fromString $ "Failed to decode response from file: " <> filePath
-    else if not exists && not updateGolden
-      then
-        error $
-          fromString $
-            "Golden file not found: "
-              <> filePath
-              <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
-              <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
-      else do
-        -- UPDATE_GOLDEN=true: create or update golden file
-        createDirectoryIfMissing True goldenDir
-        response <- action
-        writeFileLBS filePath (AE.encode $ fromWreqResponse response)
-        return response
+    else
+      if not exists && not updateGolden
+        then
+          error
+            $ fromString
+            $ "Golden file not found: "
+            <> filePath
+            <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
+            <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
+        else do
+          -- UPDATE_GOLDEN=true: create or update golden file
+          createDirectoryIfMissing True goldenDir
+          response <- action
+          writeFileLBS filePath (AE.encode $ fromWreqResponse response)
+          return response
