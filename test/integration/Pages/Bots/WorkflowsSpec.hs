@@ -77,11 +77,11 @@ spec = aroundAll withTestResources do
         result `shouldSatisfy` isValidJsonResponse
         hasSuccessBlock result `shouldBe` True
 
-        -- Verify channel was updated
+        -- Verify channel was updated (from slackInteraction fixture which uses "C0123ABCDEF")
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T_HERE_WF"
         slackDataM `shouldSatisfy` isJust
         case slackDataM of
-          Just slackData -> slackData.channelId `shouldBe` "C_TEST_CHANNEL"
+          Just slackData -> slackData.channelId `shouldBe` "C0123ABCDEF"
           Nothing -> pass
 
       it "Discord: ping interaction workflow" \tr -> do

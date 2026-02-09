@@ -114,6 +114,11 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected ManageMembersPost response"
 
   describe "Teams Creation, Update and Consumption" do
+    before \tr -> do
+      -- Clean up all teams once before this test suite to prevent accumulation from previous runs
+      _ <- withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.teams WHERE project_id = ?|] (Only testPid)
+      pass
+
     let team =
           ManageMembers.TeamForm
             { teamName = "Hello"

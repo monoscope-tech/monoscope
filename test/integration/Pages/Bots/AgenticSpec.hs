@@ -5,6 +5,7 @@ import Data.Default (def)
 import Data.Text qualified as T
 import Effectful qualified as Eff
 import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, testPid)
+import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
@@ -12,7 +13,7 @@ import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, afterAll_, aroundAll, beforeAll_, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
@@ -73,6 +74,9 @@ spec = aroundAll withTestResources do
           Left err -> expectationFailure $ "Parse failed: " <> toString err
 
     describe "Live API calls (uses golden files)" do
+      beforeAll_ seedTelemetryData
+      afterAll_ cleanupTelemetryData
+
       it "processes error trend query and saves golden response" \tr -> do
         result <- runTestBg tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIKey tr)
         case result of

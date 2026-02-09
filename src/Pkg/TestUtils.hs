@@ -120,6 +120,12 @@ migrationsDirr :: FilePath
 migrationsDirr = "./static/migrations/"
 
 
+-- | Test Discord public key (hex-encoded Ed25519 public key derived from deterministic seed)
+-- Matches the public key generated from 32 bytes of 0x42 in BotTestHelpers
+testDiscordPublicKeyHex :: Text
+testDiscordPublicKeyHex = "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
+
+
 migrate :: TmpPostgres.DB -> IO ()
 migrate db = do
   conn <- liftIO $ connectPostgreSQL (TmpPostgres.toConnectionString db)
@@ -543,6 +549,15 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
+              -- Fallback values for external services (CI mode without .env)
+              -- .env values take priority if set, otherwise use test defaults
+              , discordPublicKey = bool testDiscordPublicKeyHex envConfig.discordPublicKey (T.null envConfig.discordPublicKey)
+              , twilioAccountSid = bool "ACtest_account_sid_for_tests_only" envConfig.twilioAccountSid (T.null envConfig.twilioAccountSid)
+              , twilioAuthToken = bool "test_auth_token_for_tests_only" envConfig.twilioAuthToken (T.null envConfig.twilioAuthToken)
+              , whatsappFromNumber = bool "+15555551234" envConfig.whatsappFromNumber (T.null envConfig.whatsappFromNumber)
+              , slackBotToken = bool "xoxb-test-token-not-real" envConfig.slackBotToken (T.null envConfig.slackBotToken)
+              , discordBotToken = bool "test-discord-bot-token" envConfig.discordBotToken (T.null envConfig.discordBotToken)
+              , openaiApiKey = bool "sk-test-key-not-real" envConfig.openaiApiKey (T.null envConfig.openaiApiKey)
               }
           )
   f
