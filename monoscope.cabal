@@ -464,6 +464,7 @@ test-suite integration-tests
       Pages.Bots.BotFixtures
       Pages.Bots.BotTestHelpers
       Pages.Bots.DiscordSpec
+      Pages.Bots.SeedTestData
       Pages.Bots.SlackSpec
       Pages.Bots.WhatsappSpec
       Pages.Bots.WorkflowsSpec
