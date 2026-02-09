@@ -26,7 +26,7 @@ seedTelemetryData tr = void $ withResource tr.trPool \conn -> do
       execute
         conn
         [sql|
-        INSERT INTO telemetry.otel_logs_and_spans
+        INSERT INTO otel_logs_and_spans
           (project_id, timestamp, level, severity___severity_text, severity___severity_number,
            body, resource___service___name, attributes___error___type, summary)
         VALUES (?, ?, 'ERROR', 'ERROR', 17, ?, 'api-service', 'RuntimeException',
@@ -45,7 +45,7 @@ seedTelemetryData tr = void $ withResource tr.trPool \conn -> do
       execute
         conn
         [sql|
-        INSERT INTO telemetry.otel_logs_and_spans
+        INSERT INTO otel_logs_and_spans
           (project_id, timestamp, level, severity___severity_text, severity___severity_number,
            body, resource___service___name, summary)
         VALUES (?, ?, 'WARN', 'WARN', 13, ?, ?,
@@ -62,7 +62,7 @@ seedTelemetryData tr = void $ withResource tr.trPool \conn -> do
       execute
         conn
         [sql|
-        INSERT INTO telemetry.otel_logs_and_spans
+        INSERT INTO otel_logs_and_spans
           (project_id, timestamp, level, severity___severity_text, severity___severity_number,
            body, resource___service___name, summary)
         VALUES (?, ?, 'INFO', 'INFO', 9, ?, 'api-service',
@@ -77,7 +77,7 @@ cleanupTelemetryData tr = void $ withResource tr.trPool \conn ->
   execute
     conn
     [sql|
-      DELETE FROM telemetry.otel_logs_and_spans
+      DELETE FROM otel_logs_and_spans
       WHERE project_id = '00000000-0000-0000-0000-000000000000'
     |]
     ()

@@ -125,20 +125,30 @@ getOrCreateGoldenResponse goldenDir prompt apiKey = do
   let fileName = promptToFilename prompt
       filePath = goldenDir </> fileName
   exists <- doesFileExist filePath
-  if exists
+  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
+
+  if exists && not updateGolden
     then do
       -- Read cached response
       content <- readFileLBS filePath
       case AE.decode content of
         Just (llmResp :: LLMResponse) -> return llmResp.llmResponse
         Nothing -> error $ fromString $ "Failed to decode LLM response from file: " <> filePath
-    else do
-      -- Make actual API call and cache it
-      createDirectoryIfMissing True goldenDir
-      response <- callOpenAIAPI prompt apiKey
-      let llmResp = LLMResponse{llmPrompt = prompt, llmResponse = response}
-      writeFileLBS filePath (AE.encode llmResp)
-      return response
+    else if not exists && not updateGolden
+      then
+        error $
+          fromString $
+            "Golden file not found: "
+              <> filePath
+              <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
+              <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
+      else do
+        -- UPDATE_GOLDEN=true: create or update golden file
+        createDirectoryIfMissing True goldenDir
+        response <- callOpenAIAPI prompt apiKey
+        let llmResp = LLMResponse{llmPrompt = prompt, llmResponse = response}
+        writeFileLBS filePath (AE.encode llmResp)
+        return response
 
 
 -- | Actual OpenAI API call implementation

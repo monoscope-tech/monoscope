@@ -42,6 +42,7 @@ where
 
 import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
+import Control.Concurrent (threadDelay)
 import Control.Exception (finally, throwIO)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
@@ -212,9 +213,19 @@ withExternalDBSetup f = do
     -- Close all connections in the pool
     destroyAllResources pool
 
-    -- Drop the test database
+    -- Give connections time to fully close
+    threadDelay 100000 -- 100ms
+
+    -- Forcefully terminate any remaining connections to test database
     masterConn' <- connectPostgreSQL masterConnStr
-    _ <-
+    void $
+      execute
+        masterConn'
+        (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" <> testDbName <> "' AND pid <> pg_backend_pid()")
+        ()
+
+    -- Now drop the database
+    void $
       execute
         masterConn'
         (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> testDbName)
