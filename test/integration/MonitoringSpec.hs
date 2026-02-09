@@ -90,7 +90,7 @@ spec = aroundAll withTestResources do
       _ <- testServant tr $ Dashboards.dashboardsPostH testPid dashboardForm
 
       -- Get dashboard to retrieve its ID
-      (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing (Dashboards.DashboardFilters [])
+      (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
       dashId <- case dashboardsResp of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
           let dashM = V.find (\x -> x.title == ("Alert Cascade Test Dashboard" :: Text)) dashboards
@@ -140,7 +140,7 @@ spec = aroundAll withTestResources do
   describe "Widget Alert Query Sync" do
     it "should sync alert query when widget query changes" \tr -> do
       -- Reuse dashboard from previous test (tests share state via aroundAll)
-      (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing (Dashboards.DashboardFilters [])
+      (_, dashboardsResp) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (Dashboards.DashboardFilters [])
       dashId <- case dashboardsResp of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
           let dashM = V.find (\x -> x.title == ("Alert Cascade Test Dashboard" :: Text)) dashboards

@@ -55,13 +55,13 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardPostError response"
 
     it "Should update a dashboard" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
           let createdDashboard = Unsafe.fromJust $ V.find (\x -> x.title == "Test Dashboard") dashboards
           let fm = Dashboards.DashboardRenameForm{Dashboards.title = "Updated Dashboard", Dashboards.fileDir = Nothing}
           _ <- testServant tr $ Dashboards.dashboardRenamePatchH testPid createdDashboard.id fm
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
           case pg' of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
               let updated = V.find (\x -> x.title == "Updated Dashboard") d.dashboards
@@ -70,14 +70,14 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should delete a dashboard" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let createdDashboard = V.find (\db -> db.title == "Dashboard 1") d.dashboards & Unsafe.fromJust
           (_, pg') <- testServant tr $ Dashboards.dashboardDeleteH testPid createdDashboard.id
           case pg' of
             Dashboards.DashboardNoContent -> do
-              (_, pg'') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+              (_, pg'') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
               case pg'' of
                 Dashboards.DashboardsGet (PageCtx _ dd) -> do
                   let v = V.find (\db -> db.title == "Dashboard 1") dd.dashboards
@@ -87,12 +87,12 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should duplicate dashboard" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ Dashboards.DashboardsGetD{dashboards}) -> do
           let createdDashboard = Unsafe.fromJust $ V.find (\db -> db.title == "Updated Dashboard") dashboards
           _ <- testServant tr $ Dashboards.dashboardDuplicatePostH testPid createdDashboard.id
-          (_, pg2) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+          (_, pg2) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
           case pg2 of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
               let duplicatedDashboard = V.find (\db -> db.title == "Updated Dashboard (Copy)") d.dashboards
@@ -111,13 +111,13 @@ spec = aroundAll withTestResources do
           -- Filter to get team-hello and team-hi (exclude team-broo)
           let teamIds = V.toList $ V.map (\t -> t.id) $ V.filter (\t -> t.handle /= "broo") teams'
           let brooId = V.find (\t -> t.handle == "broo") teams' & Unsafe.fromJust & \t -> t.id
-          (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing (DashboardFilters [])
+          (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (DashboardFilters [])
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
               let dIds = V.toList $ V.map (.id) $ V.filter (\db -> db.title /= "Updated Dashboard (Copy)") d.dashboards
               let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = teamIds}
               _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "add_teams" bulkActionForm
-              (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+              (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
               case pg' of
                 Dashboards.DashboardsGet (PageCtx _ dd) -> do
                   length dd.dashboards `shouldBe` 3
@@ -133,13 +133,13 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected ManageTeamsGet' response"
 
     it "Should handle bulk delete of dashboards" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let dIds = V.toList $ V.map (.id) d.dashboards
           let bulkActionForm = Dashboards.DashboardBulkActionForm{itemId = dIds, teamHandles = []}
           _ <- testServant tr $ Dashboards.dashboardBulkActionPostH testPid "delete" bulkActionForm
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
           case pg' of
             Dashboards.DashboardsGet (PageCtx _ dd) -> do
               length dd.dashboards `shouldBe` 0
@@ -156,7 +156,7 @@ spec = aroundAll withTestResources do
         _ <- Dashboards.dashboardsPostH testPid dashboardB
         _ <- Dashboards.dashboardsPostH testPid dashboardC
         Dashboards.dashboardsPostH testPid dashboard1
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let dash = Unsafe.fromJust $ V.find (\x -> x.title == "Star Test Dashboard") d.dashboards
@@ -164,7 +164,7 @@ spec = aroundAll withTestResources do
 
           -- Star the dashboard
           _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dash.id
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
           case pg' of
             Dashboards.DashboardsGet (PageCtx _ d') -> do
               let starredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d'.dashboards
@@ -172,7 +172,7 @@ spec = aroundAll withTestResources do
 
               -- Unstar the dashboard
               _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dash.id
-              (_, pg'') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+              (_, pg'') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
               case pg'' of
                 Dashboards.DashboardsGet (PageCtx _ d'') -> do
                   let unstarredDash = Unsafe.fromJust $ V.find (\x -> x.id == dash.id) d''.dashboards
@@ -183,7 +183,7 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardsGet response"
 
     it "Should sort starred dashboards first" \tr -> do
-      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+      (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
       case pg of
         Dashboards.DashboardsGet (PageCtx _ d) -> do
           let dashA = Unsafe.fromJust $ V.find (\x -> x.title == "Dashboard A") d.dashboards
@@ -194,7 +194,7 @@ spec = aroundAll withTestResources do
           _ <- testServant tr $ Dashboards.dashboardStarPostH testPid dashA.id
 
           -- Fetch dashboards and verify starred ones appear first
-          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing filters
+          (_, pg') <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing filters
           case pg' of
             Dashboards.DashboardsGet (PageCtx _ d') -> do
               let dashboards = d'.dashboards
