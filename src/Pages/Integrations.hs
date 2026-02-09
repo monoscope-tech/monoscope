@@ -87,12 +87,13 @@ notificationsTestPostH pid TestForm{..} = do
         _ -> sendPostmarkEmail email Nothing (Just ("Test Notification", "This is a test notification for " <> project.title))
 
   case (channel, teamId) of
-    ("all", Just tid) -> getTeam tid >>= traverse_ \t -> do
-      forM_ t.notify_emails sendTestEmail
-      forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
-      forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
-      when (not $ V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
-      forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
+    ("all", Just tid) ->
+      getTeam tid >>= traverse_ \t -> do
+        forM_ t.notify_emails sendTestEmail
+        forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
+        forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
+        when (not $ V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
+        forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
     ("email", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.notify_emails sendTestEmail
     ("email", Nothing) -> forM_ project.notifyEmails sendTestEmail
     ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)

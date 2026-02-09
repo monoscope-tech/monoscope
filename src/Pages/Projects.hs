@@ -866,9 +866,12 @@ teamGetH pid handle layoutM = do
               , pageTitle = "Team details"
               , currProject = Just project
               , config = appCtx.config
-              , pageActions = if team.is_everyone then Nothing else Just $ label_ [class_ "btn btn-sm btn-outline gap-2", Lucid.for_ $ team.handle <> "-new-team-modal"] do
-                  faSprite_ "pen-to-square" "regular" "h-4 w-4"
-                  "Edit"
+              , pageActions =
+                  if team.is_everyone
+                    then Nothing
+                    else Just $ label_ [class_ "btn btn-sm btn-outline gap-2", Lucid.for_ $ team.handle <> "-new-team-modal"] do
+                      faSprite_ "pen-to-square" "regular" "h-4 w-4"
+                      "Edit"
               }
       case layoutM of
         Just _ -> addRespHeaders $ ManageTeamGet' (pid, team, projMembers, channels, discordChannels)

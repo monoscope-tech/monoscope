@@ -1442,6 +1442,7 @@ data DashboardsGetD = DashboardsGetD
   , tableActions :: Maybe Table.TableHeaderActions
   , filters :: DashboardFilters
   , availableTags :: [Text]
+  , copyMode :: Maybe (Text, Dashboards.DashboardId) -- (widgetId, sourceDashboardId) for copy-to-dashboard mode
   }
   deriving (Generic, Show)
 data DashboardsGet
@@ -1581,14 +1582,19 @@ dashboardsGet_ dg = do
     let getDashIcon dash = maybe "square-dashed" (\d -> fromMaybe "square-dashed" d.icon) (loadDashboardFromVM dash)
         getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dash)
 
+    let noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
+        inCopyMode = isJust dg.copyMode
+
     let renderNameCol dash = do
           let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
               folder = folderFromPath dash.filePath
           span_ [class_ "flex items-center gap-2"] do
             span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Dashboard icon"] $ faSprite_ (getDashIcon dash) "regular" "w-3 h-3"
             unless (T.null folder) $ span_ [class_ "text-xs text-textWeak font-mono", data_ "tippy-content" "Folder path for git sync"] $ toHtml folder
-            a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
-            starButton_ dg.projectId dash.id (isJust dash.starredSince)
+            if inCopyMode
+              then span_ [class_ "font-medium text-textStrong"] $ toHtml $ dashTitle dash.title
+              else a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
+            unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
 
     let renderModifiedCol dash = span_ [class_ "monospace text-textWeak", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
@@ -1596,15 +1602,9 @@ dashboardsGet_ dg = do
 
     let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards"
     let renderTagsCol dash = forM_ (V.toList dash.tags) \tag ->
-          a_
-            [ class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary"
-            , hxGet_ $ baseUrl <> "?tag=" <> toUriStr tag
-            , hxTarget_ "#dashboardsTableContainer"
-            , hxSelect_ "#dashboardsTableContainer"
-            , hxPushUrl_ "true"
-            , hxSwap_ "outerHTML"
-            ]
-            $ toHtml tag
+          if inCopyMode
+            then span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml tag
+            else a_ [class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary", hxGet_ $ baseUrl <> "?tag=" <> toUriStr tag, hxTarget_ "#dashboardsTableContainer", hxSelect_ "#dashboardsTableContainer", hxPushUrl_ "true", hxSwap_ "outerHTML"] $ toHtml tag
 
     let renderWidgetsCol dash = do
           let count = getWidgetCount dash
@@ -1612,24 +1612,37 @@ dashboardsGet_ dg = do
             faSprite_ "chart-area" "regular" "w-4 h-4 text-iconNeutral"
             span_ [class_ "leading-none monospace"] $ toHtml $ show count
 
-    let tableCols =
-          [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"] & Table.withSort "title"
-          , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"] & Table.withSort "updated_at"
-          , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
-          , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
-          , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
-          ]
+    let tableCols = case dg.copyMode of
+          Just _ ->
+            [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"]
+            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+            ]
+          Nothing ->
+            [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"] & Table.withSort "title"
+            , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"] & Table.withSort "updated_at"
+            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+            ]
 
-    let noBulkActions = dg.embedded || dg.hideActions
-        table =
+    let table =
           Table
-            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded && not dg.hideActions, Table.renderAsTable = not dg.embedded, Table.bulkActionsInHeader = if noBulkActions then Nothing else Just 0, Table.noSurface = dg.hideActions}
+            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded || inCopyMode, Table.addPadding = not dg.embedded && not dg.hideActions && not inCopyMode, Table.renderAsTable = not dg.embedded || inCopyMode, Table.bulkActionsInHeader = if noBulkActions then Nothing else Just 0, Table.noSurface = dg.hideActions || inCopyMode}
             , columns = tableCols
             , rows = dg.dashboards
             , features =
                 def
                   { Table.rowId = if noBulkActions then Nothing else Just \dash -> dash.id.toText
-                  , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                  , Table.rowAttrs = Just $ \dash -> case dg.copyMode of
+                      Just (widgetId, sourceDashId) ->
+                        [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
+                        , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText <> "/widgets/" <> widgetId <> "/duplicate?source_dashboard_id=" <> sourceDashId.toText
+                        , hxSwap_ "none"
+                        , [__| on htmx:afterRequest set #dashboards-modal.checked to false |]
+                        ]
+                      Nothing -> [class_ "group/row hover:bg-fillWeaker"]
                   , Table.bulkActions =
                       if noBulkActions
                         then []
@@ -1637,14 +1650,17 @@ dashboardsGet_ dg = do
                           [ Table.BulkAction{icon = Just "plus", title = "Add teams", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/add_teams"}
                           , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
                           ]
-                  , Table.search = if dg.embedded || dg.hideActions then Nothing else Just Table.ClientSide
+                  , Table.search = if dg.embedded || dg.hideActions || inCopyMode then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
-                  , Table.header = if dg.embedded || null dg.filters.tag then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
+                  , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
                   , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", actionText = "Create Dashboard", destination = Left "newDashboardMdl"}
                   }
             }
 
     div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
+      when inCopyMode $ div_ [class_ "mb-4 p-3 bg-fillWeak rounded-lg text-sm text-textStrong"] do
+        faSprite_ "circle-info" "regular" "w-4 h-4 inline mr-2"
+        "Select a dashboard to copy this widget to"
       toHtml table
 
 
@@ -1678,8 +1694,8 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
     "Clear all"
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
-dashboardsGetH pid sortM embeddedM teamIdM filters = do
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
+dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
 
@@ -1706,10 +1722,11 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
       isTeamView = isJust teamIdM
+      copyMode = (,) <$> copyWidgetIdM <*> (UUIDId <$> sourceDashIdM)
 
   if embedded || isTeamView
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags}
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode}
     else do
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
       let bwconf =
@@ -1735,7 +1752,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
                 , filterMenus = [tagFilterMenu | not (null availableTags)]
                 , activeFilters = [("Tags", filters.tag) | not (null filters.tag)]
                 }
-      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags})
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags, copyMode})
 
 
 data DashboardRes = DashboardNoContent | DashboardPostError Text | DashboardRenameSuccess Text
@@ -1998,10 +2015,15 @@ data WidgetMoveForm = WidgetMoveForm
 -- It creates a copy of the widget with "(Copy)" appended to the title.
 -- Returns the duplicated widget that will be converted to HTML automatically.
 -- If the original widget has an alert, the alert is also duplicated with the new widget.
-dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
-dashboardDuplicateWidgetPostH pid dashId widgetId = do
-  (_, dash) <- getDashAndVM dashId Nothing
-  case findWidgetInDashboard widgetId dash of
+-- When source_dashboard_id is provided and differs from target dashboard, this copies the widget to a different dashboard.
+dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
+  let sourceDashId = maybe targetDashId UUIDId sourceDashIdM
+      isCrossDashboard = sourceDashId /= targetDashId
+
+  -- Get source dashboard to find the widget
+  (_, sourceDash) <- getDashAndVM sourceDashId Nothing
+  case findWidgetInDashboard widgetId sourceDash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just (tabSlugM, widgetToDuplicate) -> do
       newWidgetId <- UUID.genUUID <&> UUID.toText
@@ -2026,27 +2048,55 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
         void $ Monitors.queryMonitorUpsert newMonitor
         pure newMonitorId.toText
 
-      let widgetCopy =
+      -- Get target dashboard name for toast message (if cross-dashboard)
+      targetDashNameM <-
+        if isCrossDashboard
+          then do
+            (targetDashVM, _) <- getDashAndVM targetDashId Nothing
+            pure $ Just $ dashTitle targetDashVM.title
+          else pure Nothing
+
+      let titleSuffix = bool " (Copy)" "" isCrossDashboard
+          widgetCopy =
             widgetToDuplicate
               { Widget.id = Just newWidgetId
               , Widget.title = case widgetToDuplicate.title of
-                  Nothing -> Just "Widget Copy"
-                  Just "" -> Just "Widget Copy"
-                  Just title -> Just (title <> " (Copy)")
+                  Nothing -> Just $ "Widget" <> titleSuffix
+                  Just "" -> Just $ "Widget" <> titleSuffix
+                  Just title -> Just (title <> titleSuffix)
               , Widget._projectId = Just pid
-              , Widget._dashboardId = Just dashId.toText
+              , Widget._dashboardId = Just targetDashId.toText
               , Widget.alertId = newAlertIdM
               , Widget.alertStatus = Nothing
               }
 
-      let updatedDash = case tabSlugM of
-            Just slug -> updateTabBySlug slug (#widgets %~ (<> [widgetCopy])) dash
-            Nothing -> dash & #widgets %~ (<> [widgetCopy])
-      _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
-      syncDashboardAndQueuePush pid dashId
+      -- Add widget to target dashboard (might be same as source)
+      (_, targetDash) <- getDashAndVM targetDashId Nothing
+      let targetHasTabs = not $ null $ fromMaybe [] targetDash.tabs
+          addedToTab = targetHasTabs && isJust (viaNonEmpty head (fromMaybe [] targetDash.tabs))
+
+      Log.logTrace "Widget duplication"
+        $ AE.object
+          [ "widgetId" AE..= widgetId
+          , "targetDashboardId" AE..= targetDashId
+          , "addedToTab" AE..= addedToTab
+          , "targetTabCount" AE..= length (fromMaybe [] targetDash.tabs)
+          ]
+
+      let updatedDash =
+            if targetHasTabs
+              then case viaNonEmpty head (fromMaybe [] targetDash.tabs) of
+                Just firstTab -> updateTabBySlug (slugify firstTab.name) (#widgets %~ (<> [widgetCopy])) targetDash
+                Nothing -> targetDash & #widgets %~ (<> [widgetCopy])
+              else targetDash & #widgets %~ (<> [widgetCopy])
+      _ <- Dashboards.updateSchemaAndUpdatedAt targetDashId updatedDash now
+      syncDashboardAndQueuePush pid targetDashId
 
       addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
-      addSuccessToast "Widget duplicated successfully" Nothing
+      let toastMsg = case targetDashNameM of
+            Just name -> "Widget copied to " <> name
+            Nothing -> "Widget duplicated successfully"
+      addSuccessToast toastMsg Nothing
       addRespHeaders widgetCopy
 
 

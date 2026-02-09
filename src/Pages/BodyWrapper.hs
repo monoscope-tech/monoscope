@@ -6,7 +6,7 @@ import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -451,11 +451,13 @@ bodyWrapper bcfg child = do
                       input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
 
                       div_
-                        [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+                        [ id_ "dashboards-modal-content"
+                        , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
                         , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
-                        , hxTrigger_ "intersect once"
+                        , hxTrigger_ "loadDashboards"
                         , hxSelect_ "#itemsListPage"
                         , hxSwap_ "innerHTML"
+                        , hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value}"
                         ]
                         do
                           div_ [class_ "skeleton h-16 w-full"] ""

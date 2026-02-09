@@ -417,7 +417,7 @@ renderListRow tbl row = div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsL
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ (rowAttrs <> linkHandler <> [class_ "hover:bg-fillWeaker transition-colors duration-75"]) do
+  tr_ ([class_ "hover:bg-fillWeaker transition-colors duration-75"] <> rowAttrs <> linkHandler) do
     when (isJust tbl.features.rowId)
       $ td_ [class_ "w-8 align-top pt-4"] do
         whenJust tbl.features.rowId \getId ->

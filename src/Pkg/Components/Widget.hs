@@ -449,11 +449,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             , term
                 "_"
                 [text|
-              on click 
-              set #dashboards-modal.checked to true
-              then set #dashboards-modal-widget-id.value to "${wId}"
+              on click
+              set #dashboards-modal-widget-id.value to "${wId}"
               then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
-              then set (the closest <details/>).open to false 
+              then set #dashboards-modal.checked to true
+              then trigger loadDashboards on #dashboards-modal-content
+              then set (the closest <details/>).open to false
             |]
             ]
             "Copy to dashboard"
