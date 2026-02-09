@@ -13,7 +13,7 @@ import Pkg.TestUtils
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import Test.Hspec (Spec, afterAll_, aroundAll, beforeAll_, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
 
 
 spec :: Spec
@@ -74,10 +74,8 @@ spec = aroundAll withTestResources do
           Left err -> expectationFailure $ "Parse failed: " <> toString err
 
     describe "Live API calls (uses golden files)" do
-      beforeAll_ seedTelemetryData
-      afterAll_ cleanupTelemetryData
-
       it "processes error trend query and saves golden response" \tr -> do
+        seedTelemetryData tr
         result <- runTestBg tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
@@ -108,6 +106,7 @@ spec = aroundAll withTestResources do
         case result of
           Left err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err) `shouldBe` True
           Right _ -> pass
+        cleanupTelemetryData tr
 
     describe "Widget URL generation" do
       it "generates signed widget PNG URLs correctly" \tr -> do

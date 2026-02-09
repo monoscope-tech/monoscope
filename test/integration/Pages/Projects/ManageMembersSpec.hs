@@ -114,11 +114,6 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected ManageMembersPost response"
 
   describe "Teams Creation, Update and Consumption" do
-    before \tr -> do
-      -- Clean up all teams once before this test suite to prevent accumulation from previous runs
-      _ <- withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.teams WHERE project_id = ?|] (Only testPid)
-      pass
-
     let team =
           ManageMembers.TeamForm
             { teamName = "Hello"
@@ -134,6 +129,8 @@ spec = aroundAll withTestResources do
             }
 
     it "Should create team" \tr -> do
+      -- Clean up all teams at the start of this test suite
+      _ <- withPool tr.trPool $ PGT.execute [sql|DELETE FROM projects.teams WHERE project_id = ?|] (Only testPid)
       (_, pg) <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
       case pg of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams) -> do

@@ -18,7 +18,7 @@ seedTelemetryData tr = void $ withResource tr.trPool \conn -> do
 
   -- Insert sample error logs (for "error trend" query)
   -- Last 20 hours of error data
-  forM_ [0 .. 20 :: Int] \i -> do
+  forM_ [0 .. 20] \i -> do
     let timestamp = addUTCTime (fromIntegral $ -3600 * i) baseTime
         body = AE.object ["message" AE..= ("Sample error message " <> show i :: Text)]
 
@@ -36,7 +36,7 @@ seedTelemetryData tr = void $ withResource tr.trPool \conn -> do
 
   -- Insert sample warning logs (for "service breakdown" query)
   -- Alternate between auth-service and payment-service
-  forM_ [0 .. 10 :: Int] \i -> do
+  forM_ [0 .. 10] \i -> do
     let timestamp = addUTCTime (fromIntegral $ -1800 * i) baseTime
         serviceName = if even i then "auth-service" else "payment-service" :: Text
         body = AE.object ["message" AE..= ("Warning message " <> show i :: Text)]
@@ -54,7 +54,7 @@ seedTelemetryData tr = void $ withResource tr.trPool \conn -> do
         (projectId, timestamp, AE.encode body, serviceName, serviceName)
 
   -- Insert some INFO logs for variety
-  forM_ [0 .. 5 :: Int] \i -> do
+  forM_ [0 .. 5] \i -> do
     let timestamp = addUTCTime (fromIntegral $ -7200 * i) baseTime
         body = AE.object ["message" AE..= ("Info message " <> show i :: Text)]
 
