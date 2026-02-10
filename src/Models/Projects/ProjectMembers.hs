@@ -30,6 +30,7 @@ module Models.Projects.ProjectMembers (
   teamToDetails,
   addSlackChannelToEveryoneTeam,
   addDiscordChannelToEveryoneTeam,
+  removeSlackChannelsFromEveryoneTeam,
 ) where
 
 import Data.Aeson qualified as AE
@@ -456,7 +457,13 @@ addChannelToEveryoneTeam ::
   Eff es Bool
 addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
   everyoneTeamM <- getEveryoneTeam pid
-  maybe (pure False) (\team -> let channelExists = Set.member channelId $ Set.fromList $ V.toList $ getChannels team in bool (void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True) (pure False) channelExists) everyoneTeamM
+  maybe (pure False) addIfNotExists everyoneTeamM
+  where
+    addIfNotExists team = do
+      let channelExists = Set.member channelId $ Set.fromList $ V.toList $ getChannels team
+      if channelExists
+        then pure False
+        else void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True
 
 
 -- | Add unique Slack channel to @everyone team's channel list
@@ -469,3 +476,12 @@ addSlackChannelToEveryoneTeam = addChannelToEveryoneTeam (.slack_channels) \d cs
 -- Returns True if channel was added, False if it already existed
 addDiscordChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
 addDiscordChannelToEveryoneTeam = addChannelToEveryoneTeam (.discord_channels) \d cs -> d{discordChannels = cs}
+
+
+-- | Remove all Slack channels from @everyone team
+removeSlackChannelsFromEveryoneTeam :: DB es => Projects.ProjectId -> Eff es ()
+removeSlackChannelsFromEveryoneTeam pid = do
+  everyoneTeamM <- getEveryoneTeam pid
+  traverse_ clearChannels everyoneTeamM
+  where
+    clearChannels team = void $ updateTeam pid team.id (teamToDetails team){slackChannels = V.empty}

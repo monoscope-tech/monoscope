@@ -152,6 +152,28 @@ bodyWrapper bcfg child = do
 
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
+        -- Helper function for event-based initialization
+        script_
+          [text|
+          window.initWhenReady = function(fn, timeout = 5000) {
+            if (window.widgetDepsReady) {
+              fn();
+            } else {
+              const handler = () => fn();
+              window.addEventListener('widgetDepsReady', handler, { once: true });
+
+              // Fallback timeout
+              setTimeout(() => {
+                if (!window.widgetDepsReady) {
+                  console.warn('Widget dependencies not ready after timeout, initializing anyway');
+                  window.removeEventListener('widgetDepsReady', handler);
+                  fn();
+                }
+              }, timeout);
+            }
+          };
+          |]
+
         script_
           [text|
       !function(e,t,n,s,u,a){e.twq||(s=e.twq=function(){s.exe?s.exe.apply(s,arguments):s.queue.push(arguments);},s.version='1.1',s.queue=[],u=t.createElement(n),u.async=!0,u.src='https://static.ads-twitter.com/uwt.js',

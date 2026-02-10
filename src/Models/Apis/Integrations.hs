@@ -16,6 +16,7 @@ module Models.Apis.Integrations (
   getPagerdutyByProjectId,
   insertPagerdutyData,
   deletePagerdutyData,
+  deleteSlackData,
 ) where
 
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
@@ -34,34 +35,35 @@ data SlackData = SlackData
   , webhookUrl :: Text
   , teamId :: Text
   , channelId :: Text
+  , teamName :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SlackData
 
 
-insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Eff es Int64
-insertAccessToken pid webhookUrl teamId channelId = PG.execute q params
+insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
+insertAccessToken pid webhookUrl teamId channelId teamName = PG.execute q params
   where
     q =
       [sql|INSERT INTO apis.slack
-               (project_id, webhook_url, team_id, channel_id)
-               VALUES (?,?,?,?)
+               (project_id, webhook_url, team_id, channel_id, team_name)
+               VALUES (?,?,?,?,?)
                ON CONFLICT (project_id)
-               DO UPDATE SET webhook_url = EXCLUDED.webhook_url, team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id |]
-    params = (pid, webhookUrl, teamId, channelId)
+               DO UPDATE SET webhook_url = EXCLUDED.webhook_url, team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name |]
+    params = (pid, webhookUrl, teamId, channelId, teamName)
 
 
 getProjectSlackData :: DB es => Projects.ProjectId -> Eff es (Maybe SlackData)
 getProjectSlackData pid = listToMaybe <$> PG.query q (Only pid)
   where
-    q = [sql|SELECT project_id, webhook_url, team_id, channel_id FROM apis.slack WHERE project_id =? |]
+    q = [sql|SELECT project_id, webhook_url, team_id, channel_id, team_name FROM apis.slack WHERE project_id =? |]
 
 
 getSlackDataByTeamId :: DB es => Text -> Eff es (Maybe SlackData)
 getSlackDataByTeamId teamId = listToMaybe <$> PG.query q (Only teamId)
   where
-    q = [sql|SELECT project_id, webhook_url, team_id, channel_id FROM apis.slack WHERE team_id = ? |]
+    q = [sql|SELECT project_id, webhook_url, team_id, channel_id, team_name FROM apis.slack WHERE team_id = ? |]
 
 
 data DiscordData = DiscordData
@@ -153,3 +155,9 @@ deletePagerdutyData :: DB es => Projects.ProjectId -> Eff es Int64
 deletePagerdutyData pid = PG.execute q (Only pid)
   where
     q = [sql|DELETE FROM apis.pagerduty WHERE project_id = ?|]
+
+
+deleteSlackData :: DB es => Projects.ProjectId -> Eff es Int64
+deleteSlackData pid = PG.execute q (Only pid)
+  where
+    q = [sql|DELETE FROM apis.slack WHERE project_id = ?|]

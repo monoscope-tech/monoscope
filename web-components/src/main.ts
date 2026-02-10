@@ -284,3 +284,7 @@ function tagifyTemplateFunc(tagData: any) {
 }
 
 (window as any).tagifyTemplateFunc = tagifyTemplateFunc;
+
+// Signal that web components are ready
+(window as any).widgetDepsReady = true;
+window.dispatchEvent(new CustomEvent('widgetDepsReady'));

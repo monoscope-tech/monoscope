@@ -499,11 +499,13 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       script_
         [text|
         window.addEventListener('DOMContentLoaded', () => {
-          const tagify = createTagify('#${formId} textarea[name="teams"]', {
-            tagTextProp: 'name',
-            whitelist: $teamList,
+          window.initWhenReady(function() {
+            const tagify = createTagify('#${formId} textarea[name="teams"]', {
+              tagTextProp: 'name',
+              whitelist: $teamList,
+            });
+            tagify.addTags($existingTeams);
           });
-          tagify.addTags($existingTeams);
         })
         const getSelectedTeams = () => {
           return tagify.value.map(item => item.value);

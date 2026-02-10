@@ -1,6 +1,7 @@
 BEGIN;
 
 ALTER TABLE projects.teams ADD COLUMN IF NOT EXISTS is_everyone BOOLEAN DEFAULT FALSE;
+ALTER TABLE apis.slack ADD COLUMN team_name TEXT;
 
 -- Unique constraint: one @everyone per project
 CREATE UNIQUE INDEX IF NOT EXISTS idx_teams_everyone_unique

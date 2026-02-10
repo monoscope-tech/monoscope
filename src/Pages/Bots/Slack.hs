@@ -1,9 +1,9 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, logWelcomeMessageFailure) where
 
 import BackgroundJobs qualified as BgJobs
-import Control.Exception.Annotated (SomeException, try)
+import Control.Exception.Annotated (try)
 import Control.Lens ((.~), (^.))
 import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
@@ -58,6 +58,12 @@ import Utils (toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
+logWelcomeMessageFailure :: Log.Log :> es => Text -> SomeException -> Eff es ()
+logWelcomeMessageFailure channelId err =
+  Log.logAttention ("Failed to send Slack welcome message" :: Text) $
+    AE.object ["error" AE..= show @Text err, "channel" AE..= channelId]
+
+
 data IncomingWebhook = IncomingWebhook
   { channel :: Text
   , channelId :: Text
@@ -68,8 +74,9 @@ data IncomingWebhook = IncomingWebhook
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] IncomingWebhook
 
 
-newtype TokenResponseTeam = TokenResponseTeam
+data TokenResponseTeam = TokenResponseTeam
   { id :: Text
+  , name :: Text
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] TokenResponseTeam
@@ -125,12 +132,12 @@ linkProjectGetH slack_code stateM = do
       project <- Projects.projectById pid
       case (token, project) of
         (Just token', Just project') -> do
-          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
+          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId token'.team.name
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
             result <- try @SomeException $ sendSlackWelcomeMessage envCfg.slackBotToken token'.incomingWebhook.channelId project'.title
-            either (\err -> Log.logAttention ("Failed to send Slack welcome message" :: Text) $ AE.object ["error" AE..= show @Text err, "channel" AE..= token'.incomingWebhook.channelId]) (const pass) result
+            either (logWelcomeMessageFailure token'.incomingWebhook.channelId) (const pass) result
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
             else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Slack", Just pid)
@@ -151,7 +158,7 @@ slackInteractionsH interaction = do
           projectM <- Projects.projectById slackData.projectId
           whenJust projectM \project -> do
             result <- try @SomeException $ sendSlackWelcomeMessage authCtx.env.slackBotToken interaction.channel_id project.title
-            either (\err -> Log.logAttention ("Failed to send Slack welcome message" :: Text) $ AE.object ["error" AE..= show @Text err, "channel" AE..= interaction.channel_id]) (const pass) result
+            either (logWelcomeMessageFailure interaction.channel_id) (const pass) result
       let channelDisplay = if T.null interaction.channel_name then "this channel" else "#" <> interaction.channel_name
           resp =
             AE.object

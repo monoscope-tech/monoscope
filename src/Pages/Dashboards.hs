@@ -320,28 +320,29 @@ dashboardPage_ pid dashId dash dashVM allParams = do
   })();
 
   window.addEventListener('DOMContentLoaded', () => {
-    const tagifyInstances = new Map();
-    document.querySelectorAll('.tagify-select-input').forEach(input => {
-      const tgfy = createTagify(input, {
-        whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
-        enforceWhitelist: true,
-        tagTextProp: 'name',
-        mode: input.dataset.mode || "",
+    window.initWhenReady(function() {
+      const tagifyInstances = new Map();
+      document.querySelectorAll('.tagify-select-input').forEach(input => {
+        const tgfy = createTagify(input, {
+          whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
+          enforceWhitelist: true,
+          tagTextProp: 'name',
+          mode: input.dataset.mode || "",
+        });
+
+        const inputKey = input.getAttribute('name') || input.id;
+        tagifyInstances.set(inputKey, tgfy);
+
+        tgfy.on('change', (e) => {
+          const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
+          const url = new URL(window.location);
+          url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value);
+          history.pushState({}, '', url);
+          window.dispatchEvent(new Event('update-query'));
+        });
       });
 
-      const inputKey = input.getAttribute('name') || input.id;
-      tagifyInstances.set(inputKey, tgfy);
-
-      tgfy.on('change', (e) => {
-        const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
-        const url = new URL(window.location);
-        url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value);
-        history.pushState({}, '', url);
-        window.dispatchEvent(new Event('update-query'));
-      });
-    });
-
-    window.addEventListener('update-query', async (e) => {
+      window.addEventListener('update-query', async (e) => {
       document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
         const { query_sql, query } = input.dataset;
         if (!query_sql && !query) return;
@@ -368,6 +369,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     });
 
     window.interpolateVarTemplates();
+    });
   });
     |]
   let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
@@ -1569,7 +1571,9 @@ dashboardsGet_ dg = do
           [text|
             let tagify;
             window.addEventListener('DOMContentLoaded', (event) => {
-              tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
+              window.initWhenReady(function() {
+                tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
+              });
             });
             const getSelectedTeams = () => {
               return tagify.value.map(item => item.value);

@@ -15,6 +15,7 @@ module Pages.Projects (
   PagerdutyConnectForm (..),
   pagerdutyConnectH,
   pagerdutyDisconnectH,
+  slackDisconnectH,
   -- ManageMembers
   manageMembersGetH,
   manageMembersPostH,
@@ -48,7 +49,7 @@ module Pages.Projects (
 where
 
 import BackgroundJobs qualified
-import Control.Exception.Annotated (SomeException, try)
+import Control.Exception.Annotated (try)
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
@@ -72,7 +73,6 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
-import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
@@ -321,7 +321,7 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
         whenJust projectM \project ->
           forM_ addedChannels \channelId -> do
             result <- try @SomeException $ SlackP.sendSlackWelcomeMessage appCtx.env.slackBotToken channelId project.title
-            either (\err -> Log.logAttention ("Failed to send Slack welcome message" :: Text) $ AE.object ["error" AE..= show @Text err, "channel" AE..= channelId]) (const pass) result
+            either (SlackP.logWelcomeMessageFailure channelId) (const pass) result
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
 
@@ -380,6 +380,17 @@ pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyDisconnectH pid = do
   void $ deletePagerdutyData pid
   addSuccessToast "PagerDuty disconnected" Nothing
+  integrationsSettingsGetH pid
+
+
+slackDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+slackDisconnectH pid = do
+  deleted <- Slack.deleteSlackData pid
+  if deleted > 0
+    then do
+      void $ ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
+      addSuccessToast "Slack disconnected" Nothing
+    else addErrorToast "Failed to disconnect Slack" Nothing
   integrationsSettingsGetH pid
 
 
@@ -468,23 +479,32 @@ integrationsBody IntegrationsConfig{..} = do
             existingSlackChannelsJSON = decodeUtf8 $ AE.encode $ V.toList existingSlackChannels
         script_
           [text|
-window.tagify = createTagify('#phones_input');
-window.tagify.addTags($tgs);
-window.emailTagify = createTagify('#emails_input');
-window.emailTagify.addTags($ems);
+window.initWhenReady(function() {
+  if (!window.tagify) window.tagify = createTagify('#phones_input');
+  window.tagify.removeAllTags();
+  window.tagify.addTags($tgs);
 
-const slackChannelWhitelist = $slackChannelWhitelist;
-window.slackTagify = createTagify('#slack-channels-input', {
-  enforceWhitelist: true,
-  whitelist: slackChannelWhitelist,
-  tagTextProp: 'name'
+  if (!window.emailTagify) window.emailTagify = createTagify('#emails_input');
+  window.emailTagify.removeAllTags();
+  window.emailTagify.addTags($ems);
+
+  window.slackChannelWhitelist = $slackChannelWhitelist;
+  if (!window.slackTagify) {
+    window.slackTagify = createTagify('#slack-channels-input', {
+      enforceWhitelist: true,
+      whitelist: window.slackChannelWhitelist,
+      tagTextProp: 'name'
+    });
+  }
+  window.slackTagify.settings.whitelist = window.slackChannelWhitelist;
+  window.slackTagify.removeAllTags();
+  window.slackTagify.addTags($existingSlackChannelsJSON.map(id => window.slackChannelWhitelist.find(v => v.value === id)).filter(Boolean));
 });
-window.slackTagify.addTags($existingSlackChannelsJSON.map(id => slackChannelWhitelist.find(v => v.value === id)).filter(Boolean));
 
-const getChecked = () => Array.from(document.querySelectorAll('input[name="notifChannel"]:checked')).map(i => i.value);
-const getTags = () => window.tagify.value?.map(t => t.value) || [];
-const getEmails = () => window.emailTagify.value?.map(t => t.value) || [];
-const getSlackChannels = () => window.slackTagify?.value.map(t => t.value) || [];
+if (!window.getChecked) window.getChecked = () => Array.from(document.querySelectorAll('input[name="notifChannel"]:checked')).map(i => i.value);
+if (!window.getTags) window.getTags = () => window.tagify.value?.map(t => t.value) || [];
+if (!window.getEmails) window.getEmails = () => window.emailTagify.value?.map(t => t.value) || [];
+if (!window.getSlackChannels) window.getSlackChannels = () => window.slackTagify?.value.map(t => t.value) || [];
 |]
 
       -- Test History Section - major section break
@@ -554,7 +574,7 @@ renderEmailIntegration = do
     p_ [class_ "text-xs text-textWeak mb-2"] "Project members are automatically included via the @everyone team. Add additional emails below:"
     div_ [class_ "flex w-full items-center gap-1"] $ do
       span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Additional email addresses"
-    input_ [class_ "input rounded-lg w-full border border-strokeStrong", term "pattern" "^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$", type_ "text", id_ "emails_input"]
+    input_ [class_ "input rounded-lg w-full border border-strokeStrong", term "pattern" "^[a-zA-Z0-9._+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$", type_ "text", id_ "emails_input"]
 
 
 renderWhatsappIntegration :: Html ()
@@ -567,18 +587,33 @@ renderWhatsappIntegration = do
 
 renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> V.Vector Text -> Html ()
 renderSlackIntegration envCfg pid slackData channels existingChannels = do
+  let stateParam = if T.null pid then "" else "&state=" <> pid
+      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
+
   case slackData of
-    Just _ -> do
-      p_ [class_ "text-sm text-textWeak mb-4 text-textSuccess"] "Already connected, but you can add again to change workspace or channel."
-      div_ [class_ "flex flex-col gap-2 mt-4"] do
+    Just sd -> do
+      div_ [class_ "rounded-lg border border-strokeBrand-weak bg-fillBrand-weak p-4 mb-4"] do
+        div_ [class_ "flex items-center gap-2 mb-2"] do
+          faSprite_ "circle-check" "solid" "w-5 h-5 text-textSuccess"
+          span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected to Slack (Team ID: " <> sd.teamId <> ")") (\name -> "Connected to Slack workspace: " <> name) sd.teamName
+
+        when (isNothing sd.teamName) do
+          p_ [class_ "text-xs text-textWeak ml-7"] "Reconnect to see workspace name"
+
+      div_ [class_ "flex flex-col gap-2 mb-4"] do
         div_ [class_ "flex w-full items-center gap-1"] do
           span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Slack channels"
           span_ [class_ "text-xs text-textWeak ml-2"] "(for @everyone team)"
         input_ [class_ "input rounded-lg w-full border border-strokeStrong", type_ "text", id_ "slack-channels-input"]
-    Nothing -> pass
-  let stateParam = if T.null pid then "" else "&state=" <> pid
-  a_ [target_ "_blank", href_ $ "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam] do
-    img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
+
+      div_ [class_ "flex items-center gap-2"] do
+        a_ [target_ "_blank", class_ "btn btn-sm btn-outline", href_ oauthUrl] "Reconnect / Change Workspace"
+        form_ [hxDelete_ [text|/p/$pid/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxSwap_ "none", hxTrigger_ "submit"] do
+          button_ [class_ "btn btn-sm btn-ghost text-textError", type_ "submit"] "Disconnect"
+    Nothing -> do
+      p_ [class_ "text-sm text-textWeak mb-4"] "Connect your Slack workspace to receive notifications and alerts."
+      a_ [target_ "_blank", href_ oauthUrl] do
+        img_ [alt_ "Add to slack", height_ "40", width_ "139", src_ "https://platform.slack-edge.com/img/add_to_slack.png", term "srcSet" "https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"]
 
 
 renderDiscordIntegration :: EnvConfig -> Text -> Html ()
@@ -1679,25 +1714,27 @@ function getTagValues(prefix) {
   }
 }
 window.addEventListener('DOMContentLoaded', () => {
-  const whiteList = $whiteList;
-  const emailWhiteList = whiteList.map(m => ({ name: m.email, value: m.email }));
+  window.initWhenReady(function() {
+    const whiteList = $whiteList;
+    const emailWhiteList = whiteList.map(m => ({ name: m.email, value: m.email }));
 
-  window[`$prefix-membersTagify`] = createTagify('#$prefix-team-members-input', { enforceWhitelist: true, whitelist: whiteList, tagTextProp: 'name' });
-  const memberTags = ($membersTags).map(id => whiteList.find(v => v.value == id)).filter(Boolean);
-  window[`$prefix-membersTagify`].addTags(memberTags);
+    window[`$prefix-membersTagify`] = createTagify('#$prefix-team-members-input', { enforceWhitelist: true, whitelist: whiteList, tagTextProp: 'name' });
+    const memberTags = ($membersTags).map(id => whiteList.find(v => v.value == id)).filter(Boolean);
+    window[`$prefix-membersTagify`].addTags(memberTags);
 
-  window[`$prefix-notifEmailsTagify`] = createTagify('#$prefix-notif-emails-input', { whitelist: emailWhiteList, tagTextProp: 'name' });
-  window[`$prefix-notifEmailsTagify`].addTags($notifEmails);
+    window[`$prefix-notifEmailsTagify`] = createTagify('#$prefix-notif-emails-input', { whitelist: emailWhiteList, tagTextProp: 'name' });
+    window[`$prefix-notifEmailsTagify`].addTags($notifEmails);
 
-  window[`$prefix-slackTagify`] = createTagify('#$prefix-slack-channels-input', { enforceWhitelist: true, whitelist: $channelWhiteList, tagTextProp: 'name' });
-  const slackTags = ($slackChannels).map(id => ($channelWhiteList).find(v => v.value == id)).filter(Boolean);
-  window[`$prefix-slackTagify`].addTags(slackTags);
+    window[`$prefix-slackTagify`] = createTagify('#$prefix-slack-channels-input', { enforceWhitelist: true, whitelist: $channelWhiteList, tagTextProp: 'name' });
+    const slackTags = ($slackChannels).map(id => ($channelWhiteList).find(v => v.value == id)).filter(Boolean);
+    window[`$prefix-slackTagify`].addTags(slackTags);
 
-  window[`$prefix-discordTagify`] = createTagify('#$prefix-discord-channels-input', { enforceWhitelist: true, whitelist: $discordWhiteList, tagTextProp: 'name' });
-  const discordTags = ($discordChannels).map(id => ($discordWhiteList).find(v => v.value == id)).filter(Boolean);
-  window[`$prefix-discordTagify`].addTags(discordTags);
+    window[`$prefix-discordTagify`] = createTagify('#$prefix-discord-channels-input', { enforceWhitelist: true, whitelist: $discordWhiteList, tagTextProp: 'name' });
+    const discordTags = ($discordChannels).map(id => ($discordWhiteList).find(v => v.value == id)).filter(Boolean);
+    window[`$prefix-discordTagify`].addTags(discordTags);
 
-  window[`$prefix-pagerdutyTagify`] = createTagify('#$prefix-pagerduty-services-input', { tagTextProp: 'name' });
-  window[`$prefix-pagerdutyTagify`].addTags($pagerdutyServicesTags);
+    window[`$prefix-pagerdutyTagify`] = createTagify('#$prefix-pagerduty-services-input', { tagTextProp: 'name' });
+    window[`$prefix-pagerdutyTagify`].addTags($pagerdutyServicesTags);
+  });
 });
 |]

@@ -116,7 +116,7 @@ getOpenAIKey tr = tr.trATCtx.env.openaiApiKey
 
 
 setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupSlackData tr pid teamId = void $ runTestBg tr $ Slack.insertAccessToken pid ("https://hooks.slack.com/test/" <> teamId) teamId "C_NOTIF_CHANNEL"
+setupSlackData tr pid teamId = void $ runTestBg tr $ Slack.insertAccessToken pid ("https://hooks.slack.com/test/" <> teamId) teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId)
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()

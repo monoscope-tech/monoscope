@@ -377,6 +377,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
     notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
   , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
   , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
+  , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "slack" :> Delete '[HTML] (RespHeaders (Html ()))
   , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Pages.Integrations.TestForm :> Post '[HTML] (RespHeaders (Html ()))
   , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Pages.Integrations.NotificationTestHistoryGet)
   , -- Onboarding routes
@@ -577,6 +578,7 @@ projectsServer =
     , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
     , pagerdutyConnect = Integrations.pagerdutyConnectH
     , pagerdutyDisconnect = Integrations.pagerdutyDisconnectH
+    , slackDisconnect = Integrations.slackDisconnectH
     , notificationsTestPost = Pages.Integrations.notificationsTestPostH
     , notificationsTestHistoryGet = Pages.Integrations.notificationsTestHistoryGetH
     , deleteProjectGet = CreateProject.deleteProjectGetH
