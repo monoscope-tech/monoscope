@@ -1,11 +1,22 @@
 {
-    "explanation": "There are currently no warning or error entries logged in the system, implying that either the services are functioning correctly or the logging level may need adjustments to capture potential issues.",
-    "query": "",
+    "explanation": "The warning counts by service show that two services recorded warnings: one service had 5 warnings while the other had 6 warnings. In contrast, there is a single service that recorded a total of 21 errors, indicating a more significant issue or failure that needs to be examined further.",
+    "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
     "time_range": {
         "from": null,
         "since": null,
         "to": null
     },
-    "visualization": "",
-    "widgets": []
+    "visualization": "distribution",
+    "widgets": [
+        {
+            "query": "level == \"WARN\" | summarize count() by resource.service.name",
+            "title": "Warning Counts by Service",
+            "type": "distribution"
+        },
+        {
+            "query": "level == \"ERROR\" | summarize count() by resource.service.name",
+            "title": "Error Counts by Service",
+            "type": "distribution"
+        }
+    ]
 }

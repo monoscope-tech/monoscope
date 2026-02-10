@@ -10,6 +10,7 @@ import Pages.Bots.Slack (slackEventsPostH, slackInteractionsH)
 import Pages.Bots.Whatsapp (whatsappIncomingPostH)
 import Pkg.TestUtils
 import Relude
+import System.Config qualified as Config
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
@@ -33,9 +34,11 @@ spec = aroundAll withTestResources do
       it "Discord: handles query with signature verification" \tr -> do
         setupDiscordData tr testPid "guild_wf_discord"
         let payload = discordCommandInteraction "monoscope" "show error rate"
-        let (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
+            (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
+            testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
+            testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
         result `shouldSatisfy` isValidJsonResponse
         getDiscordResponseType result `shouldSatisfy` isJust
 
@@ -55,11 +58,13 @@ spec = aroundAll withTestResources do
 
       it "Discord: handles invalid signature" \tr -> do
         let payload = discordCommandInteraction "monoscope" "test"
-        let invalidSig = "0000000000000000000000000000000000000000000000000000000000000000"
-        let ts = "1700000000"
+            invalidSig = "0000000000000000000000000000000000000000000000000000000000000000"
+            ts = "1700000000"
+            testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
+            testCtx = tr.trATCtx{Config.env = testConfig}
 
         -- Should reject with invalid signature
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ discordInteractionsH payload (Just $ encodeUtf8 invalidSig) (Just $ encodeUtf8 ts)
+        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH payload (Just $ encodeUtf8 invalidSig) (Just $ encodeUtf8 ts)
         -- Even with invalid sig, handler returns response (may vary by implementation)
         result `shouldSatisfy` isValidJsonResponse
 
@@ -86,7 +91,9 @@ spec = aroundAll withTestResources do
 
       it "Discord: ping interaction workflow" \tr -> do
         let (signedPayload, sig, ts) = signDiscordPayload discordPingPayload "1700000000"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+            testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
+            testCtx = tr.trATCtx{Config.env = testConfig}
+        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
 
         result `shouldSatisfy` isValidJsonResponse
         getDiscordResponseType result `shouldBe` Just 1
@@ -114,9 +121,11 @@ spec = aroundAll withTestResources do
       it "Discord: handles thread context" \tr -> do
         setupDiscordData tr testPid "guild_thread_wf"
         let payload = discordThreadInteraction "monoscope" "follow up" "thread_123"
-        let (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
+            (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
+            testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
+            testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Multi-Platform Integration" do
@@ -133,8 +142,10 @@ spec = aroundAll withTestResources do
 
         -- Test Discord
         let discordPayload = discordCommandInteraction "monoscope" "show status"
-        let (signedPayload, sig, ts) = signDiscordPayload discordPayload "1700000000"
-        discordResp <- toBaseServantResponse tr.trATCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+            (signedPayload, sig, ts) = signDiscordPayload discordPayload "1700000000"
+            testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
+            testCtx = tr.trATCtx{Config.env = testConfig}
+        discordResp <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
         discordResp `shouldSatisfy` isValidJsonResponse
 
         -- Test WhatsApp
@@ -154,8 +165,10 @@ spec = aroundAll withTestResources do
       it "Discord responses have correct structure" \tr -> do
         setupDiscordData tr testPid "guild_format_discord"
         let payload = discordCommandInteraction "monoscope" "test"
-        let (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+            (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
+            testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
+            testCtx = tr.trATCtx{Config.env = testConfig}
+        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
 
         getDiscordResponseType result `shouldSatisfy` isJust
 

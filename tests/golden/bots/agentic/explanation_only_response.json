@@ -1,12 +1,11 @@
 {
-    "explanation": "To determine which services are generating the most errors, we can count the number of error logs categorized by service name. This will give us a clear picture of which services are encountering issues most frequently.",
-    "query": "level == \"ERROR\" | summarize error_count = count() by resource.service.name | top 10 by error_count",
+    "explanation": "Currently, there is one service reporting errors, with a total of 21 errors recorded. This indicates potential issues that might need to be inspected further to maintain system reliability.",
+    "query": "level == \"ERROR\" | summarize count() by resource.service.name",
+    "time_range": {
+        "from": null,
+        "since": "2H",
+        "to": null
+    },
     "visualization": "distribution",
-    "widgets": [
-        {
-            "query": "level == \"ERROR\" | summarize error_count = count() by resource.service.name | top 10 by error_count",
-            "title": "Top 10 Services by Error Count",
-            "type": "distribution"
-        }
-    ]
+    "widgets": []
 }
