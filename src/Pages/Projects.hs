@@ -440,7 +440,8 @@ integrationsBody IntegrationsConfig{..} = do
 
         let tgs = decodeUtf8 $ AE.encode $ V.toList phones
             ems = decodeUtf8 $ AE.encode $ V.toList emails
-        script_ [text|
+        script_
+          [text|
 window.tagify = createTagify('#phones_input');
 window.tagify.addTags($tgs);
 window.emailTagify = createTagify('#emails_input');
