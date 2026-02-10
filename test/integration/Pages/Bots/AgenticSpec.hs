@@ -107,16 +107,11 @@ spec = aroundAll withTestResources do
             isJust agenticResp.explanation || not (null agenticResp.widgets) `shouldBe` True
 
       it "handles empty API key gracefully" \tr -> do
-        -- Skip in CI (golden file mode) - this test requires real API call to fail
-        updateGolden <- liftIO $ isJust <$> lookupEnv "UPDATE_GOLDEN"
-        if not updateGolden
-          then pendingWith "Requires UPDATE_GOLDEN=true (tests API error handling)"
-          else do
-            result <- runTestBg tr $ processAIQuery testPid "show errors" Nothing ""
-            case result of
-              Left err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err) `shouldBe` True
-              Right _ -> pass
-            cleanupTelemetryData tr
+        result <- runTestBg tr $ processAIQuery testPid "show errors" Nothing ""
+        case result of
+          Left err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err) `shouldBe` True
+          Right _ -> pass
+        cleanupTelemetryData tr
 
     describe "Widget URL generation" do
       it "generates signed widget PNG URLs correctly" \tr -> do

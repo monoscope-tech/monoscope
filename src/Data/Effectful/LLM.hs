@@ -59,7 +59,7 @@ data AgenticChatCache = AgenticChatCache
   { accHistory :: [LLMCore.Message]
   , accModel :: Text
   , accHasTools :: Bool
-  , accResponse :: LLMCore.Message
+  , accResponse :: Either Text LLMCore.Message  -- Left = error, Right = success
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -221,7 +221,9 @@ getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
     then do
       content <- readFileLBS filePath
       case AE.decode content of
-        Just (cached :: AgenticChatCache) -> return $ Right cached.accResponse
+        Just (cached :: AgenticChatCache) -> case cached.accResponse of
+          Left err -> return $ Left err
+          Right msg -> return $ Right msg
         Nothing -> error $ toText $ "Failed to decode agentic chat cache from: " <> filePath
     else
       if not exists && not updateGolden
@@ -237,8 +239,11 @@ getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
           let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
           result <- LLMCore.chat openAI history (Just params)
           case result of
-            Left err -> return $ Left $ show err -- Don't cache errors
+            Left err -> do
+              let cached = AgenticChatCache{accHistory = historyMessages, accModel = defaultModel, accHasTools = hasTools, accResponse = Left (show err)}
+              writeFileLBS filePath (AE.encode cached)
+              return $ Left $ show err
             Right responseMsg -> do
-              let cached = AgenticChatCache{accHistory = historyMessages, accModel = defaultModel, accHasTools = hasTools, accResponse = responseMsg}
+              let cached = AgenticChatCache{accHistory = historyMessages, accModel = defaultModel, accHasTools = hasTools, accResponse = Right responseMsg}
               writeFileLBS filePath (AE.encode cached)
               return $ Right responseMsg
