@@ -237,7 +237,7 @@ getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
           let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
           result <- LLMCore.chat openAI history (Just params)
           case result of
-            Left err -> return $ Left $ show err  -- Don't cache errors
+            Left err -> return $ Left $ show err -- Don't cache errors
             Right responseMsg -> do
               let cached = AgenticChatCache{accHistory = historyMessages, accModel = defaultModel, accHasTools = hasTools, accResponse = responseMsg}
               writeFileLBS filePath (AE.encode cached)
