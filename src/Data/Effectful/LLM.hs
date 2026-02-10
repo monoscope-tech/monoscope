@@ -59,7 +59,7 @@ data AgenticChatCache = AgenticChatCache
   { accHistory :: [LLMCore.Message]
   , accModel :: Text
   , accHasTools :: Bool
-  , accResponse :: Either Text LLMCore.Message  -- Left = error, Right = success
+  , accResponse :: Either Text LLMCore.Message -- Left = error, Right = success
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
