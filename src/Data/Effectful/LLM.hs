@@ -187,17 +187,19 @@ callOpenAIAPI fullPrompt apiKey = do
 -- | Create deterministic cache key from user query and iteration
 cacheKeyFromQuery :: [LLMCore.Message] -> Bool -> String
 cacheKeyFromQuery messages hasTools =
-  let -- Extract original user query from first user message
-      isUserMessage m = case AE.toJSON (LLMCore.role m) of
-        AE.String role -> role == "User"
-        _ -> False
-      userQuery = case find isUserMessage messages of
-        Just msg -> T.take 50 $ T.replace " " "_" $ T.replace "\n" "_" $ LLMCore.content msg
-        Nothing -> "unknown_query"
-      -- Count messages to determine iteration (2=initial, 4=after tools, etc)
-      iterNum = length messages
-      toolSuffix = if hasTools then "_with_tools" else ""
-   in "agentic_" <> toString userQuery <> "_iter" <> show iterNum <> toolSuffix
+  let
+    -- Extract original user query from first user message
+    isUserMessage m = case AE.toJSON (LLMCore.role m) of
+      AE.String role -> role == "User"
+      _ -> False
+    userQuery = case find isUserMessage messages of
+      Just msg -> T.take 50 $ T.replace " " "_" $ T.replace "\n" "_" $ LLMCore.content msg
+      Nothing -> "unknown_query"
+    -- Count messages to determine iteration (2=initial, 4=after tools, etc)
+    iterNum = length messages
+    toolSuffix = if hasTools then "_with_tools" else ""
+   in
+    "agentic_" <> toString userQuery <> "_iter" <> show iterNum <> toolSuffix
 
 
 -- Helper to check if CreateChatCompletion has tools (via JSON inspection)
