@@ -37,13 +37,14 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Effectful
 import Effectful.Dispatch.Dynamic
-import Network.HTTP.Client (createCookieJar, defaultRequest)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), createCookieJar, defaultRequest)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
 import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
 import Network.Wreq.Types qualified as W
 import Relude hiding (get, put)
+import UnliftIO.Exception (throwIO, try)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
 
@@ -153,7 +154,7 @@ runHTTPGolden goldenDir = interpret $ \_ -> \case
 
 -- Helper functions
 sanitizeFileName :: String -> String
-sanitizeFileName = map (\c -> if c `elem` ['/', ':', '?', '&'] then '_' else c)
+sanitizeFileName = map (\c -> if c `elem` (['/', ':', '?', '&'] :: [Char]) then '_' else c)
 
 
 data WreqResponse = WreqResponse
@@ -230,6 +231,13 @@ getOrCreateGoldenResponse goldenDir fileName action = do
         else do
           -- UPDATE_GOLDEN=true: create or update golden file
           createDirectoryIfMissing True goldenDir
-          response <- action
+          -- Catch HTTP exceptions and convert them to responses
+          result <- try action
+          response <- case result of
+            Right resp -> return resp
+            Left (HttpExceptionRequest _ (StatusCodeException resp body)) ->
+              -- Convert 4xx/5xx responses to normal responses for golden files
+              return resp{responseBody = LBS.fromStrict body}
+            Left (ex :: HttpException) -> throwIO ex -- Re-throw other exceptions
           writeFileLBS filePath (AE.encode $ fromWreqResponse response)
           return response
