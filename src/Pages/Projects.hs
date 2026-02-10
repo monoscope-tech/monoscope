@@ -438,37 +438,23 @@ integrationsBody IntegrationsConfig{..} = do
                 ]
                 "Save Selections"
 
+        let tgs = decodeUtf8 $ AE.encode $ V.toList phones
+            ems = decodeUtf8 $ AE.encode $ V.toList emails
+        script_ [text|
+window.tagify = createTagify('#phones_input');
+window.tagify.addTags($tgs);
+window.emailTagify = createTagify('#emails_input');
+window.emailTagify.addTags($ems);
+const getChecked = () => Array.from(document.querySelectorAll('input[name="notifChannel"]:checked')).map(i => i.value);
+const getTags = () => window.tagify.value?.map(t => t.value) || [];
+const getEmails = () => window.emailTagify.value?.map(t => t.value) || [];
+|]
+
       -- Test History Section - major section break
       div_ [class_ "mt-16 pt-8 border-t border-strokeWeak pb-8"] do
         h3_ [class_ "text-textStrong text-2xl font-medium mb-6"] "Test History"
         div_ [id_ "test-history", hxGet_ [text|/p/$pid/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
           p_ [class_ "text-textWeak text-center py-4"] "Loading..."
-
-  let tgs = decodeUtf8 $ AE.encode $ V.toList phones
-      ems = decodeUtf8 $ AE.encode $ V.toList emails
-  script_
-    [text|
-     document.addEventListener('DOMContentLoaded', function() {
-      window.tagify = createTagify('#phones_input');
-      window.tagify.addTags($tgs);
-
-      window.emailTagify = createTagify('#emails_input');
-      window.emailTagify.addTags($ems);
-    })
-
-   function getChecked() {
-     const checkedInputs = document.querySelectorAll('input[name="notifChannel"]:checked');
-     const vals = Array.from(checkedInputs).map(input => input.value);
-     return vals
-   }
-
-   function getEmails() {
-     const tag = window.emailTagify.value
-     const values = tag.map(tag => tag.value);
-     return values || []
-   }
-
-|]
 
 
 renderInlineTestButton :: Text -> Text -> Html ()
