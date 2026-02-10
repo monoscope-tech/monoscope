@@ -3,7 +3,7 @@
 module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage) where
 
 import BackgroundJobs qualified as BgJobs
-import Control.Exception.Annotated (try)
+import Control.Exception.Annotated (SomeException, try)
 import Control.Lens ((.~), (^.))
 import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
@@ -128,7 +128,9 @@ linkProjectGetH slack_code stateM = do
           void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
-          when wasAdded $ sendSlackWelcomeMessage envCfg.slackBotToken token'.incomingWebhook.channelId project'.title
+          when wasAdded do
+            result <- try @SomeException $ sendSlackWelcomeMessage envCfg.slackBotToken token'.incomingWebhook.channelId project'.title
+            either (\err -> Log.logAttention ("Failed to send Slack welcome message" :: Text) $ AE.object ["error" AE..= show @Text err, "channel" AE..= token'.incomingWebhook.channelId]) (const pass) result
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
             else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Slack", Just pid)
@@ -147,7 +149,9 @@ slackInteractionsH interaction = do
         wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam slackData.projectId interaction.channel_id
         when wasAdded do
           projectM <- Projects.projectById slackData.projectId
-          whenJust projectM \project -> sendSlackWelcomeMessage authCtx.env.slackBotToken interaction.channel_id project.title
+          whenJust projectM \project -> do
+            result <- try @SomeException $ sendSlackWelcomeMessage authCtx.env.slackBotToken interaction.channel_id project.title
+            either (\err -> Log.logAttention ("Failed to send Slack welcome message" :: Text) $ AE.object ["error" AE..= show @Text err, "channel" AE..= interaction.channel_id]) (const pass) result
       let channelDisplay = if T.null interaction.channel_name then "this channel" else "#" <> interaction.channel_name
           resp =
             AE.object

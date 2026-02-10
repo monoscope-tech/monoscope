@@ -48,6 +48,7 @@ module Pages.Projects (
 where
 
 import BackgroundJobs qualified
+import Control.Exception.Annotated (SomeException, try)
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
@@ -71,6 +72,7 @@ import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
+import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask)
 import Fmt
 import GHC.Records (HasField (getField))
@@ -317,8 +319,9 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
             teamDetails = (ProjectMembers.teamToDetails team){ProjectMembers.slackChannels = V.fromList slackChannels} :: ProjectMembers.TeamDetails
         void $ ProjectMembers.updateTeam pid team.id teamDetails
         whenJust projectM \project ->
-          forM_ addedChannels \channelId ->
-            SlackP.sendSlackWelcomeMessage appCtx.env.slackBotToken channelId project.title
+          forM_ addedChannels \channelId -> do
+            result <- try @SomeException $ SlackP.sendSlackWelcomeMessage appCtx.env.slackBotToken channelId project.title
+            either (\err -> Log.logAttention ("Failed to send Slack welcome message" :: Text) $ AE.object ["error" AE..= show @Text err, "channel" AE..= channelId]) (const pass) result
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
 

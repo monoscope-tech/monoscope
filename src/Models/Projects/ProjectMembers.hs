@@ -456,7 +456,7 @@ addChannelToEveryoneTeam ::
   Eff es Bool
 addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
   everyoneTeamM <- getEveryoneTeam pid
-  maybe (pure False) (\team -> bool (void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True) (pure False) (Set.member channelId $ Set.fromList $ V.toList $ getChannels team)) everyoneTeamM
+  maybe (pure False) (\team -> let channelExists = Set.member channelId $ Set.fromList $ V.toList $ getChannels team in bool (void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True) (pure False) channelExists) everyoneTeamM
 
 
 -- | Add unique Slack channel to @everyone team's channel list

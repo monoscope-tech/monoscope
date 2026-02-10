@@ -133,3 +133,38 @@ spec = aroundAll withTestResources do
               Just team -> V.elem "C0123ABCDEF" team.slack_channels `shouldBe` True
               Nothing -> expectationFailure "@everyone team not found"
           Nothing -> expectationFailure "Slack data not found"
+
+      it "/here sends welcome message when channel is newly added" \tr -> do
+        setupSlackData tr testPid "T10HEREWELC"
+        let interaction = slackInteraction "/here" "" "T10HEREWELC"
+        -- First call should add channel and attempt to send welcome message
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+
+        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T10HEREWELC"
+        case slackDataM of
+          Just slackData -> do
+            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            case everyoneTeamM of
+              Just team -> V.elem "C0123ABCDEF" team.slack_channels `shouldBe` True
+              Nothing -> expectationFailure "@everyone team not found"
+          Nothing -> expectationFailure "Slack data not found"
+
+      it "/here does not send welcome message when channel already exists" \tr -> do
+        setupSlackData tr testPid "T11HERENODUP"
+        let interaction = slackInteraction "/here" "" "T11HERENODUP"
+        -- First call adds channel
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        -- Second call should not send welcome message (channel already exists)
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+
+        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T11HERENODUP"
+        case slackDataM of
+          Just slackData -> do
+            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            case everyoneTeamM of
+              Just team -> do
+                -- Channel should exist only once
+                let channelCount = V.length $ V.filter (== "C0123ABCDEF") team.slack_channels
+                channelCount `shouldBe` 1
+              Nothing -> expectationFailure "@everyone team not found"
+          Nothing -> expectationFailure "Slack data not found"
