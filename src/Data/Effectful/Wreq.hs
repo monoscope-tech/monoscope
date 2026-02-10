@@ -44,9 +44,9 @@ import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
 import Network.Wreq.Types qualified as W
 import Relude hiding (get, put)
-import UnliftIO.Exception (throwIO, try)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
+import UnliftIO.Exception (throwIO, try)
 
 
 -- Re-export types from Wreq
