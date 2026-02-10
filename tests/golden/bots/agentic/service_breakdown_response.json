@@ -1,6 +1,6 @@
 {
-    "explanation": "The analysis shows that three distinct services have logged warnings and errors. Service A reported 5 warnings and errors, Service B reported 6, and Service C had the highest count at 21. This indicates that Service C may require further investigation to address the issues indicated by its higher log count.",
-    "query": "level in (\"ERROR\", \"WARN\") | summarize count() by resource.service.name",
+    "explanation": "The analysis of service logs shows that there are 2 services generating warnings, while only 1 service is recording errors. This indicates that warnings are more widespread across multiple services, which could require attention to ensure system stability and prevent potential escalation to errors.",
+    "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
     "time_range": {
         "from": null,
         "since": "2H",
@@ -9,7 +9,7 @@
     "visualization": "distribution",
     "widgets": [
         {
-            "query": "level in (\"ERROR\", \"WARN\") | summarize count() by resource.service.name",
+            "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
             "title": "Warning and Error Counts by Service",
             "type": "distribution"
         }
