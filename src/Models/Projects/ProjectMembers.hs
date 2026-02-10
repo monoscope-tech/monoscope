@@ -448,13 +448,13 @@ teamToDetails t = TeamDetails{name = t.name, description = t.description, handle
 
 -- | Generic function to add a unique channel to @everyone team
 -- Returns True if channel was added, False if it already existed
-addChannelToEveryoneTeam ::
-  DB es =>
-  (Team -> V.Vector Text) ->
-  (TeamDetails -> V.Vector Text -> TeamDetails) ->
-  Projects.ProjectId ->
-  Text ->
-  Eff es Bool
+addChannelToEveryoneTeam
+  :: DB es
+  => (Team -> V.Vector Text)
+  -> (TeamDetails -> V.Vector Text -> TeamDetails)
+  -> Projects.ProjectId
+  -> Text
+  -> Eff es Bool
 addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
   everyoneTeamM <- getEveryoneTeam pid
   maybe (pure False) addIfNotExists everyoneTeamM

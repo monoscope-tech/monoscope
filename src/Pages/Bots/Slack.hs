@@ -60,8 +60,8 @@ import Web.FormUrlEncoded (FromForm)
 
 logWelcomeMessageFailure :: Log.Log :> es => Text -> SomeException -> Eff es ()
 logWelcomeMessageFailure channelId err =
-  Log.logAttention ("Failed to send Slack welcome message" :: Text) $
-    AE.object ["error" AE..= show @Text err, "channel" AE..= channelId]
+  Log.logAttention ("Failed to send Slack welcome message" :: Text)
+    $ AE.object ["error" AE..= show @Text err, "channel" AE..= channelId]
 
 
 data IncomingWebhook = IncomingWebhook
@@ -582,9 +582,17 @@ sendSlackWelcomeMessage token channelId projectTitle = do
           , "blocks"
               AE..= AE.Array
                 ( V.fromList
-                    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= [fmt|🟢 *Monoscope connected!*
+                    [ AE.object
+                        [ "type" AE..= "section"
+                        , "text"
+                            AE..= AE.object
+                              [ "type" AE..= "mrkdwn"
+                              , "text"
+                                  AE..= [fmt|🟢 *Monoscope connected!*
 
-This channel will now receive notifications for *{projectTitle}*.|]]]
+This channel will now receive notifications for *{projectTitle}*.|]
+                              ]
+                        ]
                     ]
                 )
           ]
