@@ -89,14 +89,14 @@ getLoadingMessage = \case
 
 
 data BotResponse
-  = BotLinked (PageCtx Text)
+  = BotLinked (PageCtx (Text, Maybe Projects.ProjectId))
   | NoTokenFound (PageCtx ())
   | DiscordError (PageCtx ())
   | NoContent (PageCtx ())
 
 
 instance ToHtml BotResponse where
-  toHtml (BotLinked (PageCtx bwconf bot)) = toHtml $ PageCtx bwconf $ installedSuccess bot
+  toHtml (BotLinked (PageCtx bwconf (bot, pidM))) = toHtml $ PageCtx bwconf $ installedSuccess bot pidM
   toHtml (DiscordError (PageCtx bwconf ())) = toHtml $ PageCtx bwconf discordError
   toHtml (NoTokenFound (PageCtx bwconf ())) = toHtml $ PageCtx bwconf noTokenFound
   toHtml (NoContent (PageCtx bwconf ())) = toHtml $ PageCtx bwconf ""
@@ -228,8 +228,8 @@ discordError = do
       "This could be due to not adding discord from the integrations page, click on add to discord on the integrations page to try again."
 
 
-installedSuccess :: Text -> Html ()
-installedSuccess botPlatform = do
+installedSuccess :: Text -> Maybe Projects.ProjectId -> Html ()
+installedSuccess botPlatform pidM = do
   navBar
   section_ [class_ "min-h-screen  flex flex-col justify-center"] do
     div_ [class_ "max-w-4xl mx-auto px-4"] do
@@ -243,6 +243,9 @@ installedSuccess botPlatform = do
           div_ [class_ "text-center mb-12"] do
             h2_ [class_ "font-semibold text-textStrong mb-4"] "You're All Set! 🚀"
             p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl "] $ toHtml $ "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
+            whenJust pidM \pid ->
+              div_ [class_ "mt-6"] do
+                a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/integrations"] "Go back to Integrations"
           div_ [class_ "max-w-3xl mx-auto"] do
             h3_ [class_ "font-semibold text-textStrong mb-8 text-center"] "Available Commands"
             div_ [class_ "grid gap-4 md:grid-cols-2"] do

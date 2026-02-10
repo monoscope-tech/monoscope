@@ -61,6 +61,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.List (partition)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time
 import Data.UUID qualified as RealUUID
@@ -263,6 +264,9 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
   pagerdutyInfo <- getPagerdutyByProjectId pid
+  channels <- maybe (pure []) (\d -> fromMaybe [] . fmap (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId) slackInfo
+  everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
+  let existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
   addRespHeaders
@@ -279,6 +283,8 @@ integrationsSettingsGetH pid = do
         , emails = project.notifyEmails
         , slackData = slackInfo
         , pagerdutyData = pagerdutyInfo
+        , slackChannels = channels
+        , existingSlackChannels = existingSlackChannels
         }
 
 
@@ -286,13 +292,14 @@ data NotifListForm = NotifListForm
   { notificationsChannel :: [Text]
   , phones :: [Text]
   , emails :: [Text]
+  , slackChannels :: [Text]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, FromForm)
 
 
 updateNotificationsChannel :: Projects.ProjectId -> NotifListForm -> ATAuthCtx (RespHeaders (Html ()))
-updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, emails} = do
+updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, emails, slackChannels} = do
   validationResult <- validateNotificationChannels pid notificationsChannel phones
   case validationResult of
     Left errorMessage -> do
@@ -300,6 +307,18 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
       integrationsSettingsGetH pid
     Right () -> do
       _ <- Projects.updateNotificationsChannel pid notificationsChannel phones emails
+      appCtx <- ask @AuthContext
+      projectM <- Projects.projectById pid
+      everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
+      whenJust everyoneTeamM \team -> do
+        let oldChannels = Set.fromList $ V.toList team.slack_channels
+            newChannelsSet = Set.fromList slackChannels
+            addedChannels = Set.difference newChannelsSet oldChannels
+            teamDetails = (ProjectMembers.teamToDetails team){ProjectMembers.slackChannels = V.fromList slackChannels} :: ProjectMembers.TeamDetails
+        void $ ProjectMembers.updateTeam pid team.id teamDetails
+        whenJust projectM \project ->
+          forM_ addedChannels \channelId ->
+            SlackP.sendSlackWelcomeMessage appCtx.env.slackBotToken channelId project.title
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
 
@@ -372,6 +391,8 @@ data IntegrationsConfig = IntegrationsConfig
   , emails :: V.Vector Text
   , slackData :: Maybe SlackData
   , pagerdutyData :: Maybe Slack.PagerdutyData
+  , slackChannels :: [BotUtils.Channel]
+  , existingSlackChannels :: V.Vector Text
   }
 
 
@@ -392,7 +413,7 @@ integrationsBody IntegrationsConfig{..} = do
         div_
           [ class_ ""
           , hxPost_ [text|/p/$pid/notifications-channels|]
-          , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags(), emails: getEmails()}"
+          , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags(), emails: getEmails(), slackChannels: getSlackChannels()}"
           , hxSwap_ "none"
           , hxTrigger_ "submit"
           , id_ "notifsForm"
@@ -404,7 +425,7 @@ integrationsBody IntegrationsConfig{..} = do
             -- Group integrations by connection status
             let integrations =
                   [ ("email", "Email Notifications", "Receive project updates via email", Projects.NEmail, True, faSprite_ "envelope" "solid" "h-8 w-8", renderEmailIntegration)
-                  , ("slack", "Slack", "Send notifications to Slack channels", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-8 w-8", renderSlackIntegration envConfig pid slackData)
+                  , ("slack", "Slack", "Send notifications to Slack channels", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-8 w-8", renderSlackIntegration envConfig pid slackData slackChannels existingSlackChannels)
                   , ("discord", "Discord", "Send notifications to Discord servers", Projects.NDiscord, True, faSprite_ "discord" "solid" "h-8 w-8", renderDiscordIntegration envConfig pid)
                   , ("phone", "WhatsApp", "Send notification via WhatsApp", Projects.NPhone, not $ V.null phones, faSprite_ "whatsapp" "solid" "h-8 w-8", renderWhatsappIntegration)
                   , ("pagerduty", "PagerDuty", "Page on-call engineers for monitor alerts", Projects.NPagerduty, isJust pagerdutyData, faSprite_ "pager" "solid" "h-8 w-8", renderPagerdutyIntegration projectId.toText pagerdutyData)
@@ -431,7 +452,7 @@ integrationsBody IntegrationsConfig{..} = do
               button_
                 [ class_ "btn btn-primary w-full sm:w-auto"
                 , hxPost_ [text|/p/$pid/notifications-channels|]
-                , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags(), emails: getEmails()}"
+                , hxVals_ "js:{notificationsChannel: getChecked(), phones: getTags(), emails: getEmails(), slackChannels: getSlackChannels()}"
                 , hxTarget_ "#integrations-form-section"
                 , hxSelect_ "#integrations-form-section"
                 , hxSwap_ "outerHTML swap:0.3s"
@@ -440,15 +461,27 @@ integrationsBody IntegrationsConfig{..} = do
 
         let tgs = decodeUtf8 $ AE.encode $ V.toList phones
             ems = decodeUtf8 $ AE.encode $ V.toList emails
+            slackChannelWhitelist = decodeUtf8 $ AE.encode $ map (\c -> AE.object ["value" AE..= BotUtils.channelId c, "name" AE..= ("#" <> BotUtils.channelName c)]) slackChannels
+            existingSlackChannelsJSON = decodeUtf8 $ AE.encode $ V.toList existingSlackChannels
         script_
           [text|
 window.tagify = createTagify('#phones_input');
 window.tagify.addTags($tgs);
 window.emailTagify = createTagify('#emails_input');
 window.emailTagify.addTags($ems);
+
+const slackChannelWhitelist = $slackChannelWhitelist;
+window.slackTagify = createTagify('#slack-channels-input', {
+  enforceWhitelist: true,
+  whitelist: slackChannelWhitelist,
+  tagTextProp: 'name'
+});
+window.slackTagify.addTags($existingSlackChannelsJSON.map(id => slackChannelWhitelist.find(v => v.value === id)).filter(Boolean));
+
 const getChecked = () => Array.from(document.querySelectorAll('input[name="notifChannel"]:checked')).map(i => i.value);
 const getTags = () => window.tagify.value?.map(t => t.value) || [];
 const getEmails = () => window.emailTagify.value?.map(t => t.value) || [];
+const getSlackChannels = () => window.slackTagify?.value.map(t => t.value) || [];
 |]
 
       -- Test History Section - major section break
@@ -529,10 +562,16 @@ renderWhatsappIntegration = do
     input_ [class_ "input rounded-lg w-full border border-strokeStrong", term "pattern" "^\\+?[1-9]\\d{6,14}$", type_ "text", id_ "phones_input"]
 
 
-renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> Html ()
-renderSlackIntegration envCfg pid slackData = do
+renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> V.Vector Text -> Html ()
+renderSlackIntegration envCfg pid slackData channels existingChannels = do
   case slackData of
-    Just _ -> p_ [class_ "text-sm text-textWeak mb-4 text-textSuccess"] "Already connected, but you can add again to change workspace or channel."
+    Just _ -> do
+      p_ [class_ "text-sm text-textWeak mb-4 text-textSuccess"] "Already connected, but you can add again to change workspace or channel."
+      div_ [class_ "flex flex-col gap-2 mt-4"] do
+        div_ [class_ "flex w-full items-center gap-1"] do
+          span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Slack channels"
+          span_ [class_ "text-xs text-textWeak ml-2"] "(for @everyone team)"
+        input_ [class_ "input rounded-lg w-full border border-strokeStrong", type_ "text", id_ "slack-channels-input"]
     Nothing -> pass
   let stateParam = if T.null pid then "" else "&state=" <> pid
   a_ [target_ "_blank", href_ $ "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam] do

@@ -5,6 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Models.Apis.Integrations qualified as Slack
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Pages.Bots.BotFixtures
 import Pages.Bots.BotTestHelpers
 import Pages.Bots.Slack (slackInteractionsH)
@@ -85,3 +86,50 @@ spec = aroundAll withTestResources do
 
         isValidJsonResponse result `shouldBe` True
         extractResponseText result `shouldSatisfy` isJust
+
+    describe "Channel Management" do
+      it "/here command adds channel to @everyone team" \tr -> do
+        setupSlackData tr testPid "T07HERETEAM"
+        let interaction = slackInteraction "/here" "" "T07HERETEAM"
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+
+        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T07HERETEAM"
+        case slackDataM of
+          Just slackData -> do
+            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            case everyoneTeamM of
+              Just team -> V.elem "C0123ABCDEF" team.slack_channels `shouldBe` True
+              Nothing -> expectationFailure "@everyone team not found"
+          Nothing -> expectationFailure "Slack data not found"
+
+      it "/here command does not duplicate channels in @everyone team" \tr -> do
+        setupSlackData tr testPid "T08HEREDUP"
+        let interaction = slackInteraction "/here" "" "T08HEREDUP"
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+
+        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T08HEREDUP"
+        case slackDataM of
+          Just slackData -> do
+            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            case everyoneTeamM of
+              Just team -> do
+                let channelCount = V.length $ V.filter (== "C0123ABCDEF") team.slack_channels
+                channelCount `shouldBe` 1
+              Nothing -> expectationFailure "@everyone team not found"
+          Nothing -> expectationFailure "Slack data not found"
+
+      it "/here updates both default channel_id and @everyone team" \tr -> do
+        setupSlackData tr testPid "T09HEREBOTH"
+        let interaction = slackInteraction "/here" "" "T09HEREBOTH"
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+
+        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T09HEREBOTH"
+        case slackDataM of
+          Just slackData -> do
+            slackData.channelId `shouldBe` "C0123ABCDEF"
+            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            case everyoneTeamM of
+              Just team -> V.elem "C0123ABCDEF" team.slack_channels `shouldBe` True
+              Nothing -> expectationFailure "@everyone team not found"
+          Nothing -> expectationFailure "Slack data not found"

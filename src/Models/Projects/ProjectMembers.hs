@@ -27,11 +27,15 @@ module Models.Projects.ProjectMembers (
   getTeamsById,
   Team (..),
   TeamMemberVM (..),
+  teamToDetails,
+  addSlackChannelToEveryoneTeam,
+  addDiscordChannelToEveryoneTeam,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.Default.Instances ()
+import Data.Set qualified as Set
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -434,3 +438,34 @@ getTeamsByHandles pid handles = PG.query q (pid, V.fromList handles)
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
                t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
     |]
+
+
+-- | Convert Team to TeamDetails for updates
+teamToDetails :: Team -> TeamDetails
+teamToDetails t = TeamDetails{name = t.name, description = t.description, handle = t.handle, members = t.members, notifyEmails = t.notify_emails, slackChannels = t.slack_channels, discordChannels = t.discord_channels, phoneNumbers = t.phone_numbers, pagerdutyServices = t.pagerduty_services}
+
+
+-- | Generic function to add a unique channel to @everyone team
+-- Returns True if channel was added, False if it already existed
+addChannelToEveryoneTeam ::
+  DB es =>
+  (Team -> V.Vector Text) ->
+  (TeamDetails -> V.Vector Text -> TeamDetails) ->
+  Projects.ProjectId ->
+  Text ->
+  Eff es Bool
+addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
+  everyoneTeamM <- getEveryoneTeam pid
+  maybe (pure False) (\team -> bool (void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True) (pure False) (Set.member channelId $ Set.fromList $ V.toList $ getChannels team)) everyoneTeamM
+
+
+-- | Add unique Slack channel to @everyone team's channel list
+-- Returns True if channel was added, False if it already existed
+addSlackChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+addSlackChannelToEveryoneTeam = addChannelToEveryoneTeam (.slack_channels) \d cs -> d{slackChannels = cs}
+
+
+-- | Add unique Discord channel to @everyone team's channel list
+-- Returns True if channel was added, False if it already existed
+addDiscordChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+addDiscordChannelToEveryoneTeam = addChannelToEveryoneTeam (.discord_channels) \d cs -> d{discordChannels = cs}

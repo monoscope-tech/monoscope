@@ -74,7 +74,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
           _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
+            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Discord", Just pid)
         Nothing -> pure $ addHeader "" $ DiscordError $ PageCtx def ()
     _ ->
       pure $ addHeader "" $ DiscordError $ PageCtx def ()

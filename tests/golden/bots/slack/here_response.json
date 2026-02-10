@@ -17,7 +17,7 @@
         },
         {
             "text": {
-                "text": "• 🔴 Error alerts\n• 📊 Daily & weekly reports\n• 🟡 Anomaly detections",
+                "text": "• 🔴 Error alerts\n• 📊 Daily & weekly reports\n• 🟡 Anomaly detections\n\nYou can also configure channels on the web dashboard.",
                 "type": "mrkdwn"
             },
             "type": "section"

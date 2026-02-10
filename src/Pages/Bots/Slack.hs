@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..)) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage) where
 
 import BackgroundJobs qualified as BgJobs
 import Control.Exception.Annotated (try)
@@ -34,7 +34,7 @@ import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getSlack
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
-import Models.Projects.Projects (projectIdFromText)
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
@@ -47,6 +47,7 @@ import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
+import PyF
 import Relude hiding (ask, asks)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
@@ -126,9 +127,11 @@ linkProjectGetH slack_code stateM = do
         (Just token', Just project') -> do
           void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
+          wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
+          when wasAdded $ sendSlackWelcomeMessage envCfg.slackBotToken token'.incomingWebhook.channelId project'.title
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Slack"
+            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Slack", Just pid)
         _ -> pure $ addHeader ("/p/" <> pid.toText <> "/integrations") $ NoTokenFound $ PageCtx bwconf ()
 
 
@@ -139,6 +142,12 @@ slackInteractionsH interaction = do
   case interaction.command of
     "/here" -> do
       _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
+      slackDataM <- getSlackDataByTeamId interaction.team_id
+      whenJust slackDataM \slackData -> do
+        wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam slackData.projectId interaction.channel_id
+        when wasAdded do
+          projectM <- Projects.projectById slackData.projectId
+          whenJust projectM \project -> sendSlackWelcomeMessage authCtx.env.slackBotToken interaction.channel_id project.title
       let channelDisplay = if T.null interaction.channel_name then "this channel" else "#" <> interaction.channel_name
           resp =
             AE.object
@@ -153,7 +162,7 @@ slackInteractionsH interaction = do
                             , "text"
                                 AE..= AE.object
                                   [ "type" AE..= "mrkdwn"
-                                  , "text" AE..= ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections")
+                                  , "text" AE..= ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
                                   ]
                             ]
                         ]
@@ -552,6 +561,23 @@ sendSlackChatMessage token content = do
   let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
   rs <- postWith opts (toString url) content
   pass
+
+
+sendSlackWelcomeMessage :: HTTP :> es => Text -> Text -> Text -> Eff es ()
+sendSlackWelcomeMessage token channelId projectTitle = do
+  let message =
+        AE.object
+          [ "channel" AE..= channelId
+          , "blocks"
+              AE..= AE.Array
+                ( V.fromList
+                    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= [fmt|🟢 *Monoscope connected!*
+
+This channel will now receive notifications for *{projectTitle}*.|]]]
+                    ]
+                )
+          ]
+  sendSlackChatMessage token message
 
 
 data UrlVerificationData = UrlVerificationData
