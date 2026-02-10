@@ -280,7 +280,7 @@ runNotifyTest ref = interpret \_ -> \case
           DiscordNotification discordData -> ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
           WhatsAppNotification whatsappData -> ("WhatsApp" :: Text, whatsappData.to, Just whatsappData.template)
           PagerdutyNotification pagerdutyData -> ("PagerDuty" :: Text, pagerdutyData.dedupKey, Just pagerdutyData.summary)
-    Log.logInfo "Notification" notifInfo
+    Log.logTrace "Notification" notifInfo
     Log.logTrace "Notification payload" notification
     liftIO $ modifyIORef ref (notification :)
   GetNotifications -> liftIO $ reverse <$> readIORef ref

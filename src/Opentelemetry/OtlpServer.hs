@@ -1282,7 +1282,7 @@ runServer appLogger appCtx tp = do
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
 processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
-  Log.logInfo "Received trace export request" AE.Null
+  Log.logTrace "Received trace export request" AE.Null
 
   currentTime <- liftIO getCurrentTime
   appCtx <- ask @AuthContext
@@ -1310,7 +1310,7 @@ processTraceRequest metadataApiKey req = do
         , grpcErrorMetadata = []
         , grpcErrorDetails = Nothing
         }
-    Log.logInfo
+    Log.logTrace
       "Traces: Authentication successful"
       (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
@@ -1330,13 +1330,13 @@ processTraceRequest metadataApiKey req = do
   let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
       !spans' = V.fromList spans
 
-  Log.logInfo
+  Log.logTrace
     "Traces: Converted resource spans to OtelLogs"
     (AE.object ["span_count" AE..= length spans])
 
   unless (V.null spans') do
     Telemetry.bulkInsertOtelLogsAndSpansTF spans'
-    Log.logInfo
+    Log.logTrace
       "Traces: Successfully inserted spans into database"
       (AE.object ["inserted_count" AE..= V.length spans'])
 
@@ -1354,7 +1354,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
 processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
-  Log.logInfo "Received logs export request" AE.Null
+  Log.logTrace "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
   appCtx <- ask @AuthContext
 
@@ -1381,7 +1381,7 @@ processLogsRequest metadataApiKey req = do
         , grpcErrorMetadata = []
         , grpcErrorDetails = Nothing
         }
-    Log.logInfo
+    Log.logTrace
       "Logs: Authentication successful"
       (AE.object ["project_ids" AE..= map unUUIDId allProjectIds, "project_keys" AE..= V.toList allApiKeys, "metadata_auth" AE..= isJust metadataApiKey])
 
@@ -1399,13 +1399,13 @@ processLogsRequest metadataApiKey req = do
 
   let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
 
-  Log.logInfo
+  Log.logTrace
     "Logs: Converted resource logs to OtelLogs"
     (AE.object ["log_count" AE..= length logs])
 
   unless (null logs) do
     Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
-    Log.logInfo
+    Log.logTrace
       "Logs: Successfully inserted logs into database"
       (AE.object ["inserted_count" AE..= length logs])
 
@@ -1423,7 +1423,7 @@ logsServiceExport appLogger appCtx tp (Proto req) = do
 -- | Process metrics request with optional API key from gRPC metadata (extracted for testing)
 processMetricsRequest :: (DB es, Eff.Reader AuthContext :> es, Log :> es) => Maybe Text -> MS.ExportMetricsServiceRequest -> Eff es ()
 processMetricsRequest metadataApiKey req = do
-  Log.logInfo "Received metrics export request" AE.Null
+  Log.logTrace "Received metrics export request" AE.Null
 
   currentTime <- liftIO getCurrentTime
   appCtx <- ask @AuthContext
@@ -1442,7 +1442,7 @@ processMetricsRequest metadataApiKey req = do
 
   case pidM of
     Just pid -> do
-      Log.logInfo
+      Log.logTrace
         "Metrics: Authentication successful"
         (AE.object ["project_id" AE..= unUUIDId pid, "project_key" AE..= projectKey, "metadata_auth" AE..= isJust metadataApiKey])
 
@@ -1453,13 +1453,13 @@ processMetricsRequest metadataApiKey req = do
       let !projectCaches = one (pid, projectCache)
           !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
 
-      Log.logInfo
+      Log.logTrace
         "Metrics: Converted resource metrics to MetricRecords"
         (AE.object ["metric_count" AE..= length metricRecords])
 
       unless (null metricRecords) do
         Telemetry.bulkInsertMetrics (V.fromList metricRecords)
-        Log.logInfo
+        Log.logTrace
           "Metrics: Successfully inserted metrics into database"
           (AE.object ["inserted_count" AE..= length metricRecords])
     Nothing ->

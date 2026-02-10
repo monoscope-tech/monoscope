@@ -465,9 +465,9 @@ processFiveMinuteSpans scheduledTime pid = do
             (pid, fiveMinutesAgo, scheduledTime, skip, perPage)
       -- Only log if there are actually spans to process (reduces noise in tests)
       Relude.when (V.length httpSpans > 0) $ do
-        Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
+        Log.logTrace "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
         processProjectSpans pid httpSpans fiveMinutesAgo scheduledTime
-        Log.logInfo "Processing complete for page" ("skip", skip)
+        Log.logTrace "Processing complete for page" ("skip", skip)
       Relude.when (V.length httpSpans == perPage) $ do
         processSpansWithPagination fiveMinutesAgo (skip + perPage)
 
@@ -694,7 +694,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
 
   -- Only log if there are actually entities to process (reduces noise in tests)
   Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0)
-    $ Log.logInfo
+    $ Log.logTrace
       "Entities extracted"
       ( object
           [ "project_id" AE..= pid.toText
@@ -721,7 +721,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
       let spansWithHashes = V.filter (\(_, hashes) -> not $ V.null hashes) $ V.zip spans spanUpdates
       Relude.when (V.length spansWithHashes > 0) $ do
         let expectedCount = V.length spansWithHashes
-        Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON expectedCount)
+        Log.logTrace "Updating spans with computed hashes" ("span_count", AE.toJSON expectedCount)
         let dbSpanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
             hashValues = PGArray $ V.toList $ V.map (AE.toJSON . snd) spansWithHashes
         rowsUpdated <-
@@ -739,7 +739,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
             (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
         Relude.when (fromIntegral rowsUpdated /= expectedCount)
           $ Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
-        Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
+        Log.logTrace "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault =
@@ -1103,7 +1103,7 @@ newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Tex
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
   authCtx <- ask @Config.AuthContext
   let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
-  Log.logInfo "Processing new anomalies" ()
+  Log.logTrace "Processing new anomalies" ()
   case anomalyType of
     -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
     -- This prevents notification spam when multiple related changes occur
@@ -1524,7 +1524,7 @@ gitSyncPushAllDashboards pid = do
 
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()
 checkTriggeredQueryMonitors = do
-  Log.logInfo "Checking query monitors" ()
+  Log.logTrace "Checking query monitors" ()
   monitors <- Monitors.getActiveQueryMonitors
   forM_ monitors \monitor -> do
     startWall <- Time.currentTime
