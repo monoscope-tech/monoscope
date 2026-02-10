@@ -120,7 +120,9 @@ setupSlackData tr pid teamId = void $ runTestBg tr $ Slack.insertAccessToken pid
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupDiscordData tr pid guildId = void $ runTestBg tr $ Slack.insertDiscordData pid guildId
+setupDiscordData tr pid guildId = void
+  $ withResource tr.trPool \conn ->
+    PGS.execute conn [sql|INSERT INTO apis.discord (project_id, guild_id) VALUES (?,?) ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id|] (pid, guildId)
 
 
 setupWhatsappNumber :: TestResources -> Projects.ProjectId -> Text -> IO ()

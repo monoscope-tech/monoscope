@@ -24,7 +24,7 @@ spec = aroundAll withTestResources do
 
     describe "/here command" do
       it "returns structured success response" \tr -> do
-        setupDiscordData tr testPid "guild_here_test"
+        setupDiscordData tr testPid "1234567890123456789"
 
         let payload = discordCommandInteraction "here" ""
             (body, sig, ts) = signDiscordPayload payload "1706745601"
@@ -35,7 +35,7 @@ spec = aroundAll withTestResources do
         getDiscordResponseType result `shouldBe` Just 4
 
       it "matches golden file format" \tr -> do
-        setupDiscordData tr testPid "guild_here_golden"
+        setupDiscordData tr testPid "1234567890123456789"
 
         let payload = discordCommandInteraction "here" ""
             (body, sig, ts) = signDiscordPayload payload "1706745606"
@@ -47,7 +47,7 @@ spec = aroundAll withTestResources do
 
     describe "/monoscope command" do
       it "uses deferred response pattern" \tr -> do
-        setupDiscordData tr testPid "guild_mono_test"
+        setupDiscordData tr testPid "1234567890123456789"
 
         let payload = discordCommandInteraction "monoscope" "show errors"
             (body, sig, ts) = signDiscordPayload payload "1706745602"
@@ -58,13 +58,13 @@ spec = aroundAll withTestResources do
         isEmptyResponse result `shouldBe` True
 
       it "handles thread context for conversations" \tr -> do
-        setupDiscordData tr testPid "guild_thread_test"
+        setupDiscordData tr testPid "1234567890123456789"
         let threadPayload = discordThreadInteraction "monoscope" "show errors" "thread_123"
         BS.length threadPayload `shouldSatisfy` (> 0)
 
     describe "/dashboard command" do
       it "returns select menu for dashboards" \tr -> do
-        setupDiscordData tr testPid "guild_dash_test"
+        setupDiscordData tr testPid "1234567890123456789"
         let payload = discordCommandInteraction "dashboard" ""
             (body, sig, ts) = signDiscordPayload payload "1706745607"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
@@ -74,7 +74,7 @@ spec = aroundAll withTestResources do
 
     describe "Response format" do
       it "/here response includes Components v2 flag" \tr -> do
-        setupDiscordData tr testPid "guild_format_test"
+        setupDiscordData tr testPid "1234567890123456789"
         let payload = discordCommandInteraction "here" ""
             (body, sig, ts) = signDiscordPayload payload "1706745603"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
@@ -83,7 +83,7 @@ spec = aroundAll withTestResources do
         hasComponentsV2Flag result `shouldBe` True
 
       it "/here response has container component" \tr -> do
-        setupDiscordData tr testPid "guild_container_test"
+        setupDiscordData tr testPid "1234567890123456789"
         let payload = discordCommandInteraction "here" ""
             (body, sig, ts) = signDiscordPayload payload "1706745604"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
@@ -92,7 +92,7 @@ spec = aroundAll withTestResources do
         hasContainerComponent result `shouldBe` True
 
       it "/here response has text content components" \tr -> do
-        setupDiscordData tr testPid "guild_text_test"
+        setupDiscordData tr testPid "1234567890123456789"
         let payload = discordCommandInteraction "here" ""
             (body, sig, ts) = signDiscordPayload payload "1706745605"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
