@@ -118,7 +118,7 @@ handlePayload signatureM eventTypeM rawBody payload = do
       syncM <- GitSync.getGitHubSyncByRepo ownerName repoName
       case syncM of
         Nothing -> do
-          Log.logInfo "GitHub webhook for untracked repo" (ownerName, repoName)
+          Log.logTrace "GitHub webhook for untracked repo" (ownerName, repoName)
           pure $ AE.object ["status" AE..= ("ignored" :: Text)]
         Just sync -> case validateWebhookSignature sync.webhookSecret signatureM rawBody of
           Left err -> do
@@ -130,10 +130,10 @@ handlePayload signatureM eventTypeM rawBody payload = do
               Just "push" -> do
                 liftIO $ withResource ctx.jobsPool \conn ->
                   void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo sync.projectId
-                Log.logInfo "Triggered git sync from webhook" (sync.projectId, ownerName, repoName)
+                Log.logTrace "Triggered git sync from webhook" (sync.projectId, ownerName, repoName)
                 pure $ AE.object ["status" AE..= ("ok" :: Text)]
               Just event -> do
-                Log.logInfo "Ignoring GitHub event type" event
+                Log.logTrace "Ignoring GitHub event type" event
                 pure $ AE.object ["status" AE..= ("ignored" :: Text), "event" AE..= event]
               Nothing -> do
                 Log.logInfo "GitHub webhook missing event type" ()
@@ -170,14 +170,14 @@ gitSyncSettingsPostH pid form = do
   syncM <- case existingM of
     Nothing -> do
       result <- GitSync.insertGitHubSync encKey pid form.owner form.repo branch form.accessToken Nothing (fromMaybe "" form.pathPrefix)
-      Log.logInfo "Created GitHub sync config" (pid, form.owner, form.repo)
+      Log.logTrace "Created GitHub sync config" (pid, form.owner, form.repo)
       pure result
     Just existing -> do
       result <-
         if T.null form.accessToken
           then GitSync.updateGitHubSyncKeepToken existing.id form.owner form.repo branch True
           else GitSync.updateGitHubSync encKey existing.id form.owner form.repo branch form.accessToken True
-      Log.logInfo "Updated GitHub sync config" (pid, form.owner, form.repo)
+      Log.logTrace "Updated GitHub sync config" (pid, form.owner, form.repo)
       pure result
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid syncM
 
@@ -190,7 +190,7 @@ gitSyncSettingsDeleteH pid = do
     Nothing -> pass
     Just existing -> do
       _ <- GitSync.deleteGitHubSync existing.id
-      Log.logInfo "Deleted GitHub sync config" pid
+      Log.logTrace "Deleted GitHub sync config" pid
   addRespHeaders $ gitSyncSettingsView ctx.env.hostUrl pid Nothing
 
 
@@ -408,7 +408,7 @@ queueGitSyncPush pid dashboardId = do
     Just _ -> do
       liftIO $ withResource ctx.jobsPool \conn ->
         void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncPushDashboard pid (unUUIDId dashboardId)
-      Log.logInfo "Queued git sync push for dashboard" (pid, dashboardId)
+      Log.logTrace "Queued git sync push for dashboard" (pid, dashboardId)
 
 
 -- | Form for selecting a repo from GitHub App installation

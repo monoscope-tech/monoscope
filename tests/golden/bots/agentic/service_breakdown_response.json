@@ -1,21 +1,16 @@
 {
-    "explanation": "The warning counts by service show that two services recorded warnings: one service had 5 warnings while the other had 6 warnings. In contrast, there is a single service that recorded a total of 21 errors, indicating a more significant issue or failure that needs to be examined further.",
-    "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
+    "explanation": "The analysis shows that three distinct services have logged warnings and errors. Service A reported 5 warnings and errors, Service B reported 6, and Service C had the highest count at 21. This indicates that Service C may require further investigation to address the issues indicated by its higher log count.",
+    "query": "level in (\"ERROR\", \"WARN\") | summarize count() by resource.service.name",
     "time_range": {
         "from": null,
-        "since": null,
+        "since": "2H",
         "to": null
     },
     "visualization": "distribution",
     "widgets": [
         {
-            "query": "level == \"WARN\" | summarize count() by resource.service.name",
-            "title": "Warning Counts by Service",
-            "type": "distribution"
-        },
-        {
-            "query": "level == \"ERROR\" | summarize count() by resource.service.name",
-            "title": "Error Counts by Service",
+            "query": "level in (\"ERROR\", \"WARN\") | summarize count() by resource.service.name",
+            "title": "Warning and Error Counts by Service",
             "type": "distribution"
         }
     ]

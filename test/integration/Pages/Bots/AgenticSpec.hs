@@ -75,6 +75,7 @@ spec = aroundAll withTestResources do
 
     describe "Live API calls (uses golden files)" do
       it "processes error trend query and saves golden response" \tr -> do
+        cleanupTelemetryData tr
         seedTelemetryData tr
         result <- runTestBg tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIKey tr)
         case result of
@@ -85,6 +86,8 @@ spec = aroundAll withTestResources do
             length agenticResp.widgets `shouldSatisfy` (>= 0)
 
       it "processes service breakdown query and saves golden response" \tr -> do
+        cleanupTelemetryData tr
+        seedTelemetryData tr
         result <- runTestBg tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
@@ -93,6 +96,8 @@ spec = aroundAll withTestResources do
             assertJsonGolden "agentic/service_breakdown_response.json" responseJson
 
       it "processes explanation-only query and saves golden response" \tr -> do
+        cleanupTelemetryData tr
+        seedTelemetryData tr
         result <- runTestBg tr $ processAIQuery testPid "what services have the most errors?" Nothing (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err

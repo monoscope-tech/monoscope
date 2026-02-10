@@ -101,6 +101,8 @@ spec = aroundAll withTestResources do
         _ -> fail "Expected DashboardGet' response"
 
     it "Should handle bulk add teams to dashboards" \tr -> do
+      -- Note: Dashboards already created by "Should create a dashboard" test
+      -- Create test teams
       let team = ManageMembers.TeamForm{teamName = "Hello", teamDescription = "", teamHandle = "hello", notifEmails = [], teamMembers = [], discordChannels = [], slackChannels = [], phoneNumbers = [], pagerdutyServices = [], teamId = Nothing}
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team Nothing
       _ <- testServant tr $ ManageMembers.manageTeamPostH testPid team{teamHandle = "hii"} Nothing
@@ -108,9 +110,9 @@ spec = aroundAll withTestResources do
       (_, tm) <- testServant tr $ ManageMembers.manageTeamsGetH testPid (Just "")
       case tm of
         ManageMembers.ManageTeamsGet' (pid, members, slackChannels, discordChannels, teams') -> do
-          -- Filter to get team-hello and team-hi (exclude team-broo)
-          let teamIds = V.toList $ V.map (\t -> t.id) $ V.filter (\t -> t.handle /= "broo") teams'
-          let brooId = V.find (\t -> t.handle == "broo") teams' & Unsafe.fromJust & \t -> t.id
+          -- Get all team IDs (not handles - the field name is misleading)
+          let selectedTeams = V.filter (\t -> t.handle /= "broo") teams'
+          let teamIds = V.toList $ V.map (\t -> t.id) selectedTeams
           (_, pg) <- testServant tr $ Dashboards.dashboardsGetH testPid Nothing Nothing Nothing Nothing Nothing (DashboardFilters [])
           case pg of
             Dashboards.DashboardsGet (PageCtx _ d) -> do
@@ -124,10 +126,14 @@ spec = aroundAll withTestResources do
                   forM_ dd.dashboards $ \db -> do
                     if db.title == "Updated Dashboard (Copy)"
                       then length db.teams `shouldBe` 0
-                      else length db.teams `shouldBe` 2
-                    length (filter (== brooId) (V.toList db.teams)) `shouldBe` 0
-                    unless (db.title == "Updated Dashboard (Copy)") $ do
-                      True `shouldBe` all (`elem` V.toList db.teams) teamIds
+                      else do
+                        -- Should have 3 teams: hello, hii, and @everyone
+                        length db.teams `shouldBe` 3
+                        -- Get team handles for assertions
+                        let dbTeamHandles = mapMaybe (\tid -> V.find (\t -> t.id == tid) teams' <&> (.handle)) (V.toList db.teams)
+                        -- Verify required teams are present and broo is excluded
+                        all (`elem` dbTeamHandles) ["hello", "hii", "everyone"] `shouldBe` True
+                        dbTeamHandles `shouldSatisfy` notElem "broo"
                 _ -> fail "Expected DashboardDelete response"
             _ -> fail "Expected DashboardGet' response"
         _ -> fail "Expected ManageTeamsGet' response"

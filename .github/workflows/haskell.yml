@@ -140,6 +140,7 @@ jobs:
           USE_EXTERNAL_DB: true
           LOG_LEVEL: ${{ matrix.test == 'integration-tests' && 'warn' || '' }}
           TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
+          DISCORD_CLIENT_ID: "1328384474395967631"
         run: |
           echo "::group::Running ${{ matrix.test }}"
           cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct

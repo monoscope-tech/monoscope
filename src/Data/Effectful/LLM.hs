@@ -18,7 +18,6 @@ module Data.Effectful.LLM (
 import Control.Lens ((^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key)
-import Data.Hashable (hash)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful
@@ -26,9 +25,15 @@ import Effectful.Dispatch.Dynamic
 import Langchain.LLM.Core qualified as LLMCore
 import Langchain.LLM.OpenAI qualified as OpenAI
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
+import OpenAI.V1.Models qualified as Models
 import Relude
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
+
+
+-- Default model used for all LLM calls
+defaultModel :: Text
+defaultModel = "gpt-4o-mini"
 
 
 -- Manual JSON instances for LLMCore.Message (can't use Generic due to type structure)
@@ -169,7 +174,7 @@ callOpenAIAPI fullPrompt apiKey = do
           }
       params =
         OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = "gpt-4o-mini"
+          { OpenAIV1.model = Models.Model defaultModel
           , OpenAIV1.messages = V.fromList [userMessage]
           }
   -- Use langchain-hs to generate response
@@ -179,14 +184,20 @@ callOpenAIAPI fullPrompt apiKey = do
     Right response -> pure $ Right response
 
 
--- | Create deterministic cache key from request data
-hashCacheKey :: [LLMCore.Message] -> Text -> Bool -> String
-hashCacheKey messages model hasTools =
-  let messageStrs = map (\m -> show (LLMCore.role m) <> ":" <> T.take 100 (LLMCore.content m)) messages
-      historyStr = T.intercalate "|" messageStrs
-      combined = historyStr <> model <> show hasTools
-      hashVal = hash combined
-   in "chat_" <> show (abs hashVal)
+-- | Create deterministic cache key from user query and iteration
+cacheKeyFromQuery :: [LLMCore.Message] -> Bool -> String
+cacheKeyFromQuery messages hasTools =
+  let -- Extract original user query from first user message
+      isUserMessage m = case AE.toJSON (LLMCore.role m) of
+        AE.String role -> role == "User"
+        _ -> False
+      userQuery = case find isUserMessage messages of
+        Just msg -> T.take 50 $ T.replace " " "_" $ T.replace "\n" "_" $ LLMCore.content msg
+        Nothing -> "unknown_query"
+      -- Count messages to determine iteration (2=initial, 4=after tools, etc)
+      iterNum = length messages
+      toolSuffix = if hasTools then "_with_tools" else ""
+   in "agentic_" <> toString userQuery <> "_iter" <> show iterNum <> toolSuffix
 
 
 -- Helper to check if CreateChatCompletion has tools (via JSON inspection)
@@ -198,10 +209,9 @@ hasToolsInParams p = isJust $ AE.toJSON p ^? key "tools"
 getOrCreateAgenticGoldenResponse :: FilePath -> LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> Text -> IO (Either Text LLMCore.Message)
 getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
   let historyMessages = toList history
-      modelName = "gpt-4o-mini" -- Model is always gpt-4o-mini in this codebase
       hasTools = hasToolsInParams params
-      cacheKey = hashCacheKey historyMessages modelName hasTools
-      fileName = "agentic_" <> cacheKey <> ".json"
+      cacheKey = cacheKeyFromQuery historyMessages hasTools
+      fileName = cacheKey <> ".json"
       filePath = goldenDir </> fileName
   exists <- doesFileExist filePath
   updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
@@ -211,13 +221,22 @@ getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
       case AE.decode content of
         Just (cached :: AgenticChatCache) -> return $ Right cached.accResponse
         Nothing -> error $ toText $ "Failed to decode agentic chat cache from: " <> filePath
-    else do
-      createDirectoryIfMissing True goldenDir
-      let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
-      result <- LLMCore.chat openAI history (Just params)
-      case result of
-        Left err -> return $ Left $ show err
-        Right responseMsg -> do
-          let cached = AgenticChatCache{accHistory = historyMessages, accModel = modelName, accHasTools = hasTools, accResponse = responseMsg}
-          writeFileLBS filePath (AE.encode cached)
-          return $ Right responseMsg
+    else
+      if not exists && not updateGolden
+        then
+          error
+            $ toText
+            $ "Golden file not found: "
+            <> filePath
+            <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
+            <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
+        else do
+          createDirectoryIfMissing True goldenDir
+          let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
+          result <- LLMCore.chat openAI history (Just params)
+          case result of
+            Left err -> return $ Left $ show err
+            Right responseMsg -> do
+              let cached = AgenticChatCache{accHistory = historyMessages, accModel = defaultModel, accHasTools = hasTools, accResponse = responseMsg}
+              writeFileLBS filePath (AE.encode cached)
+              return $ Right responseMsg

@@ -1,9 +1,9 @@
 {
-    "explanation": "Currently, there is one service reporting errors, with a total of 21 errors recorded. This indicates potential issues that might need to be inspected further to maintain system reliability.",
+    "explanation": "There was a total of 21 errors reported across services. However, no specific service names could be determined at this moment. This indicates that while errors occurred, they may not be tied to identifiable services based on the available data.",
     "query": "level == \"ERROR\" | summarize count() by resource.service.name",
     "time_range": {
         "from": null,
-        "since": "2H",
+        "since": null,
         "to": null
     },
     "visualization": "distribution",
