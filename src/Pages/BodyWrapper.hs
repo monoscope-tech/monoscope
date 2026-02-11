@@ -145,7 +145,7 @@ bodyWrapper bcfg child = do
         -- script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
 
-        when bcfg.config.enableBrowserMonitoring $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
+        when bcfg.config.enableBrowserMonitoring $ script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/monoscope.min.js")] ("" :: Text)
 
         -- Flag for widget initialization - set to true after web-components loads
         script_ "window.widgetDepsReady = false;"
