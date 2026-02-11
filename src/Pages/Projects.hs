@@ -480,25 +480,27 @@ integrationsBody IntegrationsConfig{..} = do
         script_
           [text|
 window.initWhenReady(function() {
-  if (!window.tagify) window.tagify = createTagify('#phones_input');
-  window.tagify.removeAllTags();
-  window.tagify.addTags($tgs);
+  requestAnimationFrame(() => {
+    if (!window.tagify) window.tagify = createTagify('#phones_input');
+    window.tagify.removeAllTags();
+    window.tagify.addTags($tgs);
 
-  if (!window.emailTagify) window.emailTagify = createTagify('#emails_input');
-  window.emailTagify.removeAllTags();
-  window.emailTagify.addTags($ems);
+    if (!window.emailTagify) window.emailTagify = createTagify('#emails_input');
+    window.emailTagify.removeAllTags();
+    window.emailTagify.addTags($ems);
 
-  window.slackChannelWhitelist = $slackChannelWhitelist;
-  if (!window.slackTagify) {
-    window.slackTagify = createTagify('#slack-channels-input', {
-      enforceWhitelist: true,
-      whitelist: window.slackChannelWhitelist,
-      tagTextProp: 'name'
-    });
-  }
-  window.slackTagify.settings.whitelist = window.slackChannelWhitelist;
-  window.slackTagify.removeAllTags();
-  window.slackTagify.addTags($existingSlackChannelsJSON.map(id => window.slackChannelWhitelist.find(v => v.value === id)).filter(Boolean));
+    window.slackChannelWhitelist = $slackChannelWhitelist;
+    if (!window.slackTagify) {
+      window.slackTagify = createTagify('#slack-channels-input', {
+        enforceWhitelist: true,
+        whitelist: window.slackChannelWhitelist,
+        tagTextProp: 'name'
+      });
+    }
+    window.slackTagify.settings.whitelist = window.slackChannelWhitelist;
+    window.slackTagify.removeAllTags();
+    window.slackTagify.addTags($existingSlackChannelsJSON.map(id => window.slackChannelWhitelist.find(v => v.value === id)).filter(Boolean));
+  });
 });
 
 if (!window.getChecked) window.getChecked = () => Array.from(document.querySelectorAll('input[name="notifChannel"]:checked')).map(i => i.value);
