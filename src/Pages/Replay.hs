@@ -1,6 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, compressAndMergeReplaySessions) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, compressAndMergeReplaySessions, saveMergedReplayEvents) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -26,9 +26,11 @@ import Pages.S3 (getMinioConnectInfo)
 import Pkg.Queue (publishJSONToKafka)
 import Relude
 import RequestMessages (replaceNullChars)
-import System.Config (AuthContext (config), EnvConfig (..))
+import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
+import Data.Pool (withResource)
+import OddJobs.Job (createJob)
 import UnliftIO.Exception (tryAny)
 import Utils (eitherStrToText)
 
@@ -110,17 +112,17 @@ getMinioFile conn bucket objKey = do
     Left _ -> pure V.empty
 
 
-getSessionEvents :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Text -> Eff es AE.Array
-getSessionEvents conn bucket sessionId = do
+getSessionEvents :: Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> Text -> ATAuthCtx AE.Array
+getSessionEvents conn pid bucket sessionId = do
   let prefix = sessionId <> "/"
       mergedKey = fromString $ toString $ sessionId <> "/merged.json.gz"
+  ctx <- Effectful.Reader.Static.ask @AuthContext
   res <- liftIO $ Minio.runMinio conn $ do
     items <- runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
     let objectNames = [Minio.oiObject info | Minio.ListItemObject info <- items]
         (mergedFiles, individualFiles) = partition (\n -> n == mergedKey) objectNames
         hasMerged = not $ null mergedFiles
         hasIndividual = not $ null individualFiles
-    -- Download merged file if present
     mergedEvents <- if hasMerged
       then do
         src <- Minio.getObject bucket mergedKey Minio.defaultGetObjectOptions
@@ -131,7 +133,6 @@ getSessionEvents conn bucket sessionId = do
           Right (AE.Array arr) -> pure arr
           _ -> pure V.empty
       else pure V.empty
-    -- Download individual files
     individualEvents <- forM individualFiles $ \objName -> do
       src <- Minio.getObject bucket objName Minio.defaultGetObjectOptions
       let stream = Minio.gorObjectStream src
@@ -140,13 +141,10 @@ getSessionEvents conn bucket sessionId = do
         Right (AE.Array arr) -> pure arr
         _ -> pure V.empty
     let allEvents = sortEvents $ V.concat (mergedEvents : individualEvents)
-    -- If there are unmerged individual files, merge everything and save back to S3
     when hasIndividual $ do
-      let compressed = GZip.compress $ AE.encode (AE.Array allEvents)
-          compressedSize = BL.length compressed
-      Minio.putObject bucket mergedKey (CC.sourceLazy compressed) (Just compressedSize) Minio.defaultPutObjectOptions
-      forM_ individualFiles $ \objName ->
-        Minio.removeObject bucket objName
+      let jobPayload = AE.object [ "tag" AE..= ("SaveMergedReplayEvents" :: Text), "contents" AE..= ([AE.toJSON pid, AE.toJSON sessionId, AE.Array allEvents] :: [AE.Value])]
+      liftIO $ withResource ctx.jobsPool \conn' ->
+              void $ createJob conn' "background_jobs" jobPayload
     pure allEvents
   case res of
     Right events
@@ -214,8 +212,7 @@ replaySessionGetH pid sessionId = do
       let (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
           conn = getMinioConnectInfo acc sec region bucket endpoint
           sessionStr = UUID.toText sessionId
-
-      result <- liftIO $ tryAny $ runEff $ getSessionEvents conn bucket sessionStr
+      result <- tryAny $ getSessionEvents conn pid bucket sessionStr
       case result of
         Right replayEvents -> addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
         Left err -> do
@@ -223,6 +220,41 @@ replaySessionGetH pid sessionId = do
           addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Failed to load session" :: Text)]
     Nothing -> do
       addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Project not found" :: Text)]
+
+
+-- | Save pre-merged replay events to the bucket, replacing individual files
+saveMergedReplayEvents :: Projects.ProjectId -> UUID.UUID -> AE.Value -> ATBackgroundCtx ()
+saveMergedReplayEvents pid sessionId events = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let envCfg = ctx.config
+  projectM <- Projects.projectById pid
+  case projectM of
+    Nothing -> Log.logAttention "Project not found for saving merged replay events" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", pid.toText)])
+    Just p -> do
+      let (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
+          s3Conn = getMinioConnectInfo acc sec region bucket endpoint
+          session = UUID.toText sessionId
+          prefix = session <> "/"
+          mergedKey = fromString $ toString $ session <> "/merged.json.gz"
+          compressed = GZip.compress $ AE.encode events
+          compressedSize = BL.length compressed
+      result <- liftIO $ tryAny $ Minio.runMinio s3Conn $ do
+        Minio.putObject bucket mergedKey (CC.sourceLazy compressed) (Just compressedSize) Minio.defaultPutObjectOptions
+        items <- runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
+        let objectNames = [Minio.oiObject info | Minio.ListItemObject info <- items]
+        forM_ objectNames $ \objName ->
+          when (objName /= mergedKey) $
+            Minio.removeObject bucket objName
+      case result of
+        Right (Right _) -> do
+          _ <- PG.execute [sql|
+            UPDATE projects.replay_sessions SET merged = TRUE, updated_at = now() WHERE session_id = ? AND project_id = ?
+          |] (sessionId, pid)
+          Log.logInfo "Saved merged replay events" ("session_id", UUID.toText sessionId)
+        Right (Left err) ->
+          Log.logAttention "Minio error saving merged replay events" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", pid.toText), ("error", toText $ show err)])
+        Left err ->
+          Log.logAttention "Failed to save merged replay events" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", pid.toText), ("error", toText $ show err)])
 
 
 -- | Find inactive sessions and compress & merge their S3 event files
