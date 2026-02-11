@@ -145,7 +145,7 @@ bodyWrapper bcfg child = do
         -- script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
 
-        script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
+        when bcfg.config.enableBrowserMonitoring $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
         -- Flag for widget initialization - set to true after web-components loads
         script_ "window.widgetDepsReady = false;"
@@ -588,18 +588,20 @@ bodyWrapper bcfg child = do
                 });
       |]
       -- Initialize Monoscope only when telemetryProjectId is available
-      when (bcfg.config.telemetryProjectId /= "")
-        $ script_
-          [text| 
-            window.monoscope = new Monoscope({ 
-              projectId: "${telemetryProjectId}", 
-              serviceName: "${telemetryServiceName}", 
-              user: {
-                email: ${email}, 
-                name: "${name}"
-              }
-            });
-        |]
+      when (bcfg.config.telemetryProjectId /= "" && bcfg.config.enableBrowserMonitoring)
+        $ let enableReplay = bool "false" "true" bcfg.config.enableSessionReplay
+           in script_
+                [text|
+                  window.monoscope = new Monoscope({
+                    projectId: "${telemetryProjectId}",
+                    serviceName: "${telemetryServiceName}",
+                    sessionReplay: ${enableReplay},
+                    user: {
+                      email: ${email},
+                      name: "${name}"
+                    }
+                  });
+              |]
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()

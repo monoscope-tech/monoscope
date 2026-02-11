@@ -115,6 +115,7 @@ data EnvConfig = EnvConfig
   , kafkaDeadLetterTopic :: Text
   , enableFreetier :: Bool
   , enableBrowserMonitoring :: Bool
+  , enableSessionReplay :: Bool
   , -- External scripts configuration
     googleTagManagerId :: Maybe Text
   , googleAdsConversionId :: Maybe Text
