@@ -63,6 +63,7 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils qualified as BotUtils
+import Pages.Replay qualified as Replay
 import Pages.Charts.Charts qualified as Charts
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
@@ -116,6 +117,7 @@ data BgJobs
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
+  | CompressReplaySessions
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -355,6 +357,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    CompressReplaySessions -> Replay.compressAndMergeReplaySessions
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -387,6 +390,10 @@ runHourlyJob scheduledTime hour = do
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
   Relude.when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
+
+  -- Compress & merge inactive replay sessions
+  liftIO $ withResource ctx.jobsPool \conn ->
+    void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
 
   Log.logInfo "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
 

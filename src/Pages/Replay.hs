@@ -1,19 +1,24 @@
 {-# LANGUAGE OverloadedStrings #-}
 
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, compressAndMergeReplaySessions) where
 
+import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as BL
 import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
+import Data.List (partition)
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful (Eff, IOE, runEff, type (:>))
 import Effectful.Log (Log)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
@@ -108,24 +113,48 @@ getMinioFile conn bucket objKey = do
 getSessionEvents :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Text -> Eff es AE.Array
 getSessionEvents conn bucket sessionId = do
   let prefix = sessionId <> "/"
+      mergedKey = fromString $ toString $ sessionId <> "/merged.json.gz"
   res <- liftIO $ Minio.runMinio conn $ do
     items <- runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
     let objectNames = [Minio.oiObject info | Minio.ListItemObject info <- items]
-    eventArrays <- forM objectNames $ \objName -> do
+        (mergedFiles, individualFiles) = partition (\n -> n == mergedKey) objectNames
+        hasMerged = not $ null mergedFiles
+        hasIndividual = not $ null individualFiles
+    -- Download merged file if present
+    mergedEvents <- if hasMerged
+      then do
+        src <- Minio.getObject bucket mergedKey Minio.defaultGetObjectOptions
+        let stream = Minio.gorObjectStream src
+        compressed <- runConduit $ stream .| CC.foldMap fromStrict
+        let decompressed = GZip.decompress compressed
+        case AE.eitherDecode decompressed of
+          Right (AE.Array arr) -> pure arr
+          _ -> pure V.empty
+      else pure V.empty
+    -- Download individual files
+    individualEvents <- forM individualFiles $ \objName -> do
       src <- Minio.getObject bucket objName Minio.defaultGetObjectOptions
       let stream = Minio.gorObjectStream src
       bs <- runConduit $ stream .| CC.foldMap fromStrict
       case AE.eitherDecode bs of
         Right (AE.Array arr) -> pure arr
         _ -> pure V.empty
-    pure $ V.concat eventArrays
+    let allEvents = sortEvents $ V.concat (mergedEvents : individualEvents)
+    -- If there are unmerged individual files, merge everything and save back to S3
+    when hasIndividual $ do
+      let compressed = GZip.compress $ AE.encode (AE.Array allEvents)
+          compressedSize = BL.length compressed
+      Minio.putObject bucket mergedKey (CC.sourceLazy compressed) (Just compressedSize) Minio.defaultPutObjectOptions
+      forM_ individualFiles $ \objName ->
+        Minio.removeObject bucket objName
+    pure allEvents
   case res of
     Right events
       | V.null events -> do
           -- Fallback: try legacy single-file format ({sessionId}.json)
           legacyEvents <- getMinioFile conn bucket (fromString $ toString $ sessionId <> ".json")
           pure $ sortEvents legacyEvents
-      | otherwise -> pure $ sortEvents events
+      | otherwise -> pure events
     Left _ -> do
       legacyEvents <- getMinioFile conn bucket (fromString $ toString $ sessionId <> ".json")
       pure $ sortEvents legacyEvents
@@ -159,7 +188,13 @@ saveReplayMinio envCfg (ackId, replayData) = do
               res <- liftIO $ Minio.runMinio conn do
                 Minio.putObject bucket objKey (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
               case res of
-                Right _ -> pure $ Just ackId
+                Right _ -> do
+                  _ <- PG.execute [sql|
+                    INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at)
+                    VALUES (?, ?, now())
+                    ON CONFLICT (session_id) DO UPDATE SET last_event_at = now(), merged = FALSE, updated_at = now()
+                  |] (replayData.sessionId, replayData.projectId)
+                  pure $ Just ackId
                 Left err -> do
                   Log.logAttention "Failed to save replay events to MinIO" (HM.fromList [("session", session), ("projectId", replayData.projectId.toText), ("error", toText $ show err)])
                   pure Nothing
@@ -188,3 +223,76 @@ replaySessionGetH pid sessionId = do
           addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Failed to load session" :: Text)]
     Nothing -> do
       addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Project not found" :: Text)]
+
+
+-- | Find inactive sessions and compress & merge their S3 event files
+compressAndMergeReplaySessions :: ATBackgroundCtx ()
+compressAndMergeReplaySessions = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let envCfg = ctx.config
+
+  sessions <- PG.query [sql|
+    SELECT session_id, project_id FROM projects.replay_sessions
+    WHERE merged = FALSE AND last_event_at < now() - interval '30 minutes'
+    LIMIT 100
+  |] ()
+
+  Log.logInfo "Starting replay session merge job" ("sessions_count", length (sessions :: [(UUID.UUID, Projects.ProjectId)]))
+
+  forM_ sessions $ \(sessionId, projectId) -> do
+    projectM <- Projects.projectById projectId
+    case projectM of
+      Nothing -> Log.logAttention "Project not found for replay session merge" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", projectId.toText)])
+      Just p -> do
+        let (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
+            s3Conn = getMinioConnectInfo acc sec region bucket endpoint
+        result <- liftIO $ tryAny $ mergeOneSession s3Conn bucket sessionId
+        case result of
+          Right _ -> do
+            _ <- PG.execute [sql|
+              UPDATE projects.replay_sessions SET merged = TRUE, updated_at = now() WHERE session_id = ?
+            |] (Only sessionId)
+            Log.logInfo "Merged replay session" ("session_id", UUID.toText sessionId)
+          Left err ->
+            Log.logAttention "Failed to merge replay session" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", projectId.toText), ("error", toText $ show err)])
+
+
+-- | Merge all S3 event files for a single session into one gzip-compressed file
+mergeOneSession :: Minio.ConnectInfo -> Minio.Bucket -> UUID.UUID -> IO ()
+mergeOneSession conn bucket sessionId = do
+  let session = UUID.toText sessionId
+      prefix = session <> "/"
+      mergedKey = fromString $ toString $ session <> "/merged.json.gz"
+
+  res <- Minio.runMinio conn $ do
+    -- List all objects in the session prefix
+    items <- runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
+    let objectNames = [Minio.oiObject info | Minio.ListItemObject info <- items]
+
+    unless (null objectNames) $ do
+      -- Download all objects (decompress merged.json.gz if present)
+      eventArrays <- forM objectNames $ \objName -> do
+        src <- Minio.getObject bucket objName Minio.defaultGetObjectOptions
+        let stream = Minio.gorObjectStream src
+        bs <- runConduit $ stream .| CC.foldMap fromStrict
+        if objName == mergedKey
+          then case AE.eitherDecode (GZip.decompress bs) of
+            Right (AE.Array arr) -> pure arr
+            _ -> pure V.empty
+          else case AE.eitherDecode bs of
+            Right (AE.Array arr) -> pure arr
+            _ -> pure V.empty
+
+      let allEvents = sortEvents $ V.concat eventArrays
+          compressed = GZip.compress $ AE.encode (AE.Array allEvents)
+          compressedSize = BL.length compressed
+
+      Minio.putObject bucket mergedKey (CC.sourceLazy compressed) (Just compressedSize) Minio.defaultPutObjectOptions
+
+      forM_ objectNames $ \objName ->
+        when (objName /= mergedKey) $
+          Minio.removeObject bucket objName
+
+  case res of
+    Right _ -> pure ()
+    Left err -> error $ "Failed to merge session " <> toText session <> ": " <> toText (show err)

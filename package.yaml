@@ -275,6 +275,7 @@ library:
     - base16-bytestring
     - minio-hs
     - conduit
+    - zlib
 
 executables:
   monoscope:

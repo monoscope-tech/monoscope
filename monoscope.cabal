@@ -359,6 +359,7 @@ library
     , wreq
     , xxhash
     , yaml
+    , zlib
   default-language: GHC2021
 
 executable monoscope
