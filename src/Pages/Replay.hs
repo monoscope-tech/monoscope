@@ -9,8 +9,9 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as BL
 import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
-import Data.List (partition)
 import Data.HashMap.Strict qualified as HM
+import Data.List (partition)
+import Data.Pool (withResource)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -22,6 +23,7 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
+import OddJobs.Job (createJob)
 import Pages.S3 (getMinioConnectInfo)
 import Pkg.Queue (publishJSONToKafka)
 import Relude
@@ -29,8 +31,6 @@ import RequestMessages (replaceNullChars)
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
-import Data.Pool (withResource)
-import OddJobs.Job (createJob)
 import UnliftIO.Exception (tryAny)
 import Utils (eitherStrToText)
 
@@ -123,16 +123,17 @@ getSessionEvents conn pid bucket sessionId = do
         (mergedFiles, individualFiles) = partition (\n -> n == mergedKey) objectNames
         hasMerged = not $ null mergedFiles
         hasIndividual = not $ null individualFiles
-    mergedEvents <- if hasMerged
-      then do
-        src <- Minio.getObject bucket mergedKey Minio.defaultGetObjectOptions
-        let stream = Minio.gorObjectStream src
-        compressed <- runConduit $ stream .| CC.foldMap fromStrict
-        let decompressed = GZip.decompress compressed
-        case AE.eitherDecode decompressed of
-          Right (AE.Array arr) -> pure arr
-          _ -> pure V.empty
-      else pure V.empty
+    mergedEvents <-
+      if hasMerged
+        then do
+          src <- Minio.getObject bucket mergedKey Minio.defaultGetObjectOptions
+          let stream = Minio.gorObjectStream src
+          compressed <- runConduit $ stream .| CC.foldMap fromStrict
+          let decompressed = GZip.decompress compressed
+          case AE.eitherDecode decompressed of
+            Right (AE.Array arr) -> pure arr
+            _ -> pure V.empty
+        else pure V.empty
     individualEvents <- forM individualFiles $ \objName -> do
       src <- Minio.getObject bucket objName Minio.defaultGetObjectOptions
       let stream = Minio.gorObjectStream src
@@ -142,9 +143,9 @@ getSessionEvents conn pid bucket sessionId = do
         _ -> pure V.empty
     let allEvents = sortEvents $ V.concat (mergedEvents : individualEvents)
     when hasIndividual $ do
-      let jobPayload = AE.object [ "tag" AE..= ("SaveMergedReplayEvents" :: Text), "contents" AE..= ([AE.toJSON pid, AE.toJSON sessionId, AE.Array allEvents] :: [AE.Value])]
+      let jobPayload = AE.object ["tag" AE..= ("SaveMergedReplayEvents" :: Text), "contents" AE..= ([AE.toJSON pid, AE.toJSON sessionId, AE.Array allEvents] :: [AE.Value])]
       liftIO $ withResource ctx.jobsPool \conn' ->
-              void $ createJob conn' "background_jobs" jobPayload
+        void $ createJob conn' "background_jobs" jobPayload
     pure allEvents
   case res of
     Right events
@@ -187,11 +188,14 @@ saveReplayMinio envCfg (ackId, replayData) = do
                 Minio.putObject bucket objKey (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
               case res of
                 Right _ -> do
-                  _ <- PG.execute [sql|
+                  _ <-
+                    PG.execute
+                      [sql|
                     INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at)
                     VALUES (?, ?, now())
                     ON CONFLICT (session_id) DO UPDATE SET last_event_at = now(), merged = FALSE, updated_at = now()
-                  |] (replayData.sessionId, replayData.projectId)
+                  |]
+                      (replayData.sessionId, replayData.projectId)
                   pure $ Just ackId
                 Left err -> do
                   Log.logAttention "Failed to save replay events to MinIO" (HM.fromList [("session", session), ("projectId", replayData.projectId.toText), ("error", toText $ show err)])
@@ -243,13 +247,16 @@ saveMergedReplayEvents pid sessionId events = do
         items <- runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
         let objectNames = [Minio.oiObject info | Minio.ListItemObject info <- items]
         forM_ objectNames $ \objName ->
-          when (objName /= mergedKey) $
-            Minio.removeObject bucket objName
+          when (objName /= mergedKey)
+            $ Minio.removeObject bucket objName
       case result of
         Right (Right _) -> do
-          _ <- PG.execute [sql|
+          _ <-
+            PG.execute
+              [sql|
             UPDATE projects.replay_sessions SET merged = TRUE, updated_at = now() WHERE session_id = ? AND project_id = ?
-          |] (sessionId, pid)
+          |]
+              (sessionId, pid)
           Log.logInfo "Saved merged replay events" ("session_id", UUID.toText sessionId)
         Right (Left err) ->
           Log.logAttention "Minio error saving merged replay events" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", pid.toText), ("error", toText $ show err)])
@@ -263,11 +270,14 @@ compressAndMergeReplaySessions = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
 
-  sessions <- PG.query [sql|
+  sessions <-
+    PG.query
+      [sql|
     SELECT session_id, project_id FROM projects.replay_sessions
     WHERE merged = FALSE AND last_event_at < now() - interval '30 minutes'
     LIMIT 100
-  |] ()
+  |]
+      ()
 
   Log.logInfo "Starting replay session merge job" ("sessions_count", length (sessions :: [(UUID.UUID, Projects.ProjectId)]))
 
@@ -281,9 +291,12 @@ compressAndMergeReplaySessions = do
         result <- liftIO $ tryAny $ mergeOneSession s3Conn bucket sessionId
         case result of
           Right _ -> do
-            _ <- PG.execute [sql|
+            _ <-
+              PG.execute
+                [sql|
               UPDATE projects.replay_sessions SET merged = TRUE, updated_at = now() WHERE session_id = ?
-            |] (Only sessionId)
+            |]
+                (Only sessionId)
             Log.logInfo "Merged replay session" ("session_id", UUID.toText sessionId)
           Left err ->
             Log.logAttention "Failed to merge replay session" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", projectId.toText), ("error", toText $ show err)])
@@ -322,8 +335,8 @@ mergeOneSession conn bucket sessionId = do
       Minio.putObject bucket mergedKey (CC.sourceLazy compressed) (Just compressedSize) Minio.defaultPutObjectOptions
 
       forM_ objectNames $ \objName ->
-        when (objName /= mergedKey) $
-          Minio.removeObject bucket objName
+        when (objName /= mergedKey)
+          $ Minio.removeObject bucket objName
 
   case res of
     Right _ -> pure ()
