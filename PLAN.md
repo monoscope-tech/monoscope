@@ -1,177 +1,78 @@
-# Plan: Extract Shared Haskell/Lucid Helpers & Delete Dead Code
+# Plan: Extract Shared Haskell/Lucid Helpers & Delete Dead Code (v2)
 
 ## Summary
 
-- **7 files changed**, 2 files deleted
-- **Net: -405 lines** (93 removed from dedup + 360 dead code deleted - 29 new helper code + 19 import line changes)
-- **0 API changes** — all external function signatures stay the same
-- **0 behavior changes** — visual output is identical (expansion panels switch from CSS checkbox-peer to native `<details>/<summary>`, which is functionally equivalent)
+- **11 files changed**, 1 file deleted
+- **Net: ~-440 lines**
+- Core idea: ONE `formSection_` function that works as a static titled section OR a collapsible panel with chevron, plus shared field/modal helpers used everywhere
 
 ---
 
-## Phase 1: Enhance `collapsibleSection` in PageHeader.hs
-
-**File:** `src/Pkg/Components/PageHeader.hs`
-**Current signature (line 88):**
-```haskell
-collapsibleSection :: Text -> Maybe Text -> Html () -> Html ()
-collapsibleSection title subtitleM content
-```
-
-**New signature:**
-```haskell
-collapsibleSection :: Text -> Maybe Text -> Maybe Text -> Bool -> [Attribute] -> Html () -> Html ()
-collapsibleSection title iconM subtitleM open extraAttrs content
-```
-
-**Changes:**
-- Add `iconM :: Maybe Text` — optional FA icon name (e.g. `Just "clock"`)
-- Add `open :: Bool` — whether section starts expanded (`<details open>`)
-- Add `extraAttrs :: [Attribute]` — escape hatch for `id_` or custom attrs
-- Remove the inner `div_ [class_ "px-4 pb-4"]` content wrapper — let the caller control their own padding/layout
-
-**Full replacement (lines 88-100):**
-```haskell
-collapsibleSection :: Text -> Maybe Text -> Maybe Text -> Bool -> [Attribute] -> Html () -> Html ()
-collapsibleSection title iconM subtitleM open extraAttrs content =
-  details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"]
-           <> [term "open" "" | open] <> extraAttrs) do
-    summary_
-      [ class_ "p-4 cursor-pointer list-none flex items-center justify-between gap-2"
-      , [__|on click toggle .rotate-180 on the next <svg/> in me|]
-      ]
-      do
-        div_ [class_ "flex items-center gap-2"] do
-          whenJust iconM \icon -> faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
-          span_ [class_ "font-medium text-sm"] $ toHtml title
-          whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
-        faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral transition-transform duration-150"
-    content
-```
-
-**Impact:** +2 lines (14 → 16). Zero callers to update (nobody imports this today).
-
----
-
-## Phase 2: Replace expansion panels in Monitors.hs
-
-**File:** `src/Pages/Monitors.hs` (518 lines)
-
-### 2a. Delete duplicate `collapsibleSection_` definition
-
-**Delete lines 17 and 363-375:**
-```haskell
--- DELETE from exports (line 17):
-  collapsibleSection_,
-
--- DELETE definition (lines 363-375):
-collapsibleSection_ :: Text -> Maybe Text -> Html () -> Html ()
-collapsibleSection_ title subtitleM content =
-  details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    summary_
-      [ class_ "p-4 cursor-pointer list-none flex items-center justify-between gap-2"
-      , [__|on click toggle .rotate-180 on the next <svg/> in me|]
-      ]
-      do
-        div_ [class_ "flex items-center gap-2"] do
-          span_ [class_ "font-medium text-sm"] $ toHtml title
-          whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
-        faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral transition-transform duration-150"
-    div_ [class_ "px-4 pb-4"] content
-```
-**Saved: -14 lines**
-
-### 2b. Add import
-
-**Add after line 44 (existing imports):**
-```haskell
-import Pkg.Components.PageHeader (collapsibleSection)
-```
-**Added: +1 line**
-
-### 2c. Replace `monitorScheduleSection_` chrome (lines 393-400)
-
-**Before (8 lines of chrome):**
-```haskell
-  div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ "clock" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [class_ "text-sm font-medium text-textStrong"] "Monitor Schedule"
-      input_ [type_ "checkbox", class_ "hidden peer", checked_]
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-    div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
-```
-
-**After (2 lines):**
-```haskell
-  collapsibleSection "Monitor Schedule" (Just "clock") Nothing True [] do
-    div_ [class_ "flex gap-3 p-3 pt-0"] do
-```
-**Saved: -6 lines**
-
-### 2d. Replace `thresholdsSection_` chrome (lines 421-428)
-
-**Before (8 lines):**
-```haskell
-  div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden", id_ "thresholds"] do
-    label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ "chart-line" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
-      input_ [type_ "checkbox", class_ "hidden peer", checked_]
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-    div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-```
-
-**After (2 lines):**
-```haskell
-  collapsibleSection "Thresholds" (Just "chart-line") Nothing True [id_ "thresholds"] do
-    div_ [class_ "p-3 pt-0"] do
-```
-**Saved: -6 lines**
-
-### 2e. Replace `notificationSettingsSection_` chrome (lines 455-462)
-
-**Before (8 lines):**
-```haskell
-  div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ "envelope" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [class_ "text-sm font-medium text-textStrong"] "Notification Settings"
-      input_ [type_ "checkbox", class_ "hidden peer"]
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-    div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-```
-
-**After (2 lines):**
-```haskell
-  collapsibleSection "Notification Settings" (Just "envelope") Nothing False [] do
-    div_ [class_ "p-3 pt-0"] do
-```
-**Saved: -6 lines**
-
-Note: `False` because this section starts collapsed (original had no `checked_`).
-
-### Monitors.hs total: -31 lines
-
-**External consumers unaffected:** `Dashboards.hs` (line 91: `import Pages.Monitors qualified as Alerts`) and `LogExplorer/Log.hs` (line 57: `import Pages.Monitors qualified as AlertUI`) both call `monitorScheduleSection_`, `thresholdsSection_`, and `notificationSettingsSection_` — the APIs are unchanged, only internal chrome changed.
-
----
-
-## Phase 3: Add shared helpers to Components.hs
+## Phase 1: Add all shared helpers to Components.hs
 
 **File:** `src/Pages/Components.hs` (625 lines)
 
-### 3a. Add `confirmModal_`
+### 1a. `formSection_` — the unified section helper
 
-Add after `modalCloseButton_` (line 510):
+Replaces: `collapsibleSection` (PageHeader.hs), `collapsibleSection_` (Monitors.hs), `teamSection_` (Projects.hs local), all inline `details_/summary_` patterns in Anomalies.hs, facet section toggles in Log.hs, `faQ` in Onboarding.hs.
 
 ```haskell
--- | Confirmation modal with warning icon, title, description, and action button
--- Usage: confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect..." $
---          button_ [...] "Remove"
+-- | Titled section, optionally collapsible.
+-- When collapsible: renders as <details>/<summary> with chevron icon.
+-- When static: renders as a div with a header row (no chevron, always visible).
+formSection_ :: Text -> Maybe Text -> Maybe Text -> Bool -> Bool -> [Attribute] -> Html () -> Html ()
+formSection_ title iconM subtitleM collapsible open extraAttrs content
+  | collapsible =
+      details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"]
+               <> [term "open" "" | open] <> extraAttrs) do
+        summary_
+          [ class_ "p-4 cursor-pointer list-none flex items-center justify-between gap-2"
+          , [__|on click toggle .rotate-180 on the next <svg/> in me|]
+          ]
+          do
+            div_ [class_ "flex items-center gap-2"] do
+              whenJust iconM \icon -> faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
+              span_ [class_ "font-medium text-sm"] $ toHtml title
+              whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
+            faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral transition-transform duration-150"
+        content
+  | otherwise =
+      div_ ([class_ "space-y-3"] <> extraAttrs) do
+        h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider flex items-center gap-2"] do
+          whenJust iconM \icon -> faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
+          toHtml title
+          whenJust subtitleM $ span_ [class_ "text-xs text-textWeak normal-case font-normal"] . toHtml
+        content
+```
+**+20 lines**
+
+Usage examples:
+```haskell
+-- Static section (team modal "Details" header):
+formSection_ "Details" Nothing Nothing False True [] do
+  div_ [class_ "rounded-lg bg-bgRaised border border-strokeWeak p-4 space-y-4"] do ...
+
+-- Collapsible section (Monitors "Monitor Schedule"):
+formSection_ "Monitor Schedule" (Just "clock") Nothing True True [] do
+  div_ [class_ "flex gap-3 p-3 pt-0"] do ...
+
+-- Collapsible, starts closed (Monitors "Notification Settings"):
+formSection_ "Notification Settings" (Just "envelope") Nothing True False [] do ...
+
+-- Collapsible with extra attrs (Monitors "Thresholds" with id):
+formSection_ "Thresholds" (Just "chart-line") Nothing True True [id_ "thresholds"] do ...
+
+-- Anomalies AI chat system prompt:
+formSection_ "System Prompt" (Just "terminal") Nothing True False [class_ "mb-4"] do ...
+
+-- Onboarding FAQ:
+formSection_ question Nothing Nothing True False [] do
+  p_ [class_ "text-textWeak font-medium leading-relaxed"] $ toHtml answer
+```
+
+### 1b. `confirmModal_`
+
+```haskell
 confirmModal_ :: Text -> Text -> Text -> Html () -> Html ()
 confirmModal_ modalId title description actionButton = do
   input_ [type_ "checkbox", id_ modalId, class_ "modal-toggle"]
@@ -188,27 +89,26 @@ confirmModal_ modalId title description actionButton = do
         actionButton
     label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
 ```
-**Added: +16 lines**
+**+16 lines**
 
-### 3b. Add `formActionsModal_`
+### 1c. `formActionsModal_`
+
+Takes `Html ()` for submit content (supports icon + conditional text):
 
 ```haskell
--- | Modal form footer with Cancel (label that closes modal) + Submit button
-formActionsModal_ :: Text -> Text -> Text -> Html ()
-formActionsModal_ modalId cancelLabel submitLabel =
-  div_ [class_ "mt-3 flex justify-end gap-2"] do
+formActionsModal_ :: Text -> Text -> Html () -> Html ()
+formActionsModal_ modalId cancelLabel submitHtml =
+  div_ [class_ "pt-6 mt-6 border-t border-strokeWeak flex justify-end gap-3"] do
     label_ [Lucid.for_ modalId, class_ "btn btn-outline cursor-pointer"] $ toHtml cancelLabel
-    button_ [type_ "submit", class_ "btn btn-primary"] $ toHtml submitLabel
+    button_ [type_ "submit", class_ "btn btn-primary"] submitHtml
 ```
-**Added: +5 lines**
+**+5 lines**
 
-### 3c. Add `connectionField_`
+### 1d. `connectionField_`
 
 Shared replacement for `S3.connectionField` and `GitSync.gitField`:
 
 ```haskell
--- | Labeled input field for connection/settings forms
--- Handles required marker, password type, placeholder
 connectionField_ :: Text -> Text -> Bool -> Text -> Bool -> Text -> Html ()
 connectionField_ label name required defVal isPassword placeholder =
   fieldset_ [class_ "fieldset"] do
@@ -220,319 +120,588 @@ connectionField_ label name required defVal isPassword placeholder =
              , placeholder_ placeholder
              ] <> [required_ "true" | required]
 ```
-**Added: +10 lines**
+**+10 lines**
 
-Note: This unifies the visual style. S3 fields previously used `div_ [class_ "space-y-1.5"]` + `input-bordered`; GitSync used identical code with an extra placeholder param. Both now use `fieldset_` (DaisyUI semantic pattern). The visual change is minor — slightly different spacing, consistent with the rest of the platform.
+### 1e. `formField_` / `formFieldIcon_` / `tagInput_`
 
-### 3d. Update module exports (line 1)
+Shared from Projects.hs team modal locals + Log.hs alert form:
 
-**Before:**
 ```haskell
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
+formField_ :: Text -> Text -> Html () -> Html ()
+formField_ inputId label inputHtml =
+  fieldset_ [class_ "fieldset"] do
+    label_ [class_ "label text-sm font-medium", Lucid.for_ inputId] $ toHtml label
+    inputHtml
+
+formFieldIcon_ :: Text -> Text -> Text -> Html () -> Html ()
+formFieldIcon_ icon inputId label inputHtml =
+  fieldset_ [class_ "fieldset p-4"] do
+    label_ [class_ "label text-sm font-medium flex items-center gap-2 mb-2", Lucid.for_ inputId] do
+      faSprite_ icon "solid" "w-4 h-4 text-iconNeutral shrink-0"
+      toHtml label
+    inputHtml
+
+tagInput_ :: Text -> Text -> Html ()
+tagInput_ inputId placeholder =
+  textarea_ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ placeholder] ""
+```
+**+16 lines**
+
+### 1f. Update module exports
+
+```haskell
+module Pages.Components (...existing..., formSection_, confirmModal_, formActionsModal_,
+  connectionField_, formField_, formFieldIcon_, tagInput_) where
 ```
 
-**After:**
-```haskell
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, confirmModal_, formActionsModal_, connectionField_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
-```
-
-### Components.hs total: +31 lines added
+### Components.hs total: +67 lines added
 
 ---
 
-## Phase 4: Replace confirmation modals
+## Phase 2: Delete `collapsibleSection` from PageHeader.hs
 
-### 4a. S3.hs (lines 107-118)
+**File:** `src/Pkg/Components/PageHeader.hs`
 
-**File:** `src/Pages/S3.hs`
+Delete `collapsibleSection` (lines 88-100) and its export (line 16). The `card` helper (line 104-105) also has zero imports — delete it too.
 
-**Add import:**
 ```haskell
-import Pages.Components (confirmModal_)
+-- DELETE lines 16-17 from exports:
+  collapsibleSection,
+  card,
+
+-- DELETE lines 88-105:
+collapsibleSection :: Text -> Maybe Text -> Html () -> Html ()
+...
+card :: Html () -> Html ()
+card = div_ [class_ "rounded-lg bg-bgRaised border border-strokeWeak p-4"]
 ```
-
-**Before (lines 107-118, 12 lines):**
-```haskell
-    input_ [type_ "checkbox", id_ "remove-modal", class_ "modal-toggle"]
-    div_ [class_ "modal", role_ "dialog"] do
-      div_ [class_ "modal-box p-6"] do
-        div_ [class_ "flex items-start gap-3 mb-4"] do
-          div_ [class_ "p-2 bg-fillError-weak rounded-full"] $ faSprite_ "triangle-alert" "regular" "h-5 w-5 text-textError"
-          div_ do
-            h3_ [class_ "text-lg font-semibold text-textStrong"] "Remove bucket?"
-            p_ [class_ "text-sm text-textWeak mt-1"] "This will disconnect your S3 bucket. Data already stored will remain in your bucket."
-        div_ [class_ "flex justify-end gap-2 mt-6"] do
-          label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "remove-modal"] "Cancel"
-          button_ [class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90", hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
-      label_ [class_ "modal-backdrop", Lucid.for_ "remove-modal"] ""
-```
-
-**After (4 lines):**
-```haskell
-    confirmModal_ "remove-modal" "Remove bucket?"
-      "This will disconnect your S3 bucket. Data already stored will remain in your bucket." $
-      button_ [class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90",
-               hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
-```
-**Saved: -8 lines**
-
-### 4b. Delete S3.hs `connectionField` definition (lines 121-127)
-
-**Delete:**
-```haskell
-connectionField :: Text -> Text -> Bool -> Text -> Bool -> Html ()
-connectionField lbl name required defVal isPass =
-  div_ [class_ "space-y-1.5"] do
-    label_ [class_ "flex items-center gap-1 text-xs font-medium text-textWeak"] do
-      toHtml lbl
-      when required $ span_ [class_ "text-textError"] "*"
-    input_ ([class_ "input input-bordered input-sm w-full", value_ defVal, name_ name, type_ $ if isPass then "password" else "text", placeholder_ lbl] <> [required_ "true" | required])
-```
-**Saved: -7 lines**
-
-### 4c. Update S3.hs `connectionField` call sites (lines 88-92)
-
-**Before:**
-```haskell
-          connectionField "Access Key ID" "accessKey" True (maybe "" (.accessKey) s3BucketM) False
-          connectionField "Secret Access Key" "secretKey" True (maybe "" (.secretKey) s3BucketM) True
-          connectionField "Region" "region" True (maybe "" (.region) s3BucketM) False
-          connectionField "Bucket Name" "bucket" True (maybe "" (.bucket) s3BucketM) False
-        connectionField "Custom Endpoint" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM) False
-```
-
-**After:**
-```haskell
-          connectionField_ "Access Key ID" "accessKey" True (maybe "" (.accessKey) s3BucketM) False "Access Key ID"
-          connectionField_ "Secret Access Key" "secretKey" True (maybe "" (.secretKey) s3BucketM) True "Secret Access Key"
-          connectionField_ "Region" "region" True (maybe "" (.region) s3BucketM) False "Region"
-          connectionField_ "Bucket Name" "bucket" True (maybe "" (.bucket) s3BucketM) False "Bucket Name"
-        connectionField_ "Custom Endpoint" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM) False "Custom Endpoint"
-```
-
-Note: The old `connectionField` used the label as placeholder. The new `connectionField_` has an explicit placeholder param. The call sites pass the same label as placeholder to preserve behavior.
-
-**Saved: 0 lines** (same count, just different function name + extra param)
-
-### S3.hs total: -15 lines + 1 import = -14 net
+**Saved: -20 lines**
 
 ---
 
-### 4d. GitSync.hs (lines 309-320)
+## Phase 3: Monitors.hs
 
-**File:** `src/Pages/GitSync.hs`
+**File:** `src/Pages/Monitors.hs` (518 lines)
 
-**Add import:**
+### 3a. Delete duplicate `collapsibleSection_` export + definition (lines 17, 363-375): **-14 lines**
+
+### 3b. Add import
+
 ```haskell
-import Pages.Components (confirmModal_)
+import Pages.Components (formSection_)
 ```
+**+1 line**
 
-**Before (lines 309-320, 12 lines):**
-```haskell
-  input_ [type_ "checkbox", id_ "disconnect-modal", class_ "modal-toggle"]
-  div_ [class_ "modal", role_ "dialog"] do
-    div_ [class_ "modal-box p-6"] do
-      div_ [class_ "flex items-start gap-3 mb-4"] do
-        div_ [class_ "p-2 bg-fillError-weak rounded-full"] $ faSprite_ "triangle-alert" "regular" "h-5 w-5 text-textError"
-        div_ do
-          h3_ [class_ "text-lg font-semibold text-textStrong"] "Disconnect GitHub?"
-          p_ [class_ "text-sm text-textWeak mt-1"] "This will stop syncing dashboards with your repository. Dashboards will remain unchanged."
-      div_ [class_ "flex justify-end gap-2 mt-6"] do
-        label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "disconnect-modal"] "Cancel"
-        button_ [class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90", hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
-    label_ [class_ "modal-backdrop", Lucid.for_ "disconnect-modal"] ""
-```
+### 3c. Replace 3 expansion panels
 
-**After (4 lines):**
-```haskell
-  confirmModal_ "disconnect-modal" "Disconnect GitHub?"
-    "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." $
-    button_ [class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90",
-             hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
-```
-**Saved: -8 lines**
-
-### 4e. Delete GitSync.hs `gitField` definition (lines 327-333)
-
-**Delete:**
-```haskell
-gitField :: Text -> Text -> Bool -> Text -> Bool -> Text -> Html ()
-gitField lbl name required defVal isPass placeholder =
-  div_ [class_ "space-y-1.5"] do
-    label_ [class_ "flex items-center gap-1 text-xs font-medium text-textWeak"] do
-      toHtml lbl
-      when required $ span_ [class_ "text-textError"] "*"
-    input_ ([class_ "input input-bordered input-sm w-full", value_ defVal, name_ name, type_ $ if isPass then "password" else "text", placeholder_ placeholder] <> [required_ "true" | required])
-```
-**Saved: -7 lines**
-
-### 4f. Update GitSync.hs `gitField` call sites
-
-All 10 call sites change `gitField` → `connectionField_`. The params are already in the same order:
+**monitorScheduleSection_ (lines 393-400) — 8 lines → 2:**
 ```haskell
 -- Before:
-gitField "Repository Owner" "owner" True "" False "acme-corp"
--- After:
-connectionField_ "Repository Owner" "owner" True "" False "acme-corp"
-```
-**Saved: 0 lines** (just rename)
+  div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
+    label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
+      div_ [class_ "flex items-center gap-2"] do
+        faSprite_ "clock" "regular" "w-4 h-4 text-iconNeutral"
+        span_ [class_ "text-sm font-medium text-textStrong"] "Monitor Schedule"
+      input_ [type_ "checkbox", class_ "hidden peer", checked_]
+      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
+    div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
 
-### GitSync.hs total: -15 lines + 1 import = -14 net
+-- After:
+  formSection_ "Monitor Schedule" (Just "clock") Nothing True True [] do
+    div_ [class_ "flex gap-3 p-3 pt-0"] do
+```
+**-6 lines**
+
+**thresholdsSection_ (lines 421-428) — 8 → 2:** **-6 lines**
+```haskell
+  formSection_ "Thresholds" (Just "chart-line") Nothing True True [id_ "thresholds"] do
+    div_ [class_ "p-3 pt-0"] do
+```
+
+**notificationSettingsSection_ (lines 455-462) — 8 → 2:** **-6 lines**
+```haskell
+  formSection_ "Notification Settings" (Just "envelope") Nothing True False [] do
+    div_ [class_ "p-3 pt-0"] do
+```
+
+### 3d. Update `#thresholds` visibility toggle (line 409)
+
+The conditionType select's hyperscript toggles `#thresholds` via `add/remove .hidden`. With `<details>`, change to:
+```haskell
+-- Before:
+[__|on change if my value == 'threshold_exceeded' then remove .hidden from #thresholds else add .hidden to #thresholds end|]
+-- After:
+[__|on change if my value == 'threshold_exceeded' then set #thresholds.open to true else set #thresholds.open to false end|]
+```
+
+### Monitors.hs total: -31 lines
 
 ---
 
-## Phase 5: Replace modal form footers
+## Phase 4: S3.hs
 
-### 5a. Dashboards.hs rename modal (line 200-201)
+**File:** `src/Pages/S3.hs` (139 lines)
 
-**File:** `src/Pages/Dashboards.hs`
+| Change | Lines |
+|--------|:-----:|
+| Add import `Pages.Components (confirmModal_, connectionField_)` | +1 |
+| Replace confirm modal (107-118): 12 → 4 | -8 |
+| Delete `connectionField` definition (121-127) | -7 |
+| Update 5 call sites: `connectionField` → `connectionField_` (add placeholder param) | 0 |
+| **Total** | **-14** |
 
-**Add import (merge into existing line 88):**
+---
+
+## Phase 5: GitSync.hs
+
+**File:** `src/Pages/GitSync.hs` (556 lines)
+
+| Change | Lines |
+|--------|:-----:|
+| Add import `Pages.Components (confirmModal_, connectionField_)` | +1 |
+| Replace confirm modal (309-320): 12 → 4 | -8 |
+| Delete `gitField` definition (327-333) | -7 |
+| Update 10 call sites: `gitField` → `connectionField_` | 0 |
+| **Total** | **-14** |
+
+---
+
+## Phase 6: Projects.hs
+
+**File:** `src/Pages/Projects.hs` (1756 lines)
+
+### 6a. Update import (line 98)
+
 ```haskell
-import Pages.Components qualified as Components
--- already imported, just use Components.formActionsModal_
+-- Before:
+import Pages.Components (modalCloseButton_, paymentPlanPicker)
+-- After:
+import Pages.Components (modalCloseButton_, paymentPlanPicker, formSection_, formActionsModal_, formField_, formFieldIcon_, tagInput_)
 ```
 
-**Before (lines 200-201):**
+### 6b. Delete 4 local helper definitions (lines 1659-1667)
+
 ```haskell
+-- DELETE teamSection_ (lines 1659-1661):
+  let teamSection_ title content = div_ [class_ "space-y-4"] do
+        _ <- h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider"] title
+        content
+
+-- DELETE field_, fieldIcon_, tagInput_ (lines 1663-1667):
+  let field_ inputId lbl input = ...
+  let fieldIcon_ icon inputId lbl input = ...
+  let tagInput_ inputId ph = ...
+```
+**-9 lines**
+
+### 6c. Update `teamSection_` call sites → `formSection_`
+
+```haskell
+-- Before (line 1681):
+          teamSection_ "Details" do
+-- After:
+          formSection_ "Details" Nothing Nothing False True [] do
+
+-- Before (line 1688):
+          unless isEveryoneTeam $ teamSection_ "Members" do
+-- After:
+          unless isEveryoneTeam $ formSection_ "Members" Nothing Nothing False True [] do
+
+-- Before (line 1699):
+          teamSection_ "Notifications" do
+-- After:
+          formSection_ "Notifications" Nothing Nothing False True [] do
+```
+**0 net lines** (same line count, different function)
+
+### 6d. Update `field_` call sites → `formField_`
+
+```haskell
+-- Before:
+                field_ (mkId "team-name") "Team Name" $ input_ [...]
+-- After:
+                formField_ (mkId "team-name") "Team Name" $ input_ [...]
+```
+**0 net lines** (just renamed, 4 call sites)
+
+### 6e. Update `fieldIcon_` call sites → `formFieldIcon_`
+
+```haskell
+-- Before:
+              fieldIcon_ "envelope" (mkId "notif-emails-input") "Email" $ tagInput_ (mkId "notif-emails-input") "Add email addresses..."
+-- After:
+              formFieldIcon_ "envelope" (mkId "notif-emails-input") "Email" $ tagInput_ (mkId "notif-emails-input") "Add email addresses..."
+```
+**0 net lines** (just renamed, 4 call sites)
+
+### 6f. Replace footer (lines 1717-1719) → `formActionsModal_`
+
+```haskell
+-- Before:
+        div_ [class_ "pt-6 mt-6 border-t border-strokeWeak flex justify-end gap-3"] do
+          label_ [Lucid.for_ modalId, class_ "btn btn-outline"] "Cancel"
+          button_ [class_ "btn btn-primary", type_ "submit"] $ faSprite_ "check" "solid" "w-4 h-4" >> " " >> if isJust team then "Save Changes" else "Create Team"
+
+-- After:
+        formActionsModal_ modalId "Cancel" $ faSprite_ "check" "solid" "w-4 h-4" >> " " >> if isJust team then "Save Changes" else "Create Team"
+```
+**-2 lines**
+
+### Projects.hs total: -11 lines
+
+---
+
+## Phase 7: Dashboards.hs
+
+**File:** `src/Pages/Dashboards.hs` (2533 lines)
+
+### 7a. Replace rename modal footer (lines 200-202) → `formActionsModal_`
+
+```haskell
+-- Before:
       div_ [class_ "mt-3 flex justify-end gap-2"] do
         label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
         button_ [type_ "submit", class_ "btn btn-primary"] "Save"
-```
 
-**After (1 line):**
-```haskell
-      Components.formActionsModal_ "pageTitleModalId" "Cancel" "Save"
+-- After:
+      formActionsModal_ "pageTitleModalId" "Cancel" "Save"
 ```
-**Saved: -2 lines**
+**-2 lines**
 
-### 5b. Dashboards.hs tab rename modal (lines 220-221)
+### 7b. Replace tab rename modal footer (lines 220-222)
 
-**Before:**
-```haskell
-        div_ [class_ "mt-3 flex justify-end gap-2"] do
-          label_ [Lucid.for_ "tabRenameModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
-          button_ [type_ "submit", class_ "btn btn-primary"] "Save"
-```
-
-**After:**
-```haskell
-        Components.formActionsModal_ "tabRenameModalId" "Cancel" "Save"
-```
-**Saved: -2 lines**
+Same pattern. **-2 lines**
 
 ### Dashboards.hs total: -4 lines
 
 ---
 
-### 5c. Projects.hs team modal footer (lines 1717-1719)
+## Phase 8: Anomalies.hs
 
-**File:** `src/Pages/Projects.hs`
+**File:** `src/Pages/Anomalies.hs` (1301 lines)
 
-**Note:** Projects.hs already imports `Pages.Components (modalCloseButton_, paymentPlanPicker)`. Add `formActionsModal_` and `connectionField_` to that import.
+### 8a. Add import
 
-**Update import (line 98):**
 ```haskell
--- Before:
-import Pages.Components (modalCloseButton_, paymentPlanPicker)
--- After:
-import Pages.Components (modalCloseButton_, formActionsModal_, paymentPlanPicker)
+import Pages.Components (formSection_)
 ```
+**+1 line**
 
-**Before (lines 1717-1719):**
+### 8b. AI Chat — System Prompt (lines 634-638)
+
 ```haskell
-        div_ [class_ "pt-6 mt-6 border-t border-strokeWeak flex justify-end gap-3"] do
-          label_ [Lucid.for_ modalId, class_ "btn btn-outline"] "Cancel"
-          button_ [class_ "btn btn-primary", type_ "submit"] $ faSprite_ "check" "solid" "w-4 h-4" >> " " >> if isJust team then "Save Changes" else "Create Team"
+-- Before (5 lines):
+      details_ [class_ "mb-4 border border-strokeWeak rounded-lg"] do
+        summary_ [class_ "cursor-pointer px-4 py-2 text-sm text-textWeak hover:bg-fillWeaker list-none flex items-center gap-2"] do
+          faSprite_ "terminal" "regular" "w-4 h-4"
+          "System Prompt"
+        div_ [class_ "px-4 py-3 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $ toHtml systemPrompt
+
+-- After (3 lines):
+      formSection_ "System Prompt" (Just "terminal") Nothing True False [class_ "mb-4"] do
+        div_ [class_ "px-4 pb-4 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $
+          toHtml systemPrompt
 ```
+**-2 lines**. Visual change: gains card-style appearance (bg-bgBase, rounded-xl) instead of lightweight border.
 
-**After (3 lines):** Keep as-is. The Projects footer has a **different layout** (`pt-6 mt-6 border-t`, different btn classes, icon in submit button, conditional label) from the standard `formActionsModal_`. Forcing it into the helper would require making the helper overly complex. **Skip this one.**
+### 8c. AI Chat — Tool Calls (lines 642-646)
 
-### Projects.hs: Delete local helpers only
-
-**Delete local helper definitions (lines 1663-1667):**
 ```haskell
-  let field_ inputId lbl input = fieldset_ [class_ "fieldset"] (label_ [class_ "label text-sm font-medium", Lucid.for_ inputId] lbl >> input)
-  let fieldIcon_ icon inputId lbl input = fieldset_ [class_ "fieldset p-4"] do
-        _ <- label_ [class_ "label text-sm font-medium flex items-center gap-2 mb-2", Lucid.for_ inputId] (faSprite_ icon "solid" "w-4 h-4 text-iconNeutral shrink-0" >> lbl)
-        input
-  let tagInput_ inputId ph = textarea_ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph] ""
+-- Before (5 lines):
+        $ details_ [class_ "mb-4 border border-strokeWeak rounded-lg"] do
+          summary_ [class_ "cursor-pointer px-4 py-2 text-sm text-textWeak hover:bg-fillWeaker list-none flex items-center gap-2"] do
+            faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4"
+            toHtml $ "Behind the scenes: " <> show (length toolCalls) <> " tool calls"
+          div_ [class_ "px-4 py-3 border-t border-strokeWeak bg-fillWeaker/50"] $ forM_ toolCalls toolCallView_
+
+-- After (3 lines):
+        $ formSection_ ("Behind the scenes: " <> show (length toolCalls) <> " tool calls") (Just "magnifying-glass-chart") Nothing True False [class_ "mb-4"] do
+          div_ [class_ "px-4 pb-4"] $ forM_ toolCalls toolCallView_
 ```
+**-2 lines**
 
-**Decision:** These local helpers are well-tailored to this modal's specific styling (the `fieldIcon_` has `p-4` for divided sections, `field_` has `for_` linking). They differ enough from `connectionField_` that forcing them into the shared helper would make call sites longer. **Keep them as local `let` bindings.** They're already clean — the issue was never these specific helpers, but the duplicated ones (S3/GitSync).
+### 8d. Chat History — System Prompt (lines 720-724)
 
-### Projects.hs total: 0 lines changed (import update only if formActionsModal_ is used elsewhere, but we're skipping the footer)
+```haskell
+-- Before (5 lines):
+    details_ [class_ ""] do
+      summary_ [class_ "cursor-pointer flex items-center gap-2 text-sm font-medium text-textStrong hover:text-textBrand transition-colors"] do
+        faSprite_ "file-text" "regular" "w-4 h-4 text-iconInformation"
+        "System Prompt"
+      div_ [class_ "mt-3 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto border border-strokeWeak rounded-lg p-4 bg-fillWeaker/50"] $ toHtml systemPrompt
+
+-- After (3 lines):
+    formSection_ "System Prompt" (Just "file-text") Nothing True False [] do
+      div_ [class_ "px-4 pb-4 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $
+        toHtml systemPrompt
+```
+**-2 lines**
+
+### 8e. Payload Changes (lines 1045-1049)
+
+```haskell
+-- Before (5 lines):
+        details_ [class_ "group mb-4"] do
+          summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
+            faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
+            "View detailed payload changes"
+          div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] do
+
+-- After (3 lines):
+        formSection_ "View detailed payload changes" Nothing Nothing True False [class_ "mb-4"] do
+          div_ [class_ "p-4"] do
+```
+**-2 lines**. Visual change: gains card-style panel instead of branded inline link.
+
+### 8f. Stack Trace (lines 1026-1031)
+
+```haskell
+-- Before (6 lines):
+        div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
+          label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
+            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
+            "Stack trace"
+            input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
+          div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm monospace text-fillError-strong"] $ pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
+
+-- After (3 lines):
+        formSection_ "Stack trace" Nothing Nothing True False [class_ "mb-4"] do
+          div_ [class_ "p-4 overflow-x-scroll text-sm monospace"] $
+            pre_ [class_ "whitespace-pre-wrap"] $ toHtml exceptionData.stackTrace
+```
+**-3 lines**. Visual change: gains standard card-style, loses error-themed colors.
+
+### Anomalies.hs total: -10 lines
 
 ---
 
-## Phase 6: Delete unused Form.hs
+## Phase 9: LogExplorer/Log.hs
+
+**File:** `src/Pages/LogExplorer/Log.hs` (1097 lines)
+
+### 9a. Add import
+
+```haskell
+import Pages.Components (formSection_, formField_)
+```
+**+1 line**
+
+### 9b. Facet section toggle (lines 230-240)
+
+```haskell
+-- Before (6 lines of chrome):
+    div_ [class_ "facet-section-group group/section block contain-[layout_style]"] do
+      input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
+      label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName] do
+        faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform -rotate-90"
+        span_ [class_ "font-medium text-sm"] (toHtml sectionName)
+      div_ [class_ "facets-container mt-1 max-h-0 overflow-hidden peer-checked:max-h-[2000px] transition-[max-height] duration-300"] do
+
+-- After (2 lines):
+    formSection_ sectionName Nothing Nothing True (not collapsed) [class_ "facet-section-group"] do
+      div_ [class_ "facets-container mt-1"] do
+```
+**-4 lines**. Note: loses the smooth max-height animation (300ms). `<details>` toggle is instant. This is a UX change, but unifies the pattern.
+
+### 9c. Alert form fieldset (lines 967-976)
+
+```haskell
+-- Before (4 lines):
+          fieldset_ [class_ "fieldset"] do
+            label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
+            input_ [type_ "text", name_ "title", value_ $ maybe "" (\x -> x.alertConfig.title) alertM,
+                    placeholder_ "e.g. High error rate on checkout API", class_ "input input-sm w-full", required_ ""]
+
+-- After (3 lines):
+          formField_ "alert-title" "Alert name" $
+            input_ [type_ "text", name_ "title", id_ "alert-title", value_ $ maybe "" (\x -> x.alertConfig.title) alertM,
+                    placeholder_ "e.g. High error rate on checkout API", class_ "input input-sm w-full", required_ ""]
+```
+**-1 line**
+
+### Log.hs total: -4 lines
+
+---
+
+## Phase 10: Onboarding.hs
+
+**File:** `src/Pages/Onboarding/Onboarding.hs` (1031 lines)
+
+### 10a. Add import
+
+```haskell
+import Pages.Components (connectionField_, formSection_, formField_)
+```
+**+1 line**
+
+### 10b. Delete `formField` helper (lines 782-789)
+
+```haskell
+-- DELETE:
+formField :: Text -> Text -> Text -> Text -> Text -> Html ()
+formField labelText inputType inputName inputId inputValue = do
+  div_ [class_ "flex flex-col gap-2"] $ do
+    div_ [class_ "flex w-full items-center gap-1"] $ do
+      span_ [class_ "text-textStrong lowercase first-letter:uppercase"] $ toHtml labelText
+    if inputType == "textarea"
+      then textarea_ [class_ "textarea w-full rounded-lg border border-strokeStrong", type_ "text", name_ inputName, id_ inputId] ""
+      else input_ [class_ "input w-full h-12", type_ inputType, name_ inputName, id_ inputId, value_ inputValue]
+```
+**-8 lines**
+
+### 10c. Replace `formField` call sites (lines 813-814)
+
+```haskell
+-- Before:
+              formField "Notify phone number" "text" "phoneNumber" "phone" phone
+              formField "Notify the following email address" "textarea" "emails" "emails_input" ""
+
+-- After:
+              connectionField_ "Notify phone number" "phoneNumber" False phone False "Phone number"
+              formField_ "emails_input" "Notify the following email addresses" $
+                textarea_ [class_ "textarea w-full min-h-12 resize-none", name_ "emails", id_ "emails_input"] ""
+```
+**0 net lines** (same count). Visual change: gets standard DaisyUI fieldset styling.
+
+### 10d. Restyle `createInputField` (lines 958-964)
+
+```haskell
+-- Before (7 lines):
+createInputField :: (Text, Text) -> Html ()
+createInputField (labelText, value) = do
+  div_ [class_ "flex flex-col gap-1 w-full"] $ do
+    div_ [class_ "flex w-full items-center gap-1"] $ do
+      span_ [class_ " text-textStrong lowercase first-letter:uppercase"] (toHtml labelText)
+      span_ [class_ " text-textWeak"] "*"
+    input_ [class_ "input w-full h-12", type_ "text", name_ $ T.replace " " "" labelText, required_ "required", value_ value]
+
+-- After (2 lines):
+createInputField :: (Text, Text) -> Html ()
+createInputField (labelText, value) =
+  connectionField_ labelText (T.replace " " "" labelText) True value False labelText
+```
+**-5 lines**. Visual change: standard DaisyUI fieldset, standard input size.
+
+### 10e. Restyle `createSelectField` (lines 967-975)
+
+```haskell
+-- Before (9 lines):
+createSelectField :: Text -> Text -> V.Vector (Text, Text) -> Html ()
+createSelectField val labelText options = do
+  div_ [class_ "flex flex-col gap-1 w-full"] $ do
+    div_ [class_ "flex w-full items-center gap-1"] $ do
+      span_ [class_ " text-textStrong lowercase first-letter:uppercase"] $ toHtml labelText
+      span_ [class_ " text-textWeak"] "*"
+    select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required"] do
+      option_ [value_ ""] ""
+      forM_ options $ \(key, value) -> option_ (value_ key : [selected_ val | val == key]) $ toHtml value
+
+-- After (5 lines):
+createSelectField :: Text -> Text -> V.Vector (Text, Text) -> Html ()
+createSelectField val labelText options =
+  formField_ (T.replace " " "" labelText) labelText $
+    select_ [class_ "select w-full", name_ $ T.replace " " "" labelText, required_ "required"] do
+      option_ [value_ ""] ""
+      forM_ options $ \(key, value) -> option_ (value_ key : [selected_ val | val == key]) $ toHtml value
+```
+**-4 lines**
+
+### 10f. Replace `faQ` (lines 1004-1010)
+
+```haskell
+-- Before (7 lines):
+faQ :: Text -> Text -> Html ()
+faQ question answer =
+  div_ [class_ "w-full py-5 flex flex-col group/faq"] $ do
+    button_ [class_ "text-textStrong  flex w-full justify-between items-center hover:text-textStrong cursor-pointer", [__|on click toggle .hidden on the next <div/> then toggle .rotate-180 on <svg/> in me|]] do
+      span_ [class_ "text-left pr-4 leading-normal"] $ toHtml question
+      faSprite_ "chevron-down" "regular" "h-4 w-4 text-textWeak group-hover/faq:text-textStrong transition-transform duration-200"
+    div_ [class_ "text-textWeak font-medium w-full hidden pt-4 leading-relaxed"] $ toHtml answer
+
+-- After (3 lines):
+faQ :: Text -> Text -> Html ()
+faQ question answer =
+  formSection_ question Nothing Nothing True False [] $
+    p_ [class_ "px-4 pb-4 text-textWeak font-medium leading-relaxed"] $ toHtml answer
+```
+**-4 lines**. Visual change: FAQs get card-style appearance with border.
+
+### Onboarding.hs total: -20 lines
+
+---
+
+## Phase 11: Delete unused Form.hs
 
 **File:** `src/Pkg/Components/Form.hs` (360 lines)
 
-**Action:** Delete the entire file.
+Delete the entire file. Zero imports across the entire codebase. Also remove from cabal/package file if listed.
 
-**Rationale:**
-- Zero imports across the entire codebase (verified via grep)
-- The DSL approach (`textField "name" "Label" & withRequired & withValue v`) is more verbose than direct Lucid (`fieldset_ do label_ "Label"; input_ [...]`) for the forms in this codebase
-- Most forms have complex HTMX attributes (hxVals_ with JS expressions, hyperscript event handlers) that don't fit the DSL well
-- The new `connectionField_` in Components.hs covers the only case where a form field helper is genuinely useful (repeated simple text inputs)
-
-**Saved: -360 lines**
-
-**Also remove from cabal/package file** if `Form.hs` is listed in `exposed-modules` or `other-modules`.
-
----
-
-## Files NOT Changed (and why)
-
-| File | Lines | Why unchanged |
-|------|-------|---------------|
-| `Pages/Anomalies.hs` | 1301 | Collapsibles use different styling (lightweight inline `details_` with custom borders, not the card-style expansion panels). Different UX purpose. |
-| `Pages/LogExplorer/Log.hs` | 1097 | Facets use animated `max-height` CSS transitions incompatible with `details_/summary_`. Alert form uses Monitors section components (API unchanged). |
-| `Pages/Onboarding/Onboarding.hs` | 1031 | Unique full-page styling, non-standard layout. Not worth unifying. |
-| `Pages/Api.hs` | 297 | Single modal with unique layout. No repeated pattern to extract. |
-| `Pages/LemonSqueezy.hs` | 235 | Payment-specific layout, no overlap. |
-| `Pkg/Components/Table.hs` | 809 | Already well-abstracted with its own DSL. |
-| `Pkg/Components/Widget.hs` | 1325 | Domain-specific widget rendering. No repeated form patterns. |
+**-360 lines**
 
 ---
 
 ## Change Ledger
 
-| File | Before | After | Delta |
-|------|--------|-------|-------|
-| `Pkg/Components/PageHeader.hs` | 105 | 107 | **+2** |
-| `Pages/Components.hs` | 625 | 656 | **+31** |
-| `Pages/Monitors.hs` | 518 | 487 | **-31** |
-| `Pages/S3.hs` | 139 | 125 | **-14** |
-| `Pages/GitSync.hs` | 556 | 542 | **-14** |
-| `Pages/Dashboards.hs` | 2533 | 2529 | **-4** |
-| `Pkg/Components/Form.hs` | 360 | 0 | **-360** |
-| **Total** | **4836** | **4446** | **-390** |
+| File | Before | Delta | After |
+|------|:------:|:-----:|:-----:|
+| `Pages/Components.hs` | 625 | **+67** | 692 |
+| `Pkg/Components/PageHeader.hs` | 105 | **-20** | 85 |
+| `Pages/Monitors.hs` | 518 | **-31** | 487 |
+| `Pages/S3.hs` | 139 | **-14** | 125 |
+| `Pages/GitSync.hs` | 556 | **-14** | 542 |
+| `Pages/Projects.hs` | 1756 | **-11** | 1745 |
+| `Pages/Dashboards.hs` | 2533 | **-4** | 2529 |
+| `Pages/Anomalies.hs` | 1301 | **-10** | 1291 |
+| `Pages/LogExplorer/Log.hs` | 1097 | **-4** | 1093 |
+| `Pages/Onboarding/Onboarding.hs` | 1031 | **-20** | 1011 |
+| `Pkg/Components/Form.hs` | 360 | **-360** | 0 |
+| **Total** | **10021** | **-421** | **9600** |
+
+---
+
+## What this consolidates
+
+| Before | Count | Becomes |
+|--------|:-----:|---------|
+| `collapsibleSection` (PageHeader.hs) | 1 def, 0 uses | deleted, replaced by `formSection_` |
+| `collapsibleSection_` (Monitors.hs duplicate) | 1 def, 0 external uses | deleted |
+| `teamSection_` (Projects.hs local) | 1 def, 3 uses | → `formSection_ ... False` |
+| Monitors checkbox-peer panels | 3 instances | → `formSection_ ... True` |
+| Anomalies `details_/summary_` blocks | 5 instances | → `formSection_ ... True` |
+| Log.hs facet section toggle | 1 instance | → `formSection_ ... True` |
+| Onboarding `faQ` | 1 def, 3 uses | → `formSection_ ... True` |
+| `connectionField` (S3.hs) | 1 def, 5 uses | → `connectionField_` |
+| `gitField` (GitSync.hs) | 1 def, 10 uses | → `connectionField_` |
+| `field_` (Projects.hs local) | 1 def, 4 uses | → `formField_` |
+| `fieldIcon_` (Projects.hs local) | 1 def, 4 uses | → `formFieldIcon_` |
+| `tagInput_` (Projects.hs local) | 1 def, 5 uses | → `tagInput_` (shared) |
+| `formField` (Onboarding.hs) | 1 def, 2 uses | → `connectionField_` |
+| `createInputField` styling | 1 def | → restyled via `connectionField_` |
+| `createSelectField` styling | 1 def | → restyled via `formField_` |
+| S3 confirm modal | 12 lines | → `confirmModal_` |
+| GitSync confirm modal | 12 lines | → `confirmModal_` |
+| Dashboards modal footers | 2 instances | → `formActionsModal_` |
+| Projects modal footer | 1 instance | → `formActionsModal_` |
+| `Pkg/Components/Form.hs` | 360 lines, 0 uses | deleted entirely |
+
+**13 local/duplicate definitions eliminated. 1 dead module deleted. 6 shared helpers in one file.**
 
 ---
 
 ## Execution Order
 
-The phases must be done in this order because of dependencies:
-
-1. **Phase 1** — Enhance `collapsibleSection` (PageHeader.hs) — no deps
-2. **Phase 3** — Add helpers to Components.hs — no deps
-3. **Phase 2** — Update Monitors.hs — depends on Phase 1
-4. **Phase 4** — Update S3.hs and GitSync.hs — depends on Phase 3
-5. **Phase 5** — Update Dashboards.hs — depends on Phase 3
-6. **Phase 6** — Delete Form.hs — independent, do last
-
-Phases 1+3 can be done in parallel. Phases 2+4+5 can be done in parallel after 1+3.
+1. **Phase 1** — Add helpers to Components.hs (no deps)
+2. **Phase 2** — Delete from PageHeader.hs (no deps)
+3. **Phases 3-10** — All page updates (depend on Phase 1, independent of each other — parallelizable)
+4. **Phase 11** — Delete Form.hs (independent, do last)
 
 ---
 
 ## Risk Assessment
 
-- **Monitors expansion panels:** Switching from checkbox-peer CSS to native `<details>/<summary>` changes the DOM structure. Both `Dashboards.hs` and `Log.hs` call `monitorScheduleSection_`, `thresholdsSection_`, and `notificationSettingsSection_` — but these are server-rendered HTML helpers, not HTMX endpoints that target specific DOM IDs within the panels. The content inside the panels is unchanged. **Risk: low.**
-
-- **The `id_ "thresholds"` on the thresholds panel** is used by JavaScript: `remove .hidden from #thresholds` / `add .hidden to #thresholds`. With `<details>`, hiding/showing works differently (via `open` attribute). The hyperscript that toggles `#thresholds` visibility will need to be updated to use `set #thresholds.open to true/false` instead of `add/remove .hidden`. This is in the conditionType select's `on change` handler (line 409). **Must update this handler.**
-
-- **S3/GitSync field styling:** Switching from `div_ + space-y-1.5 + input-bordered` to `fieldset_ + input` changes the visual spacing slightly. The user has approved unifying styles. **Risk: cosmetic only.**
-
-- **Form.hs deletion:** Zero imports confirmed. **Risk: none.**
+- **Monitors `#thresholds` hyperscript**: Must update `add/remove .hidden` → `set .open to true/false`. Exact line identified (409).
+- **Log.hs facet animation**: Loses 300ms smooth `max-height` transition. `<details>` toggle is instant. This is the biggest UX change.
+- **Anomalies visual changes**: AI chat disclosures and stack trace get card-style appearance. Previously lightweight. User approved unification.
+- **Onboarding field sizing**: Inputs go from `h-12` (tall) to standard DaisyUI size. Labels go from custom `text-textStrong lowercase first-letter:uppercase` to standard `label text-xs font-medium`. User approved unification.
+- **FAQ appearance**: Accordion items get card borders. Previously borderless text toggles.
+- **Form.hs deletion**: Zero imports confirmed. Zero risk.
