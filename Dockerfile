@@ -48,6 +48,7 @@ COPY proto ./proto
 # Build frontend assets (npm deps already installed in deps image)
 COPY config ./config
 COPY static ./static
+COPY web-components ./web-components
 RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify && \
   cd web-components && NODE_ENV=production npx vite build --mode production --sourcemap false && \
   cd .. && workbox generateSW config/workbox-config.js

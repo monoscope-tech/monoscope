@@ -244,7 +244,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
       severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
       severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
       severityBadge _ = pass
-  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-auto pb-32"] do
+  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 pb-32"] do
     -- Header
     div_ [class_ "flex flex-col gap-3"] do
       div_ [class_ "flex gap-2 flex-wrap items-center"] do
@@ -278,12 +278,11 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
     -- Two Column Layout
     div_ [class_ "flex flex-col gap-4"] do
       div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
-        let cardSection icon title content =
-              div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center justify-between flex items-center gap-2"] do
-                  faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
-                  span_ [class_ "text-sm font-medium text-textStrong"] title
-                >> content
+        let cardSection icon title content = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+              _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
+                span_ [class_ "text-sm font-medium text-textStrong"] title
+              content
         case issue.issueType of
           Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
