@@ -800,21 +800,22 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
               formField_ FieldMd def "Notify the following email address" "emails" False $ Just $ tagInput_ "emails" "" [data_ "tagify-initial" tgs]
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
-      script_ """
-    function appendMember() {
-      const email = document.querySelector('#add-member-input').value
-      if(email.length < 1) return
-      const node = document.querySelector("#member-template").cloneNode(true)
-      node.removeAttribute('id')
-      node.querySelector('input').value = email
-      node.querySelector('input').setAttribute('name', 'emails')
-      node.querySelector('span').textContent = email
-      node.classList.remove('hidden')
-      document.querySelector('#members-container').appendChild(node)
-       _hyperscript.processNode(node)
-       document.querySelector('#add-member-input').value = ''
-    }
-  """
+      script_
+        """
+        function appendMember() {
+          const email = document.querySelector('#add-member-input').value
+          if(email.length < 1) return
+          const node = document.querySelector("#member-template").cloneNode(true)
+          node.removeAttribute('id')
+          node.querySelector('input').value = email
+          node.querySelector('input').setAttribute('name', 'emails')
+          node.querySelector('span').textContent = email
+          node.classList.remove('hidden')
+          document.querySelector('#members-container').appendChild(node)
+           _hyperscript.processNode(node)
+           document.querySelector('#add-member-input').value = ''
+        }
+        """
 
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()

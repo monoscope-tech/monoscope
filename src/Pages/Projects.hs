@@ -96,7 +96,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), PanelCfg (..), connectionBadge_, formActionsModal_, formField_, formSelectField_, iconBadge_, iconBadgeXs_, modal_, panel_, paymentPlanPicker, tagInput_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), PanelCfg (..), connectionBadge_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, modal_, panel_, paymentPlanPicker, tagInput_)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
@@ -1596,7 +1596,9 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
           $ panel_ def{icon = Just "users", collapsible = Just True} "Members"
           $ formField_ FieldSm def "Team Members" (mkId "team-members-input") False
           $ Just
-          $ tagInput_ (mkId "team-members-input") "Start typing to search members..."
+          $ tagInput_
+            (mkId "team-members-input")
+            "Start typing to search members..."
             [data_ "tagify-whitelist" whiteList, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" membersTags, data_ "tagify-resolve" ""]
 
         when isEveryoneTeam do
@@ -1612,7 +1614,8 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
               ( [ ("envelope", "Email", "notif-emails-input", "Add email addresses...", [data_ "tagify-whitelist" emailWhiteList, data_ "tagify-text-prop" "name", data_ "tagify-initial" notifEmails])
                 , ("slack", "Slack", "slack-channels-input", "Add Slack channels...", [data_ "tagify-whitelist" channelWhiteList, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" slackChannels, data_ "tagify-resolve" ""])
                 , ("discord", "Discord", "discord-channels-input", "Add Discord channels...", [data_ "tagify-whitelist" discordWhiteList, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" discordChannels, data_ "tagify-resolve" ""])
-                ] :: [(Text, Text, Text, Text, [Attribute])]
+                ]
+                  :: [(Text, Text, Text, Text, [Attribute])]
               )
               \(ic, lbl, fid, ph, attrs) -> notifField_ ic lbl fid ph attrs
             formField_ FieldSm def{icon = Just "pager"} "PagerDuty" (mkId "pagerduty-services-input") False $ Just do
