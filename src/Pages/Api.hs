@@ -10,7 +10,6 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Lucid
-import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxPatch_, hxPost_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
@@ -22,6 +21,7 @@ import Pkg.Components.Table qualified as Table
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
+import Pages.Components (BadgeColor (..), ModalCfg (..), iconBadgeLg_, modalWith_)
 import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64.URL qualified as B64
@@ -118,40 +118,17 @@ apiKeysPage pid apiKeys = do
       div_ [class_ "flex flex-col gap-2"] do
         h2_ [class_ "text-xl font-semibold text-textWeak leading-7"] "Manage API keys"
         p_ [class_ "text-sm text-textWeak leading-tight"] "Create and revoke your API keys"
-      label_ [class_ "btn btn-primary", Lucid.for_ "apikey-modal"] "Create an API key"
+      pass
     mainContent pid apiKeys Nothing
 
-    input_ [type_ "checkbox", id_ "apikey-modal", class_ "modal-toggle"]
-    div_ [class_ "modal ", role_ "dialog", id_ "apikey-modal"] do
-      div_ [class_ "modal-box flex flex-col p-8"] $ do
-        div_ [class_ "flex w-full mb-4 justify-between items-start"] do
-          div_ [class_ "p-3 bg-[#0068ff]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-            $ faSprite_ "key" "regular" "h-6 w-6 text-textBrand"
-          button_
-            [ class_ "btn btn-ghost btn-sm btn-circle tap-target"
-            , Aria.label_ "Close modal"
-            , [__|on click set #apikey-modal.checked to false |]
-            ]
-            do
-              faSprite_ "circle-xmark" "regular" "h-6 w-6 text-textWeak"
-        span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
-        form_
-          [ hxPost_ $ "/p/" <> pid.toText <> "/apis"
-          , class_ "flex flex-col gap-4"
-          , hxTarget_ "#main-content"
-          , [__|on closeModal from body set #apikey-modal.checked to false |]
-          ]
-          do
-            div_ [class_ "flex flex-col"] do
-              p_ [class_ "text-textWeak"] "Please input a title for your API key."
-              div_ $ input_ [class_ "input px-4 py-2 mt-6  border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title", [__|init if not ('ontouchstart' in window) me.focus()|]]
-            div_ [class_ "flex w-full"] do
-              button_
-                [ type_ "submit"
-                , class_ "btn btn-primary w-full"
-                ]
-                "Create key"
-      label_ [class_ "modal-backdrop", Lucid.for_ "apikey-modal"] "Close"
+    modalWith_ "apikey-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-primary"] "Create an API key") do
+      iconBadgeLg_ BrandBadge "key"
+      span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
+      form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-4", hxTarget_ "#main-content"] do
+        div_ [class_ "flex flex-col"] do
+          p_ [class_ "text-textWeak"] "Please input a title for your API key."
+          div_ $ input_ [class_ "input px-4 py-2 mt-6 border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title"]
+        div_ [class_ "flex w-full"] $ button_ [type_ "submit", class_ "btn btn-primary w-full"] "Create key"
 
 
 mainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()

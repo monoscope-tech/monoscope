@@ -36,6 +36,7 @@ declare global {
     formatNumber: (num: number) => string;
     getUTCOffset: () => string;
     createTagify: (selectorOrElement: string | Element, options?: any) => any;
+    getTagValues: (selector: string) => string[];
   }
   function updateUrlState(key: string, value: string): void;
 }

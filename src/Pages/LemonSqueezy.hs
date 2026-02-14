@@ -13,12 +13,11 @@ import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_)
-import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (PageCtx))
-import Pages.Components (paymentPlanPicker)
+import Pages.Components (BadgeColor (..), ModalCfg (..), iconBadgeXs_, modalWith_, paymentPlanPicker)
 import Relude hiding (ask, asks)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
@@ -160,7 +159,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
 
     div_ [class_ "surface-raised rounded-2xl p-6 space-y-6"] do
       div_ [class_ "flex items-center gap-2 mb-4"] do
-        div_ [class_ "p-1.5 rounded-md bg-fillBrand-weak"] $ faSprite_ "chart-line" "regular" "h-3.5 w-3.5 text-textBrand"
+        iconBadgeXs_ BrandBadge "chart-line"
         label_ [class_ "text-sm font-medium text-textStrong"] "Usage Overview"
 
       div_ [class_ "grid grid-cols-2 gap-4"] do
@@ -184,7 +183,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
 
     div_ [class_ "surface-raised rounded-2xl p-6 space-y-4"] do
       div_ [class_ "flex items-center gap-2 mb-2"] do
-        div_ [class_ "p-1.5 rounded-md bg-fillSuccess-weak"] $ faSprite_ "dollar" "regular" "h-3.5 w-3.5 text-textSuccess"
+        iconBadgeXs_ SuccessBadge "dollar"
         label_ [class_ "text-sm font-medium text-textStrong"] "Current Plan"
 
       div_ [class_ "flex items-center justify-between p-4 border border-strokeWeak rounded-xl bg-fillWeaker"] do
@@ -199,19 +198,14 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
       div_ [class_ "border-t border-strokeWeak pt-4"] do
         div_ [class_ "text-textStrong text-sm font-semibold mb-2"] "Upgrade plan"
         p_ [class_ "text-textWeak text-sm mb-4"] "Monoscope pricing, click on compare feature below to select the option that best suit your project."
-        label_ [class_ "btn btn-primary btn-sm", Lucid.for_ "pricing-modal", [__|on click set #pricing-modal.check to true|]] "Change plan"
+        pass
 
-  input_ [type_ "checkbox", id_ "pricing-modal", class_ "modal-toggle"]
-  div_ [class_ "modal p-8", role_ "dialog", [__|on closeModal from body set #pricing-modal.checked to false |]] do
-    div_ [class_ "modal-box relative flex flex-col gap-5 w-[1250px] py-16 px-32", style_ "max-width:1300px"] do
-      button_ [class_ "absolute top-8 right-8 cursor-pointer", [__| on click set #pricing-modal.checked to false |]] do
-        faSprite_ "circle-xmark" "regular" "w-8 h-8"
-      div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
-        span_ [class_ "text-textStrong text-2xl font-semibold"] "What's Included?"
-        p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
-        p_ [] "Please adjust the bar below to see difference in price as your events increase"
-      paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled
-    label_ [class_ "modal-backdrop", Lucid.for_ "pricing-modal"] "Close"
+  modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} (Just $ span_ [class_ "btn btn-primary btn-sm"] "Change plan") do
+    div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
+      span_ [class_ "text-textStrong text-2xl font-semibold"] "What's Included?"
+      p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
+      p_ [] "Please adjust the bar below to see difference in price as your events increase"
+    paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled
 
 
 calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime

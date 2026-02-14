@@ -207,8 +207,8 @@ expandedItemView pid item aptSp leftM rightM = do
       reqDetails = if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes)
   div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
-    unless isLog $ span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "loading-span-list"] ""
-    span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+    unless isLog $ htmxOverlayIndicator_ "loading-span-list"
+    htmxOverlayIndicator_ "details_indicator"
     div_ [class_ "flex flex-col gap-4 bg-fillWeaker py-2  px-2"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do

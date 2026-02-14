@@ -152,27 +152,6 @@ bodyWrapper bcfg child = do
 
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
-        -- Helper function for event-based initialization
-        script_
-          [text|
-          window.initWhenReady = function(fn, timeout = 5000) {
-            if (window.widgetDepsReady) {
-              fn();
-            } else {
-              const handler = () => fn();
-              window.addEventListener('widgetDepsReady', handler, { once: true });
-
-              // Fallback timeout
-              setTimeout(() => {
-                if (!window.widgetDepsReady) {
-                  console.warn('Widget dependencies not ready after timeout, initializing anyway');
-                  window.removeEventListener('widgetDepsReady', handler);
-                  fn();
-                }
-              }, timeout);
-            }
-          };
-          |]
 
         script_
           [text|
@@ -181,14 +160,6 @@ bodyWrapper bcfg child = do
       twq('config','om5gt');
       |]
 
-        script_
-          [text|
-          function getTags() {
-            const tag = window.tagify.value
-            const values = tag.map(tag => tag.value);
-            return values || []
-          }
-        |]
 
         let swURI = $(hashAssetFile "/public/sw.js")
         script_
@@ -843,7 +814,7 @@ navBottomList pidTxt =
   , ("dollar", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
   , ("bucket", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
-  , ("github", "GitHub sync", "/p/" <> pidTxt <> "/settings/git-sync", Nothing, Nothing, Nothing)
+  , ("github", "GitHub Sync", "/p/" <> pidTxt <> "/settings/git-sync", Nothing, Nothing, Nothing)
   , ("trash", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 

@@ -61,7 +61,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (PanelCfg (..), emptyState_, panel_, resizer_, statBox_)
+import Pages.Components (BadgeColor (..), PanelCfg (..), emptyState_, iconBadgeSq_, panel_, resizer_, statBox_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -74,7 +74,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
+import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, lookupValueText, methodFillColor, statusFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -348,7 +348,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 tr
             div_ [class_ "transition-opacity duration-200 mx-1", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
             div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] w-1/2 w-c-scroll overflow-x-hidden overflow-y-auto", id_ "log_details_container"] do
-              span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+              htmxOverlayIndicator_ "details_indicator"
               whenJust (spanRecs V.!? 0) \sr ->
                 div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
@@ -627,7 +627,7 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
   div_ [class_ "surface-raised rounded-2xl p-6 animate-fade-in max-w-3xl mx-auto w-full"] do
     -- User question
     div_ [class_ "flex items-start gap-3 mb-4 pb-4 border-b border-strokeWeak"] do
-      div_ [class_ "p-2 rounded-lg bg-fillWeak shrink-0"] $ faSprite_ "user" "regular" "w-4 h-4 text-iconNeutral"
+      iconBadgeSq_ NeutralBadge "user"
       p_ [class_ "text-sm text-textStrong"] $ toHtml userQuery
     whenJust systemPromptM \systemPrompt ->
       div_ [class_ "mb-4"]
@@ -644,7 +644,7 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
           div_ [class_ "px-4 py-3 border-t border-strokeWeak bg-fillWeaker/50"] $ forM_ toolCalls toolCallView_
     -- AI response
     div_ [class_ "flex items-start gap-3"] do
-      div_ [class_ "p-2 rounded-lg bg-fillBrand-weak shrink-0"] $ faSprite_ "sparkles" "regular" "w-4 h-4 text-iconBrand"
+      iconBadgeSq_ BrandBadge "sparkles"
       div_ [class_ "flex-1 flex flex-col gap-4"] do
         div_ [class_ "prose prose-sm text-textStrong max-w-none"] $ renderMarkdown explanation
     whenJust widgetsM \widgets -> do
@@ -761,7 +761,7 @@ anomalyAIChat_ pid issueId = do
         ]
         do
           div_ [class_ "flex items-center gap-3"] do
-            div_ [class_ "p-2 rounded-lg bg-fillBrand-weak shrink-0"] $ faSprite_ "sparkles" "regular" "h-4 w-4 text-iconBrand"
+            iconBadgeSq_ BrandBadge "sparkles"
             input_
               [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
               , placeholder_ "Ask about this issue... e.g., 'What could cause this error?'"

@@ -46,7 +46,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecIntByKey, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, htmxIndicatorWith_, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecIntByKey, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -832,7 +832,7 @@ apiLogsPage page = do
         div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
         div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto", id_ "log_details_container"] do
-          span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+          htmxOverlayIndicator_ "details_indicator"
           whenJust page.targetEvent \te -> do
             script_
               [text|
@@ -951,7 +951,7 @@ alertConfigurationForm_ project alertM teams = do
       form_
         [ id_ "alert-form"
         , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
-        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: getSelectedTeams()}"
+        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
         , [__|on htmx:afterRequest
@@ -1059,7 +1059,7 @@ loadMore url =
         [class_ "col-span-4 w-full relative w-full cursor-pointer flex items-center p-1 text-textBrand"]
         do
           "Load more"
-          span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+          htmxIndicatorWith_ "rowsIndicator" LdMD "ml-2"
 
 
 renderPattern :: (Text, Int) -> Int -> Projects.ProjectId -> Html ()

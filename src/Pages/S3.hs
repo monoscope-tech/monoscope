@@ -9,11 +9,11 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Components (FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadge_)
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Utils (faSprite_)
+import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
 
 
 getMinioConnectInfo :: Text -> Text -> Text -> Text -> Text -> Minio.ConnectInfo
@@ -76,7 +76,7 @@ bringS3Page pid s3BucketM = div_ [class_ "w-full h-full overflow-y-auto"] do
       div_ [class_ "surface-raised rounded-2xl p-4"] do
         div_ [class_ "flex items-center justify-between"] do
           div_ [class_ "flex items-center gap-3"] do
-            div_ [class_ "p-2 rounded-full bg-fillBrand-weak"] $ faSprite_ "bucket" "regular" "h-4 w-4 text-textBrand"
+            iconBadge_ BrandBadge "bucket"
             div_ do
               h3_ [class_ "text-sm font-medium text-textStrong"] "Connection Status"
               p_ [class_ "text-xs text-textWeak"] "Your bucket connection state"
@@ -98,7 +98,7 @@ bringS3Page pid s3BucketM = div_ [class_ "w-full h-full overflow-y-auto"] do
         div_ [class_ "flex items-center gap-3"] do
           button_ [class_ "btn btn-sm btn-outline gap-1"] do
             "Validate & Save"
-            span_ [class_ "htmx-indicator loading loading-dots loading-xs", id_ "indicator"] ""
+            htmxIndicator_ "indicator" LdXS
           span_ [class_ "text-xs text-textWeak"] "Auto-saves on success"
         when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
           faSprite_ "trash" "regular" "w-3 h-3"

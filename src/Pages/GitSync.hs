@@ -38,7 +38,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Components (FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadge_, iconBadgeLg_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.GitHub qualified as GitHub
 import Relude hiding (ask)
@@ -46,7 +46,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
 import Text.MMark qualified as MMark
-import Utils (faSprite_)
+import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -222,7 +222,7 @@ notConnectedView pid actionUrl installUrl = do
   -- GitHub App install card (primary option)
   div_ [class_ "surface-raised rounded-2xl p-6 space-y-4"] do
     div_ [class_ "flex items-center gap-3 mb-4"] do
-      div_ [class_ "p-3 rounded-full bg-fillBrand-weak"] $ faSprite_ "github" "regular" "h-6 w-6 text-textBrand"
+      iconBadgeLg_ BrandBadge "github"
       div_ do
         h3_ [class_ "text-lg font-semibold text-textStrong"] "Connect to GitHub"
         p_ [class_ "text-sm text-textWeak"] "Sync dashboards with your repository automatically"
@@ -253,7 +253,7 @@ notConnectedView pid actionUrl installUrl = do
           div_ [class_ "flex justify-end"] do
             button_ [class_ "btn btn-sm btn-outline gap-1", type_ "submit"] do
               "Connect with PAT"
-              span_ [class_ "htmx-indicator loading loading-dots loading-xs", id_ "indicator"] ""
+              htmxIndicator_ "indicator" LdXS
 
 
 -- | View when connected - shows repo info and webhook URL
@@ -263,7 +263,7 @@ connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
   div_ [class_ "surface-raised rounded-2xl p-4"] do
     div_ [class_ "flex items-center justify-between"] do
       div_ [class_ "flex items-center gap-3"] do
-        div_ [class_ "p-2 rounded-full bg-fillSuccess-weak"] $ faSprite_ "circle-check" "regular" "h-4 w-4 text-textSuccess"
+        iconBadge_ SuccessBadge "circle-check"
         div_ do
           h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
           p_ [class_ "text-xs text-textWeak"] do
@@ -301,7 +301,7 @@ connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
     div_ [class_ "flex items-center justify-between"] do
       button_ [class_ "btn btn-sm btn-outline gap-1", type_ "submit"] do
         "Update Settings"
-        span_ [class_ "htmx-indicator loading loading-dots loading-xs", id_ "indicator"] ""
+        htmxIndicator_ "indicator" LdXS
       label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "disconnect-modal"] do
         faSprite_ "link-slash" "regular" "w-3 h-3"
         span_ "Disconnect"
@@ -442,7 +442,7 @@ projectSelectorView :: Int64 -> [Projects.Project'] -> Html ()
 projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex items-center justify-center p-8"] do
   div_ [class_ "surface-raised rounded-2xl p-6 max-w-md w-full space-y-4"] do
     div_ [class_ "flex items-center gap-3 mb-4"] do
-      div_ [class_ "p-3 rounded-full bg-fillSuccess-weak"] $ faSprite_ "circle-check" "regular" "h-6 w-6 text-textSuccess"
+      iconBadgeLg_ SuccessBadge "circle-check"
       div_ do
         h3_ [class_ "text-lg font-semibold text-textStrong"] "GitHub App Installed!"
         p_ [class_ "text-sm text-textWeak"] "Select a project to connect"
@@ -450,7 +450,7 @@ projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex 
       then p_ [class_ "text-textWeak text-center py-4"] "No projects found. Create a project first."
       else div_ [class_ "space-y-2"] $ forM_ projects \proj ->
         a_ [href_ ("/p/" <> proj.id.toText <> "/settings/git-sync/repos?installationId=" <> show instId), class_ "flex items-center gap-3 p-3 rounded-lg border border-borderWeak hover:border-borderBrand cursor-pointer block"] do
-          div_ [class_ "p-2 rounded-full bg-fillWeak"] $ faSprite_ "folder" "regular" "h-4 w-4 text-textWeak"
+          iconBadge_ NeutralBadge "folder"
           span_ [class_ "font-medium text-textStrong"] $ toHtml proj.title
 
 

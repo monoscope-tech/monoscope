@@ -85,7 +85,7 @@ import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_)
+import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -278,94 +278,77 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           input_
             $ [ type_ "text"
               , name_ var.key
-              , class_ "tagify-select-input"
-              , data_ "whitelistjson" whitelist
-              , data_ "enforce-whitelist" "true"
-              , data_ "mode" $ if var.multi == Just True then "" else "select"
+              , class_ "dash-variable-input"
+              , data_ "tagify" ""
+              , data_ "tagify-whitelist" whitelist
+              , data_ "tagify-enforce-whitelist" ""
+              , data_ "tagify-text-prop" "name"
+              , data_ "tagify-mode" $ if var.multi == Just True then "" else "select"
               , data_ "query_sql" $ maybeToMonoid var.sql
               , data_ "query" $ maybeToMonoid var.query
               , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
+            <> memptyIfFalse (var.multi == Just True) [data_ "tagify-mode" "select"]
     script_
-      [text|
-  // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
-  (function() {
-    let cachedSearch = '', cachedParams = null, pending = false;
-    window.interpolateVarTemplates = function() {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(() => {
-        pending = false;
-        if (window.location.search !== cachedSearch) {
-          cachedSearch = window.location.search;
-          cachedParams = new URLSearchParams(cachedSearch);
-        }
-        document.querySelectorAll('[data-var-template]').forEach(el => {
-          let text = el.dataset.varTemplate;
-          cachedParams.forEach((value, key) => {
-            if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
+      """
+      (function() {
+        let cachedSearch = '', cachedParams = null, pending = false;
+        window.interpolateVarTemplates = function() {
+          if (pending) return;
+          pending = true;
+          requestAnimationFrame(() => {
+            pending = false;
+            if (window.location.search !== cachedSearch) { cachedSearch = window.location.search; cachedParams = new URLSearchParams(cachedSearch); }
+            document.querySelectorAll('[data-var-template]').forEach(el => {
+              let text = el.dataset.varTemplate;
+              cachedParams.forEach((value, key) => { if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || ''); });
+              el.textContent = text;
+            });
           });
-          el.textContent = text;
-        });
-      });
-    };
-  })();
+        };
 
-  window.addEventListener('DOMContentLoaded', () => {
-    window.initWhenReady(function() {
-      const tagifyInstances = new Map();
-      document.querySelectorAll('.tagify-select-input').forEach(input => {
-        const tgfy = createTagify(input, {
-          whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
-          enforceWhitelist: true,
-          tagTextProp: 'name',
-          mode: input.dataset.mode || "",
-        });
-
-        const inputKey = input.getAttribute('name') || input.id;
-        tagifyInstances.set(inputKey, tgfy);
-
-        tgfy.on('change', (e) => {
-          const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
-          const url = new URL(window.location);
-          url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value);
-          history.pushState({}, '', url);
-          window.dispatchEvent(new Event('update-query'));
-        });
-      });
-
-      window.addEventListener('update-query', async (e) => {
-      document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
-        const { query_sql, query } = input.dataset;
-        if (!query_sql && !query) return;
-
-        try {
-          const tagify = tagifyInstances.get(input.getAttribute('name') || input.id);
-          tagify?.loading(true);
-
-          const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)),
-            query, query_sql, data_type: 'text' });
-
-          const { data_text } = await fetch(`/chart_data?$${params}`).then(res => res.json());
-
-          if (tagify) {
-            tagify.settings.whitelist = data_text.map(i => i.length === 1 ? i[0] : { value: i[0], name: i[1] });
-            tagify.loading(false);
-          }
-        } catch (e) {
-          console.error(`Error fetching data for ${input.name}:`, e);
+        function setupVarInputs() {
+          document.querySelectorAll('.dash-variable-input').forEach(input => {
+            const tgfy = input._tagifyInstance;
+            if (!tgfy || input._varBound) return;
+            input._varBound = true;
+            tgfy.on('change', (e) => {
+              const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
+              const url = new URL(window.location);
+              url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value);
+              history.pushState({}, '', url);
+              window.dispatchEvent(new Event('update-query'));
+            });
+          });
+          window.interpolateVarTemplates();
         }
-      });
 
-      window.interpolateVarTemplates();
-    });
+        window.addEventListener('update-query', async () => {
+          document.querySelectorAll('.dash-variable-input[data-reload_on_change="true"]').forEach(async input => {
+            const { query_sql, query } = input.dataset;
+            if (!query_sql && !query) return;
+            const tgfy = input._tagifyInstance;
+            try {
+              tgfy?.loading(true);
+              const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), query, query_sql, data_type: 'text' });
+              const { data_text } = await fetch(`/chart_data?${params}`).then(res => res.json());
+              if (tgfy) { tgfy.settings.whitelist = data_text.map(i => i.length === 1 ? i[0] : { value: i[0], name: i[1] }); tgfy.loading(false); }
+            } catch (e) { console.error(`Error fetching data for ${input.name}:`, e); }
+          });
+          window.interpolateVarTemplates();
+        });
 
-    window.interpolateVarTemplates();
-    });
-  });
-    |]
+        function trySetupVarInputs(retries) {
+          const inputs = document.querySelectorAll('.dash-variable-input');
+          const allReady = inputs.length === 0 || Array.from(inputs).every(i => i._tagifyInstance);
+          if (allReady || retries <= 0) { setupVarInputs(); return; }
+          setTimeout(() => trySetupVarInputs(retries - 1), 100);
+        }
+        trySetupVarInputs(5);
+        document.addEventListener('htmx:afterSettle', () => setTimeout(setupVarInputs, 50));
+      })();
+      """
   let pidText = pid.toText
       dashIdText = dashId.toText
       activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
@@ -677,26 +660,22 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
       tabPath = maybe "" ("/tab/" <>) activeTabSlug
       oobAttr = if useOob then [id_ $ modalId <> "-container", hxSwapOob_ "beforeend:body"] else []
   div_ oobAttr do
-    input_ [class_ "modal-toggle", id_ modalId, type_ "checkbox", [__|init set my.checked to true on keyup if event's key is 'Escape' set my.checked to false|]]
-    div_ [class_ "modal w-screen", role_ "dialog"] do
-      label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
-      div_ [class_ "modal-box relative min-w-80 max-w-md flex flex-col gap-4"] do
-        Components.modalCloseButton_ modalId
-        h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
-        p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
-        whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
-        input_
-          [ type_ "text"
-          , class_ "input input-bordered w-full"
-          , placeholder_ "Search..."
-          , [__|on keyup if event's key is 'Escape' set my value to '' then trigger keyup else show <.var-opt/> in closest .modal-box when its textContent.toLowerCase() contains my value.toLowerCase()|]
-          ]
-        div_ [class_ "max-h-64 overflow-y-auto flex flex-col gap-1"]
-          $ forM_ (fromMaybe [] var.options) \opt -> do
-            let optVal = opt Unsafe.!! 0
-                optLbl = fromMaybe optVal (opt !!? 1)
-                url = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> "var-" <> var.key <> "=" <> optVal
-            a_ [class_ "var-opt p-2 rounded hover:bg-fillWeak cursor-pointer", href_ url] $ toHtml optLbl
+    Components.modalWith_ modalId def{autoOpen = True, boxClass = "min-w-80 max-w-md gap-4"} Nothing do
+      h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
+      p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
+      whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
+      input_
+        [ type_ "text"
+        , class_ "input input-bordered w-full"
+        , placeholder_ "Search..."
+        , [__|on keyup if event's key is 'Escape' set my value to '' then trigger keyup else show <.var-opt/> in closest .modal-box when its textContent.toLowerCase() contains my value.toLowerCase()|]
+        ]
+      div_ [class_ "max-h-64 overflow-y-auto flex flex-col gap-1"]
+        $ forM_ (fromMaybe [] var.options) \opt -> do
+          let optVal = opt Unsafe.!! 0
+              optLbl = fromMaybe optVal (opt !!? 1)
+              url = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> "var-" <> var.key <> "=" <> optVal
+          a_ [class_ "var-opt p-2 rounded hover:bg-fillWeak cursor-pointer", href_ url] $ toHtml optLbl
 
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
@@ -1293,7 +1272,7 @@ widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget 
     , hxPost_ alertEndpoint
     , hxSwap_ "none"
     , hxTrigger_ "submit"
-    , hxVals_ "js:{teams: typeof getSelectedTeams === 'function' ? getSelectedTeams() : []}"
+    , hxVals_ "js:{teams: window.getTagValues('#teamHandlesInput')}"
     , class_ $ "flex flex-col gap-3" <> if hasAlert then "" else " hidden"
     , [__|on htmx:afterRequest if event.detail.successful set my value to '' then call me.reset() end|]
     ]
@@ -1509,7 +1488,7 @@ dashboardsGet_ dg = do
   unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
     [ class_ "flex  h-[90vh] gap-4 group/md"
     , hxPost_ ""
-    , hxVals_ "js:{ teams: getSelectedTeams() }"
+    , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
     ]
     do
       div_ [class_ "w-2/7 space-y-4 h-full flex flex-col"] do
@@ -1537,7 +1516,8 @@ dashboardsGet_ dg = do
         div_ [class_ "flex items-end gap-2"] do
           div_ [class_ "flex w-full gap-2"] do
             formField_ FieldSm def{placeholder = "Dashboard Title"} "Dashboard name" "title" True Nothing
-            formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False Nothing
+            let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
+            formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList]
             formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
           div_ [class_ "shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
         div_ [class_ "py-2 border-b border-b-strokeWeak"] do
@@ -1548,19 +1528,6 @@ dashboardsGet_ dg = do
         div_ [class_ "pt-5"]
           $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
-        let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
-        script_
-          [text|
-            let tagify;
-            window.addEventListener('DOMContentLoaded', (event) => {
-              window.initWhenReady(function() {
-                tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
-              });
-            });
-            const getSelectedTeams = () => {
-              return tagify.value.map(item => item.value);
-            }
-        |]
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
     let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)

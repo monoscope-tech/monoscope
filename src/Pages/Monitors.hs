@@ -36,7 +36,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), formCheckbox_, formField_, formSelectField_, panel_)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), formCheckbox_, formField_, formSelectField_, panel_, tagInput_)
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
@@ -393,22 +393,7 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       div_ [class_ "flex flex-col gap-1"] do
         span_ [class_ "text text-sm"] "Teams"
         span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
-      textarea_ [class_ "input max-h-max w-full mt-2 resize-none", name_ "teams"] ""
-    script_
-      [text|
-      window.addEventListener('DOMContentLoaded', () => {
-        window.initWhenReady(function() {
-          const tagify = createTagify('#${formId} textarea[name="teams"]', {
-            tagTextProp: 'name',
-            whitelist: $teamList,
-          });
-          tagify.addTags($existingTeams);
-        });
-      })
-      const getSelectedTeams = () => {
-        return tagify.value.map(item => item.value);
-      }
-    |]
+      tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams]
     div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
       formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ [value_ "true"] ++ [checked_ | emailAll]
       span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"

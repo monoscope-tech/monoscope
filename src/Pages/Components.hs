@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
@@ -177,7 +177,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                function priceChange() {
                  const value = price_indicator.value
                  let num_reqs = Math.floor(value/1000000)
-                 let calculatedPrice = value <= 20_000_000 ? 34 : 34 + ((value- 20_000_000)/500_000)
+                 let calculatedPrice = value <= 20_000_000 ? 29 : 29 + ((value- 20_000_000)/500_000)
                  let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/500_000)
                  priceContainer.innerText = calculatedPrice
                  criticalContainer.innerText = calculatedPriceCritical
@@ -471,40 +471,7 @@ navBar = do
 
 
 modal_ :: T.Text -> Html () -> Html () -> Html ()
-modal_ modalId btnTrigger contentHtml = do
-  label_ [Lucid.for_ modalId] btnTrigger
-  input_
-    [ class_ "modal-toggle"
-    , Lucid.id_ modalId
-    , Lucid.type_ "checkbox"
-    , Aria.label_ "Toggle modal"
-    , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
-          on closeModal from body set my.checked to false end
-          on change if my.checked then
-            add .overflow-hidden to <body/>
-            wait 50ms then
-            set :focusable to my.closest('.modal').querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
-            if :focusable then call :focusable.focus() end
-          else
-            remove .overflow-hidden from <body/>
-          end
-      |]
-    ]
-  div_
-    [ class_ "modal w-screen"
-    , role_ "dialog"
-    , Aria.label_ "Modal dialog"
-    , style_ "--color-base-100: var(--color-fillWeaker)"
-    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
-        set :form to target.closest('form') then
-        if :form then call :form.requestSubmit() then halt end
-      |]
-    ]
-    do
-      label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
-      div_ [class_ "modal-box relative w-auto flex flex-col gap-5 max-w-5xl"] do
-        modalCloseButton_ modalId
-        div_ contentHtml
+modal_ modalId btnTrigger = modalWith_ modalId def (Just btnTrigger)
 
 
 modalCloseButton_ :: Monad m => Text -> HtmlT m ()
@@ -683,6 +650,7 @@ data PanelCfg = PanelCfg
   , subtitle :: Maybe Text
   , collapsible :: Maybe Bool -- Nothing = static section, Just True = starts open, Just False = starts closed
   , sectionId :: Maybe Text -- id attribute on the details element
+  , raised :: Bool -- surface-raised card wrapper
   }
   deriving stock (Generic)
   deriving anyclass (Default)
@@ -690,13 +658,15 @@ data PanelCfg = PanelCfg
 
 panel_ :: Monad m => PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
 panel_ cfg title content = case cfg.collapsible of
-  Nothing ->
-    div_ [class_ "space-y-4"] do
-      h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider flex items-center gap-2"] do
-        whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
-        toHtml title
-        whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
-      content
+  Nothing -> wrapper do
+    header do
+      whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
+      toHtml title
+      whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
+    content
+    where
+      wrapper = if cfg.raised then div_ [class_ "surface-raised rounded-2xl p-4 relative"] else div_ [class_ "space-y-4"]
+      header = if cfg.raised then span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] else h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider flex items-center gap-2"]
   Just startOpen ->
     details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] <> [open_ "" | startOpen] <> maybe [] (pure . id_) cfg.sectionId) do
       summary_ [class_ "p-3 cursor-pointer list-none flex items-center justify-between gap-2 hover:bg-fillWeak transition-colors"] do
@@ -719,8 +689,8 @@ formCheckbox_ FieldMd lbl name extraAttrs =
     span_ [class_ "text-sm"] $ toHtml lbl
 
 
-tagInput_ :: Monad m => Text -> Text -> HtmlT m ()
-tagInput_ inputId ph = textarea_ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph] ""
+tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
+tagInput_ inputId ph attrs = textarea_ ([class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph, data_ "tagify" ""] <> attrs) ""
 
 
 formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
@@ -742,17 +712,95 @@ connectionBadge_ status = span_ [class_ $ "badge badge-sm gap-1 " <> badgeCls] d
       _ -> ("badge-soft badge-secondary", Nothing)
 
 
+data BadgeColor = BrandBadge | SuccessBadge | ErrorBadge | NeutralBadge
+
+
+iconBadge_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadge_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-full"
+
+
+iconBadgeSq_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadgeSq_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-lg"
+
+
+iconBadgeLg_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadgeLg_ = iconBadgeWith_ "p-3" "h-6 w-6" "rounded-full"
+
+
+iconBadgeXs_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadgeXs_ = iconBadgeWith_ "p-1.5" "h-3.5 w-3.5" "rounded-md"
+
+
+iconBadgeWith_ :: Monad m => Text -> Text -> Text -> BadgeColor -> Text -> HtmlT m ()
+iconBadgeWith_ pad iconSize shape color icon =
+  div_ [class_ $ pad <> " shrink-0 " <> shape <> " " <> bg color] $ faSprite_ icon "regular" (iconSize <> " " <> fg color)
+  where
+    bg = \case BrandBadge -> "bg-fillBrand-weak"; SuccessBadge -> "bg-fillSuccess-weak"; ErrorBadge -> "bg-fillError-weak"; NeutralBadge -> "bg-fillWeak"
+    fg = \case BrandBadge -> "text-iconBrand"; SuccessBadge -> "text-iconSuccess"; ErrorBadge -> "text-iconError"; NeutralBadge -> "text-iconNeutral"
+
+
+data ModalCfg = ModalCfg
+  { autoOpen :: Bool
+  , boxClass :: Text
+  , boxStyle :: Text
+  , wrapperClass :: Text
+  , hideClose :: Bool
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+modalWith_ :: T.Text -> ModalCfg -> Maybe (Html ()) -> Html () -> Html ()
+modalWith_ modalId cfg triggerM contentHtml = do
+  whenJust triggerM $ label_ [Lucid.for_ modalId]
+  input_
+    $ [ class_ "modal-toggle"
+      , Lucid.id_ modalId
+      , Lucid.type_ "checkbox"
+      , Aria.label_ "Toggle modal"
+      , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
+          on closeModal from body set my.checked to false end
+          on change if my.checked then
+            add .overflow-hidden to <body/>
+            wait 50ms then
+            set :modal to the next <.modal/> then
+            set :focusable to :modal.querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
+            if :focusable then call :focusable.focus() end
+          else
+            remove .overflow-hidden from <body/>
+          end
+      |]
+      ]
+    <> [checked_ | cfg.autoOpen]
+  div_
+    [ class_ $ "modal w-screen " <> cfg.wrapperClass
+    , role_ "dialog"
+    , Aria.label_ "Modal dialog"
+    , style_ "--color-base-100: var(--color-fillWeaker)"
+    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
+        set :form to target.closest('form') then
+        if :form then call :form.requestSubmit() then halt end
+      |]
+    ]
+    do
+      label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
+      div_
+        ( [class_ $ "modal-box relative w-auto flex flex-col gap-5 " <> bool "max-w-5xl" cfg.boxClass (not $ T.null cfg.boxClass)]
+            <> [style_ cfg.boxStyle | not $ T.null cfg.boxStyle]
+        )
+        do
+          unless cfg.hideClose $ modalCloseButton_ modalId
+          div_ [class_ "space-y-2"] contentHtml
+
+
 confirmModal_ :: Text -> Text -> Text -> [Attribute] -> Text -> Html ()
-confirmModal_ modalId title description confirmAttrs confirmText = do
-  input_ [type_ "checkbox", id_ modalId, class_ "modal-toggle"]
-  div_ [class_ "modal", role_ "dialog"] do
-    div_ [class_ "modal-box p-6"] do
-      div_ [class_ "flex items-start gap-3 mb-4"] do
-        div_ [class_ "p-2 bg-fillError-weak rounded-full"] $ faSprite_ "triangle-alert" "regular" "h-5 w-5 text-textError"
-        div_ do
-          h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
-          p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
-      div_ [class_ "flex justify-end gap-2 mt-6"] do
-        label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
-        button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
-    label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
+confirmModal_ modalId title description confirmAttrs confirmText =
+  modalWith_ modalId def{boxClass = "p-6", hideClose = True} Nothing do
+    div_ [class_ "flex items-start gap-3 mb-4"] do
+      iconBadgeWith_ "p-2" "h-5 w-5" "rounded-full" ErrorBadge "triangle-alert"
+      div_ do
+        h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
+        p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
+    div_ [class_ "flex justify-end gap-2 mt-6"] do
+      label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
+      button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText

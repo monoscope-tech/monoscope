@@ -15,6 +15,9 @@ module Utils (
   LoadingType (..),
   loadingIndicator_,
   loadingIndicatorWith_,
+  htmxIndicator_,
+  htmxIndicatorWith_,
+  htmxOverlayIndicator_,
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
@@ -167,6 +170,19 @@ loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
 -- | Loading indicator with extra classes for custom styling
 loadingIndicatorWith_ :: Monad m => LoadingSize -> LoadingType -> Text -> HtmlT m ()
 loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> loadingTypeClass typ <> " loading-" <> loadingSizeClass size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
+
+
+htmxIndicator_ :: Monad m => Text -> LoadingSize -> HtmlT m ()
+htmxIndicator_ elId size = htmxIndicatorWith_ elId size ""
+
+
+htmxIndicatorWith_ :: Monad m => Text -> LoadingSize -> Text -> HtmlT m ()
+htmxIndicatorWith_ elId size extraCls =
+  span_ [id_ elId, class_ $ "htmx-indicator loading loading-dots loading-" <> loadingSizeClass size <> bool "" (" " <> extraCls) (not $ T.null extraCls), role_ "status", Aria.label_ "Loading"] ""
+
+
+htmxOverlayIndicator_ :: Monad m => Text -> HtmlT m ()
+htmxOverlayIndicator_ elId = span_ [id_ elId, class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots z-10 top-10", role_ "status", Aria.label_ "Loading"] ""
 
 
 deleteParam :: Text -> Text -> Text

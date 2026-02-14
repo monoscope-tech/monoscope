@@ -285,6 +285,59 @@ function tagifyTemplateFunc(tagData: any) {
 
 (window as any).tagifyTemplateFunc = tagifyTemplateFunc;
 
+// Auto-initialize tagify inputs from data attributes
+// Uses data-tagify-* prefix to avoid collision with Tagify's built-in data attribute handling
+function initTagifyElement(el: HTMLElement) {
+  if ((el as any)._tagifyInstance) return;
+  try {
+    const options: any = {};
+    const wl = el.getAttribute('data-tagify-whitelist');
+    if (wl) {
+      try { options.whitelist = JSON.parse(wl); } catch (e) {
+        console.error('[Tagify auto-init] Failed to parse whitelist:', el.id, e);
+      }
+    }
+    if (el.hasAttribute('data-tagify-enforce-whitelist')) options.enforceWhitelist = true;
+    if (el.hasAttribute('data-tagify-mode')) options.mode = el.getAttribute('data-tagify-mode');
+    if (el.hasAttribute('data-tagify-text-prop')) options.tagTextProp = el.getAttribute('data-tagify-text-prop');
+
+    const tagify = window.createTagify(el, options);
+    (el as any)._tagifyInstance = tagify;
+
+    const initial = el.getAttribute('data-tagify-initial');
+    if (initial) {
+      try {
+        const tags = JSON.parse(initial);
+        if (el.hasAttribute('data-tagify-resolve') && options.whitelist) {
+          tagify.addTags(tags.map((id: any) => options.whitelist.find((v: any) => v.value === id || v.value == id)).filter(Boolean));
+        } else {
+          tagify.addTags(tags);
+        }
+      } catch (e) {
+        console.error('[Tagify auto-init] Failed to parse initial tags:', el.id, e);
+      }
+    }
+  } catch (e) {
+    console.error('[Tagify auto-init] Failed to init element:', el.id, e);
+  }
+}
+
+function initAllTagifyInputs(root: Document | Element = document) {
+  root.querySelectorAll<HTMLElement>('[data-tagify]').forEach(initTagifyElement);
+}
+
+window.getTagValues = (selector: string): string[] => {
+  const el = document.querySelector(selector);
+  return (el as any)?._tagifyInstance?.value?.map((t: any) => t.value || t) || [];
+};
+
 // Signal that web components are ready
 (window as any).widgetDepsReady = true;
 window.dispatchEvent(new CustomEvent('widgetDepsReady'));
+
+// Init tagify elements - run now, on DOMContentLoaded, and after HTMX swaps
+initAllTagifyInputs();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => initAllTagifyInputs());
+}
+document.addEventListener('htmx:afterSettle', (e: any) => initAllTagifyInputs(e.detail?.elt || document));
