@@ -630,8 +630,10 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
       div_ [class_ "p-2 rounded-lg bg-fillWeak shrink-0"] $ faSprite_ "user" "regular" "w-4 h-4 text-iconNeutral"
       p_ [class_ "text-sm text-textStrong"] $ toHtml userQuery
     whenJust systemPromptM \systemPrompt ->
-      div_ [class_ "mb-4"] $ panel_ def{icon = Just "terminal", collapsible = Just False} "System Prompt" $
-        div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $ toHtml systemPrompt
+      div_ [class_ "mb-4"]
+        $ panel_ def{icon = Just "terminal", collapsible = Just False} "System Prompt"
+        $ div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"]
+        $ toHtml systemPrompt
     -- Behind the scenes section (tool calls)
     whenJust toolCallsM \toolCalls ->
       unless (null toolCalls)
@@ -712,8 +714,9 @@ aiChatHistoryView_ pid msgs = forM_ (pairUserAssistant msgs) \(u, a) -> do
 aiChatHistoryWithSystemPrompt_ :: Projects.ProjectId -> Text -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryWithSystemPrompt_ pid systemPrompt msgs = do
   div_ [class_ "surface-raised rounded-2xl p-6 max-w-3xl mx-auto w-full mb-4"] do
-    panel_ def{icon = Just "file-text", collapsible = Just False} "System Prompt" $
-      div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $ toHtml systemPrompt
+    panel_ def{icon = Just "file-text", collapsible = Just False} "System Prompt"
+      $ div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"]
+      $ toHtml systemPrompt
   -- Render chat history
   aiChatHistoryView_ pid msgs
 
