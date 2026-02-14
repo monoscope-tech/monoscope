@@ -38,7 +38,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadge_, iconBadgeLg_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadge_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.GitHub qualified as GitHub
 import Relude hiding (ask)
