@@ -448,12 +448,12 @@
   /* Dropdown chevron rotation */
   .dropdown summary svg,
   .dropdown [tabindex] svg,
-  details summary svg {
+  details summary > svg:last-child {
     transition: transform 200ms var(--ease-out-expo);
   }
   .dropdown:has(:focus) summary svg,
   .dropdown[open] summary svg,
-  details[open] summary svg,
+  details[open] summary > svg:last-child,
   .dropdown:has(.dropdown-content:not(.hidden)) [tabindex] svg {
     transform: rotate(180deg);
   }
@@ -1020,7 +1020,7 @@ body, :host {
 @layer custom {
   /* Badge component - solid filled badges */
   .badge {
-    @apply inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textInverse-strong shadow-sm;
+    @apply px-2 py-0.5 /* @apply inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textInverse-strong shadow-sm; */
   }
   /* Badge component - outline badges */
   .badge-outline {
@@ -1393,7 +1393,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-success {
-  @apply bg-fillSuccess-strong text-textSuccess font-medium;
+  @apply bg-fillSuccess-weak text-textSuccess font-medium;
 }
 
 @utility badge-error {

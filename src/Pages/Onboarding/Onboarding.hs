@@ -778,17 +778,6 @@ integrationCard serviceName iconPath isConnected connectUrl = do
     connectionStatusButton isConnected connectUrl
 
 
--- Helper function to render form field with label
-formField :: Text -> Text -> Text -> Text -> Text -> Html ()
-formField labelText inputType inputName inputId inputValue = do
-  div_ [class_ "flex flex-col gap-2"] $ do
-    div_ [class_ "flex w-full items-center gap-1"] $ do
-      span_ [class_ "text-textStrong lowercase first-letter:uppercase"] $ toHtml labelText
-    if inputType == "textarea"
-      then textarea_ [class_ "textarea w-full rounded-lg border border-strokeStrong", type_ "text", name_ inputName, id_ inputId] ""
-      else input_ [class_ "input w-full h-12", type_ inputType, name_ inputName, id_ inputId, value_ inputValue]
-
-
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do
   div_ [class_ "w-xl mx-auto mt-[156px] mb-10"] $ do
@@ -804,14 +793,14 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
             [ class_ "flex flex-col gap-8"
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/phone-emails"
             , hxExt_ "json-enc"
-            , hxVals_ "js:{phoneNumber: document.getElementById('phone').value , emails: getTags()}"
+            , hxVals_ "js:{phoneNumber: document.getElementById('phoneNumber').value , emails: getTags()}"
             , hxTarget_ "#inviteModalContainer"
             , hxSwap_ "innerHTML"
             , hxIndicator_ "#loadingIndicator"
             ]
             $ do
-              formField "Notify phone number" "text" "phoneNumber" "phone" phone
-              formField "Notify the following email address" "textarea" "emails" "emails_input" ""
+              formField_ FieldMd def{inputType = "tel", value = phone} "Notify phone number" "phoneNumber" False Nothing
+              formField_ FieldMd def{inputType = "textarea"} "Notify the following email address" "emails" False Nothing
               div_ [class_ "items-center gap-4 flex"] $ do
                 button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center"] "Proceed"
       let tgs = decodeUtf8 $ AE.encode $ V.toList emails
@@ -819,7 +808,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
         [text|
      document.addEventListener('DOMContentLoaded', function() {
       window.initWhenReady(function() {
-        window.tagify = createTagify('#emails_input');
+        window.tagify = createTagify('#emails');
         window.tagify.addTags($tgs);
       });
     })
@@ -847,9 +836,13 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
       stepIndicator 1 "Tell us a little bit about you" ""
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
         div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
-          mapM_ createInputField [("first Name" :: Text, firstName), ("last Name", lastName), ("company Name", cName)]
-          createSelectField cSize "company Size" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
-          createSelectField fUsFrm "where Did You Hear About Us" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
+          forM_ ([("first Name", "firstName", firstName), ("last Name", "lastName", lastName), ("company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
+            formField_ FieldMd def{value = val} label name True Nothing
+          let createSelectField selected label name (opts :: [(Text, Text)]) = formSelectField_ FieldMd label name True do
+                option_ [value_ ""] ""
+                forM_ opts \(k, v) -> option_ (value_ k : [selected_ selected | selected == k]) $ toHtml v
+          createSelectField cSize "company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
+          createSelectField fUsFrm "where Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
         div_ [class_ "items-center gap-1 flex"] $ do
           button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
@@ -955,26 +948,6 @@ inviteMemberItem email = do
       "remove"
 
 
-createInputField :: (Text, Text) -> Html ()
-createInputField (labelText, value) = do
-  div_ [class_ "flex flex-col gap-1 w-full"] $ do
-    div_ [class_ "flex w-full items-center gap-1"] $ do
-      span_ [class_ " text-textStrong lowercase first-letter:uppercase"] (toHtml labelText)
-      span_ [class_ " text-textWeak"] "*"
-    input_ [class_ "input w-full h-12", type_ "text", name_ $ T.replace " " "" labelText, required_ "required", value_ value]
-
-
-createSelectField :: Text -> Text -> V.Vector (Text, Text) -> Html ()
-createSelectField val labelText options = do
-  div_ [class_ "flex flex-col gap-1 w-full"] $ do
-    div_ [class_ "flex w-full items-center gap-1"] $ do
-      span_ [class_ " text-textStrong lowercase first-letter:uppercase"] $ toHtml labelText
-      span_ [class_ " text-textWeak"] "*"
-    select_ [class_ "select w-full h-12", name_ $ T.replace " " "" labelText, required_ "required"] do
-      option_ [value_ ""] ""
-      forM_ options $ \(key, value) -> option_ (value_ key : [selected_ val | val == key]) $ toHtml value
-
-
 createBinaryField :: Text -> Text -> [Text] -> (Text, Text) -> Html ()
 createBinaryField kind name selectedValues (value, label) = do
   div_ [class_ " items-center gap-3 inline-flex"] $ do
@@ -1003,11 +976,11 @@ stepIndicator step title prevUrl = do
 
 faQ :: Text -> Text -> Html ()
 faQ question answer =
-  div_ [class_ "w-full py-5 flex flex-col group/faq"] $ do
-    button_ [class_ "text-textStrong  flex w-full justify-between items-center hover:text-textStrong cursor-pointer", [__|on click toggle .hidden on the next <div/> then toggle .rotate-180 on <svg/> in me|]] do
+  details_ [class_ "w-full py-5 group/faq"] do
+    summary_ [class_ "text-textStrong flex w-full justify-between items-center hover:text-textStrong cursor-pointer list-none", [__|on click toggle .rotate-180 on <svg/> in me|]] do
       span_ [class_ "text-left pr-4 leading-normal"] $ toHtml question
       faSprite_ "chevron-down" "regular" "h-4 w-4 text-textWeak group-hover/faq:text-textStrong transition-transform duration-200"
-    div_ [class_ "text-textWeak font-medium w-full hidden pt-4 leading-relaxed"] $ toHtml answer
+    div_ [class_ "text-textWeak font-medium w-full pt-4 leading-relaxed"] $ toHtml answer
 
 
 universalIndicator :: Html ()

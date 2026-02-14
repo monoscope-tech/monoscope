@@ -95,7 +95,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (modalCloseButton_, paymentPlanPicker)
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), connectionBadge_, formActionsModal_, formField_, formSelectField_, modal_, panel_, paymentPlanPicker, tagInput_)
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
@@ -553,7 +553,7 @@ renderNotificationOption pid title description value channel notifChannel isConf
           div_ [class_ "flex-1 min-w-0"] do
             h3_ [class_ "text-base font-semibold text-textStrong"] $ toHtml title
             p_ [class_ "text-sm text-textWeak mt-0.5"] $ toHtml description
-        div_ $ integrationStatusBadge_ isConfigured isActive
+        div_ $ connectionBadge_ $ if isActive then "Active" else if isConfigured then "Connected" else "Configure"
 
       -- Test button area and toggle (always rendered to prevent layout shift)
       div_ [class_ "flex items-center justify-between gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
@@ -573,32 +573,14 @@ renderNotificationOption pid title description value channel notifChannel isConf
       div_ [class_ "px-4 pb-4 border-t border-strokeWeak pt-4"] extraContent
 
 
-integrationStatusBadge_ :: Bool -> Bool -> Html ()
-integrationStatusBadge_ isConfigured isActive
-  | isActive = span_ [class_ "badge badge-success badge-sm gap-1 shrink-0"] do
-      faSprite_ "circle-check" "solid" "h-3 w-3"
-      "Active"
-  | isConfigured = span_ [class_ "badge badge-ghost badge-sm gap-1 shrink-0"] do
-      faSprite_ "circle" "regular" "h-3 w-3"
-      "Connected"
-  | otherwise = span_ [class_ "badge badge-ghost badge-sm shrink-0"] "Configure"
-
-
 renderEmailIntegration :: Html ()
 renderEmailIntegration = do
-  div_ [class_ "flex flex-col gap-2"] $ do
-    p_ [class_ "text-xs text-textWeak mb-2"] "Project members are automatically included via the @everyone team. Add additional emails below:"
-    div_ [class_ "flex w-full items-center gap-1"] $ do
-      span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Additional email addresses"
-    input_ [class_ "input rounded-lg w-full border border-strokeStrong", term "pattern" "^[a-zA-Z0-9._+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$", type_ "text", id_ "emails_input"]
+  p_ [class_ "text-xs text-textWeak mb-2"] "Project members are automatically included via the @everyone team. Add additional emails below:"
+  formField_ FieldSm def{extraAttrs = [term "pattern" "^[a-zA-Z0-9._+\\-]+@[a-zA-Z0-9.\\-]+\\.[a-zA-Z]{2,}$"]} "Additional email addresses" "emails_input" False Nothing
 
 
 renderWhatsappIntegration :: Html ()
-renderWhatsappIntegration = do
-  div_ [class_ "flex flex-col gap-2"] $ do
-    div_ [class_ "flex w-full items-center gap-1"] $ do
-      span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Add phone numbers"
-    input_ [class_ "input rounded-lg w-full border border-strokeStrong", term "pattern" "^\\+?[1-9]\\d{6,14}$", type_ "text", id_ "phones_input"]
+renderWhatsappIntegration = formField_ FieldSm def{extraAttrs = [term "pattern" "^\\+?[1-9]\\d{6,14}$"]} "Phone numbers" "phones_input" False Nothing
 
 
 renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> V.Vector Text -> Html ()
@@ -616,11 +598,7 @@ renderSlackIntegration envCfg pid slackData channels existingChannels = do
         when (isNothing sd.teamName) do
           p_ [class_ "text-xs text-textWeak ml-7"] "Reconnect to see workspace name"
 
-      div_ [class_ "flex flex-col gap-2 mb-4"] do
-        div_ [class_ "flex w-full items-center gap-1"] do
-          span_ [class_ "text-textStrong lowercase first-letter:uppercase"] "Slack channels"
-          span_ [class_ "text-xs text-textWeak ml-2"] "(for @everyone team)"
-        input_ [class_ "input rounded-lg w-full border border-strokeStrong", type_ "text", id_ "slack-channels-input"]
+      div_ [class_ "mb-4"] $ formField_ FieldSm def "Slack channels (for @everyone team)" "slack-channels-input" False Nothing
 
       div_ [class_ "flex items-center gap-2"] do
         a_ [target_ "_blank", class_ "btn btn-sm btn-outline", href_ oauthUrl] "Reconnect / Change Workspace"
@@ -647,7 +625,7 @@ renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . maybe disc
       p_ [class_ "text-sm text-textSuccess flex items-center gap-2"] $ faSprite_ "circle-check" "regular" "h-4 w-4" >> "Connected"
       button_ [class_ "btn btn-sm btn-outline mt-2", hxPost_ [text|/p/$pid/integrations/pagerduty/disconnect|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] "Disconnect"
     disconnectedUI = form_ [class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/integrations/pagerduty|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] do
-      input_ [class_ "input rounded-lg w-full border border-strokeStrong", type_ "text", name_ "integrationKey", placeholder_ "Events API v2 Integration Key"]
+      formField_ FieldSm def{placeholder = "Events API v2 Integration Key"} "Integration Key" "integrationKey" False Nothing
       p_ [class_ "text-xs text-textWeak"] "Get from: PagerDuty → Services → Integrations → Events API v2"
       button_ [class_ "btn btn-sm btn-outline w-max", type_ "submit"] "Connect"
 
@@ -882,9 +860,7 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
         div_ [class_ "flex flex-col gap-2"] do
           h2_ [class_ "text-textStrong text-3xl font-semibold"] "Teams"
           p_ [class_ "text-textWeak text-sm"] "Manage your project teams and their notification channels"
-        label_ [class_ "btn btn-primary btn-sm text-white", Lucid.for_ "n-new-team-modal"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
-        input_ [type_ "checkbox", id_ "n-new-team-modal", class_ "modal-toggle"]
-        teamModal pid Nothing whiteList channelWhiteList discordWhiteList False
+        teamModal pid Nothing whiteList channelWhiteList discordWhiteList False $ span_ [class_ "btn btn-primary btn-sm text-white"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Team")
 
       unless (V.null teams) do
         let renderTeamNameCol team = nameCell pid team.name team.description team.handle
@@ -1043,9 +1019,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
         lazySection_ "monitors-section" "bell" "Alerts" "Search alerts..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
         lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText team.id)
         lazySection_ "services-section" "server" "Services" "Search services..." ""
-    unless isEveryone do
-      input_ [type_ "checkbox", id_ $ team.handle <> "-new-team-modal", class_ "modal-toggle", [__|on closeModal from body set my.checked to false|]]
-      teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True
+    unless isEveryone $ teamModal pid (Just team) whiteList channelWhiteList discordWhiteList True mempty
 
 
 teamPageNF :: Projects.ProjectId -> Text -> Html ()
@@ -1531,20 +1505,10 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
           -- Project details card
           div_ [class_ "surface-raised rounded-2xl p-4 space-y-4"] do
             div_ [class_ "space-y-4"] do
-              div_ [class_ "space-y-1.5"] do
-                label_ [class_ "flex items-center gap-1 text-xs font-medium text-textWeak", Lucid.for_ "title"] do
-                  "Project Name"
-                  span_ [class_ "text-textError"] "*"
-                input_ [class_ "input input-bordered input-sm w-full", type_ "text", id_ "title", name_ "title", value_ cp.title, required_ "required", placeholder_ "My Project"]
-
-              div_ [class_ "space-y-1.5"] do
-                label_ [class_ "text-xs font-medium text-textWeak", Lucid.for_ "timezone"] "Timezone"
-                select_ [name_ "timeZone", id_ "timezone", class_ "select select-bordered select-sm w-full"] do
-                  option_ [value_ cp.timeZone] $ toHtml cp.timeZone
-
-              div_ [class_ "space-y-1.5"] do
-                label_ [class_ "text-xs font-medium text-textWeak", Lucid.for_ "description"] "Description"
-                textarea_ [class_ "textarea textarea-bordered w-full text-sm", rows_ "3", placeholder_ "What is this project about?", id_ "description", name_ "description"] $ toHtml cp.description
+              formField_ FieldSm def{value = cp.title, placeholder = "My Project"} "Project Name" "title" True Nothing
+              formSelectField_ FieldSm "Timezone" "timeZone" False do
+                option_ [value_ cp.timeZone] $ toHtml cp.timeZone
+              formField_ FieldSm def{inputType = "textarea", value = cp.description, placeholder = "What is this project about?", extraAttrs = [rows_ "3"]} "Description" "description" False Nothing
 
           -- Alert configuration card
           alertConfiguration (isJust cp.endpointAlerts) (isJust cp.errorAlerts) (isJust cp.weeklyNotifs) (isJust cp.dailyNotifs)
@@ -1558,7 +1522,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
 
       script_ do
         [text|
-           const timezoneSelect = document.getElementById("timezone");
+           const timezoneSelect = document.getElementById("timeZone");
            const timeZones = Intl.supportedValuesOf('timeZone');
            timeZones.forEach((tz) => {
              const option = document.createElement("option");
@@ -1641,82 +1605,72 @@ alertConfiguration newEndpointsAlerts errorAlerts weeklyReportsAlerts dailyRepor
 
 
 -- Main Modal Component
-teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Bool -> Html ()
-teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView = do
-  let name = maybe "" (.name) team
+teamModal :: Projects.ProjectId -> Maybe ProjectMembers.TeamVM -> Text -> Text -> Text -> Bool -> Html () -> Html ()
+teamModal pid team whiteList channelWhiteList discordWhiteList isInTeamView trigger = do
+  let encodeField f = decodeUtf8 $ AE.encode $ maybe [] f team
+      name = maybe "" (.name) team
       handle = maybe "" (.handle) team
       description = maybe "" (.description) team
       isEveryoneTeam = maybe False (.is_everyone) team
       prefix = maybe "n" (.handle) team
       modalId = prefix <> "-new-team-modal"
       mkId suffix = prefix <> "-" <> suffix
-      membersTags = decodeUtf8 $ AE.encode $ maybe [] (\t -> UUID.toText . (.memberId) <$> t.members) team
-      notifEmails = decodeUtf8 $ AE.encode $ maybe [] (.notify_emails) team
-      slackChannels = decodeUtf8 $ AE.encode $ maybe [] (.slack_channels) team
-      discordChannels = decodeUtf8 $ AE.encode $ maybe [] (.discord_channels) team
-      pagerdutyServicesTags = decodeUtf8 $ AE.encode $ maybe [] (.pagerduty_services) team
+      membersTags = encodeField \t -> UUID.toText . (.memberId) <$> t.members
+      notifEmails = encodeField (.notify_emails)
+      slackChannels = encodeField (.slack_channels)
+      discordChannels = encodeField (.discord_channels)
+      pagerdutyServicesTags = encodeField (.pagerduty_services)
+      field_ lbl fid attrs = formField_ FieldSm def lbl (mkId fid) False $ Just $ input_ $ [class_ "input w-full", type_ "text", id_ $ mkId fid, name_ fid] <> attrs
+      notifField_ ic lbl fid ph = formField_ FieldSm def{icon = Just ic} lbl (mkId fid) False $ Just $ tagInput_ (mkId fid) ph
 
-  let teamSection_ title content = div_ [class_ "space-y-4"] do
-        _ <- h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider"] title
-        content
+  modal_ modalId trigger do
+    form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{...getTagValues(`$prefix`)}|], hxSwap_ "none", class_ "flex flex-col gap-5 max-w-4xl w-full"] do
+      whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
+      div_ [] do
+        h2_ [class_ "text-xl font-semibold text-textStrong flex items-center gap-3"] (faSprite_ "users" "solid" "w-5 h-5 text-iconNeutral shrink-0" >> toHtml (if isJust team then "Edit Team" else "Create New Team"))
+        p_ [class_ "text-sm text-textWeak mt-1"] "Set up team details, members, and notification channels"
 
-  let field_ inputId lbl input = fieldset_ [class_ "fieldset"] (label_ [class_ "label text-sm font-medium", Lucid.for_ inputId] lbl >> input)
-  let fieldIcon_ icon inputId lbl input = fieldset_ [class_ "fieldset p-4"] do
-        _ <- label_ [class_ "label text-sm font-medium flex items-center gap-2 mb-2", Lucid.for_ inputId] (faSprite_ icon "solid" "w-4 h-4 text-iconNeutral shrink-0" >> lbl)
-        input
-  let tagInput_ inputId ph = textarea_ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph] ""
+      div_ [class_ "flex-1 overflow-y-auto max-h-[60vh] space-y-6"] do
+        panel_ def{icon = Just "circle-info", collapsible = Just True} "Details" do
+          div_ [class_ "space-y-4"] do
+            div_ [class_ "grid grid-cols-2 gap-4"] do
+              field_ "Team Name" "teamName" $ [placeholder_ "e.g. Backend Team", value_ name, required_ "true"] <> [disabled_ "" | isEveryoneTeam]
+              field_ "Handle" "teamHandle" $ [placeholder_ "e.g. backend-team", value_ handle, required_ "true", pattern_ "^[a-z][a-z0-9-]*$"] <> [disabled_ "" | isEveryoneTeam]
+            formField_ FieldSm def "Description" (mkId "teamDescription") False $ Just $ textarea_ [class_ "textarea w-full min-h-20 resize-none", id_ $ mkId "teamDescription", name_ "teamDescription", placeholder_ "What does this team do?"] $ toHtml description
 
-  div_ [class_ "modal", role_ "dialog", style_ "--color-base-100: var(--color-fillWeaker)"] do
-    label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
-    div_ [class_ "modal-box w-full max-w-2xl flex flex-col"] do
-      modalCloseButton_ modalId
-      form_ [hxPost_ $ "/p/" <> pid.toText <> "/manage_teams?" <> if isInTeamView then "teamView=true" else "", hxExt_ "json-enc", hxVals_ [text|js:{...getTagValues(`$prefix`)}|], hxSwap_ "none", class_ "flex flex-col h-full"] do
-        whenJust ((.id) <$> team) \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
+        unless isEveryoneTeam
+          $ panel_ def{icon = Just "users", collapsible = Just True} "Members"
+          $ formField_ FieldSm def "Team Members" (mkId "team-members-input") False
+          $ Just
+          $ tagInput_ (mkId "team-members-input") "Start typing to search members..."
 
-        div_ [class_ "pb-6"] do
-          h2_ [class_ "text-xl font-semibold text-textStrong flex items-center gap-3"] (faSprite_ "users" "solid" "w-5 h-5 text-iconNeutral shrink-0" >> toHtml (if isJust team then "Edit Team" else "Create New Team"))
-          p_ [class_ "text-sm text-textWeak mt-2"] "Set up team details, members, and notification channels"
+        when isEveryoneTeam do
+          div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong"] do
+            faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
+            "The @everyone team automatically includes all project members. Configure additional notification channels below, or use the "
+            a_ [href_ ("/p/" <> pid.toText <> "/integrations"), class_ "text-textBrand underline"] "Integrations page"
+            " to set up Slack, Discord, and other project-wide channels."
 
-        div_ [class_ "flex-1 overflow-y-auto max-h-[60vh] -mx-6 px-6 space-y-8"] do
-          teamSection_ "Details" do
-            div_ [class_ "rounded-lg bg-bgRaised border border-strokeWeak p-4 space-y-4"] do
-              div_ [class_ "grid grid-cols-2 gap-4"] do
-                field_ (mkId "team-name") "Team Name" $ input_ $ [class_ "input w-full", type_ "text", id_ $ mkId "team-name", name_ "teamName", placeholder_ "e.g. Backend Team", value_ name, required_ "true"] <> [disabled_ "" | isEveryoneTeam]
-                field_ (mkId "team-handle") "Handle" $ input_ $ [class_ "input w-full", type_ "text", id_ $ mkId "team-handle", name_ "teamHandle", placeholder_ "e.g. backend-team", value_ handle, required_ "true", pattern_ "^[a-z][a-z0-9-]*$"] <> [disabled_ "" | isEveryoneTeam]
-              field_ (mkId "team-description") "Description" $ textarea_ [class_ "textarea w-full min-h-20 resize-none", id_ $ mkId "team-description", name_ "teamDescription", placeholder_ "What does this team do?"] $ toHtml description
+        panel_ def{icon = Just "bell", collapsible = Just True, subtitle = Just "Configure where alerts are sent"} "Notifications" do
+          div_ [class_ "divide-y divide-strokeWeak [&>*]:py-3"] do
+            forM_ ([("envelope", "Email", "notif-emails-input", "Add email addresses..."), ("slack", "Slack", "slack-channels-input", "Add Slack channels..."), ("discord", "Discord", "discord-channels-input", "Add Discord channels...")] :: [(Text, Text, Text, Text)]) \(ic, lbl, fid, ph) -> notifField_ ic lbl fid ph
+            formField_ FieldSm def{icon = Just "pager"} "PagerDuty" (mkId "pagerduty-services-input") False $ Just do
+              tagInput_ (mkId "pagerduty-services-input") "Add integration keys..."
+              details_ [class_ "group mt-2"] do
+                summary_ [class_ "text-xs text-textWeak hover:text-textStrong cursor-pointer list-none flex items-center gap-1.5"] do
+                  faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform rotate-180 group-open:rotate-270"
+                  "How to get your integration key"
+                ol_ [class_ "text-xs text-textWeak space-y-1 mt-2 ml-4 list-decimal list-inside"] do
+                  li_ "Open PagerDuty → Services"
+                  li_ "Select your service → Integrations tab"
+                  li_ "Add 'Events API v2' integration"
+                  li_ "Copy the Integration Key"
 
-          unless isEveryoneTeam $ teamSection_ "Members" do
-            div_ [class_ "rounded-lg bg-bgRaised border border-strokeWeak p-4"] do
-              field_ (mkId "team-members-input") "Team Members" $ tagInput_ (mkId "team-members-input") "Start typing to search members..."
-
-          when isEveryoneTeam do
-            div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong"] do
-              faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
-              "The @everyone team automatically includes all project members. Configure additional notification channels below, or use the "
-              a_ [href_ ("/p/" <> pid.toText <> "/integrations"), class_ "text-textBrand underline"] "Integrations page"
-              " to set up Slack, Discord, and other project-wide channels."
-
-          teamSection_ "Notifications" do
-            p_ [class_ "text-xs text-textWeak mt-1"] "Configure where alerts are sent"
-            div_ [class_ "rounded-lg bg-bgRaised border border-strokeWeak divide-y divide-strokeWeak"] do
-              fieldIcon_ "envelope" (mkId "notif-emails-input") "Email" $ tagInput_ (mkId "notif-emails-input") "Add email addresses..."
-              fieldIcon_ "slack" (mkId "slack-channels-input") "Slack" $ tagInput_ (mkId "slack-channels-input") "Add Slack channels..."
-              fieldIcon_ "discord" (mkId "discord-channels-input") "Discord" $ tagInput_ (mkId "discord-channels-input") "Add Discord channels..."
-              fieldIcon_ "pager" (mkId "pagerduty-services-input") "PagerDuty" do
-                tagInput_ (mkId "pagerduty-services-input") "Add integration keys..."
-                details_ [class_ "group mt-2"] do
-                  summary_ [class_ "text-xs text-textWeak hover:text-textStrong cursor-pointer list-none flex items-center gap-1.5"] do
-                    faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
-                    "How to get your integration key"
-                  ol_ [class_ "text-xs text-textWeak space-y-1 mt-2 ml-4 list-decimal list-inside"] do
-                    li_ "Open PagerDuty → Services"
-                    li_ "Select your service → Integrations tab"
-                    li_ "Add 'Events API v2' integration"
-                    li_ "Copy the Integration Key"
-
-        div_ [class_ "pt-6 mt-6 border-t border-strokeWeak flex justify-end gap-3"] do
-          label_ [Lucid.for_ modalId, class_ "btn btn-outline"] "Cancel"
-          button_ [class_ "btn btn-primary", type_ "submit"] $ faSprite_ "check" "solid" "w-4 h-4" >> " " >> if isJust team then "Save Changes" else "Create Team"
+      formActionsModal_ modalId
+        $ button_ [class_ "btn btn-primary", type_ "submit"]
+        $ faSprite_ "check" "solid" "w-4 h-4"
+        >> " "
+        >> if isJust team then "Save Changes" else "Create Team"
   script_
     [text|
 function getTagValues(prefix) {

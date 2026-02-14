@@ -53,7 +53,7 @@ import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), formField_, resizer_)
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
@@ -944,7 +944,7 @@ alertConfigurationForm_ project alertM teams = do
         , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
         , [__|on click set #create-alert-toggle.checked to false|]
         ]
-        $ faSprite_ "xmark" "regular" "w-4 h-4 text-textWeak"
+        $ faSprite_ "xmark" "regular" "w-3 h-3 text-textWeak"
 
     -- Form content wrapper with scrolling
     div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
@@ -962,18 +962,8 @@ alertConfigurationForm_ project alertM teams = do
           |]
         ]
         do
-          -- Alert name field (more compact)
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]
-          fieldset_ [class_ "fieldset"] do
-            label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
-            input_
-              [ type_ "text"
-              , name_ "title"
-              , value_ $ maybe "" (\x -> x.alertConfig.title) alertM
-              , placeholder_ "e.g. High error rate on checkout API"
-              , class_ "input input-sm w-full"
-              , required_ ""
-              ]
+          formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Alert name" "title" True Nothing
 
           -- Monitor Schedule section (shared component)
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM

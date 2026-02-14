@@ -61,7 +61,7 @@ import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (emptyState_, resizer_, statBox_)
+import Pages.Components (PanelCfg (..), emptyState_, panel_, resizer_, statBox_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -629,13 +629,9 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
     div_ [class_ "flex items-start gap-3 mb-4 pb-4 border-b border-strokeWeak"] do
       div_ [class_ "p-2 rounded-lg bg-fillWeak shrink-0"] $ faSprite_ "user" "regular" "w-4 h-4 text-iconNeutral"
       p_ [class_ "text-sm text-textStrong"] $ toHtml userQuery
-    -- System prompt section (collapsed by default)
     whenJust systemPromptM \systemPrompt ->
-      details_ [class_ "mb-4 border border-strokeWeak rounded-lg"] do
-        summary_ [class_ "cursor-pointer px-4 py-2 text-sm text-textWeak hover:bg-fillWeaker list-none flex items-center gap-2"] do
-          faSprite_ "terminal" "regular" "w-4 h-4"
-          "System Prompt"
-        div_ [class_ "px-4 py-3 border-t border-strokeWeak bg-fillWeaker/50 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $ toHtml systemPrompt
+      div_ [class_ "mb-4"] $ panel_ def{icon = Just "terminal", collapsible = Just False} "System Prompt" $
+        div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $ toHtml systemPrompt
     -- Behind the scenes section (tool calls)
     whenJust toolCallsM \toolCalls ->
       unless (null toolCalls)
@@ -715,13 +711,9 @@ aiChatHistoryView_ pid msgs = forM_ (pairUserAssistant msgs) \(u, a) -> do
 -- | Render chat history with system prompt as first message
 aiChatHistoryWithSystemPrompt_ :: Projects.ProjectId -> Text -> [Issues.AIChatMessage] -> Html ()
 aiChatHistoryWithSystemPrompt_ pid systemPrompt msgs = do
-  -- Render system prompt as first message (collapsed by default)
   div_ [class_ "surface-raised rounded-2xl p-6 max-w-3xl mx-auto w-full mb-4"] do
-    details_ [class_ ""] do
-      summary_ [class_ "cursor-pointer flex items-center gap-2 text-sm font-medium text-textStrong hover:text-textBrand transition-colors"] do
-        faSprite_ "file-text" "regular" "w-4 h-4 text-iconInformation"
-        "System Prompt"
-      div_ [class_ "mt-3 text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto border border-strokeWeak rounded-lg p-4 bg-fillWeaker/50"] $ toHtml systemPrompt
+    panel_ def{icon = Just "file-text", collapsible = Just False} "System Prompt" $
+      div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"] $ toHtml systemPrompt
   -- Render chat history
   aiChatHistoryView_ pid msgs
 

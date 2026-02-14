@@ -85,6 +85,7 @@ import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components (FieldCfg (..), FieldSize (..), formField_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -191,14 +192,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       , hxTrigger_ "submit"
       , hxTarget_ "#pageTitleText"
       ]
-    $ fieldset_ [class_ "fieldset min-w-xs"] do
-      label_ [class_ "label"] "Dashboard Title"
-      input_ [class_ "input", name_ "title", placeholder_ "Insert new title", value_ $ dashTitle dashVM.title]
-      label_ [class_ "label mt-2"] "Folder"
-      input_ [class_ "input font-mono text-sm", name_ "fileDir", placeholder_ "reports/", value_ $ folderFromPath dashVM.filePath]
-      div_ [class_ "mt-3 flex justify-end gap-2"] do
-        label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
-        button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+    $ do
+      formField_ FieldSm def{value = dashTitle dashVM.title, placeholder = "Insert new title"} "Dashboard Title" "title" False Nothing
+      formField_ FieldSm def{value = folderFromPath dashVM.filePath, placeholder = "reports/"} "Folder" "fileDir" False Nothing
+      Components.formActionsModal_ "pageTitleModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
   -- Modal for renaming tab (only shown for dashboards with tabs)
   whenJust dash.tabs \tabs -> do
@@ -213,12 +210,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         , hxSwap_ "none"
         , hxTrigger_ "submit"
         ]
-      $ fieldset_ [class_ "fieldset min-w-xs"] do
-        label_ [class_ "label"] "Tab Name"
-        input_ [class_ "input", name_ "newName", placeholder_ "Enter tab name", value_ activeTabName]
-        div_ [class_ "mt-3 flex justify-end gap-2"] do
-          label_ [Lucid.for_ "tabRenameModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
-          button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+      $ do
+        formField_ FieldSm def{value = activeTabName, placeholder = "Enter tab name"} "Tab Name" "newName" False Nothing
+        Components.formActionsModal_ "tabRenameModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
   -- Variable picker modal - auto-opens when required vars are unset (from tab.requires or variable.required)
   whenJust dash.variables \variables -> do
@@ -372,8 +366,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     });
   });
     |]
-  let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
-      widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
+  let pidText = pid.toText
+      dashIdText = dashId.toText
+      activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
+      widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
@@ -422,6 +418,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     script_
       [text|
       document.addEventListener('DOMContentLoaded', () => {
+        window.interpolateVarTemplates = window.interpolateVarTemplates || function() {};
         GridStack.renderCB = function(el, w) {
           el.innerHTML = w.content;
           const scripts = Array.from(el.querySelectorAll('script'));
@@ -546,10 +543,22 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         // Auto-expand widget if expand param is in URL
         const expandWId = new URLSearchParams(window.location.search).get('expand');
         if (expandWId) {
-          setTimeout(() => {
-            const expandBtn = document.querySelector('[data-expand-btn="' + expandWId + '"]');
-            if (expandBtn) expandBtn.click();
-          }, 100);
+          const drawer = document.getElementById('global-data-drawer');
+          const drawerContent = document.getElementById('global-data-drawer-content');
+          const loaderTmp = document.getElementById('loader-tmp');
+          if (drawer && drawerContent) {
+            drawer.checked = true;
+            document.body.classList.add('overflow-hidden');
+            if (loaderTmp) drawerContent.innerHTML = loaderTmp.innerHTML;
+            fetch('/p/$pidText/dashboards/$dashIdText/widgets/' + expandWId + '/expand')
+              .then(r => r.text())
+              .then(html => {
+                drawerContent.innerHTML = html;
+                htmx.process(drawerContent);
+                if (typeof _hyperscript !== 'undefined') _hyperscript.processNode(drawerContent);
+                if (typeof window.evalScriptsFromContent === 'function') window.evalScriptsFromContent(drawerContent);
+              });
+          }
         }
       });
 
@@ -1265,7 +1274,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
     div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
-      widgetAlertConfig_ pid alertFormId alertEndpoint widgetPreviewId sourceWid widgetToUse
+      widgetAlertConfig_ pid alertFormId alertEndpoint wid sourceWid widgetToUse
 
 
 -- | Widget alert configuration form (unified with Log Explorer form structure)
@@ -1293,28 +1302,20 @@ widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget 
       input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
       input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of Widget.WTTimeseries -> "timeseries"; Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
 
-      -- Alert name field
-      fieldset_ [class_ "fieldset"] do
-        label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
-        input_ [type_ "text", name_ "title", value_ defaultTitle, placeholder_ "e.g. High error rate alert", class_ "input input-sm w-full", required_ ""]
-
+      Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate alert"} "Alert name" "title" True Nothing
       -- Monitor Schedule section (shared component)
       Alerts.monitorScheduleSection_ True 5 5 (Just "threshold_exceeded") (Just chartTargetId)
-
       -- Thresholds section (shared component)
       Alerts.thresholdsSection_ (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
-
       -- Widget-specific: Show threshold lines option
+      let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
+          isOnBreach = widget.showThresholdLines == Just "on_breach"
+          isNever = widget.showThresholdLines == Just "never"
       div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-3"] do
-        fieldset_ [class_ "fieldset"] do
-          label_ [class_ "label text-xs"] "Show threshold lines on chart"
-          select_ [name_ "showThresholdLines", class_ "select select-sm w-full"] do
-            let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
-                isOnBreach = widget.showThresholdLines == Just "on_breach"
-                isNever = widget.showThresholdLines == Just "never"
-            option_ ([value_ "always"] <> [selected_ "" | isAlways]) "Always"
-            option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
-            option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
+        Components.formSelectField_ Components.FieldSm "Show threshold lines on chart" "showThresholdLines" False do
+          option_ ([value_ "always"] <> [selected_ "" | isAlways]) "Always"
+          option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
+          option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
       -- Notification Settings section (shared component) - empty teams, users can configure after creation
       Alerts.notificationSettingsSection_ Nothing Nothing Nothing True V.empty V.empty alertFormId
@@ -1533,31 +1534,12 @@ dashboardsGet_ dg = do
             renderDashboardListItem False tmplItemClass (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon dashTmpl.preview
 
       div_ [class_ "w-5/7 px-3 py-5 h-full overflow-y-scroll "] do
-        div_ [class_ "flex items-end justify-between gap-2"] do
-          div_ [class_ "flex items-center w-full justify-between gap-2"] do
-            label_ [class_ "flex flex-col gap-1 w-full"] do
-              span_ [class_ "text-sm font-medium"] "Dashboard name"
-              input_
-                [ type_ "text"
-                , class_ "input input-sm w-full shrink-1"
-                , placeholder_ "Dashboard Title"
-                , name_ "title"
-                , required_ "required"
-                ]
-            label_ [class_ "flex flex-col gap-1 w-full"] do
-              span_ [class_ "text-sm font-medium"] "Teams"
-              input_
-                [ type_ "text"
-                , class_ "input input-sm w-full shrink-1"
-                , id_ "teamHandlesInput"
-                , name_ "teams"
-                , placeholder_ "Add teams"
-                ]
-            label_ [class_ "flex flex-col gap-1 w-full"] do
-              span_ [class_ "text-sm font-medium"] "Folder"
-              input_ [type_ "text", class_ "input input-sm w-full font-mono", name_ "fileDir", placeholder_ "reports/"]
-
-          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
+        div_ [class_ "flex items-end gap-2"] do
+          div_ [class_ "flex w-full gap-2"] do
+            formField_ FieldSm def{placeholder = "Dashboard Title"} "Dashboard name" "title" True Nothing
+            formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False Nothing
+            formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
+          div_ [class_ "shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
         div_ [class_ "py-2 border-b border-b-strokeWeak"] do
           span_ [class_ "text-sm "] "Using "
           span_ [class_ "text-sm font-medium", id_ "dItemTitle"] "Custom Dashboard"

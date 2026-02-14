@@ -9,12 +9,6 @@ module Pages.Monitors (
   alertTeamDeleteH,
   AlertUpsertForm (..),
   Alert (..),
-  -- Shared alert UI helpers
-  thresholdInput_,
-  recoveryInput_,
-  directionSelect_,
-  frequencySelect_,
-  collapsibleSection_,
   -- Shared alert section components
   monitorScheduleSection_,
   thresholdsSection_,
@@ -42,6 +36,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), formCheckbox_, formField_, formSelectField_, panel_)
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
@@ -321,62 +316,6 @@ alertTeamDeleteH pid monitorId teamId = do
   addRespHeaders $ AlertNoContent ""
 
 
--- Shared Alert UI Helpers
-
-thresholdInput_ :: Text -> Text -> Text -> Bool -> Text -> [Attribute] -> Maybe Double -> Html ()
-thresholdInput_ nm color lbl req inputCls extraAttrs vM = fieldset_ [class_ "fieldset flex-1 min-w-0"] do
-  label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] do
-    div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] ""
-    span_ [class_ "font-medium"] $ toHtml lbl
-    when req $ span_ [class_ "text-textWeak"] "*"
-  div_ [class_ "relative"] do
-    input_ $ [type_ "number", name_ nm, id_ nm, class_ $ "input w-full " <> inputCls <> " pr-14"] <> [required_ "" | req] <> [value_ (show v) | Just v <- [vM]] <> extraAttrs
-    span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
-
-
-recoveryInput_ :: Text -> Text -> Text -> Text -> Maybe Double -> Html ()
-recoveryInput_ nm color lbl inputCls vM = fieldset_ [class_ "fieldset flex-1 min-w-0"] do
-  label_ [class_ "label flex items-center gap-1.5 text-xs mb-1"] $ div_ [class_ $ "w-1.5 h-1.5 rounded-full " <> color] "" >> span_ [class_ "font-medium"] (toHtml lbl)
-  div_ [class_ "relative"] do
-    input_ $ [type_ "number", name_ nm, class_ $ "input w-full " <> inputCls <> " pr-14", placeholder_ "Same as trigger"] <> [value_ (show v) | Just v <- [vM]]
-    span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] "events"
-
-
-directionSelect_ :: Bool -> Text -> Html ()
-directionSelect_ belowSelected selectCls = fieldset_ [class_ "fieldset flex-1 min-w-0"] do
-  label_ [class_ "label text-xs font-medium mb-1"] "Trigger condition"
-  select_ [name_ "direction", class_ $ "select w-full " <> selectCls] do
-    option_ (value_ "above" : [selected_ "" | not belowSelected]) "Above threshold"
-    option_ (value_ "below" : [selected_ "" | belowSelected]) "Below threshold"
-
-
-frequencySelect_ :: Int -> Bool -> Text -> Html ()
-frequencySelect_ defaultMins isByos selectCls = fieldset_ [class_ "fieldset flex-1 min-w-0"] do
-  label_ [class_ "label text-xs"] "Check interval"
-  select_ [name_ "frequency", class_ $ "select w-full " <> selectCls] $ forM_ timeOpts mkOpt
-  where
-    timeOpts :: [(Int, Text)]
-    timeOpts = [(1, "1 minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "1 hour"), (360, "6 hours"), (720, "12 hours"), (1440, "1 day")]
-    mkOpt (m, l) = option_ ([value_ (show m <> "m")] <> [disabled_ "" | not isByos && m < 5] <> [selected_ "" | m == defaultMins]) ("Every " <> toHtml l)
-
-
-collapsibleSection_ :: Text -> Maybe Text -> Html () -> Html ()
-collapsibleSection_ title subtitleM content =
-  details_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    summary_
-      [ class_ "p-4 cursor-pointer list-none flex items-center justify-between gap-2"
-      , [__|on click toggle .rotate-180 on the next <svg/> in me|]
-      ]
-      do
-        div_ [class_ "flex items-center gap-2"] do
-          span_ [class_ "font-medium text-sm"] $ toHtml title
-          whenJust subtitleM $ span_ [class_ "text-xs text-textWeak"] . toHtml
-        faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral transition-transform duration-150"
-    div_ [class_ "px-4 pb-4"] content
-
-
--- | Shared Monitor Schedule section for alert forms
--- Parameters: isByos, defaultFrequency, defaultTimeWindow, conditionType, chartTargetId
 monitorScheduleSection_ :: Bool -> Int -> Int -> Maybe Text -> Maybe Text -> Html ()
 monitorScheduleSection_ isByos defaultFrequency defaultTimeWindow conditionType chartTargetIdM = do
   let timeOpts :: [(Int, Text)]
@@ -390,129 +329,86 @@ monitorScheduleSection_ isByos defaultFrequency defaultTimeWindow conditionType 
       chartUpdateAttrM = case chartTargetIdM of
         Just chartId -> Just $ term "_" [text|on change set chart to document.getElementById('${chartId}') if chart exists then call chart.updateRollup(my.value) end|]
         Nothing -> Just [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
-  div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ "clock" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [class_ "text-sm font-medium text-textStrong"] "Monitor Schedule"
-      input_ [type_ "checkbox", class_ "hidden peer", checked_]
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-    div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
-      fieldset_ [class_ "fieldset flex-1 min-w-0"] do
-        label_ [class_ "label text-xs"] "Execute the query"
-        select_ [name_ "frequency", class_ "select select-sm w-full"] $ forM_ timeOpts mkFreqOpt
-      fieldset_ [class_ "fieldset flex-1 min-w-0"] do
-        label_ [class_ "label text-xs"] "Include rows from"
-        select_ ([name_ "timeWindow", class_ "select select-sm w-full", id_ "timeWindow"] <> maybeToList chartUpdateAttrM) $ forM_ timeOpts mkTimeOpt
-      fieldset_ [class_ "fieldset flex-1 min-w-0"] do
-        label_ [class_ "label text-xs"] "Notify me when"
-        select_ [name_ "conditionType", class_ "select select-sm w-full", id_ "condType", [__|on change if my value == 'threshold_exceeded' then remove .hidden from #thresholds else add .hidden to #thresholds end|]] do
+  panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
+    div_ [class_ "flex gap-2 py-2"] do
+      formSelectField_ FieldSm "Execute the query" "frequency" False $ forM_ timeOpts mkFreqOpt
+      formField_ FieldSm def "Include rows from" "timeWindow" False
+        $ Just (select_ ([class_ "select select-bordered select-sm w-full", name_ "timeWindow", id_ "timeWindow"] <> maybeToList chartUpdateAttrM) $ forM_ timeOpts mkTimeOpt)
+      formField_ FieldSm def "Notify me when" "conditionType" False
+        $ Just
+        $ select_ [name_ "conditionType", class_ "select select-bordered select-sm w-full", id_ "condType", [__|on change if my value == 'threshold_exceeded' then set #thresholds.open to true else set #thresholds.open to false end|]] do
           option_ ([value_ "threshold_exceeded"] <> [selected_ "" | isThresholdType]) "threshold is exceeded"
           option_ ([value_ "has_matches"] <> [selected_ "" | not isThresholdType]) "the query has any results"
 
 
--- | Shared Thresholds section for alert forms
--- Parameters: chartTargetId, alertThreshold, warningThreshold, triggerLessThan, alertRecovery, warningRecovery
 thresholdsSection_ :: Maybe Text -> Maybe Double -> Maybe Double -> Bool -> Maybe Double -> Maybe Double -> Html ()
 thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessThan alertRecoveryM warningRecoveryM = do
   let chartUpdateAttr = case chartTargetIdM of
         Just chartId -> term "_" [text|on input set chart to document.getElementById('${chartId}') if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
         Nothing -> [__|on input set chart to #visualization-widget if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
-  div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden", id_ "thresholds"] do
-    label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ "chart-line" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
-      input_ [type_ "checkbox", class_ "hidden peer", checked_]
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-    div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-      div_ [class_ "flex flex-row gap-3"] do
-        thresholdInput_ "alertThreshold" "bg-fillError-strong" "Alert threshold" True "input-sm" [chartUpdateAttr] alertThresholdM
-        thresholdInput_ "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False "input-sm" [chartUpdateAttr] warningThresholdM
-        directionSelect_ triggerLessThan "select-sm"
-      div_ [class_ "mt-3 pt-3 border-t border-strokeWeak"] do
-        div_ [class_ "mb-2"] do
-          label_ [class_ "text-xs font-medium text-textStrong"] "Recovery thresholds "
-          span_ [class_ "text-xs text-textWeak"] "(optional)"
-          p_ [class_ "text-xs text-textWeak mt-0.5"] "Alert recovers only when value crosses these thresholds"
-        div_ [class_ "flex flex-row gap-3"] do
-          recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-sm" alertRecoveryM
-          recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-sm" warningRecoveryM
+      showVal = maybe "" show
+  panel_ def{icon = Just "chart-line", collapsible = Just True, sectionId = Just "thresholds"} "Thresholds" do
+    div_ [class_ "flex flex-row gap-2 py-2"] do
+      formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = Just "events", value = showVal alertThresholdM, extraAttrs = [chartUpdateAttr]} "Alert threshold" "alertThreshold" True Nothing
+      formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", value = showVal warningThresholdM, extraAttrs = [chartUpdateAttr]} "Warning threshold" "warningThreshold" False Nothing
+      formSelectField_ FieldSm "Trigger condition" "direction" False do
+        option_ (value_ "above" : [selected_ "" | not triggerLessThan]) "Above threshold"
+        option_ (value_ "below" : [selected_ "" | triggerLessThan]) "Below threshold"
+    div_ [class_ "mt-3 pt-3 border-t border-strokeWeak space-y-2"] do
+      div_ [class_ "space-y-1 text-xs text-textWeak"] do
+        div_ (span_ [class_ "font-medium text-textStrong"] "Recovery thresholds " >> span_ "(optional)")
+        p_ "Alert recovers only when value crosses these thresholds"
+      div_ [class_ "flex flex-row gap-2 py-2"] do
+        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillError-strong", suffix = Just "events", placeholder = "Same as trigger", value = showVal alertRecoveryM} "Alert recovery" "alertRecoveryThreshold" False Nothing
+        formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
 
 
--- | Shared Notification Settings section for alert forms
--- Parameters: severity, subject, message, emailAll, allTeams, selectedTeamIds, formId
 notificationSettingsSection_ :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> V.Vector ProjectMembers.Team -> V.Vector UUID.UUID -> Text -> Html ()
 notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selectedTeamIds formId = do
   let defaultSeverity = fromMaybe "Error" severityM
       defaultSubject = fromMaybe "Alert triggered" subjectM
       defaultMessage = fromMaybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." messageM
       teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
-      teamName tId = case V.find (\t -> t.id == tId) allTeams of
-        Just t -> t.handle
-        Nothing -> "Unknown Team"
+      teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
       existingTeams = decodeUtf8 $ AE.encode $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
-  div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-    label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-      div_ [class_ "flex items-center gap-2"] do
-        faSprite_ "envelope" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [class_ "text-sm font-medium text-textStrong"] "Notification Settings"
-      input_ [type_ "checkbox", class_ "hidden peer"]
-      faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-    div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-      div_ [class_ "flex items-center w-full gap-2 mb-3"] do
-        fieldset_ [class_ "fieldset"] do
-          label_ [class_ "label text-xs font-medium mb-1"] "Severity"
-          select_ [class_ "select select-sm w-28", name_ "severity"] do
-            option_ [selected_ "" | defaultSeverity == "Info"] "Info"
-            option_ [selected_ "" | defaultSeverity == "Error"] "Error"
-            option_ [selected_ "" | defaultSeverity == "Warning"] "Warning"
-            option_ [selected_ "" | defaultSeverity == "Critical"] "Critical"
-        fieldset_ [class_ "fieldset w-full"] do
-          label_ [class_ "label text-xs font-medium mb-1"] "Subject"
-          input_ [placeholder_ "e.g. Alert triggered for high error rate", class_ "input input-sm w-full", name_ "subject", value_ defaultSubject]
-      fieldset_ [class_ "fieldset w-full mb-3"] do
-        label_ [class_ "label text-xs font-medium mb-1"] "Message"
-        textarea_ [placeholder_ "Alert message details", class_ "textarea textarea-sm p-2 rounded-lg w-full", name_ "message", rows_ "3"] $ toHtml defaultMessage
-      div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
-        div_ [class_ "mb-3"] do
-          h4_ [class_ "font-medium text-sm text-textStrong mb-1"] "Recovery Notifications"
-          p_ [class_ "text-xs text-textWeak"] "Continue notifications until monitor recovers"
-        div_ [class_ "space-y-3"] do
-          div_ [class_ "flex items-center"] do
-            label_ [class_ "flex items-center gap-2 text-xs"] do
-              input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "notifyAfterCheck"]
-              span_ [] "Renotify every"
-            select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ zipWithM_ (\v t -> option_ (value_ v : [selected_ "" | v == "30m"]) (toHtml t)) ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins" :: Text, "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
-          div_ [class_ "flex items-center"] do
-            label_ [class_ "flex items-center gap-2 text-xs"] do
-              input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "stopAfterCheck", [__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]]
-              span_ [] "Stop after"
-            div_ [class_ "flex items-center gap-1.5 ml-2 hidden", id_ "stopAfterInput"] do
-              input_ [type_ "number", class_ "input input-sm w-16", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
-              span_ [class_ "text-xs text-textWeak"] "occurrences"
-      div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
-        div_ [class_ "flex flex-col gap-1"] do
-          span_ [class_ "text text-sm"] "Teams"
-          span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
-        textarea_ [class_ "input max-h-max w-full mt-2 resize-none", name_ "teams"] ""
-      script_
-        [text|
-        window.addEventListener('DOMContentLoaded', () => {
-          window.initWhenReady(function() {
-            const tagify = createTagify('#${formId} textarea[name="teams"]', {
-              tagTextProp: 'name',
-              whitelist: $teamList,
-            });
-            tagify.addTags($existingTeams);
+  panel_ def{icon = Just "envelope", collapsible = Just False} "Notification Settings" do
+    div_ [class_ "flex items-center w-full gap-2 mb-3"] do
+      formSelectField_ FieldSm "Severity" "severity" False $ forM_ ["Info", "Error", "Warning", "Critical"] \s -> option_ [selected_ "" | defaultSeverity == s] $ toHtml s
+      div_ [class_ "flex-1"] $ formField_ FieldSm def{value = defaultSubject, placeholder = "e.g. Alert triggered for high error rate"} "Subject" "subject" False Nothing
+    formField_ FieldSm def{inputType = "textarea", value = defaultMessage, placeholder = "Alert message details", extraAttrs = [rows_ "3"]} "Message" "message" False Nothing
+    div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
+      div_ [class_ "mb-3"] do
+        h4_ [class_ "font-medium text-sm text-textStrong mb-1"] "Recovery Notifications"
+        p_ [class_ "text-xs text-textWeak"] "Continue notifications until monitor recovers"
+      div_ [class_ "space-y-3"] do
+        div_ [class_ "flex items-center"] do
+          formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" []
+          select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ forM_ @[] @_ @(Text, Text) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")] \(v, t) -> option_ (value_ v : [selected_ "" | v == "30m"]) $ toHtml t
+        div_ [class_ "flex items-center"] do
+          formCheckbox_ FieldSm "Stop after" "stopAfterCheck" [[__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]]
+          div_ [class_ "flex items-center gap-1.5 ml-2 hidden", id_ "stopAfterInput"] do
+            input_ [type_ "number", class_ "input input-sm w-16", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
+            span_ [class_ "text-xs text-textWeak"] "occurrences"
+    div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
+      div_ [class_ "flex flex-col gap-1"] do
+        span_ [class_ "text text-sm"] "Teams"
+        span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
+      textarea_ [class_ "input max-h-max w-full mt-2 resize-none", name_ "teams"] ""
+    script_
+      [text|
+      window.addEventListener('DOMContentLoaded', () => {
+        window.initWhenReady(function() {
+          const tagify = createTagify('#${formId} textarea[name="teams"]', {
+            tagTextProp: 'name',
+            whitelist: $teamList,
           });
-        })
-        const getSelectedTeams = () => {
-          return tagify.value.map(item => item.value);
-        }
-      |]
-      div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
-        label_ [class_ "label cursor-pointer flex items-center gap-2"] do
-          input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "recipientEmailAll", value_ "true"] ++ [checked_ | emailAll]
-          span_ [class_ "text-sm"] "Send to all team members"
-        span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
+          tagify.addTags($existingTeams);
+        });
+      })
+      const getSelectedTeams = () => {
+        return tagify.value.map(item => item.value);
+      }
+    |]
+    div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
+      formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ [value_ "true"] ++ [checked_ | emailAll]
+      span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"

@@ -9,6 +9,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pages.Components (FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_)
 import Relude hiding (ask)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
@@ -32,16 +33,16 @@ brings3PostH pid s3Form = do
   case res of
     Left err -> do
       addErrorToast (show err) Nothing
-      addRespHeaders notConnected
+      addRespHeaders $ connectionBadge_ "Not connected"
     Right bExists ->
       if bExists
         then do
           _ <- Projects.updateProjectS3Bucket pid $ Just s3Form
           addSuccessToast "Connected succesfully" Nothing
-          addRespHeaders connected
+          addRespHeaders $ connectionBadge_ "Connected"
         else do
           addErrorToast "Bucket does not exist" Nothing
-          addRespHeaders notConnected
+          addRespHeaders $ connectionBadge_ "Not connected"
 
 
 brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -51,7 +52,7 @@ brings3RemoveH pid = do
   _ <- Projects.updateProjectS3Bucket pid Nothing
 
   addSuccessToast "Removed S3 bucket" Nothing
-  addRespHeaders notConnected
+  addRespHeaders $ connectionBadge_ "Not connected"
 
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
@@ -79,17 +80,17 @@ bringS3Page pid s3BucketM = div_ [class_ "w-full h-full overflow-y-auto"] do
             div_ do
               h3_ [class_ "text-sm font-medium text-textStrong"] "Connection Status"
               p_ [class_ "text-xs text-textWeak"] "Your bucket connection state"
-          div_ [id_ "connectedInd"] $ maybe notConnected (const connected) s3BucketM
+          div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
 
       -- Credentials card
       div_ [class_ "surface-raised rounded-2xl p-4 space-y-4"] do
         label_ [class_ "text-sm font-medium text-textStrong block"] "Bucket Credentials"
         div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] do
-          connectionField "Access Key ID" "accessKey" True (maybe "" (.accessKey) s3BucketM) False
-          connectionField "Secret Access Key" "secretKey" True (maybe "" (.secretKey) s3BucketM) True
-          connectionField "Region" "region" True (maybe "" (.region) s3BucketM) False
-          connectionField "Bucket Name" "bucket" True (maybe "" (.bucket) s3BucketM) False
-        connectionField "Custom Endpoint" "endpointUrl" False (maybe "" (.endpointUrl) s3BucketM) False
+          formField_ FieldSm def{value = maybe "" (.accessKey) s3BucketM, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
+          formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
+          formField_ FieldSm def{value = maybe "" (.region) s3BucketM, placeholder = "Region"} "Region" "region" True Nothing
+          formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
+        formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
         p_ [class_ "text-xs text-textWeak"] "Optional: For S3-compatible providers like MinIO, DigitalOcean Spaces, etc."
 
       -- Actions
@@ -103,37 +104,4 @@ bringS3Page pid s3BucketM = div_ [class_ "w-full h-full overflow-y-auto"] do
           faSprite_ "trash" "regular" "w-3 h-3"
           span_ "Remove"
 
-    -- Remove modal
-    input_ [type_ "checkbox", id_ "remove-modal", class_ "modal-toggle"]
-    div_ [class_ "modal", role_ "dialog"] do
-      div_ [class_ "modal-box p-6"] do
-        div_ [class_ "flex items-start gap-3 mb-4"] do
-          div_ [class_ "p-2 bg-fillError-weak rounded-full"] $ faSprite_ "triangle-alert" "regular" "h-5 w-5 text-textError"
-          div_ do
-            h3_ [class_ "text-lg font-semibold text-textStrong"] "Remove bucket?"
-            p_ [class_ "text-sm text-textWeak mt-1"] "This will disconnect your S3 bucket. Data already stored will remain in your bucket."
-        div_ [class_ "flex justify-end gap-2 mt-6"] do
-          label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ "remove-modal"] "Cancel"
-          button_ [class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90", hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
-      label_ [class_ "modal-backdrop", Lucid.for_ "remove-modal"] ""
-
-
-connectionField :: Text -> Text -> Bool -> Text -> Bool -> Html ()
-connectionField lbl name required defVal isPass =
-  div_ [class_ "space-y-1.5"] do
-    label_ [class_ "flex items-center gap-1 text-xs font-medium text-textWeak"] do
-      toHtml lbl
-      when required $ span_ [class_ "text-textError"] "*"
-    input_ ([class_ "input input-bordered input-sm w-full", value_ defVal, name_ name, type_ $ if isPass then "password" else "text", placeholder_ lbl] <> [required_ "true" | required])
-
-
-connected :: Html ()
-connected = span_ [class_ "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-fillSuccess-weak text-textSuccess"] do
-  faSprite_ "circle-check" "regular" "w-3 h-3"
-  "Connected"
-
-
-notConnected :: Html ()
-notConnected = span_ [class_ "inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium bg-fillWeak text-textWeak"] do
-  faSprite_ "circle-info" "regular" "w-3 h-3"
-  "Not connected"
+    confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"

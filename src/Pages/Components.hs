@@ -1,5 +1,6 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_) where
 
+import Data.Default (Default (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Fmt (commaizeF, fmt, (+|))
@@ -622,3 +623,136 @@ statBoxSkeleton_ withIcon = div_ [class_ "bg-fillWeaker rounded-3xl flex flex-co
     div_ [class_ "flex gap-2 items-center"] do
       div_ [class_ "h-4 w-20 skeleton-shimmer rounded"] ""
       div_ [class_ "h-4 w-4 skeleton-shimmer rounded-full"] ""
+
+
+data FieldSize = FieldSm | FieldMd
+
+
+data FieldCfg = FieldCfg
+  { icon :: Maybe Text
+  , inputType :: Text
+  , placeholder :: Text
+  , value :: Text
+  , extraAttrs :: [Attribute]
+  , dot :: Maybe Text -- colored circle class before label, e.g. "bg-fillError-strong"
+  , suffix :: Maybe Text -- text at right edge of input, e.g. "events"
+  }
+
+
+instance Default FieldCfg where def = FieldCfg Nothing "text" "" "" [] Nothing Nothing
+
+
+-- | Unified form field: auto-generates input from cfg, or uses custom content when provided
+formField_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool -> Maybe (HtmlT m ()) -> HtmlT m ()
+formField_ size cfg lbl name required customM =
+  fieldset_ [class_ wrapperCls] do
+    label_ [class_ labelCls, Lucid.for_ name] do
+      whenJust cfg.dot \color -> div_ [class_ $ "w-1.5 h-1.5 rounded-full shrink-0 " <> color] ""
+      whenJust cfg.icon \ic -> faSprite_ ic "solid" "w-4 h-4 text-iconNeutral shrink-0"
+      toHtml lbl
+      when required $ span_ [class_ reqCls] "*"
+    case customM of
+      Just content -> content
+      Nothing -> case (cfg.inputType, cfg.suffix) of
+        ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ name, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs) $ toHtml cfg.value
+        (_, Just sfx) -> div_ [class_ "relative"] do
+          input_ $ [class_ $ inputCls <> " pr-14", value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs
+          span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
+        _ -> input_ $ [class_ inputCls, value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs
+  where
+    (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
+      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full", "text-textError")
+      FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
+
+
+formSelectField_ :: Monad m => FieldSize -> Text -> Text -> Bool -> HtmlT m () -> HtmlT m ()
+formSelectField_ size lbl name required options =
+  fieldset_ [class_ wrapperCls] do
+    label_ [class_ labelCls, Lucid.for_ name] do
+      toHtml lbl
+      when required $ span_ [class_ reqCls] "*"
+    select_ ([class_ selectCls, name_ name, id_ name] <> [required_ "true" | required]) options
+  where
+    (wrapperCls, labelCls, selectCls, reqCls) = case size of
+      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "select select-sm w-full", "text-textError")
+      FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "select w-full h-12", "text-textWeak")
+
+
+data PanelCfg = PanelCfg
+  { icon :: Maybe Text
+  , subtitle :: Maybe Text
+  , collapsible :: Maybe Bool -- Nothing = static section, Just True = starts open, Just False = starts closed
+  , sectionId :: Maybe Text -- id attribute on the details element
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+panel_ :: Monad m => PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
+panel_ cfg title content = case cfg.collapsible of
+  Nothing ->
+    div_ [class_ "space-y-4"] do
+      h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider flex items-center gap-2"] do
+        whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
+        toHtml title
+        whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
+      content
+  Just startOpen ->
+    details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] <> [open_ "" | startOpen] <> maybe [] (pure . id_) cfg.sectionId) do
+      summary_ [class_ "p-3 cursor-pointer list-none flex items-center justify-between gap-2 hover:bg-fillWeak transition-colors"] do
+        div_ [class_ "flex items-center gap-2"] do
+          whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-3.5 h-3.5 text-iconNeutral"
+          span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml title
+          whenJust cfg.subtitle $ span_ [class_ "text-xs text-textWeak"] . toHtml
+        faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral"
+      div_ [class_ "px-3 pb-3"] content
+
+
+formCheckbox_ :: Monad m => FieldSize -> Text -> Text -> [Attribute] -> HtmlT m ()
+formCheckbox_ FieldSm lbl name extraAttrs =
+  label_ [class_ "flex items-center gap-2 text-xs cursor-pointer"] do
+    input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ name] <> extraAttrs
+    span_ [] $ toHtml lbl
+formCheckbox_ FieldMd lbl name extraAttrs =
+  label_ [class_ "label cursor-pointer flex items-center gap-2"] do
+    input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ name] <> extraAttrs
+    span_ [class_ "text-sm"] $ toHtml lbl
+
+
+tagInput_ :: Monad m => Text -> Text -> HtmlT m ()
+tagInput_ inputId ph = textarea_ [class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph] ""
+
+
+formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
+formActionsModal_ modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"] do
+  label_ [Lucid.for_ modalId, class_ "btn btn-outline cursor-pointer"] "Cancel"
+  submitBtn
+
+
+connectionBadge_ :: Monad m => Text -> HtmlT m ()
+connectionBadge_ status = span_ [class_ $ "badge badge-sm gap-1 " <> badgeCls] do
+  whenJust iconM \icon -> faSprite_ icon "regular" "h-3 w-3"
+  toHtml status
+  where
+    (badgeCls, iconM) = case status of
+      "Active" -> ("badge-soft badge-success", Just "circle-check")
+      "Connected" -> ("badge-soft badge-success", Just "circle-check")
+      "Not connected" -> ("badge-soft badge-secondary", Just "circle-info")
+      "Configure" -> ("badge-soft badge-secondary", Nothing)
+      _ -> ("badge-soft badge-secondary", Nothing)
+
+
+confirmModal_ :: Text -> Text -> Text -> [Attribute] -> Text -> Html ()
+confirmModal_ modalId title description confirmAttrs confirmText = do
+  input_ [type_ "checkbox", id_ modalId, class_ "modal-toggle"]
+  div_ [class_ "modal", role_ "dialog"] do
+    div_ [class_ "modal-box p-6"] do
+      div_ [class_ "flex items-start gap-3 mb-4"] do
+        div_ [class_ "p-2 bg-fillError-weak rounded-full"] $ faSprite_ "triangle-alert" "regular" "h-5 w-5 text-textError"
+        div_ do
+          h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
+          p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
+      div_ [class_ "flex justify-end gap-2 mt-6"] do
+        label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
+        button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
+    label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
