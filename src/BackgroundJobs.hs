@@ -68,7 +68,8 @@ import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.GitHub qualified as GitHub
-import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.EmailTemplates qualified as ET
+import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (processErrors, processSpanToEntities)
@@ -173,15 +174,9 @@ processBackgroundJob authCtx bgJob =
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = authCtx.env.hostUrl <> "p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-             "user_name": #{firstName},
-             "project_name": #{projectTitle'},
-             "project_url": #{project_url}
-          }|]
-        sendPostmarkEmail reciever (Just ("project-invite", templateVars)) Nothing
+        let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
+            (subj, html) = ET.projectInviteEmail user.firstName projectTitle' projectUrl
+        sendRenderedEmail reciever subj (ET.renderEmail subj html)
     SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
       users <- Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map toString stack
@@ -204,29 +199,15 @@ processBackgroundJob authCtx bgJob =
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = authCtx.env.hostUrl <> "p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-            "user_name": #{firstName},
-            "project_name": #{projectTitle},
-            "project_url": #{project_url}
-          }|]
-        sendPostmarkEmail reciever (Just ("project-created", templateVars)) Nothing
+        let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
+            (subj, html) = ET.projectCreatedEmail user.firstName projectTitle projectUrl
+        sendRenderedEmail reciever subj (ET.renderEmail subj html)
     DeletedProject pid -> do
       users <- Projects.usersByProjectId pid
       projectM <- Projects.projectById pid
-      forM_ projectM \pr -> do
-        forM_ users \user -> do
-          let firstName = user.firstName
-          let projectTitle = pr.title
-          let userEmail = CI.original user.email
-          let templateVars =
-                [aesonQQ|{
-             "user_name": #{firstName},
-             "project_name": #{projectTitle}
-           }|]
-          sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
+      forM_ projectM \pr -> forM_ users \user -> do
+        let (subj, html) = ET.projectDeletedEmail user.firstName pr.title
+        sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
     DailyJob ->
       unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
         >> Relude.when authCtx.config.enableDailyJobScheduling (withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling)
@@ -847,12 +828,13 @@ buildMonitorAlert monitorE issue hostUrl =
 
 
 sendNotifications :: Monitors.QueryMonitorEvaled -> [ProjectMembers.Team] -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
-sendNotifications monitorE teams p alert = do
+sendNotifications monitorE teams p alert@MonitorsAlert{monitorUrl} = do
   targetTeams <-
     if null teams
       then maybeToList <$> ProjectMembers.getEveryoneTeam monitorE.projectId
       else pure teams
-  for_ targetTeams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title alert.monitorUrl (emailQueryMonitorAlert monitorE)
+  for_ targetTeams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title monitorUrl (emailQueryMonitorAlert monitorE)
+sendNotifications _ _ _ _ = pass
 
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
@@ -1032,49 +1014,25 @@ sendReportForProject pid rType = do
         _ -> do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           Relude.when (totalRequest > 0) do
+            let dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
+                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
+                dayStart = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone sevenDaysAgoUTCTime))
+                totalAnomalies = length anomalies'
+                (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
+                pctOf n = if totalAnomalies == 0 then 0 else (fromIntegral n / fromIntegral totalAnomalies) * 99
             forM_ users \user -> do
-              let firstName = user.firstName
-                  projectTitle = pr.title
-                  userEmail = CI.original user.email
-                  anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies'
-                  perf_count = V.length endpointPerformance
-                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance
-                  rp_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-                  dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
-                  sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
-                  sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
-                  dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
-                  freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-                  slowQueriesCount = V.length slowDbQueries
-                  slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
-                  totalAnomalies = length anomalies'
-                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
-                  runtimeErrorsBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral errTotal / fromIntegral totalAnomalies) * 99
-                  apiChangesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral apiTotal / fromIntegral totalAnomalies) * 99
-                  alertIssuesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral qTotal / fromIntegral totalAnomalies) * 99
-                  templateVars =
-                    [aesonQQ|{
-                     "user_name": #{firstName},
-                     "total_events": #{totalEvents},
-                     "total_errors": #{totalErrors},
-                     "events_chart_url": #{allQ},
-                     "errors_chart_url": #{errQ},
-                     "project_name": #{projectTitle},
-                     "anomalies_count": #{total_anomalies},
-                     "errors_bar_per": #{runtimeErrorsBarPercentage},
-                     "api_bar_per": #{apiChangesBarPercentage},
-                     "alerts_bar_per": #{alertIssuesBarPercentage},
-                     "anomalies":  #{anmls},
-                     "report_url": #{rp_url},
-                     "performance_count": #{perf_count},
-                     "performance": #{perf_shrt},
-                     "queries": #{slowQueriesList},
-                     "slow_queries_count": #{slowQueriesCount},
-                     "start_date": #{dayStart},
-                     "end_date": #{dayEnd},
-                     "free_exceeded": #{freeTierLimitExceeded}
-              }|]
-              sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
+              let reportData = ET.WeeklyReportData
+                    { userName = user.firstName, projectName = pr.title
+                    , reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+                    , startDate = dayStart, endDate = dayEnd
+                    , eventsChartUrl = allQ, errorsChartUrl = errQ
+                    , totalEvents, totalErrors, anomaliesCount = total_anomalies
+                    , runtimeErrorsPct = pctOf errTotal, apiChangesPct = pctOf apiTotal, alertsPct = pctOf qTotal
+                    , anomalies = anomalies', performance = endpointPerformance, slowQueries = slowDbQueries
+                    , freeTierExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                    }
+                  (subj, html) = ET.weeklyReportEmail reportData
+              sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
       Log.logInfo "Completed sending report notifications for" pid
 
 
@@ -1143,31 +1101,9 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
                 sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title project.whatsappNumbers
             Projects.NEmail ->
               forM_ users \u -> do
-                let errosJ =
-                      ( \ee ->
-                          let e = ee.errorData
-                           in AE.object
-                                [ "root_error_message" AE..= e.rootErrorMessage
-                                , "error_type" AE..= e.errorType
-                                , "error_message" AE..= e.message
-                                , "stack_trace" AE..= e.stackTrace
-                                , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                                , "hash" AE..= e.hash
-                                , "tech" AE..= e.technology
-                                , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                                , "root_error_type" AE..= e.rootErrorType
-                                ]
-                      )
-                        <$> errors
-                    title = project.title
-                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                    templateVars =
-                      [aesonQQ|{
-                          "project_name": #{title},
-                          "errors_url": #{errors_url},
-                          "errors": #{errosJ}
-                     }|]
-                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+                let errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                    (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl (map (.errorData) errors)
+                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
             Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts, not runtime errors
             -- Ignore other anomaly types
     _ -> pass
@@ -1246,14 +1182,9 @@ processAPIChangeAnomalies pid targetHashes = do
         Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
         Projects.NEmail -> do
           forM_ users \u -> do
-            let templateVars =
-                  AE.object
-                    [ "user_name" AE..= u.firstName
-                    , "project_name" AE..= project.title
-                    , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
-                    , "endpoint_name" AE..= endpointInfo
-                    ]
-            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+            let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
+                (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl endpointInfo
+            sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
 -- | Group anomalies by endpoint hash

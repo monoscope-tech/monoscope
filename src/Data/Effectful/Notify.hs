@@ -51,6 +51,8 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Effectful.TH
 import Network.HTTP.Types (statusIsSuccessful)
+import Network.Mail.Mime (Address (..), Mail (..), htmlPart)
+import Network.Mail.SMTP (sendMailWithLoginSTARTTLS', sendMailWithLoginTLS')
 import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith, responseStatus)
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
@@ -61,8 +63,8 @@ import System.Logging qualified as Log
 -- Notification data types
 data EmailData = EmailData
   { receiver :: Text
-  , templateOptions :: Maybe (Text, AE.Value)
-  , subjectMessage :: Maybe (Text, Text)
+  , subject :: Text
+  , htmlBody :: Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -141,9 +143,8 @@ makeEffect ''Notify
 
 
 -- Smart constructors
-emailNotification :: Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Notification
-emailNotification receiver templateOptions subjectMessage =
-  EmailNotification EmailData{..}
+emailNotification :: Text -> Text -> Text -> Notification
+emailNotification receiver subject htmlBody = EmailNotification EmailData{..}
 
 
 slackNotification :: Text -> AE.Value -> Notification
@@ -172,35 +173,25 @@ runNotifyProduction = interpret $ \_ -> \case
   SendNotification notification -> case notification of
     EmailNotification EmailData{..} -> do
       appCtx <- ask @Config.AuthContext
-      let url = if isJust templateOptions then "https://api.postmarkapp.com/email/withTemplate" else "https://api.postmarkapp.com/email"
-      let apiKey = encodeUtf8 appCtx.config.postmarkToken
-      let fromAddress = appCtx.config.postmarkFromEmail
-      let (subject, message) = fromMaybe ("", "") subjectMessage
-      let payload = case templateOptions of
-            Just (template, templateVars) ->
-              [aesonQQ|{
-                "From": #{fromAddress},
-                "To": #{receiver},
-                "TemplateAlias": #{template},
-                "TemplateModel": #{templateVars}
-              }|]
-            _ ->
-              [aesonQQ|{
-                "From": #{fromAddress},
-                "Subject": #{subject},
-                "To": #{receiver},
-                "TextBody": #{message},
-                "HtmlBody": "<p>#{message}</p>",
-                "MessageStream": "outbound"
-              }|]
-      let logData = case templateOptions of
-            Just (template, _) -> AE.object ["from" AE..= fromAddress, "to" AE..= receiver, "template" AE..= template, "via" AE..= ("postmark" :: Text)]
-            Nothing -> AE.object ["from" AE..= fromAddress, "to" AE..= receiver, "subject" AE..= subject, "via" AE..= ("postmark" :: Text)]
-      Log.logTrace "Sending email notification" logData
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
-      _ <- liftIO $ postWith opts url payload
+      let cfg = appCtx.config
+      if cfg.smtpHost == ""
+        then do
+          let apiKey = encodeUtf8 cfg.postmarkToken
+              fromAddress = cfg.postmarkFromEmail
+              payload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
+          Log.logTrace "Sending email notification" (AE.object ["from" AE..= fromAddress, "to" AE..= receiver, "subject" AE..= subject, "via" AE..= ("postmark" :: Text)])
+          let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
+          void $ liftIO $ postWith opts "https://api.postmarkapp.com/email" payload
+        else do
+          let from = Address Nothing cfg.smtpSender
+              to = Address Nothing receiver
+              mail = Mail from [to] [] [] [("Subject", subject)] [[htmlPart (toLazy htmlBody)]]
+              port = fromIntegral cfg.smtpPort
+          Log.logTrace "Sending email notification" (AE.object ["from" AE..= cfg.smtpSender, "to" AE..= receiver, "subject" AE..= subject, "via" AE..= ("smtp" :: Text)])
+          liftIO $ if cfg.smtpPort == 587
+            then sendMailWithLoginSTARTTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
+            else sendMailWithLoginTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
       Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver])
-      pass
     SlackNotification SlackData{..} -> do
       appCtx <- ask @Config.AuthContext
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
@@ -275,7 +266,7 @@ runNotifyTest :: (IOE :> es, Log :> es) => IORef [Notification] -> Eff (Notify '
 runNotifyTest ref = interpret \_ -> \case
   SendNotification notification -> do
     let notifInfo = case notification of
-          EmailNotification emailData -> ("Email" :: Text, emailData.receiver, fmap fst emailData.templateOptions)
+          EmailNotification emailData -> ("Email" :: Text, emailData.receiver, Just emailData.subject)
           SlackNotification slackData -> ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
           DiscordNotification discordData -> ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
           WhatsAppNotification whatsappData -> ("WhatsApp" :: Text, whatsappData.to, Just whatsappData.template)

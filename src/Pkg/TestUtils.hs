@@ -473,7 +473,7 @@ runTestBackgroundWithLogger logger appCtx process = do
   forM_ notifications \notification -> do
     let notifInfo = case notification of
           Data.Effectful.Notify.EmailNotification emailData ->
-            ("Email" :: Text, Data.Effectful.Notify.receiver emailData, fmap fst (Data.Effectful.Notify.templateOptions emailData))
+            ("Email" :: Text, Data.Effectful.Notify.receiver emailData, Just (Data.Effectful.Notify.subject emailData))
           Data.Effectful.Notify.SlackNotification slackData ->
             ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
           Data.Effectful.Notify.DiscordNotification discordData ->

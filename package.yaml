@@ -275,6 +275,8 @@ library:
     - base16-bytestring
     - minio-hs
     - conduit
+    - mime-mail
+    - smtp-mail
     - zlib
 
 executables:

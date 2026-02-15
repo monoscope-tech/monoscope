@@ -17,7 +17,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..))
-import Effectful (Eff, IOE, runEff, type (:>))
+import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified

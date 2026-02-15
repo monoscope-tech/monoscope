@@ -27,7 +27,6 @@ module Models.Users.Sessions (
   createEmptyUser,
 ) where
 
-import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
@@ -35,27 +34,23 @@ import Data.Text.Display
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (Entity, _insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
-import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
-import Effectful.Time (Time, currentTime)
-import GHC.Records (HasField (getField))
 import Models.Projects.Projects (User (..), UserId (..), createEmptyUser, createUser, createUserId, insertUser, userByEmail, userById, userIdByEmail)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Relude
-import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
+import Servant (Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,

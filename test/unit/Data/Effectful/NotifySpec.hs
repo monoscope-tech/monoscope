@@ -15,20 +15,21 @@ spec = describe "Notify Effect" $ do
   describe "Test interpreter" $ do
     it "captures email notifications" $ do
       (notifications, result) <- runTestNotify $ do
-        sendNotification $ emailNotification "test@example.com" Nothing (Just ("Test Subject", "Test Body"))
+        sendNotification $ emailNotification "test@example.com" "Test Subject" "<p>Test Body</p>"
         pure "done"
-      
+
       result `shouldBe` "done"
       length notifications `shouldBe` 1
       case viaNonEmpty head notifications of
         Just (EmailNotification emailData) -> do
           emailData.receiver `shouldBe` "test@example.com"
-          emailData.subjectMessage `shouldBe` Just ("Test Subject", "Test Body")
+          emailData.subject `shouldBe` "Test Subject"
+          emailData.htmlBody `shouldBe` "<p>Test Body</p>"
         _ -> expectationFailure "Expected EmailNotification"
     
     it "captures multiple notifications" $ do
       (notifications, _) <- runTestNotify $ do
-        sendNotification $ emailNotification "user1@example.com" Nothing (Just ("Subject 1", "Body 1"))
+        sendNotification $ emailNotification "user1@example.com" "Subject 1" "<p>Body 1</p>"
         sendNotification $ slackNotification "https://slack.webhook.url" (AE.object ["text" AE..= ("Test message" :: Text)])
         sendNotification $ discordNotification "channel123" (AE.object ["content" AE..= ("Discord message" :: Text)])
         getNotifications
@@ -37,8 +38,8 @@ spec = describe "Notify Effect" $ do
       
     it "getNotifications returns accumulated notifications" $ do
       (_, notifs) <- runTestNotify $ do
-        sendNotification $ emailNotification "test@example.com" Nothing (Just ("Test", "Test"))
-        sendNotification $ emailNotification "test2@example.com" Nothing (Just ("Test2", "Test2"))
+        sendNotification $ emailNotification "test@example.com" "Test" "<p>Test</p>"
+        sendNotification $ emailNotification "test2@example.com" "Test2" "<p>Test2</p>"
         getNotifications
       
       length notifs `shouldBe` 2

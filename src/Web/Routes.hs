@@ -108,6 +108,7 @@ import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
+import Pkg.EmailTemplates qualified as ET
 import Pkg.Components.Widget qualified as Widget
 import Utils
 
@@ -262,6 +263,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , -- Dev routes
+    emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (RespHeaders (Html ()))
+  , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
@@ -495,6 +499,9 @@ cookieProtectedServer =
     , -- Endpoint handlers
       endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
+    , -- Dev routes
+      emailPreviewList = emailPreviewListH
+    , emailPreview = emailPreviewH
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer
@@ -743,6 +750,45 @@ getSpanJson tgtM sp =
     ]
   where
     start = utcTimeToNanoseconds sp.startTime
+
+
+-- =============================================================================
+-- Email Preview Handlers (dev only)
+-- =============================================================================
+
+emailTemplateNames :: [Text]
+emailTemplateNames = ["project-invite", "project-created", "project-deleted", "weekly-report", "runtime-errors", "anomaly-endpoint"]
+
+
+guardDevOnly :: ATAuthCtx ()
+guardDevOnly = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  unless (T.toUpper ctx.config.environment == "DEV") $ Error.throwError err404
+
+
+emailPreviewListH :: ATAuthCtx (RespHeaders (Html ()))
+emailPreviewListH = do
+  guardDevOnly
+  addRespHeaders $ ET.emailWrapper "Email Templates" do
+    ET.emailBody do
+      h1_ "Email Template Previews"
+      p_ "Click a template to preview:"
+      ul_ $ forM_ emailTemplateNames \name ->
+        li_ [style_ "margin: 8px 0;"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
+
+
+emailPreviewH :: Text -> ATAuthCtx (RespHeaders (Html ()))
+emailPreviewH templateName = do
+  guardDevOnly
+  let (subject, content) = case templateName of
+        "project-invite" -> ET.sampleProjectInvite
+        "project-created" -> ET.sampleProjectCreated
+        "project-deleted" -> ET.sampleProjectDeleted
+        "weekly-report" -> ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
+        "runtime-errors" -> ET.sampleRuntimeErrors
+        "anomaly-endpoint" -> ET.sampleAnomalyEndpoint
+        _ -> ("Unknown", p_ "Template not found")
+  addRespHeaders $ ET.emailWrapper subject content
 
 
 -- =============================================================================

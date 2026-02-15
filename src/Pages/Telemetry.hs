@@ -136,14 +136,15 @@ data MetricRow = MetricRow
 
 
 flattenMetricTree :: Map Text Telemetry.MetricDataPoint -> [MetricTree] -> Int -> [Bool] -> V.Vector MetricRow
-flattenMetricTree dataMap trees lvl conts = V.concat $ zipWith flatten trees (map (== length trees) [1 ..])
+flattenMetricTree dataMap trees lvl conts = V.concat $ zipWith flatten trees isLastFlags
   where
+    isLastFlags = replicate (length trees - 1) False ++ [True]
     flatten (MetricTree nd children) isLast =
       let fp = if nd.parent == "___root___" then nd.current else nd.parent <> "." <> nd.current
           hasChildren = not $ null children
           row = MetricRow{level = lvl, segment = nd.current, parentPath = nd.parent, fullPath = fp, isGroup = hasChildren, childCount = length children, continuations = conts, metric = Map.lookup fp dataMap}
-          n = length children
-          childRows = V.concat $ zipWith (\c cLast -> flattenMetricTree dataMap [c] (lvl + 1) (conts ++ [not cLast])) children (map (== n) [1 ..])
+          childIsLast = replicate (length children - 1) False ++ [True]
+          childRows = V.concat $ zipWith (\c cLast -> flattenMetricTree dataMap [c] (lvl + 1) (conts ++ [not cLast])) children childIsLast
        in V.cons row childRows
 
 
@@ -513,7 +514,7 @@ metricRefCounts dashboards monitors metricNames = Map.fromList $ map countRefs m
       where
         matchingDashboards = filter (dashboardHasMetric mn) dashboards
         totalWidgets = sum $ map (countWidgetsWithMetric mn) dashboards
-    alertCount mn = length $ filter (\m -> T.isInfixOf ("\"" <> mn <> "\"") m.logQuery) monitors
+    alertCount mn = length $ filter (\m -> any (`T.isInfixOf` m.logQuery) ["\"" <> mn <> "\"", "'" <> mn <> "'", "metric=" <> mn, "metric_name=" <> mn]) monitors
     dashboardHasMetric mn d = any (widgetRefsMetric mn) (allWidgets d)
     countWidgetsWithMetric mn d = length $ filter (widgetRefsMetric mn) (allWidgets d)
     allWidgets d = case d.schema of

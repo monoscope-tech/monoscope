@@ -1,8 +1,8 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlert, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlert, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
-import Control.Lens ((&), (.~))
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
@@ -31,9 +31,9 @@ import System.Logging qualified as Log
 import System.Types (DB)
 
 
-sendPostmarkEmail :: Notify.Notify :> es => Text -> Maybe (Text, AE.Value) -> Maybe (Text, Text) -> Eff es ()
-sendPostmarkEmail receiver tmpOptionsM subMsg =
-  Notify.sendNotification $ Notify.emailNotification receiver tmpOptionsM subMsg
+sendRenderedEmail :: Notify.Notify :> es => Text -> Text -> Text -> Eff es ()
+sendRenderedEmail receiver subject htmlBody =
+  Notify.sendNotification $ Notify.emailNotification receiver subject htmlBody
 
 
 sendSlackMessage :: (DB es, Log :> es, Notify.Notify :> es) => Projects.ProjectId -> Text -> Eff es ()

@@ -66,7 +66,8 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadgeXs_, iconBadge_, modalWith_, paymentPlanPicker)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Mail (sampleAlert, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendWhatsAppAlert)
+import Pkg.EmailTemplates qualified as ET
+import Pkg.Mail (sampleAlert, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Relude hiding (ask, asks)
 import Servant (err400, err404, errBody)
 import System.Config
@@ -474,10 +475,12 @@ notificationsTestPostH pid TestForm{..} = do
   appCtx <- ask @AuthContext
 
   let projectUrl = "/p/" <> pid.toText
-      sendTestEmail email = case issueType of
-        "runtime_exception" -> sendPostmarkEmail email (Just ("runtime-errors", AE.object ["project_name" AE..= project.title, "errors_url" AE..= (appCtx.env.hostUrl <> projectUrl <> "/issues/"), "errors" AE..= AE.Array mempty])) Nothing
-        "report" -> sendPostmarkEmail email Nothing (Just ("Test Report", "This is a test report notification for " <> project.title))
-        _ -> sendPostmarkEmail email Nothing (Just ("Test Notification", "This is a test notification for " <> project.title))
+      fullProjectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+      testTemplate = case issueType of
+        "runtime_exception" -> ET.runtimeErrorsEmail project.title (fullProjectUrl <> "/issues/") []
+        "report" -> ET.sampleWeeklyReport "" ""
+        _ -> ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") ["GET /api/v1/test"]
+      sendTestEmail email = let (subj, html) = testTemplate in sendRenderedEmail email subj (ET.renderEmail subj html)
 
   case (channel, teamId) of
     ("all", Just tid) ->

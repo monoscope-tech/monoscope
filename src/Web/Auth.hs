@@ -1,6 +1,7 @@
 {-# LANGUAGE FlexibleContexts #-}
 {-# LANGUAGE PackageImports #-}
 {-# LANGUAGE RankNTypes #-}
+{-# OPTIONS_GHC -Wno-ambiguous-fields #-}
 
 module Web.Auth (
   logoutH,

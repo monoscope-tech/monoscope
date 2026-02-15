@@ -124,6 +124,7 @@ library
       Pkg.Components.Widget
       Pkg.DeriveUtils
       Pkg.Drain
+      Pkg.EmailTemplates
       Pkg.GitHub
       Pkg.Mail
       Pkg.Parser
@@ -285,6 +286,7 @@ library
     , lucid-svg >=0.7.1.1
     , megaparsec
     , memory
+    , mime-mail
     , minio-hs
     , mmark
     , monad-time-effectful
@@ -319,6 +321,7 @@ library
     , servant-queryparam-server
     , servant-server
     , slugify
+    , smtp-mail
     , template-haskell
     , temporary
     , text
