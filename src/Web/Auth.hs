@@ -24,13 +24,13 @@ import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (ToJSON)
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
-import Deriving.Aeson qualified as DAE
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Deriving.Aeson qualified as DAE
 import Effectful (
   Eff,
   Effect,
@@ -65,11 +65,11 @@ import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pkg.ConvertKit qualified as ConvertKit
 import Relude hiding (ask, asks)
+import Relude.Unsafe ((!!))
 import Servant (Header, Headers, NoContent (..), addHeader, noHeader)
 import Servant qualified
 import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
-import Relude.Unsafe ((!!))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATBaseCtx, DB)

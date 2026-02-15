@@ -3,9 +3,9 @@
 module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlert, sampleReport) where
 
 import Data.Aeson qualified as AE
-import Data.Default (def)
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
+import Data.Default (def)
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool ()
 import Data.Text qualified as T
