@@ -67,8 +67,8 @@ import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
-import Pkg.GitHub qualified as GitHub
 import Pkg.EmailTemplates qualified as ET
+import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
@@ -1021,16 +1021,26 @@ sendReportForProject pid rType = do
                 (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
                 pctOf n = if totalAnomalies == 0 then 0 else (fromIntegral n / fromIntegral totalAnomalies) * 99
             forM_ users \user -> do
-              let reportData = ET.WeeklyReportData
-                    { userName = user.firstName, projectName = pr.title
-                    , reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-                    , startDate = dayStart, endDate = dayEnd
-                    , eventsChartUrl = allQ, errorsChartUrl = errQ
-                    , totalEvents, totalErrors, anomaliesCount = total_anomalies
-                    , runtimeErrorsPct = pctOf errTotal, apiChangesPct = pctOf apiTotal, alertsPct = pctOf qTotal
-                    , anomalies = anomalies', performance = endpointPerformance, slowQueries = slowDbQueries
-                    , freeTierExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-                    }
+              let reportData =
+                    ET.WeeklyReportData
+                      { userName = user.firstName
+                      , projectName = pr.title
+                      , reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+                      , startDate = dayStart
+                      , endDate = dayEnd
+                      , eventsChartUrl = allQ
+                      , errorsChartUrl = errQ
+                      , totalEvents
+                      , totalErrors
+                      , anomaliesCount = total_anomalies
+                      , runtimeErrorsPct = pctOf errTotal
+                      , apiChangesPct = pctOf apiTotal
+                      , alertsPct = pctOf qTotal
+                      , anomalies = anomalies'
+                      , performance = endpointPerformance
+                      , slowQueries = slowDbQueries
+                      , freeTierExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                      }
                   (subj, html) = ET.weeklyReportEmail reportData
               sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
       Log.logInfo "Completed sending report notifications for" pid

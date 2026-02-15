@@ -108,8 +108,8 @@ import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
-import Pkg.EmailTemplates qualified as ET
 import Pkg.Components.Widget qualified as Widget
+import Pkg.EmailTemplates qualified as ET
 import Utils
 
 

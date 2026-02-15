@@ -3,6 +3,7 @@ module Pkg.EmailTemplates (
   renderEmail,
   emailWrapper,
   emailBody,
+
   -- * Templates
   projectInviteEmail,
   projectCreatedEmail,
@@ -11,6 +12,7 @@ module Pkg.EmailTemplates (
   anomalyEndpointEmail,
   weeklyReportEmail,
   WeeklyReportData (..),
+
   -- * Sample data for previews
   sampleProjectInvite,
   sampleProjectCreated,
@@ -146,47 +148,54 @@ emailWrapper subject content = doctypehtml_ do
     style_ emailCss
     toHtmlRaw @Text "<!--[if mso]><style type=\"text/css\">.monoscope-email,.monoscope-email td,.monoscope-email th{font-family:Arial,sans-serif !important;}</style><![endif]-->"
   body_ [class_ "monoscope-email"] do
-    table_ [class_ "email-wrapper", width_ "100%", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] $
-      tr_ $ td_ [align_ "center"] $
-        table_ [class_ "email-content", width_ "100%", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] do
-          -- Masthead
-          tr_ $ td_ [class_ "email-masthead", align_ "center"] $
-            a_ [href_ "https://monoscope.tech?utm_source=transac_emails"] $
-              img_ [class_ "email-masthead_logo", src_ "https://monoscope.tech/assets/email/full_logo_l.png", alt_ "Monoscope", width_ "160", style_ "width: 160px; height: auto;"]
-          -- Body
-          tr_ $ td_ [class_ "email-body", width_ "100%"] content
-          -- Footer
-          tr_ $ td_ $ table_ [class_ "email-footer", align_ "center", width_ "600", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] do
-            -- Divider
-            tr_ $ td_ [style_ "padding: 0 20px;"] $ p_ [style_ "border-top: 1px solid #dee2e7; font-size: 1px; margin: 0 0 19px; width: 100%;"] ""
-            -- Description + social icons
-            tr_ $ td_ [style_ "padding: 0 20px 20px;"] $
-              table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] $
-                tr_ [class_ "footer-row"] do
-                  td_ [class_ "footer-col-left", style_ "vertical-align: top; width: 65%;"] do
-                    p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 16px; text-align: left; color: #99a2af; margin: 0 0 10px;"] "Monoscope \8212 monitoring and observability, built to know what\8217s happening the moment it happens. Logs, metrics, traces, and API payload monitoring with unlimited retention."
-                    p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 16px; text-align: left; color: #99a2af; margin: 0;"] "\169 2026 Monoscope."
-                  td_ [class_ "footer-col-right", style_ "vertical-align: top; text-align: right; width: 35%;"] $
-                    table_ [class_ "footer-icons", align_ "right", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] $
-                      tr_ do
-                        td_ [style_ "vertical-align: middle; padding: 0;"] $ a_ [href_ "https://x.com/monoscope_tech", target_ "_blank"] $
-                          img_ [alt_ "X", width_ "17", height_ "17", src_ "https://userimg-assets.customeriomail.com/images/client-env-146107/1745317233071_x_01JSEG70G3MSFPMCXP6XF0G06X.png", style_ "display: block; border-radius: 3px; border: 0;"]
-                        td_ [style_ "vertical-align: middle; padding: 0 0 0 8px;"] $ a_ [href_ "https://www.linkedin.com/company/89803535/", target_ "_blank"] $
-                          img_ [alt_ "LinkedIn", width_ "17", height_ "17", src_ "https://userimg-assets.customeriomail.com/images/client-env-145828/1713246315947_LinkedinIcon_01HVJQ09FBW9AHPM72CRERJ7F8.png", style_ "display: block; border-radius: 3px; border: 0;"]
-            -- Footer links
-            tr_ $ td_ [align_ "center", style_ "padding: 0 20px 19px;"] $
-              p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 20px; text-align: center; color: #99a2af; margin: 0;"] do
-                a_ [href_ "https://monoscope.tech/changelog?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Changelog"
-                toHtmlRaw @Text " &nbsp;\183&nbsp; "
-                a_ [href_ "https://monoscope.tech/docs?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Docs"
-                toHtmlRaw @Text " &nbsp;\183&nbsp; "
-                a_ [href_ "https://monoscope.tech/legal/privacy?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Privacy"
+    table_ [class_ "email-wrapper", width_ "100%", cellpadding_ "0", cellspacing_ "0", role_ "presentation"]
+      $ tr_
+      $ td_ [align_ "center"]
+      $ table_ [class_ "email-content", width_ "100%", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] do
+        -- Masthead
+        tr_
+          $ td_ [class_ "email-masthead", align_ "center"]
+          $ a_ [href_ "https://monoscope.tech?utm_source=transac_emails"]
+          $ img_ [class_ "email-masthead_logo", src_ "https://monoscope.tech/assets/email/full_logo_l.png", alt_ "Monoscope", width_ "160", style_ "width: 160px; height: auto;"]
+        -- Body
+        tr_ $ td_ [class_ "email-body", width_ "100%"] content
+        -- Footer
+        tr_ $ td_ $ table_ [class_ "email-footer", align_ "center", width_ "600", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] do
+          -- Divider
+          tr_ $ td_ [style_ "padding: 0 20px;"] $ p_ [style_ "border-top: 1px solid #dee2e7; font-size: 1px; margin: 0 0 19px; width: 100%;"] ""
+          -- Description + social icons
+          tr_
+            $ td_ [style_ "padding: 0 20px 20px;"]
+            $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", role_ "presentation"]
+            $ tr_ [class_ "footer-row"] do
+              td_ [class_ "footer-col-left", style_ "vertical-align: top; width: 65%;"] do
+                p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 16px; text-align: left; color: #99a2af; margin: 0 0 10px;"] "Monoscope \8212 monitoring and observability, built to know what\8217s happening the moment it happens. Logs, metrics, traces, and API payload monitoring with unlimited retention."
+                p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 16px; text-align: left; color: #99a2af; margin: 0;"] "\169 2026 Monoscope."
+              td_ [class_ "footer-col-right", style_ "vertical-align: top; text-align: right; width: 35%;"]
+                $ table_ [class_ "footer-icons", align_ "right", cellpadding_ "0", cellspacing_ "0", role_ "presentation"]
+                $ tr_ do
+                  td_ [style_ "vertical-align: middle; padding: 0;"]
+                    $ a_ [href_ "https://x.com/monoscope_tech", target_ "_blank"]
+                    $ img_ [alt_ "X", width_ "17", height_ "17", src_ "https://userimg-assets.customeriomail.com/images/client-env-146107/1745317233071_x_01JSEG70G3MSFPMCXP6XF0G06X.png", style_ "display: block; border-radius: 3px; border: 0;"]
+                  td_ [style_ "vertical-align: middle; padding: 0 0 0 8px;"]
+                    $ a_ [href_ "https://www.linkedin.com/company/89803535/", target_ "_blank"]
+                    $ img_ [alt_ "LinkedIn", width_ "17", height_ "17", src_ "https://userimg-assets.customeriomail.com/images/client-env-145828/1713246315947_LinkedinIcon_01HVJQ09FBW9AHPM72CRERJ7F8.png", style_ "display: block; border-radius: 3px; border: 0;"]
+          -- Footer links
+          tr_
+            $ td_ [align_ "center", style_ "padding: 0 20px 19px;"]
+            $ p_ [style_ "font-family: Ubuntu, Helvetica, Arial, sans-serif; font-size: 12px; line-height: 20px; text-align: center; color: #99a2af; margin: 0;"] do
+              a_ [href_ "https://monoscope.tech/changelog?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Changelog"
+              toHtmlRaw @Text " &nbsp;\183&nbsp; "
+              a_ [href_ "https://monoscope.tech/docs?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Docs"
+              toHtmlRaw @Text " &nbsp;\183&nbsp; "
+              a_ [href_ "https://monoscope.tech/legal/privacy?utm_source=transac_emails", style_ "color: #99a2af; text-decoration: none;"] "Privacy"
 
 
 emailBody :: Html () -> Html ()
 emailBody content =
-  table_ [class_ "email-body_inner", align_ "center", width_ "600", cellpadding_ "0", cellspacing_ "0", role_ "presentation"] $
-    tr_ $ td_ [class_ "content-cell"] content
+  table_ [class_ "email-body_inner", align_ "center", width_ "600", cellpadding_ "0", cellspacing_ "0", role_ "presentation"]
+    $ tr_
+    $ td_ [class_ "content-cell"] content
 
 
 emailButton :: Text -> Text -> Html ()
@@ -224,7 +233,7 @@ emailFallbackUrl url = do
 
 
 emailGreeting :: Maybe Text -> Html ()
-emailGreeting = maybe (p_ "Hi there!") \name -> p_ do "Hi " ; b_ (toHtml name) ; "!"
+emailGreeting = maybe (p_ "Hi there!") \name -> p_ do "Hi "; b_ (toHtml name); "!"
 
 
 -- =============================================================================
@@ -298,8 +307,9 @@ errorCard e =
     tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
       p_ [class_ "error-card-header"] $ toHtml $ e.errorType <> ": " <> e.message
       p_ [class_ "error-card-sub"] $ toHtml $ "Root cause: " <> e.rootErrorType <> ": " <> e.rootErrorMessage
-    tr_ $ td_ [style_ "padding: 10px 20px;"] $
-      table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+    tr_
+      $ td_ [style_ "padding: 10px 20px;"]
+      $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
         tr_ do
           metaCell "When:" $ toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
           metaCell "Technology:" $ maybe "" (toText . show) e.technology
@@ -310,8 +320,8 @@ errorCard e =
       h3_ [style_ "margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"] "Stack Trace"
       div_ [class_ "error-card-stack"] $ toHtml e.stackTrace
   where
-    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"] $
-      span_ [class_ "error-card-meta"] do
+    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
+      $ span_ [class_ "error-card-meta"] do
         b_ [class_ "error-card-label"] $ toHtml @Text label
         " "
         toHtml @Text val
@@ -330,8 +340,8 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
         "We detected new endpoints on your "
         b_ $ toHtml projectName
         " project:"
-      div_ [class_ "highlight-box"] $
-        table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+      div_ [class_ "highlight-box"]
+        $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
           tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
           forM_ endpointNames \ep ->
             tr_ $ td_ [style_ "padding: 3px 0;"] $ span_ [class_ "monoscope-code"] $ toHtml ep
@@ -413,31 +423,34 @@ weeklyReportEmail d =
           barLegend "#fbbf24" "Monitor alerts"
 
       -- Anomalies table
-      reportTable ("Issues: Changes, Alerts, and Errors {" <> show d.anomaliesCount <> "}") ["First Seen", "Total Requests"] $
-        if V.null d.anomalies
+      reportTable ("Issues: Changes, Alerts, and Errors {" <> show d.anomaliesCount <> "}") ["First Seen", "Total Requests"]
+        $ if V.null d.anomalies
           then [tr_ $ td_ [colspan_ "3"] "No anomalies detected yet."]
-          else V.toList $ d.anomalies <&> \(_, title, _, _, _) ->
-            tr_ do td_ $ toHtml title ; td_ "\8212" ; td_ "\8212"
+          else
+            V.toList $ d.anomalies <&> \(_, title, _, _, _) ->
+              tr_ do td_ $ toHtml title; td_ "\8212"; td_ "\8212"
 
       -- Performance table
-      reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Average Latency", "Latency Change"] $
-        if V.null d.performance
+      reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Average Latency", "Latency Change"]
+        $ if V.null d.performance
           then [tr_ $ td_ [colspan_ "3"] "No performance data yet."]
-          else V.toList $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
-            tr_ do
-              td_ do toHtml host ; " " ; span_ [class_ "monoscope-code"] $ toHtml method ; " " ; span_ [class_ "monoscope-code"] $ toHtml urlPath
-              td_ $ toHtml $ show dur
-              td_ $ toHtml $ show durChange <> "%"
+          else
+            V.toList $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
+              tr_ do
+                td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
+                td_ $ toHtml $ show dur
+                td_ $ toHtml $ show durChange <> "%"
 
       -- Slow queries table
-      reportTable ("Slow db operations {" <> show (V.length d.slowQueries) <> "}") ["Average Latency", "Total events"] $
-        if V.null d.slowQueries
+      reportTable ("Slow db operations {" <> show (V.length d.slowQueries) <> "}") ["Average Latency", "Total events"]
+        $ if V.null d.slowQueries
           then [tr_ $ td_ [colspan_ "3"] "No slow queries detected."]
-          else V.toList $ d.slowQueries <&> \(statement, total, latency) ->
-            tr_ do
-              td_ $ span_ [class_ "monoscope-code"] $ toHtml statement
-              td_ $ toHtml $ show latency
-              td_ $ toHtml $ show total
+          else
+            V.toList $ d.slowQueries <&> \(statement, total, latency) ->
+              tr_ do
+                td_ $ span_ [class_ "monoscope-code"] $ toHtml statement
+                td_ $ toHtml $ show latency
+                td_ $ toHtml $ show total
 
       emailButton d.reportUrl "View the Full Report"
       emailDivider
@@ -476,11 +489,14 @@ reportTable title headers rows =
 sampleProjectInvite :: (Text, Html ())
 sampleProjectInvite = projectInviteEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id"
 
+
 sampleProjectCreated :: (Text, Html ())
 sampleProjectCreated = projectCreatedEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id"
 
+
 sampleProjectDeleted :: (Text, Html ())
 sampleProjectDeleted = projectDeletedEmail "Jane Doe" "My API Project"
+
 
 sampleRuntimeErrors :: (Text, Html ())
 sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2]
@@ -509,8 +525,10 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
         , RequestDumps.requestPath = Just "/api/v1/users"
         }
 
+
 sampleAnomalyEndpoint :: (Text, Html ())
 sampleAnomalyEndpoint = anomalyEndpointEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id/issues" ["POST /api/v1/orders", "GET /api/v1/orders/:id"]
+
 
 sampleWeeklyReport :: Text -> Text -> (Text, Html ())
 sampleWeeklyReport eventsChart errorsChart =

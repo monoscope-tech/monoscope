@@ -188,9 +188,10 @@ runNotifyProduction = interpret $ \_ -> \case
               mail = Mail from [to] [] [] [("Subject", subject)] [[htmlPart (toLazy htmlBody)]]
               port = fromIntegral cfg.smtpPort
           Log.logTrace "Sending email notification" (AE.object ["from" AE..= cfg.smtpSender, "to" AE..= receiver, "subject" AE..= subject, "via" AE..= ("smtp" :: Text)])
-          liftIO $ if cfg.smtpPort == 587
-            then sendMailWithLoginSTARTTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
-            else sendMailWithLoginTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
+          liftIO
+            $ if cfg.smtpPort == 587
+              then sendMailWithLoginSTARTTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
+              else sendMailWithLoginTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
       Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver])
     SlackNotification SlackData{..} -> do
       appCtx <- ask @Config.AuthContext
