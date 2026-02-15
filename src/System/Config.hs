@@ -17,7 +17,7 @@ import Effectful
 import Effectful.Fail (Fail)
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
-import Pkg.DBUtils qualified as DBUtils
+import Pkg.DeriveUtils qualified as DeriveUtils
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
@@ -203,7 +203,7 @@ instance Default DeploymentEnv where
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 config.databaseUrl
-  let createTimefusionPgConnIO = DBUtils.connectPostgreSQL $ encodeUtf8 config.timefusionPgUrl
+  let createTimefusionPgConnIO = DeriveUtils.connectPostgreSQL $ encodeUtf8 config.timefusionPgUrl
   when config.migrateAndInitializeOnStart $ liftIO do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization

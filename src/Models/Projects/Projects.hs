@@ -58,8 +58,7 @@ import Effectful
 import Effectful.PostgreSQL qualified as PG
 import GHC.Records (HasField (getField))
 import Models.Users.Users qualified as Users
-import Pkg.DBUtils (WrappedEnumSC (..))
-import Pkg.DeriveUtils (UUIDId (..), idFromText)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData)

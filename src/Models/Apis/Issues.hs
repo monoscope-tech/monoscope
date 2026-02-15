@@ -88,8 +88,7 @@ import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Pkg.DBUtils (WrappedEnumSC (..))
-import Pkg.DeriveUtils (UUIDId (..), idToText)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText)
 import Relude hiding (id)
 import Servant (ServerError, err500, errBody)
 import System.Types (DB)

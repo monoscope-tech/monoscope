@@ -59,8 +59,7 @@ import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
-import Pkg.DBUtils (WrappedEnumSC (..))
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))

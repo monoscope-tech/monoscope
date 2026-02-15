@@ -53,10 +53,8 @@ import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Web.Auth (APItoolkitAuthContext, authHandler)
+import Web.Auth (APItoolkitAuthContext, authHandler, renderError)
 import Web.Auth qualified as Auth
-import Web.ClientMetadata qualified as ClientMetadata
-import Web.Error
 
 -- Model imports
 
@@ -194,7 +192,7 @@ data Routes mode = Routes
   , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[JSON] Slack.SlackEventPayload :> Post '[JSON] AE.Value
   , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
-  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
+  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
   , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
@@ -420,7 +418,7 @@ server pool =
     , slackEventsPost = Slack.slackEventsPostH
     , externalOptionsGet = Slack.externalOptionsH
     , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
-    , clientMetadata = ClientMetadata.clientMetadataH
+    , clientMetadata = Auth.clientMetadataH
     , lemonWebhook = LemonSqueezy.webhookPostH
     , githubWebhook = GitSync.githubWebhookPostH
     , chartsDataShot = Charts.queryMetrics

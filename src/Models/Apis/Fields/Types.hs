@@ -39,8 +39,7 @@ import Effectful
 import Effectful.PostgreSQL qualified as PG
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Pkg.DBUtils (WrappedEnumSC (..))
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import System.Types (DB)
 import Web.HttpApiData (FromHttpApiData)

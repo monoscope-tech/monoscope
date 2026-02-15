@@ -48,7 +48,7 @@ import Effectful.Time qualified as Time
 import Models.Apis.Fields.Types ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DBUtils (WrappedEnumShow (..))
+import Pkg.DeriveUtils (WrappedEnumShow (..))
 import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)

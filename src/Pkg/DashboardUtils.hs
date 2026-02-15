@@ -56,13 +56,6 @@ variablePresetsKQL pid mf mt allParams currentTime =
    in Map.union kqlRemapping filteredBase
 
 
--- | Convert constant results to a SQL list format suitable for IN clauses.
--- For single-column results [["api/users"], ["api/orders"]],
--- this generates: "('api/users', 'api/orders')".
--- For multi-column results, only the first column is used (empty inner lists are skipped).
--- For empty results, generates an empty subquery "(SELECT NULL::text WHERE FALSE)"
--- to avoid SQL three-valued logic issues with NULL in IN clauses.
---
 -- >>> constantToSQLList [["api/users"], ["api/orders"]]
 -- "('api/users', 'api/orders')"
 -- >>> constantToSQLList [["foo'bar"]]
@@ -77,12 +70,6 @@ constantToSQLList = \case
     escapeQuote v = "'" <> T.replace "'" "''" v <> "'"
 
 
--- | Convert constant results to a KQL list format suitable for IN expressions.
--- For single-column results [["api/users"], ["api/orders"]],
--- this generates: ("api/users", "api/orders").
--- KQL uses double quotes for strings with backslash escaping.
--- For empty results, generates a sentinel value that will never match real data.
---
 -- >>> constantToKQLList [["api/users"], ["api/orders"]]
 -- "(\"api/users\", \"api/orders\")"
 -- >>> constantToKQLList [["foo\"bar"]]

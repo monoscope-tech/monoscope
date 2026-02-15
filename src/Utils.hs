@@ -95,7 +95,7 @@ import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
-import Pkg.THUtils (hashFile)
+import Pkg.DeriveUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
 import Text.Printf (printf)

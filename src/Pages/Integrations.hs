@@ -24,8 +24,7 @@ import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Projects.ProjectMembers (Team (..), getTeamsById)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Mail (sendDiscordAlert, sendPagerdutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendWhatsAppAlert)
-import Pkg.SampleAlerts (sampleAlert, sampleReport)
+import Pkg.Mail (sampleAlert, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendWhatsAppAlert)
 import Relude hiding (Reader, State, ask)
 import Servant (err400, err404, errBody)
 import System.Config qualified as Config

@@ -59,7 +59,7 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Users qualified as Users
-import Pkg.DBUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)

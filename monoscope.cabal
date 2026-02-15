@@ -54,6 +54,7 @@ extra-source-files:
     static/migrations/0026_pagerduty.sql
     static/migrations/0027_notification_test.sql
     static/migrations/0028_everyone_team.sql
+    static/migrations/0029_replay_sessions.sql
 
 source-repository head
   type: git
@@ -125,14 +126,12 @@ library
       Pages.Share
       Pages.Telemetry
       Pkg.AI
-      Pkg.Components.ExternalHeadScripts
       Pkg.Components.LogQueryBox
       Pkg.Components.Table
       Pkg.Components.TimePicker
       Pkg.Components.Widget
       Pkg.ConvertKit
       Pkg.DashboardUtils
-      Pkg.DBUtils
       Pkg.DeriveUtils
       Pkg.Drain
       Pkg.GitHub
@@ -142,9 +141,7 @@ library
       Pkg.Parser.Stats
       Pkg.QueryCache
       Pkg.Queue
-      Pkg.SampleAlerts
       Pkg.TestUtils
-      Pkg.THUtils
       ProcessMessage
       RequestMessages
       Start
@@ -156,8 +153,6 @@ library
       System.Types
       Utils
       Web.Auth
-      Web.ClientMetadata
-      Web.Error
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
       Proto.Opentelemetry.Proto.Common.V1.Common_Fields

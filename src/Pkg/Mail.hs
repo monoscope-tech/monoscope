@@ -1,8 +1,9 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService) where
+module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlert, sampleReport) where
 
 import Data.Aeson qualified as AE
+import Data.Default (def)
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Notify qualified as Notify
@@ -17,6 +18,7 @@ import Effectful (
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
+import Models.Apis.Issues (IssueType (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
@@ -358,3 +360,33 @@ sendPagerdutyAlertToService integrationKey (RuntimeErrorAlert issueId errorData)
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
 sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
 sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
+
+
+sampleAlert :: IssueType -> Text -> NotificationAlerts
+sampleAlert = \case
+  APIChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
+  RuntimeException ->
+    const
+      $ RuntimeErrorAlert
+        "test-123"
+        def
+          { RequestDumps.when = UTCTime (fromGregorian 2025 1 1) 0
+          , RequestDumps.errorType = "🧪 TEST: TypeError"
+          , RequestDumps.rootErrorType = "TypeError"
+          , RequestDumps.message = "Sample error message for testing"
+          , RequestDumps.rootErrorMessage = "Sample error"
+          , RequestDumps.stackTrace = "at sampleFunction (sample.js:42:15)"
+          , RequestDumps.hash = Just "test-hash-xyz"
+          , RequestDumps.technology = Just RequestDumps.JsExpress
+          , RequestDumps.requestMethod = Just "GET"
+          , RequestDumps.requestPath = Just "/api/test"
+          , RequestDumps.spanId = Just "test-span-id"
+          , RequestDumps.traceId = Just "test-trace-id"
+          , RequestDumps.serviceName = Just "api"
+          , RequestDumps.stack = Just "at sampleFunction (sample.js:42:15)"
+          }
+  QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
+
+
+sampleReport :: Text -> NotificationAlerts
+sampleReport title = ReportAlert ("🧪 TEST: " <> title) "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" "https://example.com/chart.png" "https://example.com/errors.png"
