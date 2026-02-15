@@ -1,6 +1,3 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE MultilineStrings #-}
-
 -- |
 -- Module      : Pkg.AI
 -- Description : Unified AI/LLM system for natural language to KQL query generation

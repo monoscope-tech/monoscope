@@ -1,7 +1,3 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE PackageImports #-}
-{-# LANGUAGE RankNTypes #-}
-
 module Utils (
   eitherStrToText,
   onpointerdown_,

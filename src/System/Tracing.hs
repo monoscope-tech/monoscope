@@ -1,9 +1,3 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeFamilies #-}
-
 module System.Tracing (
   Tracing,
   runTracing,

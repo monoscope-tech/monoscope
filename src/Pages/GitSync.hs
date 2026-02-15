@@ -1,6 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-{-# LANGUAGE QuasiQuotes #-}
-
 module Pages.GitSync (
   githubWebhookPostH,
   GitHubWebhookPayload (..),

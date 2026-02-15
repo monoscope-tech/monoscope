@@ -1,4 +1,3 @@
-{-# LANGUAGE LambdaCase #-}
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
 module Pages.Onboarding.Onboarding (

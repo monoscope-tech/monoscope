@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH) where
 
 -- Standard library imports

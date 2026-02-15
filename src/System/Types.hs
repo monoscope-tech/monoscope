@@ -1,8 +1,3 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE StandaloneKindSignatures #-}
-
 module System.Types (
   ATBaseCtx,
   ATAuthCtx,

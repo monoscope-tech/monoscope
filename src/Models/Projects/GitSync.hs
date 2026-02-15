@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Models.Projects.GitSync (
   GitHubSync (..),
   GitHubSyncId,

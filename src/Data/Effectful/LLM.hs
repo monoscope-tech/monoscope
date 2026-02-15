@@ -1,11 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DeriveGeneric #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
-
 module Data.Effectful.LLM (
   LLM (..),
   callLLM,

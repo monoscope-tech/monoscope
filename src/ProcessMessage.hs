@@ -1,7 +1,4 @@
 {-# LANGUAGE PartialTypeSignatures #-}
-{-# LANGUAGE QuasiQuotes #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
 {-# LANGUAGE StrictData #-}
 
 module ProcessMessage (

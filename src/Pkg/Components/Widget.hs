@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTraceDataTable, renderTableWithDataAndParams) where
 
 import Control.Lens

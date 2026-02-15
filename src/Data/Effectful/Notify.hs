@@ -1,12 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE DeriveAnyClass #-}
-{-# LANGUAGE DerivingStrategies #-}
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE OverloadedStrings #-}
-{-# LANGUAGE RecordWildCards #-}
-{-# LANGUAGE TemplateHaskell #-}
-{-# LANGUAGE TypeFamilies #-}
 {-# OPTIONS_GHC -Wno-redundant-constraints #-}
 
 module Data.Effectful.Notify (
@@ -55,6 +46,8 @@ import Network.Mail.Mime (Address (..), Mail (..), htmlPart)
 import Network.Mail.SMTP (sendMailWithLoginSTARTTLS', sendMailWithLoginTLS')
 import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith, responseStatus)
 import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Control.Exception (try)
+import System.Timeout (timeout)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -174,25 +167,27 @@ runNotifyProduction = interpret $ \_ -> \case
     EmailNotification EmailData{..} -> do
       appCtx <- ask @Config.AuthContext
       let cfg = appCtx.config
-      if cfg.smtpHost == ""
+          via = if cfg.smtpHost == "" then "api" :: Text else "smtp"
+      Log.logTrace "Sending email notification" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
+      result <- liftIO $ try @SomeException $ timeout 30_000_000 $ if cfg.smtpHost == ""
         then do
           let apiKey = encodeUtf8 cfg.postmarkToken
               fromAddress = cfg.postmarkFromEmail
-              payload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
-          Log.logTrace "Sending email notification" (AE.object ["from" AE..= fromAddress, "to" AE..= receiver, "subject" AE..= subject, "via" AE..= ("postmark" :: Text)])
-          let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
-          void $ liftIO $ postWith opts "https://api.postmarkapp.com/email" payload
+              reqPayload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
+              opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
+          re <- postWith opts "https://api.postmarkapp.com/email" reqPayload
+          unless (statusIsSuccessful (re ^. responseStatus)) $ fail $ "Postmark returned " <> show (re ^. responseStatus)
         else do
           let from = Address Nothing cfg.smtpSender
               to = Address Nothing receiver
               mail = Mail from [to] [] [] [("Subject", subject)] [[htmlPart (toLazy htmlBody)]]
               port = fromIntegral cfg.smtpPort
-          Log.logTrace "Sending email notification" (AE.object ["from" AE..= cfg.smtpSender, "to" AE..= receiver, "subject" AE..= subject, "via" AE..= ("smtp" :: Text)])
-          liftIO
-            $ if cfg.smtpPort == 587
-              then sendMailWithLoginSTARTTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
-              else sendMailWithLoginTLS' (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
-      Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver])
+              sendMail = if cfg.smtpTls then sendMailWithLoginTLS' else sendMailWithLoginSTARTTLS'
+          sendMail (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
+      case result of
+        Right (Just ()) -> Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver, "via" AE..= via])
+        Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
+        Left ex -> Log.logAttention "Email send failed" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via, "error" AE..= displayException ex])
     SlackNotification SlackData{..} -> do
       appCtx <- ask @Config.AuthContext
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]

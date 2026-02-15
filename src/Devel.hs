@@ -1,5 +1,4 @@
-{-# OPTIONS_GHC -Wno-error=ambiguous-fields -Wno-ambiguous-fields #-}
-{-# OPTIONS_GHC -Wno-error=unused-imports -Wno-unused-imports -Wno-incomplete-uni-patterns #-}
+{-# OPTIONS_GHC -Wno-incomplete-uni-patterns #-}
 
 module Devel (dev2) where
 
@@ -7,32 +6,13 @@ module Devel (dev2) where
 -- where having fast reloads is important
 --
 
-import Data.Aeson.QQ (aesonQQ)
-import Data.Default (def)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Lucid
-import Models.Projects.Projects qualified as Projects
-import Network.Wai.Handler.Warp (run)
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Relude hiding (get)
+import Relude
 import Relude.Unsafe qualified as Unsafe
-import Web.Scotty
-
--- import qualified Data.Text.Lazy.IO as TIO
-
-import Configuration.Dotenv qualified as Dotenv
-import Control.Exception (try)
-import Data.Pool as Pool (Pool, defaultPoolConfig, newPool)
-import Database.PostgreSQL.Entity.DBT (withPool)
-import Database.PostgreSQL.Simple qualified as PG
-import Network.HTTP.Types.Status
-import Network.Wai.Middleware.Static (addBase, hasPrefix, noDots, staticPolicy, (>->))
-import System.Config
-import System.Directory (doesFileExist)
-import System.Envy (FromEnv (..), ReadShowVar (..), Var (..), decodeEnv, fromVar, toVar)
 
 import BackgroundJobs qualified
+import Configuration.Dotenv qualified as Dotenv
 import Control.Exception.Safe qualified as Safe
 import Data.Time (getCurrentTime)
 import Effectful

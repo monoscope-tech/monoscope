@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Data.Aeson qualified as AE

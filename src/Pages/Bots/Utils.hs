@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
 
 import Control.Lens ((.~), (^?))

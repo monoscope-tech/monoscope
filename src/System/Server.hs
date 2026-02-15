@@ -1,5 +1,3 @@
-{-# LANGUAGE RankNTypes #-}
-
 module System.Server (runMonoscope) where
 
 import BackgroundJobs qualified

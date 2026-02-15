@@ -1,9 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
-
 module Data.Effectful.Wreq (
   HTTP (..),
   get,

@@ -1076,10 +1076,16 @@ body, :host {
     display: none;
   }
   .alert {
-    --color-success: var(--color-fillSuccess-weak);
-    --color-error: var(--color-fillError-weak);
-    --color-warning: var(--color-fillWarning-weak);
-    --color-info: var(--color-fillInformation-weak);
+    --color-success: rgba(10 204 146 / 0.15);
+    --color-error: rgba(255 74 74 / 0.15);
+    --color-warning: rgba(255 192 46 / 0.15);
+    --color-info: rgba(38 176 255 / 0.15);
+  }
+  [data-theme="dark"] .alert {
+    --color-success: rgba(119 199 175 / 0.2);
+    --color-error: rgba(255 156 156 / 0.2);
+    --color-warning: rgba(224 190 112 / 0.2);
+    --color-info: rgba(126 192 229 / 0.2);
   }
 
 

@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-partial-fields #-}
-
 module Pages.Reports (
   reportsGetH,
   singleReportGetH,

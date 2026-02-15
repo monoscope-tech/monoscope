@@ -1,5 +1,3 @@
-{-# LANGUAGE OverloadedStrings #-}
-
 module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, compressAndMergeReplaySessions, saveMergedReplayEvents) where
 
 import Codec.Compression.GZip qualified as GZip

@@ -1,4 +1,3 @@
-{-# LANGUAGE PackageImports #-}
 {-# LANGUAGE StrictData #-}
 
 module Opentelemetry.OtlpServer (

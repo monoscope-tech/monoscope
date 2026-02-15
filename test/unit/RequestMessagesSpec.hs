@@ -1,4 +1,3 @@
-{-# LANGUAGE QuasiQuotes #-}
 module RequestMessagesSpec (spec) where
 
 import Data.Aeson qualified as AE

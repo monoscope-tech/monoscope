@@ -1,6 +1,3 @@
-{-# LANGUAGE GADTs #-}
-{-# OPTIONS_GHC -Wno-ambiguous-fields #-}
-
 module Pkg.Components.Table (
   Table (..),
   TableRows (..),

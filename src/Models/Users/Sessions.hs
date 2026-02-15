@@ -1,5 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-
 module Models.Users.Sessions (
   PersistentSessionId (..),
   PersistentSession (..),

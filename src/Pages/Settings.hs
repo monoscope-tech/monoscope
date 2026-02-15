@@ -55,7 +55,8 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (DiscordData (..), PagerdutyData (..), SlackData (..), getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData)
 import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Models.Projects.ProjectMembers (Team (..), getTeamsById)
+import Data.CaseInsensitive qualified as CI
+import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -480,15 +481,17 @@ notificationsTestPostH pid TestForm{..} = do
         _ -> ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") ["GET /api/v1/test"]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
 
+  let resolveEmails t = map CI.original <$> resolveTeamEmails pid t
+
   case (channel, teamId) of
     ("all", Just tid) ->
       getTeam tid >>= traverse_ \t -> do
-        forM_ t.notify_emails sendTestEmail
+        resolveEmails t >>= mapM_ sendTestEmail
         forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
         forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
         when (not $ V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
         forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
-    ("email", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.notify_emails sendTestEmail
+    ("email", Just tid) -> getTeam tid >>= traverse_ \t -> resolveEmails t >>= mapM_ sendTestEmail
     ("email", Nothing) -> forM_ project.notifyEmails sendTestEmail
     ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
     ("slack", Nothing) -> getProjectSlackData pid >>= traverse_ \s -> sendSlackAlert alert pid project.title (Just s.channelId)

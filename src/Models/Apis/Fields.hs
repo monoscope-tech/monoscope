@@ -34,7 +34,6 @@ import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Time (UTCTime, ZonedTime, addUTCTime, diffUTCTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)

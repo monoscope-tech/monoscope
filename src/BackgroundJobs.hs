@@ -839,11 +839,7 @@ sendNotifications _ _ _ _ = pass
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailAction = do
-  -- For @everyone team, dynamically resolve all active project member emails
-  emails <-
-    if team.is_everyone
-      then fmap (.email) <$> ProjectMembers.selectActiveProjectMembers projectId
-      else pure $ V.toList $ fmap CI.mk team.notify_emails
+  emails <- ProjectMembers.resolveTeamEmails projectId team
   for_ emails (`emailAction` Nothing)
   for_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
   for_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)

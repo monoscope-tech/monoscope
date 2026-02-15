@@ -1,8 +1,3 @@
-{-# LANGUAGE NamedFieldPuns #-}
-{-# LANGUAGE PackageImports #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# OPTIONS_GHC -Wno-ambiguous-fields #-}
-
 module Pages.Projects (
   -- ListProjects
   listProjectsGetH,
@@ -287,6 +282,7 @@ integrationsSettingsGetH pid = do
         , pagerdutyData = pagerdutyInfo
         , slackChannels = channels
         , existingSlackChannels = existingSlackChannels
+        , everyoneTeamId = (.id) <$> everyoneTeamM
         }
 
 
@@ -407,6 +403,7 @@ data IntegrationsConfig = IntegrationsConfig
   , pagerdutyData :: Maybe Slack.PagerdutyData
   , slackChannels :: [BotUtils.Channel]
   , existingSlackChannels :: V.Vector Text
+  , everyoneTeamId :: Maybe UUID.UUID
   }
 
 
@@ -453,7 +450,7 @@ integrationsBody IntegrationsConfig{..} = do
               h3_ [class_ "text-textStrong text-lg font-medium mb-4"] "Connected"
               div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-4"] do
                 forM_ connected \(val, title, desc, channel, configured, icon, content) ->
-                  renderNotificationOption pid title desc val channel notifChannel configured icon content
+                  renderNotificationOption pid everyoneTeamId title desc val channel notifChannel configured icon content
 
             -- Available integrations section - increased spacing for clear visual separation
             let availableToShow = if null connected then integrations else available
@@ -461,7 +458,7 @@ integrationsBody IntegrationsConfig{..} = do
               h3_ [class_ "text-textStrong text-lg font-medium mb-4 mt-12"] $ if null connected then "Available Integrations" else "Available"
               div_ [class_ "grid grid-cols-1 lg:grid-cols-2 gap-4"] do
                 forM_ availableToShow \(val, title, desc, channel, configured, icon, content) ->
-                  renderNotificationOption pid title desc val channel notifChannel configured icon content
+                  renderNotificationOption pid everyoneTeamId title desc val channel notifChannel configured icon content
 
             -- Save button - clear separation from sections above
             div_ [class_ "mt-10 pt-6 border-t border-strokeWeak"] do
@@ -482,18 +479,19 @@ integrationsBody IntegrationsConfig{..} = do
           p_ [class_ "text-textWeak text-center py-4"] "Loading..."
 
 
-renderInlineTestButton :: Text -> Text -> Html ()
-renderInlineTestButton pid channel =
+renderInlineTestButton :: Text -> Text -> Maybe UUID.UUID -> Html ()
+renderInlineTestButton pid channel teamIdM =
   form_ [hxPost_ [text|/p/$pid/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
     input_ [type_ "hidden", name_ "channel", value_ channel]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
+    whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
     button_ [type_ "submit", class_ "btn btn-xs btn-outline gap-1", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] do
       faSprite_ "flask-vial" "regular" "h-3 w-3"
       "Test"
 
 
-renderNotificationOption :: Text -> Text -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Bool -> Html () -> Html () -> Html ()
-renderNotificationOption pid title description value channel notifChannel isConfigured icon extraContent = do
+renderNotificationOption :: Text -> Maybe UUID.UUID -> Text -> Text -> Text -> Projects.NotificationChannel -> Maybe (V.Vector Projects.NotificationChannel) -> Bool -> Html () -> Html () -> Html ()
+renderNotificationOption pid teamIdM title description value channel notifChannel isConfigured icon extraContent = do
   let isChecked = channel `elem` fromMaybe [] notifChannel
       isActive = isChecked && isConfigured
   div_ [class_ "bg-bgRaised rounded-lg border shadow-xs hover-only:hover:shadow-md transition-shadow duration-200", class_ $ if isActive then "border-fillBrand-weak" else "border-strokeWeak"] do
@@ -512,7 +510,7 @@ renderNotificationOption pid title description value channel notifChannel isConf
         -- Test button area - always reserve space
         div_ [class_ "flex-1", id_ $ value <> "-test-button"] do
           if isActive
-            then renderInlineTestButton pid value
+            then renderInlineTestButton pid value teamIdM
             else button_ [type_ "button", disabled_ "", class_ "btn btn-xs btn-outline btn-neutral gap-1 cursor-not-allowed", Aria.label_ "Test unavailable - enable integration first"] do
               faSprite_ "flask-vial" "regular" "h-3 w-3"
               "Test"

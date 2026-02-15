@@ -31,10 +31,12 @@ module Models.Projects.ProjectMembers (
   addSlackChannelToEveryoneTeam,
   addDiscordChannelToEveryoneTeam,
   removeSlackChannelsFromEveryoneTeam,
+  resolveTeamEmails,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
+import Data.CaseInsensitive qualified as CI
 import Data.Set qualified as Set
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
@@ -475,6 +477,15 @@ addSlackChannelToEveryoneTeam = addChannelToEveryoneTeam (.slack_channels) \d cs
 -- Returns True if channel was added, False if it already existed
 addDiscordChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
 addDiscordChannelToEveryoneTeam = addChannelToEveryoneTeam (.discord_channels) \d cs -> d{discordChannels = cs}
+
+
+resolveTeamEmails :: DB es => Projects.ProjectId -> Team -> Eff es [CI Text]
+resolveTeamEmails projectId team =
+  if team.is_everyone
+    then do
+      memberEmails <- fmap (.email) <$> selectActiveProjectMembers projectId
+      pure $ memberEmails <> V.toList (fmap CI.mk team.notify_emails)
+    else pure $ V.toList $ fmap CI.mk team.notify_emails
 
 
 -- | Remove all Slack channels from @everyone team

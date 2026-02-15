@@ -1,5 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-
 module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
@@ -54,6 +52,7 @@ data EnvConfig = EnvConfig
   , enableKafkaService :: Bool
   , smtpHost :: Text
   , smtpPort :: Int
+  , smtpTls :: Bool
   , smtpUsername :: Text
   , smtpPassword :: Text
   , smtpSender :: Text
@@ -149,6 +148,7 @@ instance DefConfig EnvConfig where
       , loggingDestination = Logging.StdOut
       , logLevel = LogInfo -- Default to Info level
       , smtpPort = 465
+      , smtpTls = True
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       , showDemoProject = False -- Default to hidden
       , postmarkFromEmail = "hello@monoscope.tech"
