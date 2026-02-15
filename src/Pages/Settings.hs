@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.Settings (
   -- S3
   bringS3GetH,
@@ -480,7 +478,7 @@ notificationsTestPostH pid TestForm{..} = do
         "runtime_exception" -> ET.runtimeErrorsEmail project.title (fullProjectUrl <> "/issues/") []
         "report" -> ET.sampleWeeklyReport "" ""
         _ -> ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") ["GET /api/v1/test"]
-      sendTestEmail email = let (subj, html) = testTemplate in sendRenderedEmail email subj (ET.renderEmail subj html)
+      sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
 
   case (channel, teamId) of
     ("all", Just tid) ->

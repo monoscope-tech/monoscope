@@ -257,9 +257,9 @@ projectNotifEmail kind userNameM projectName ctaM =
   )
   where
     (subject, message) = case kind of
-      PNInvite -> ("Project Invitation", "<b>" <> fromMaybe "Someone" userNameM <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! All you need to do next is <a href=\"https://monoscope.tech/docs/sdks?utm_source=transac_emails\">integrate one of our SDKs</a> into your application so we can begin monitoring your API.")
-      PNCreated -> ("New Project Created", "You have created a new <b>" <> projectName <> "</b> project on Monoscope.")
-      PNDeleted -> ("Project Deleted", "You have successfully deleted the <b>" <> projectName <> "</b> project.")
+      PNInvite -> ("[···] Project Invitation", "<b>" <> fromMaybe "Someone" userNameM <> "</b> has invited you to the <b>" <> projectName <> "</b> project on Monoscope. We're excited to have you on board! All you need to do next is <a href=\"https://monoscope.tech/docs/sdks?utm_source=transac_emails\">integrate one of our SDKs</a> into your application so we can begin monitoring your API.")
+      PNCreated -> ("[···] New Project Created", "You have created a new <b>" <> projectName <> "</b> project on Monoscope.")
+      PNDeleted -> ("[···] Project Deleted", "You have successfully deleted the <b>" <> projectName <> "</b> project.")
 
 
 projectInviteEmail :: Text -> Text -> Text -> (Text, Html ())
@@ -283,7 +283,7 @@ projectDeletedEmail userName projectName =
 
 runtimeErrorsEmail :: Text -> Text -> [RequestDumps.ATError] -> (Text, Html ())
 runtimeErrorsEmail projectName errorsUrl errors =
-  ( "New Runtime Exception(s) Detected - " <> projectName
+  ( "[···] New Runtime Exception(s) Detected - " <> projectName
   , emailBody do
       h1_ "New Runtime Error(s)"
       p_ do
@@ -333,7 +333,7 @@ errorCard e =
 
 anomalyEndpointEmail :: Text -> Text -> Text -> [Text] -> (Text, Html ())
 anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
-  ( "New Endpoint(s) Detected for Your \"" <> projectName <> "\" Project"
+  ( "[···] New Endpoint(s) Detected for Your \"" <> projectName <> "\" Project"
   , emailBody do
       emailGreeting (Just userName)
       p_ do
@@ -381,7 +381,7 @@ data WeeklyReportData = WeeklyReportData
 
 weeklyReportEmail :: WeeklyReportData -> (Text, Html ())
 weeklyReportEmail d =
-  ( "Weekly Report for " <> d.projectName
+  ( "[···] Weekly Report for " <> d.projectName
   , emailBody do
       emailGreeting (Just d.userName)
       p_ do
