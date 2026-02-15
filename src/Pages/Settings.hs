@@ -32,6 +32,7 @@ module Pages.Settings (
 
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
+import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), getZonedTime, timeOfDayToTime, timeToTimeOfDay)
@@ -55,7 +56,6 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (DiscordData (..), PagerdutyData (..), SlackData (..), getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData)
 import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
-import Data.CaseInsensitive qualified as CI
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
