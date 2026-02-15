@@ -15,8 +15,19 @@ module Models.Users.Sessions (
   insertSession,
   getPersistentSession,
   newPersistentSessionId,
+  -- Users
+  User (..),
+  UserId (..),
+  createUser,
+  userIdByEmail,
+  createUserId,
+  insertUser,
+  userById,
+  userByEmail,
+  createEmptyUser,
 ) where
 
+import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
@@ -24,25 +35,27 @@ import Data.Text.Display
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity (Entity, _insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple hiding (execute)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField
+import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
+import Effectful.Time (Time, currentTime)
+import GHC.Records (HasField (getField))
+import Models.Projects.Projects (User (..), UserId (..), createUser, userIdByEmail, createUserId, insertUser, userById, userByEmail, createEmptyUser)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users
-import Models.Users.Users qualified as Users
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (DB, UUIDId (..))
 import Relude
-import Servant (Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
-import System.DB (DB)
+import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,
@@ -76,13 +89,13 @@ newtype SessionData = SessionData {getSessionData :: Map Text Text}
     via Aeson (Map Text Text)
 
 
-newtype PSUser = PSUser {getUser :: Users.User}
+newtype PSUser = PSUser {getUser :: User}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
   deriving anyclass (Default)
   deriving
     (FromField, ToField)
-    via Aeson Users.User
+    via Aeson User
 
 
 newtype PSProjects = PSProjects {getProjects :: V.Vector Projects.Project}
@@ -178,7 +191,7 @@ addCookie = addHeader
 data Session = Session
   { sessionId :: PersistentSessionId
   , persistentSession :: PersistentSession
-  , user :: Users.User
+  , user :: User
   , requestID :: Text
   , isSidebarClosed :: Bool
   , theme :: Text

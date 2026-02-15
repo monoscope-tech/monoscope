@@ -9,8 +9,8 @@ import Database.PostgreSQL.Transact qualified as PGT
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users (UserId (..))
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions (UserId (..))
+import Models.Users.Sessions qualified as Users
 import Pages.BodyWrapper
 import Pages.Projects (TBulkActionForm (..), TeamForm (..))
 import Pages.Projects qualified as ManageMembers

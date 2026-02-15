@@ -48,7 +48,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Types qualified as Fields (
+import Models.Apis.Fields qualified as Fields (
   FieldCategoryEnum,
   FieldId,
   FieldTypes,
@@ -57,7 +57,7 @@ import Models.Apis.Fields.Types qualified as Fields (
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)

@@ -39,12 +39,10 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Facets qualified as Facets
-import Models.Apis.Fields.Types qualified as Fields
+import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -52,10 +50,10 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.SystemLogs (insertSystemLog, mkSystemLog)
-import Models.Telemetry.Telemetry (SeverityLevel (..))
+import Models.Telemetry.SummaryGenerator (generateSummary)
+import Models.Telemetry.Telemetry (SeverityLevel (..), insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
@@ -73,10 +71,9 @@ import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
-import ProcessMessage (processSpanToEntities)
+import ProcessMessage (processErrors, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
-import RequestMessages qualified
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -417,7 +414,7 @@ generateOtelFacetsBatch projectIds timestamp = do
         ]
         $ \sp -> do
           addEvent sp "facet_generation.started" []
-          result <- try $ Facets.generateAndSaveFacets pid "otel_logs_and_spans" Facets.facetColumns 50 timestamp
+          result <- try $ Fields.generateAndSaveFacets pid "otel_logs_and_spans" Fields.facetColumns 50 timestamp
           case result of
             Left (e :: SomeException) -> do
               addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]
@@ -657,7 +654,7 @@ processProjectErrors pid errors = do
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
     processError :: RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-    processError = RequestMessages.processErrors pid Nothing Nothing Nothing
+    processError = processErrors pid Nothing Nothing Nothing
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
@@ -1002,7 +999,7 @@ sendReportForProject pid rType = do
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
     let report =
-          Reports.Report
+          Issues.Report
             { id = reportId
             , reportJson = rp_json
             , createdAt = utcToZonedTime timeZone currentTime
@@ -1012,7 +1009,7 @@ sendReportForProject pid rType = do
             , endTime = currentTime
             , reportType = typTxt
             }
-    res <- Reports.addReport report
+    res <- Issues.addReport report
     Log.logInfo "Completed report generation for" pid
     unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
       Log.logInfo "Sending report notifications for" pid
@@ -1577,7 +1574,7 @@ evaluateQueryMonitor monitor startWall = do
           , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
           ]
       otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall
-  insertSystemLog otelLog
+  insertSystemLog otelLog{Telemetry.summary = generateSummary otelLog}
   void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
   Relude.when (status /= Monitors.MSNormal) do
     Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)

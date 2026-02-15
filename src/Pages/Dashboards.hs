@@ -78,7 +78,6 @@ import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
@@ -95,9 +94,8 @@ import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
@@ -1167,7 +1165,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           if isNewWidget
             then button_ [class_ "btn btn-primary btn-sm shadow-sm", type_ "submit", form_ widgetFormId] "Save changes"
             else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-textWeak hover:text-textStrong", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
+          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-textWeak hover:text-textStrong", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
       div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
         script_ [text| var widgetJSON = ${widgetJSON}; |]
@@ -2163,8 +2161,8 @@ processConstantsAndExtendParams pid now timeParams allParams constants =
   pooledForConcurrently constants (processConstant pid now timeParams allParams) <&> \pc ->
     ( pc
     , allParams
-        <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- pc]
-        <> [("const-" <> c.key <> "-kql", Just $ DashboardUtils.constantToKQLList $ fromMaybe [] c.result) | c <- pc]
+        <> [("const-" <> c.key, Just $ constantToSQLList $ fromMaybe [] c.result) | c <- pc]
+        <> [("const-" <> c.key <> "-kql", Just $ constantToKQLList $ fromMaybe [] c.result) | c <- pc]
     )
 
 
@@ -2414,7 +2412,7 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
           button_ [class_ "btn btn-outline btn-sm", [__|on click call yamlEditorExport()|]] do
             faSprite_ "download" "regular" "w-3 h-3 mr-1"
             "Export"
-          label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
+          label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-3 h-3"
       div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ yamlUrl, hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
         div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ LdMD LdDots
       div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do

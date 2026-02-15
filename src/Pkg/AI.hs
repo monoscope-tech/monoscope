@@ -63,7 +63,7 @@ import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
-import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects

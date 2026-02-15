@@ -5,7 +5,6 @@ module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToE
 import Colourista.IO (blueMessage)
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
-import Data.Default.Instances ()
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL

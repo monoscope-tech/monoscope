@@ -27,7 +27,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions (Session (..))
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
@@ -35,10 +35,9 @@ import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import ProcessMessage (processMessages)
+import ProcessMessage (RequestMessage (..), processMessages, replaceNullChars, valueToFields)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages (RequestMessage (..), replaceNullChars, valueToFields)
 import Servant qualified
 import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldSatisfy, xdescribe)
 import Utils (toXXHash)

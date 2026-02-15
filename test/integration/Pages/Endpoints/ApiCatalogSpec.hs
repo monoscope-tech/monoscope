@@ -19,7 +19,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (UUIDId (..))
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList

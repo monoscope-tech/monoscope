@@ -28,12 +28,11 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
-import Pkg.DeriveUtils (AesonText (..))
+import Pkg.DeriveUtils (AesonText (..), DB)
 import Pkg.Parser (SqlQueryCfg (..), calculateAutoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
-import System.DB (DB)
 import Utils (toXXHash)
 
 

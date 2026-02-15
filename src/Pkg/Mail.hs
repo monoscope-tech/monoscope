@@ -1,11 +1,13 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlert, sampleReport) where
+module Pkg.Mail (sendSlackMessage, sendPostmarkEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlert, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
+import Control.Lens ((&), (.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
+import Data.Effectful.Wreq (HTTP, defaults, header, postWith)
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool ()
 import Data.Text qualified as T
@@ -390,3 +392,19 @@ sampleAlert = \case
 
 sampleReport :: Text -> NotificationAlerts
 sampleReport title = ReportAlert ("🧪 TEST: " <> title) "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" "https://example.com/chart.png" "https://example.com/errors.png"
+
+
+addConvertKitUser :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es ()
+addConvertKitUser apiKey email firstName lastName orgId orgName plan = do
+  void $ postWith
+    (defaults & header "Content-Type" .~ ["application/json"])
+    "https://api.convertkit.com/v3/forms/5502985/subscribe"
+    [aesonQQ| {"api_key": #{apiKey}, "email": #{email}, "first_name": #{firstName}, "fields": {"last_name": #{lastName}}} |]
+
+
+addConvertKitUserOrganization :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Eff es ()
+addConvertKitUserOrganization apiKey email orgID orgName orgPlan = do
+  void $ postWith
+    (defaults & header "Content-Type" .~ ["application/json"])
+    "https://api.convertkit.com/v3/tags/4059942/subscribe"
+    [aesonQQ| {"api_key": #{apiKey}, "email": #{email}, "fields": {"organization_name": #{orgName}, "organization_plan": #{orgPlan}, "organization_id": #{orgID}}} |]

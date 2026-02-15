@@ -24,8 +24,8 @@ import Langchain.LLM.Core qualified as LLM
 import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Lucid
-import Models.Apis.Fields.Facets qualified as Facets
-import Models.Apis.Reports qualified as Reports
+import Models.Apis.Fields qualified as Fields
+import Models.Apis.Issues qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
@@ -288,7 +288,7 @@ processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => Project
 processAIQuery pid userQuery threadCtx apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
-  facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+  facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
   let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx}
   result <- AI.runAgenticQuery config userQuery apiKey
   case result of

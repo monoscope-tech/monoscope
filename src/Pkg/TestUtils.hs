@@ -92,21 +92,19 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Pages.Api qualified as Api
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
+import Pages.Settings qualified as Api
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages qualified
 import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
-import System.DB (DB)
 import System.Directory (getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
@@ -718,7 +716,7 @@ data TestRequestMessages = RequestMessages
 
 -- FIXME: rename to some clearer. like toRequestMessage.
 -- convert is too general
-convert :: AE.Value -> Maybe RequestMessages.RequestMessage
+convert :: AE.Value -> Maybe ProcessMessage.RequestMessage
 convert val = case AE.fromJSON val of
   AE.Success p -> Just p
   AE.Error _ -> Nothing

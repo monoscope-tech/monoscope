@@ -24,7 +24,6 @@ import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
-import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -45,7 +44,7 @@ import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
-import Models.Apis.Fields.Types ()
+import Models.Apis.Fields ()
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (WrappedEnumShow (..))

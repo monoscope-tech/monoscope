@@ -69,7 +69,6 @@ custom-setup
 library
   exposed-modules:
       BackgroundJobs
-      Data.Default.Instances
       Data.Effectful.LLM
       Data.Effectful.Notify
       Data.Effectful.UUID
@@ -77,13 +76,11 @@ library
       Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
-      Models.Apis.Fields.Facets
-      Models.Apis.Fields.Types
+      Models.Apis.Fields
       Models.Apis.Integrations
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
       Models.Apis.Monitors
-      Models.Apis.Reports
       Models.Apis.RequestDumps
       Models.Apis.Shapes
       Models.Projects.Dashboards
@@ -93,14 +90,11 @@ library
       Models.Projects.Projects
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
-      Models.Telemetry.SystemLogs
       Models.Telemetry.Telemetry
       Models.Users.Sessions
-      Models.Users.Users
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
       Pages.Anomalies
-      Pages.Api
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
@@ -112,8 +106,6 @@ library
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
       Pages.GitSync
-      Pages.Integrations
-      Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
@@ -122,7 +114,7 @@ library
       Pages.Projects
       Pages.Replay
       Pages.Reports
-      Pages.S3
+      Pages.Settings
       Pages.Share
       Pages.Telemetry
       Pkg.AI
@@ -130,8 +122,6 @@ library
       Pkg.Components.Table
       Pkg.Components.TimePicker
       Pkg.Components.Widget
-      Pkg.ConvertKit
-      Pkg.DashboardUtils
       Pkg.DeriveUtils
       Pkg.Drain
       Pkg.GitHub
@@ -143,10 +133,8 @@ library
       Pkg.Queue
       Pkg.TestUtils
       ProcessMessage
-      RequestMessages
       Start
       System.Config
-      System.DB
       System.Logging
       System.Server
       System.Tracing

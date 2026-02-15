@@ -35,7 +35,6 @@ module Models.Projects.ProjectMembers (
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
-import Data.Default.Instances ()
 import Data.Set qualified as Set
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
@@ -58,7 +57,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)

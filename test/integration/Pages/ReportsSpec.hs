@@ -7,7 +7,7 @@ import OddJobs.Job (createJob)
 import Data.Pool (withResource)
 import Data.Time (addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
-import Models.Apis.Reports qualified as Reports
+import Models.Apis.Issues qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Reports qualified as PageReports

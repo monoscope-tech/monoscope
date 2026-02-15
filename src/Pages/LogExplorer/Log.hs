@@ -29,8 +29,8 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Fields.Facets qualified as Facets
-import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -71,7 +71,7 @@ import Pages.Bots.Utils qualified as BotUtils
 
 
 -- | Render facet data for Log Explorer sidebar in a compact format
--- | The facet counts are already scaled in the Facets.getFacetSummary function based on the selected time range
+-- | The facet counts are already scaled in the Fields.getFacetSummary function based on the selected time range
 -- | Facets are normally generated for a 24-hour period, but will be proportionally adjusted for the user's time selection
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
@@ -403,7 +403,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   (queryLibRecent, queryLibSaved) <- bimap V.fromList V.fromList . L.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   -- Get facet summary for the time range specified
-  facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+  facetSummary <- Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   -- Queue facet generation if no precomputed facets exist (new projects)
   when (isNothing facetSummary)
@@ -654,7 +654,7 @@ data ApiLogsPageData = ApiLogsPageData
   , detailsWidth :: Maybe Text
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
-  , facets :: Maybe Models.Apis.Fields.Types.FacetSummary
+  , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
   , patterns :: Maybe (V.Vector (Text, Int))
@@ -874,7 +874,7 @@ aiSearchH pid requestBody = do
         else do
           -- Fetch precomputed facets for context (last 24 hours)
           let dayAgo = addUTCTime (-86400) now
-          facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+          facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
           let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM}
           result <- AI.runAgenticQuery config inputText envCfg.openaiApiKey
 

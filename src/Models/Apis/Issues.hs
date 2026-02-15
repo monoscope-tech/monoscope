@@ -57,6 +57,15 @@ module Models.Apis.Issues (
   -- * Thread ID Helpers
   slackThreadToConversationId,
   discordThreadToConversationId,
+
+  -- * Reports
+  Report (..),
+  ReportId,
+  ReportListItem (..),
+  addReport,
+  reportHistoryByProject,
+  getReportById,
+  getLatestReportByType,
 ) where
 
 import Data.Aeson qualified as AE
@@ -70,7 +79,7 @@ import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID.V4 qualified as UUID4
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_selectWhere)
+import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (..), fromField, returnError)
@@ -86,7 +95,7 @@ import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText)
 import Relude hiding (id)
@@ -675,3 +684,55 @@ tryAcquireChatMigrationLock convId = do
   -- Try to acquire lock, returns immediately with True/False
   result <- PG.query [sql| SELECT pg_try_advisory_lock(?) |] (Only lockKey)
   pure $ fromMaybe False $ viaNonEmpty head result >>= \(Only acquired) -> Just acquired
+
+
+-- Reports
+
+type ReportId = UUIDId "report"
+
+
+data Report = Report
+  { id :: ReportId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , reportType :: Text
+  , reportJson :: AE.Value
+  , startTime :: UTCTime
+  , endTime :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
+
+
+data ReportListItem = ReportListItem
+  { id :: ReportId
+  , createdAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , reportType :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
+
+
+addReport :: DB es => Report -> Eff es ()
+addReport report = void $ PG.execute (_insert @Report) report
+
+
+getReportById :: DB es => ReportId -> Eff es (Maybe Report)
+getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |]]) (Only id')
+
+
+reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
+reportHistoryByProject pid page = PG.query q (pid, offset)
+  where
+    offset = page * 20
+    q = [sql| SELECT id, created_at, project_id, report_type FROM apis.reports WHERE project_id = ? ORDER BY created_at DESC LIMIT 20 OFFSET ?; |]
+
+
+getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
+getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportType)
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]

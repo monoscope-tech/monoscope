@@ -49,8 +49,8 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Fields.Facets qualified as Facets
-import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDump
@@ -58,7 +58,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users (User (id))
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (BadgeColor (..), PanelCfg (..), emptyState_, iconBadgeSq_, panel_, resizer_, statBox_)
@@ -479,7 +478,7 @@ buildSystemPromptForIssue pid issue now = do
     _ -> pure Nothing
   let issueContext = unlines ["--- ISSUE CONTEXT ---", buildAIContext issue errorM traceDataM spans alertContextM]
       dayAgo = addUTCTime (-86400) now
-  facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+  facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
   let systemPrompt = anomalySystemPrompt now
       fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
   pure fullSystemPrompt

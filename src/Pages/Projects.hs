@@ -88,7 +88,6 @@ import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
@@ -100,7 +99,7 @@ import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), PanelCf
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
-import Pkg.ConvertKit qualified as ConvertKit
+import Pkg.Mail (addConvertKitUserOrganization)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
@@ -622,10 +621,10 @@ manageMembersPostH pid onboardingM form = do
 
   newProjectMembers <- forM uAndPNew \(email, permission) -> do
     userId' <- do
-      userIdM' <- Users.userIdByEmail email
+      userIdM' <- Sessions.userIdByEmail email
       case userIdM' of
         Nothing -> do
-          idM' <- Users.createEmptyUser email
+          idM' <- Sessions.createEmptyUser email
           case idM' of
             Nothing -> error "duplicate email in createEmptyUser"
             Just idX -> pure idX
@@ -666,7 +665,7 @@ data TeamForm = TeamForm
   { teamName :: Text
   , teamDescription :: Text
   , teamHandle :: Text
-  , teamMembers :: V.Vector Users.UserId
+  , teamMembers :: V.Vector Sessions.UserId
   , notifEmails :: V.Vector Text
   , slackChannels :: V.Vector Text
   , discordChannels :: V.Vector Text
@@ -1364,7 +1363,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         users <- ProjectMembers.selectActiveProjectMembers pid
         unless (T.null envCfg.convertkitApiKey)
           $ forM_ users
-          $ \user -> ConvertKit.addUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
+          $ \user -> addConvertKitUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
   case plan of
     Just "Open Source" | envCfg.basicAuthEnabled -> do

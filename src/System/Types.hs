@@ -7,7 +7,7 @@ module System.Types (
   ATBaseCtx,
   ATAuthCtx,
   ATBackgroundCtx,
-  module System.DB,
+  DB,
   runBackground,
   addRespHeaders,
   addTriggerEvent,
@@ -57,8 +57,8 @@ import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
+import Pkg.DeriveUtils (DB)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.DB
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing

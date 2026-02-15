@@ -64,12 +64,11 @@ import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import UnliftIO.Exception (handle)
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -83,7 +82,6 @@ import Models.Apis.Issues qualified as Anomalies
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Anomalies qualified as AnomalyList
-import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
@@ -93,8 +91,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
-import Pages.Integrations qualified
-import Pages.LemonSqueezy qualified as LemonSqueezy
+import Pages.Settings qualified as Settings
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -107,7 +104,6 @@ import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
-import Pages.S3 qualified as S3
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
@@ -193,7 +189,7 @@ data Routes mode = Routes
   , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
-  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
+  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] Settings.WebhookData :> Post '[HTML] (Html ())
   , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
@@ -234,10 +230,10 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Put '[HTML] (RespHeaders (Html ()))
   , -- API routes
-    apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
-  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
-  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Api.ApiMut)
-  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
+    apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Settings.ApiGet)
+  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Settings.ApiMut)
+  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Settings.ApiMut)
+  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
   , -- Charts and widgets
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
@@ -249,11 +245,11 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Anomalies.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
-    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
+    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders Settings.BillingGet)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders AE.Value)
   , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (Html ()))
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders (Html ()))
@@ -376,8 +372,8 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
   , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
   , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "slack" :> Delete '[HTML] (RespHeaders (Html ()))
-  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Pages.Integrations.TestForm :> Post '[HTML] (RespHeaders (Html ()))
-  , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Pages.Integrations.NotificationTestHistoryGet)
+  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
   , -- Onboarding routes
     onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)
@@ -419,7 +415,7 @@ server pool =
     , externalOptionsGet = Slack.externalOptionsH
     , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
     , clientMetadata = Auth.clientMetadataH
-    , lemonWebhook = LemonSqueezy.webhookPostH
+    , lemonWebhook = Settings.webhookPostH
     , githubWebhook = GitSync.githubWebhookPostH
     , chartsDataShot = Charts.queryMetrics
     , rrwebPost = Replay.replayPostH
@@ -468,10 +464,10 @@ cookieProtectedServer =
     , dashboardYamlGet = Dashboards.dashboardYamlGetH
     , dashboardYamlPut = Dashboards.dashboardYamlPutH
     , -- API handlers
-      apiGet = Api.apiGetH
-    , apiDelete = Api.apiDeleteH
-    , apiPatch = Api.apiActivateH
-    , apiPost = Api.apiPostH
+      apiGet = Settings.apiGetH
+    , apiDelete = Settings.apiDeleteH
+    , apiPatch = Settings.apiActivateH
+    , apiPost = Settings.apiPostH
     , -- Chart and widget handlers
       chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
@@ -484,9 +480,9 @@ cookieProtectedServer =
     , reportsPost = Reports.reportsPostH
     , shareLinkPost = Share.shareLinkPostH
     , replaySessionGet = Replay.replaySessionGetH
-    , bringS3 = S3.bringS3GetH
-    , bringS3Post = S3.brings3PostH
-    , bringS3Remove = S3.brings3RemoveH
+    , bringS3 = Settings.bringS3GetH
+    , bringS3Post = Settings.brings3PostH
+    , bringS3Remove = Settings.brings3RemoveH
     , gitSyncSettings = GitSync.gitSyncSettingsGetH
     , gitSyncSettingsPost = GitSync.gitSyncSettingsPostH
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
@@ -495,7 +491,7 @@ cookieProtectedServer =
     , githubAppRepos = GitSync.githubAppReposH
     , githubAppSelectRepo = GitSync.githubAppSelectRepoH
     , -- Billing handlers
-      manageBillingGet = LemonSqueezy.manageBillingGetH
+      manageBillingGet = Settings.manageBillingGetH
     , -- Endpoint handlers
       endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
@@ -577,8 +573,8 @@ projectsServer =
     , pagerdutyConnect = Integrations.pagerdutyConnectH
     , pagerdutyDisconnect = Integrations.pagerdutyDisconnectH
     , slackDisconnect = Integrations.slackDisconnectH
-    , notificationsTestPost = Pages.Integrations.notificationsTestPostH
-    , notificationsTestHistoryGet = Pages.Integrations.notificationsTestHistoryGetH
+    , notificationsTestPost = Settings.notificationsTestPostH
+    , notificationsTestHistoryGet = Settings.notificationsTestHistoryGetH
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH

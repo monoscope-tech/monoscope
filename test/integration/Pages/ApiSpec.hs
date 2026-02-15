@@ -11,7 +11,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
-import Pages.Api qualified as Api
+import Pages.Settings qualified as Api
 
 
 testPid :: Projects.ProjectId

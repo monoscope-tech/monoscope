@@ -22,15 +22,14 @@ import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
-import Pkg.DashboardUtils qualified as DashboardUtils
-import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents)
+import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Stats (Section, Sources)
 import Pkg.QueryCache qualified as QC
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant.Server (ServerError (errBody), err400)
+import Pkg.DeriveUtils (DB)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.DB (DB)
 import Text.Megaparsec (parseMaybe)
 
 
@@ -119,9 +118,9 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
-  let mappngSQL = DashboardUtils.variablePresets (maybe "" (.toText) pidM) fromD toD allParams now
-      mappngKQL = DashboardUtils.variablePresetsKQL (maybe "" (.toText) pidM) fromD toD allParams now
-  let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature; " <> show err}) pure (parseQueryToAST $ DashboardUtils.replacePlaceholders mappngKQL q)
+  let mappngSQL = variablePresets (maybe "" (.toText) pidM) fromD toD allParams now
+      mappngKQL = variablePresetsKQL (maybe "" (.toText) pidM) fromD toD allParams now
+  let parseQuery q = either (\err -> throwError err400{errBody = "Invalid signature; " <> show err}) pure (parseQueryToAST $ replacePlaceholders mappngKQL q)
 
   case (queryM, querySQLM) of
     (_, Just querySQL) -> do
@@ -135,7 +134,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
               }
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
-      let sqlQuery = DashboardUtils.replacePlaceholders mappngSQL' querySQL
+      let sqlQuery = replacePlaceholders mappngSQL' querySQL
       convertTimestampsToMs <$> liftIO (fetchMetricsData respDataType sqlQuery now fromD toD authCtx)
     _ -> do
       queryAST <-

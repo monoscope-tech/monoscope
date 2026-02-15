@@ -24,10 +24,10 @@ import Effectful.Reader.Static qualified
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
-import Pages.S3 (getMinioConnectInfo)
+import Pages.Settings (getMinioConnectInfo)
 import Pkg.Queue (publishJSONToKafka)
 import Relude
-import RequestMessages (replaceNullChars)
+import ProcessMessage (replaceNullChars)
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)

@@ -59,11 +59,11 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions (craftSessionCookie, emptySessionCookie)
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
-import Pkg.ConvertKit qualified as ConvertKit
+import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
 import Relude.Unsafe ((!!))
 import Servant (Header, Headers, NoContent (..), addHeader, noHeader)
@@ -331,7 +331,7 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Nothing -> do
       user <- Users.createUser firstName lastName picture email
       -- Make basic auth users sudo for admin access
-      let userWithSudo =
+      let userWithSudo :: Users.User; userWithSudo =
             if T.isSuffixOf "@basic-auth.local" email
               then user{Users.isSudo = True}
               else user
@@ -340,7 +340,7 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Just user -> pure user.id
   persistentSessId <- Sessions.newPersistentSessionId
   Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
-  _ <- whenJust convertkitApiKeyM \ckKey -> ConvertKit.addUser ckKey email firstName lastName "" "" ""
+  _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName "" "" ""
   pure persistentSessId
 
 
