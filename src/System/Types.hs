@@ -51,13 +51,13 @@ import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
+import Pkg.DeriveUtils (DB)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
 import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
-import Pkg.DeriveUtils (DB)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)

@@ -91,7 +91,6 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
-import Pages.Settings qualified as Settings
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -104,6 +103,7 @@ import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
+import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace

@@ -51,7 +51,7 @@ import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime)
 import GHC.Records (HasField (getField))
-import Models.Projects.Projects (User (..), UserId (..), createUser, userIdByEmail, createUserId, insertUser, userById, userByEmail, createEmptyUser)
+import Models.Projects.Projects (User (..), UserId (..), createEmptyUser, createUser, createUserId, insertUser, userByEmail, userById, userIdByEmail)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB, UUIDId (..))
 import Relude

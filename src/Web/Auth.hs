@@ -331,7 +331,8 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Nothing -> do
       user <- Users.createUser firstName lastName picture email
       -- Make basic auth users sudo for admin access
-      let userWithSudo :: Users.User; userWithSudo =
+      let userWithSudo :: Users.User
+          userWithSudo =
             if T.isSuffixOf "@basic-auth.local" email
               then user{Users.isSudo = True}
               else user

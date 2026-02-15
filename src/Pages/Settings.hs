@@ -2,13 +2,34 @@
 
 module Pages.Settings (
   -- S3
-  bringS3GetH, brings3PostH, getMinioConnectInfo, brings3RemoveH,
+  bringS3GetH,
+  brings3PostH,
+  getMinioConnectInfo,
+  brings3RemoveH,
   -- Api
-  apiGetH, apiPostH, apiActivateH, apiDeleteH, GenerateAPIKeyForm (..), ApiGet (..), ApiMut (..),
+  apiGetH,
+  apiPostH,
+  apiActivateH,
+  apiDeleteH,
+  GenerateAPIKeyForm (..),
+  ApiGet (..),
+  ApiMut (..),
   -- Integrations
-  TestForm (..), notificationsTestPostH, notificationsTestHistoryGetH, TestHistory (..), NotificationTestHistoryGet (..),
+  TestForm (..),
+  notificationsTestPostH,
+  notificationsTestHistoryGetH,
+  TestHistory (..),
+  NotificationTestHistoryGet (..),
   -- LemonSqueezy
-  webhookPostH, WebhookData (..), DataVals (..), MetaData (..), CustomData (..), Attributes (..), FirstSubItem (..), manageBillingGetH, BillingGet (..),
+  webhookPostH,
+  WebhookData (..),
+  DataVals (..),
+  MetaData (..),
+  CustomData (..),
+  Attributes (..),
+  FirstSubItem (..),
+  manageBillingGetH,
+  BillingGet (..),
 ) where
 
 import Data.Aeson qualified as AE
@@ -42,7 +63,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadge_, iconBadgeLg_, iconBadgeXs_, modalWith_, paymentPlanPicker)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadgeXs_, iconBadge_, modalWith_, paymentPlanPicker)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Mail (sampleAlert, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendPostmarkEmail, sendSlackAlert, sendWhatsAppAlert)

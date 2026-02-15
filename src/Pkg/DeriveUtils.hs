@@ -39,14 +39,14 @@ import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Deriving.Aeson qualified as DAE
+import Effectful (IOE, type (:>))
+import Effectful.PostgreSQL (WithConnection)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Language.Haskell.TH.Syntax qualified as THS
 import Numeric (showHex)
-import Effectful (IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
@@ -238,7 +238,6 @@ hashFile path = do
   let hash = fromString $ showHex (xxHash content) ""
   [|$(TH.lift (toString hash))|]
 
-
 -- Default instances (orphans)
 
 #if __GLASGOW_HASKELL__ < 910
@@ -247,33 +246,41 @@ instance Default Bool where
   {-# INLINE def #-}
 #endif
 
+
 instance Default ZonedTime where
   def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
   {-# INLINE def #-}
+
 
 instance Default UTCTime where
   def = Unsafe.read "2019-08-31 05:14:37.537084021 UTC"
   {-# INLINE def #-}
 
+
 instance Default UUID.UUID where
   def = UUID.nil
   {-# INLINE def #-}
+
 
 instance Default AET.Value where
   def = AET.emptyObject
   {-# INLINE def #-}
 
+
 instance (Default s, FoldCase s) => Default (CI s) where
   def = CI.mk def
   {-# INLINE def #-}
+
 
 instance Default T.Text where
   def = T.empty
   {-# INLINE def #-}
 
+
 instance Default TL.Text where
   def = TL.empty
   {-# INLINE def #-}
+
 
 instance Default (V.Vector a) where
   def = V.empty

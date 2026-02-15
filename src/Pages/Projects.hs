@@ -99,8 +99,8 @@ import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), PanelCf
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
-import Pkg.Mail (addConvertKitUserOrganization)
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Mail (addConvertKitUserOrganization)
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader)

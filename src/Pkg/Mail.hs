@@ -7,8 +7,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Default (def)
-import Data.Effectful.Wreq (HTTP, defaults, header, postWith)
 import Data.Effectful.Notify qualified as Notify
+import Data.Effectful.Wreq (HTTP, defaults, header, postWith)
 import Data.Pool ()
 import Data.Text qualified as T
 import Data.Time
@@ -396,15 +396,17 @@ sampleReport title = ReportAlert ("🧪 TEST: " <> title) "2025-01-01" "2025-01-
 
 addConvertKitUser :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es ()
 addConvertKitUser apiKey email firstName lastName orgId orgName plan = do
-  void $ postWith
-    (defaults & header "Content-Type" .~ ["application/json"])
-    "https://api.convertkit.com/v3/forms/5502985/subscribe"
-    [aesonQQ| {"api_key": #{apiKey}, "email": #{email}, "first_name": #{firstName}, "fields": {"last_name": #{lastName}}} |]
+  void
+    $ postWith
+      (defaults & header "Content-Type" .~ ["application/json"])
+      "https://api.convertkit.com/v3/forms/5502985/subscribe"
+      [aesonQQ| {"api_key": #{apiKey}, "email": #{email}, "first_name": #{firstName}, "fields": {"last_name": #{lastName}}} |]
 
 
 addConvertKitUserOrganization :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Eff es ()
 addConvertKitUserOrganization apiKey email orgID orgName orgPlan = do
-  void $ postWith
-    (defaults & header "Content-Type" .~ ["application/json"])
-    "https://api.convertkit.com/v3/tags/4059942/subscribe"
-    [aesonQQ| {"api_key": #{apiKey}, "email": #{email}, "fields": {"organization_name": #{orgName}, "organization_plan": #{orgPlan}, "organization_id": #{orgID}}} |]
+  void
+    $ postWith
+      (defaults & header "Content-Type" .~ ["application/json"])
+      "https://api.convertkit.com/v3/tags/4059942/subscribe"
+      [aesonQQ| {"api_key": #{apiKey}, "email": #{email}, "fields": {"organization_name": #{orgName}, "organization_plan": #{orgPlan}, "organization_id": #{orgID}}} |]

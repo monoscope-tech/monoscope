@@ -22,13 +22,13 @@ import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (DataType (..), MetricsData (..), MetricsStats (..))
 import Pkg.Components.TimePicker qualified as Components
+import Pkg.DeriveUtils (DB)
 import Pkg.Parser (QueryComponents (finalSummarizeQuery, whereClause), SqlQueryCfg (..), defSqlQueryCfg, pSource, parseQueryToAST, queryASTToComponents, replacePlaceholders, variablePresets, variablePresetsKQL)
 import Pkg.Parser.Stats (Section, Sources)
 import Pkg.QueryCache qualified as QC
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant.Server (ServerError (errBody), err400)
-import Pkg.DeriveUtils (DB)
 import System.Config (AuthContext (..), EnvConfig (..))
 import Text.Megaparsec (parseMaybe)
 
