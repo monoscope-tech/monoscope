@@ -281,71 +281,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               , data_ "tagify-enforce-whitelist" ""
               , data_ "tagify-text-prop" "name"
               , data_ "tagify-mode" $ if var.multi == Just True then "" else "select"
-              , data_ "query_sql" $ maybeToMonoid var.sql
-              , data_ "query" $ maybeToMonoid var.query
-              , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+              , data_ "tagify-query-sql" $ maybeToMonoid var.sql
+              , data_ "tagify-query" $ maybeToMonoid var.query
+              , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
             <> memptyIfFalse (var.multi == Just True) [data_ "tagify-mode" "select"]
-    script_
-      """
-      (function() {
-        let cachedSearch = '', cachedParams = null, pending = false;
-        window.interpolateVarTemplates = function() {
-          if (pending) return;
-          pending = true;
-          requestAnimationFrame(() => {
-            pending = false;
-            if (window.location.search !== cachedSearch) { cachedSearch = window.location.search; cachedParams = new URLSearchParams(cachedSearch); }
-            document.querySelectorAll('[data-var-template]').forEach(el => {
-              let text = el.dataset.varTemplate;
-              cachedParams.forEach((value, key) => { if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || ''); });
-              el.textContent = text;
-            });
-          });
-        };
-
-        function setupVarInputs() {
-          document.querySelectorAll('.dash-variable-input').forEach(input => {
-            const tgfy = input._tagifyInstance;
-            if (!tgfy || input._varBound) return;
-            input._varBound = true;
-            tgfy.on('change', (e) => {
-              const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
-              const url = new URL(window.location);
-              url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value);
-              history.pushState({}, '', url);
-              window.dispatchEvent(new Event('update-query'));
-            });
-          });
-          window.interpolateVarTemplates();
-        }
-
-        window.addEventListener('update-query', async () => {
-          document.querySelectorAll('.dash-variable-input[data-reload_on_change="true"]').forEach(async input => {
-            const { query_sql, query } = input.dataset;
-            if (!query_sql && !query) return;
-            const tgfy = input._tagifyInstance;
-            try {
-              tgfy?.loading(true);
-              const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), query, query_sql, data_type: 'text' });
-              const { data_text } = await fetch(`/chart_data?${params}`).then(res => res.json());
-              if (tgfy) { tgfy.settings.whitelist = data_text.map(i => i.length === 1 ? i[0] : { value: i[0], name: i[1] }); tgfy.loading(false); }
-            } catch (e) { console.error(`Error fetching data for ${input.name}:`, e); }
-          });
-          window.interpolateVarTemplates();
-        });
-
-        function trySetupVarInputs(retries) {
-          const inputs = document.querySelectorAll('.dash-variable-input');
-          const allReady = inputs.length === 0 || Array.from(inputs).every(i => i._tagifyInstance);
-          if (allReady || retries <= 0) { setupVarInputs(); return; }
-          setTimeout(() => trySetupVarInputs(retries - 1), 100);
-        }
-        trySetupVarInputs(5);
-        document.addEventListener('htmx:afterSettle', () => setTimeout(setupVarInputs, 50));
-      })();
-      """
   let pidText = pid.toText
       dashIdText = dashId.toText
       activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)

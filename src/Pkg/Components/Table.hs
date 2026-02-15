@@ -13,6 +13,7 @@ module Pkg.Components.Table (
   TabFilterOpt (..),
   SortConfig (..),
   SortableConfig (..),
+  TreeConfig (..),
   ZeroState (..),
   SimpleZeroState (..),
   -- Pagination
@@ -121,6 +122,7 @@ data Features a = Features
   , pagination :: Maybe Pagination -- Page-based pagination with per-page selector
   , zeroState :: Maybe ZeroState
   , header :: Maybe (Html ())
+  , treeConfig :: Maybe (TreeConfig a)
   }
 
 
@@ -136,6 +138,7 @@ data Config = Config
   , addPadding :: Bool -- When True, wraps table in div with px-4 pt-4 pb-2 padding
   , bulkActionsInHeader :: Maybe Int -- Column index (0-based) to place bulk actions in header; Nothing uses toolbar
   , noSurface :: Bool -- When True, removes surface-raised class from grid wrapper (for embedded tables)
+  , noDividers :: Bool -- When True, removes divide-y separators between rows
   }
 
 
@@ -186,6 +189,14 @@ data SortableConfig = SortableConfig
   , targetId :: Text -- HTMX target for partial update
   }
   deriving stock (Eq, Show)
+
+
+-- Tree config for hierarchical row display
+data TreeConfig a = TreeConfig
+  { rowLevel :: a -> Int
+  , rowPath :: a -> Text
+  , isGroupRow :: a -> Bool
+  }
 
 
 -- Sorting types for database queries
@@ -251,6 +262,7 @@ instance Default (Features a) where
       , pagination = Nothing
       , zeroState = Nothing
       , header = Nothing
+      , treeConfig = Nothing
       }
 
 
@@ -268,6 +280,7 @@ instance Default Config where
       , addPadding = False
       , bulkActionsInHeader = Nothing
       , noSurface = False
+      , noDividers = False
       }
 
 
@@ -337,18 +350,20 @@ instance ToHtml TabFilter where
 renderTable :: Table a -> Html ()
 renderTable tbl =
   let tableContent = div_ [class_ $ tbl.config.containerClasses <> " pb-24", id_ $ tbl.config.elemID <> "_page"] do
-        whenJust tbl.features.search renderSearch
+        whenJust tbl.features.search $ renderSearch tbl.config.elemID
         whenJust tbl.features.header id
         div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-raised", id_ $ tbl.config.elemID <> "_grid"] do
-          form_ [class_ "flex flex-col divide-y w-full", id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
+          let divCls = if tbl.config.noDividers then "" else " divide-y"
+          form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
             when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
             div_ [class_ "w-full flex-col"] do
               whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-              div_ [id_ "rowsContainer", class_ "divide-y"] do
+              div_ [id_ "rowsContainer", class_ divCls] do
                 renderRows tbl
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
+        when (isJust tbl.features.treeConfig) treeScript
       paddedContent = if tbl.config.addPadding then div_ [class_ "px-4 pt-4 pb-2"] tableContent else tableContent
    in case tbl.config.containerId of
         Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
@@ -358,7 +373,7 @@ renderTable tbl =
 renderRows :: Table a -> Html ()
 renderRows tbl =
   if tbl.config.renderAsTable
-    then table_ [class_ tbl.config.tableClasses] do
+    then table_ [class_ $ tbl.config.tableClasses <> if tbl.config.noDividers then " no-dividers" else ""] do
       when tbl.config.showHeader
         $ thead_ do
           tr_ do
@@ -405,19 +420,29 @@ renderRows tbl =
     else div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
 
 
+treeRowAttrs :: a -> TreeConfig a -> [Attribute]
+treeRowAttrs row tc =
+  [ data_ "tree-path" (tc.rowPath row)
+  , data_ "tree-level" (show $ tc.rowLevel row)
+  ] <> if tc.isGroupRow row
+       then [data_ "tree-group" "true", data_ "tree-collapsed" "false", onclick_ "toggleTreeRow(this)"]
+       else []
+
+
 -- List mode: render columns in a flex container (no table wrapper/headers)
 {-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
-renderListRow tbl row = div_ (rowAttrs <> [class_ "flex gap-8 items-start itemsListItem py-3 hover:bg-fillWeaker transition-colors duration-75"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
+renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-8 items-start itemsListItem py-3 hover:bg-fillWeaker transition-colors duration-75"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
+    treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
 
 
 -- Table mode: render as table rows with columns
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ ([class_ "hover:bg-fillWeaker transition-colors duration-75"] <> rowAttrs <> linkHandler) do
+  tr_ ([class_ "hover:bg-fillWeaker transition-colors duration-75 itemsListItem"] <> treeAttrs <> rowAttrs <> linkHandler) do
     when (isJust tbl.features.rowId)
       $ td_ [class_ "w-8 align-top pt-4"] do
         whenJust tbl.features.rowId \getId ->
@@ -433,6 +458,7 @@ renderTableRow tbl row =
     forM_ tbl.columns \c -> td_ (c.attrs <> colAttrs c) $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
+    treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
     linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"]) tbl.features.rowLink
     isSelected = maybe False (\f -> f row) tbl.features.selectRow
     colAttrs c = foldMap (\a -> [class_ a]) c.align
@@ -623,8 +649,8 @@ renderToolbar tbl =
       whenJust tbl.features.sort renderSortMenu
 
 
-renderSearch :: SearchMode -> Html ()
-renderSearch searchMode =
+renderSearch :: Text -> SearchMode -> Html ()
+renderSearch elemID searchMode =
   label_ [class_ "input input-sm flex w-full h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
     faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
     case searchMode of
@@ -646,7 +672,7 @@ renderSearch searchMode =
           [ type_ "text"
           , class_ "grow"
           , placeholder_ "Search"
-          , [__| on input show .itemsListItem in #tableContainer_page when its textContent.toLowerCase() contains my value.toLowerCase() |]
+          , term "_" $ "on input show .itemsListItem in #" <> elemID <> "_page when its textContent.toLowerCase() contains my value.toLowerCase()"
           ]
 
 
@@ -721,6 +747,35 @@ renderSimpleZeroState zs =
   div_ [class_ "flex items-center justify-center gap-2 py-4 text-textWeak"] do
     faSprite_ zs.icon "regular" "h-4 w-4"
     span_ [class_ "text-sm"] $ toHtml zs.message
+
+
+treeScript :: Html ()
+treeScript = script_ """
+function toggleTreeRow(el) {
+  var path = el.getAttribute('data-tree-path');
+  var level = parseInt(el.getAttribute('data-tree-level'));
+  var collapsed = el.getAttribute('data-tree-collapsed') === 'true';
+  var rows = el.parentElement.querySelectorAll('tr[data-tree-path], div[data-tree-path]');
+  var found = false;
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    if (r === el) { found = true; continue; }
+    if (!found) continue;
+    var rp = r.getAttribute('data-tree-path');
+    if (!rp.startsWith(path + '.') && rp !== path) break;
+    if (collapsed) {
+      var rl = parseInt(r.getAttribute('data-tree-level'));
+      if (rl === level + 1) { r.style.display = ''; }
+    } else {
+      r.style.display = 'none';
+      if (r.getAttribute('data-tree-group') === 'true') r.setAttribute('data-tree-collapsed', 'true');
+    }
+  }
+  el.setAttribute('data-tree-collapsed', collapsed ? 'false' : 'true');
+  var chev = el.querySelector('.tree-chevron');
+  if (chev) chev.classList.toggle('rotate-90');
+}
+"""
 
 
 simpleZeroState :: Text -> Text -> SimpleZeroState

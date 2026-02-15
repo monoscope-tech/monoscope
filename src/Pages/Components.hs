@@ -105,7 +105,7 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
             end
       |]
     ]
-  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block tap-target", Aria.label_ "Open drawer"] trigger
+  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full"] do

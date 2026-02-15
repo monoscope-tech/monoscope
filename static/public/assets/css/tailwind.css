@@ -1605,6 +1605,10 @@ code, pre, .code, .monospace {
 }
 
 @layer custom {
+  .no-dividers :is(tr, th, td) { border-style: none; }
+}
+
+@layer custom {
   .log_details_expanded {
     width: 850px;
   }
