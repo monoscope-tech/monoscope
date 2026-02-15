@@ -424,9 +424,10 @@ treeRowAttrs :: a -> TreeConfig a -> [Attribute]
 treeRowAttrs row tc =
   [ data_ "tree-path" (tc.rowPath row)
   , data_ "tree-level" (show $ tc.rowLevel row)
-  ] <> if tc.isGroupRow row
-       then [data_ "tree-group" "true", data_ "tree-collapsed" "false", onclick_ "toggleTreeRow(this)"]
-       else []
+  ]
+    <> if tc.isGroupRow row
+      then [data_ "tree-group" "true", data_ "tree-collapsed" "false", onclick_ "toggleTreeRow(this)"]
+      else []
 
 
 -- List mode: render columns in a flex container (no table wrapper/headers)
@@ -750,32 +751,34 @@ renderSimpleZeroState zs =
 
 
 treeScript :: Html ()
-treeScript = script_ """
-function toggleTreeRow(el) {
-  var path = el.getAttribute('data-tree-path');
-  var level = parseInt(el.getAttribute('data-tree-level'));
-  var collapsed = el.getAttribute('data-tree-collapsed') === 'true';
-  var rows = el.parentElement.querySelectorAll('tr[data-tree-path], div[data-tree-path]');
-  var found = false;
-  for (var i = 0; i < rows.length; i++) {
-    var r = rows[i];
-    if (r === el) { found = true; continue; }
-    if (!found) continue;
-    var rp = r.getAttribute('data-tree-path');
-    if (!rp.startsWith(path + '.') && rp !== path) break;
-    if (collapsed) {
-      var rl = parseInt(r.getAttribute('data-tree-level'));
-      if (rl === level + 1) { r.style.display = ''; }
-    } else {
-      r.style.display = 'none';
-      if (r.getAttribute('data-tree-group') === 'true') r.setAttribute('data-tree-collapsed', 'true');
+treeScript =
+  script_
+    """
+    function toggleTreeRow(el) {
+      var path = el.getAttribute('data-tree-path');
+      var level = parseInt(el.getAttribute('data-tree-level'));
+      var collapsed = el.getAttribute('data-tree-collapsed') === 'true';
+      var rows = el.parentElement.querySelectorAll('tr[data-tree-path], div[data-tree-path]');
+      var found = false;
+      for (var i = 0; i < rows.length; i++) {
+        var r = rows[i];
+        if (r === el) { found = true; continue; }
+        if (!found) continue;
+        var rp = r.getAttribute('data-tree-path');
+        if (!rp.startsWith(path + '.') && rp !== path) break;
+        if (collapsed) {
+          var rl = parseInt(r.getAttribute('data-tree-level'));
+          if (rl === level + 1) { r.style.display = ''; }
+        } else {
+          r.style.display = 'none';
+          if (r.getAttribute('data-tree-group') === 'true') r.setAttribute('data-tree-collapsed', 'true');
+        }
+      }
+      el.setAttribute('data-tree-collapsed', collapsed ? 'false' : 'true');
+      var chev = el.querySelector('.tree-chevron');
+      if (chev) chev.classList.toggle('rotate-90');
     }
-  }
-  el.setAttribute('data-tree-collapsed', collapsed ? 'false' : 'true');
-  var chev = el.querySelector('.tree-chevron');
-  if (chev) chev.classList.toggle('rotate-90');
-}
-"""
+    """
 
 
 simpleZeroState :: Text -> Text -> SimpleZeroState
