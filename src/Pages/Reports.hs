@@ -1,5 +1,3 @@
-{-# OPTIONS_GHC -Wno-partial-fields #-}
-
 module Pages.Reports (
   reportsGetH,
   singleReportGetH,
@@ -24,7 +22,6 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.Reports qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -150,11 +147,11 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
-singleReportGetH :: Projects.ProjectId -> Reports.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
+singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  report <- Reports.getReportById rid
+  report <- Issues.getReportById rid
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   let bwconf =
         (def :: BWConfig)
@@ -176,7 +173,7 @@ reportsGetH pid page hxRequest hxBoosted = do
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)
 
-  reportsList <- Reports.reportHistoryByProject pid pg
+  reportsList <- Issues.reportHistoryByProject pid pg
   let reports = V.fromList reportsList
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   let nextUrl =
@@ -198,10 +195,10 @@ reportsGetH pid page hxRequest hxBoosted = do
 
 
 data ReportsGet
-  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Reports.ReportListItem, Maybe Text, Bool, Bool))
-  | ReportsGetList Projects.ProjectId (V.Vector Reports.ReportListItem) (Maybe Text)
-  | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Reports.Report))
-  | ReportsGetSingle' (Projects.ProjectId, Maybe Reports.Report)
+  = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Issues.ReportListItem, Maybe Text, Bool, Bool))
+  | ReportsGetList Projects.ProjectId (V.Vector Issues.ReportListItem) (Maybe Text)
+  | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Issues.Report))
+  | ReportsGetSingle' (Projects.ProjectId, Maybe Issues.Report)
 
 
 -- this one has no PageCtx wrapping
@@ -213,7 +210,7 @@ instance ToHtml ReportsGet where
   toHtmlRaw = toHtml
 
 
-singleReportPage :: Projects.ProjectId -> Maybe Reports.Report -> Html ()
+singleReportPage :: Projects.ProjectId -> Maybe Issues.Report -> Html ()
 singleReportPage pid report =
   div_ [class_ "mx-auto w-full flex flex-col overflow-y-scroll h-full"] do
     case report of
@@ -316,7 +313,7 @@ singleReportPage pid report =
         h3_ [] "Report Not Found"
 
 
-reportsPage :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
+reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl daily weekly =
   div_ [class_ "flex flex-row h-full w-full border-t"] do
     when (V.null reports) do
@@ -345,7 +342,7 @@ reportsPage pid reports nextUrl daily weekly =
 
 -- div_ [class_ "w-5 bg-gray-200"] ""
 
-reportListItems :: Projects.ProjectId -> V.Vector Reports.ReportListItem -> Maybe Text -> Html ()
+reportListItems :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Html ()
 reportListItems pid reports nextUrl =
   div_ [class_ "space-y-4 w-full"] do
     forM_ reports $ \report -> do

@@ -1,6 +1,3 @@
-{-# LANGUAGE OverloadedRecordDot #-}
-{-# LANGUAGE OverloadedStrings #-}
-
 module Models.Telemetry.SummaryGenerator (
   generateSummary,
 ) where

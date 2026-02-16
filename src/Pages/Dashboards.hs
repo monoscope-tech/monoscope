@@ -26,6 +26,7 @@ module Pages.Dashboards (
   dashboardWidgetExpandGetH,
   visTypes,
   processEagerWidget,
+  fetchWidgetData,
   dashboardBulkActionPostH,
   TabRenameForm (..),
   TabRenameRes (..),
@@ -58,10 +59,11 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
-import Effectful.Reader.Static (ask)
+import Effectful.Log (Log)
+import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -76,12 +78,13 @@ import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
+import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -91,16 +94,14 @@ import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DashboardUtils qualified as DashboardUtils
-import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
-import Pkg.THUtils (hashAssetFile)
+import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
+import Pkg.Parser (QueryComponents (..), SqlQueryCfg (..), constantToKQLList, constantToSQLList, defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (NoContent (..), ServerError, err302, err404, errBody, errHeaders)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.FilePath.Posix (takeDirectory)
 import System.Logging qualified as Log
 import System.Types
@@ -188,14 +189,10 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       , hxTrigger_ "submit"
       , hxTarget_ "#pageTitleText"
       ]
-    $ fieldset_ [class_ "fieldset min-w-xs"] do
-      label_ [class_ "label"] "Dashboard Title"
-      input_ [class_ "input", name_ "title", placeholder_ "Insert new title", value_ $ dashTitle dashVM.title]
-      label_ [class_ "label mt-2"] "Folder"
-      input_ [class_ "input font-mono text-sm", name_ "fileDir", placeholder_ "reports/", value_ $ folderFromPath dashVM.filePath]
-      div_ [class_ "mt-3 flex justify-end gap-2"] do
-        label_ [Lucid.for_ "pageTitleModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
-        button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+    $ do
+      formField_ FieldSm def{value = dashTitle dashVM.title, placeholder = "Insert new title"} "Dashboard Title" "title" False Nothing
+      formField_ FieldSm def{value = folderFromPath dashVM.filePath, placeholder = "reports/"} "Folder" "fileDir" False Nothing
+      Components.formActionsModal_ "pageTitleModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
   -- Modal for renaming tab (only shown for dashboards with tabs)
   whenJust dash.tabs \tabs -> do
@@ -210,12 +207,9 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         , hxSwap_ "none"
         , hxTrigger_ "submit"
         ]
-      $ fieldset_ [class_ "fieldset min-w-xs"] do
-        label_ [class_ "label"] "Tab Name"
-        input_ [class_ "input", name_ "newName", placeholder_ "Enter tab name", value_ activeTabName]
-        div_ [class_ "mt-3 flex justify-end gap-2"] do
-          label_ [Lucid.for_ "tabRenameModalId", class_ "btn btn-outline cursor-pointer"] "Cancel"
-          button_ [type_ "submit", class_ "btn btn-primary"] "Save"
+      $ do
+        formField_ FieldSm def{value = activeTabName, placeholder = "Enter tab name"} "Tab Name" "newName" False Nothing
+        Components.formActionsModal_ "tabRenameModalId" $ button_ [type_ "submit", class_ "btn btn-primary"] "Save"
 
   -- Variable picker modal - auto-opens when required vars are unset (from tab.requires or variable.required)
   whenJust dash.variables \variables -> do
@@ -281,94 +275,22 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           input_
             $ [ type_ "text"
               , name_ var.key
-              , class_ "tagify-select-input"
-              , data_ "whitelistjson" whitelist
-              , data_ "enforce-whitelist" "true"
-              , data_ "mode" $ if var.multi == Just True then "" else "select"
-              , data_ "query_sql" $ maybeToMonoid var.sql
-              , data_ "query" $ maybeToMonoid var.query
-              , data_ "reload_on_change" $ maybe "false" (T.toLower . show) var.reloadOnChange
+              , class_ "dash-variable-input"
+              , data_ "tagify" ""
+              , data_ "tagify-whitelist" whitelist
+              , data_ "tagify-enforce-whitelist" ""
+              , data_ "tagify-text-prop" "name"
+              , data_ "tagify-mode" $ if var.multi == Just True then "" else "select"
+              , data_ "tagify-query-sql" $ maybeToMonoid var.sql
+              , data_ "tagify-query" $ maybeToMonoid var.query
+              , data_ "tagify-reload-on-change" $ maybe "false" (T.toLower . show) var.reloadOnChange
               , value_ $ maybeToMonoid var.value
               ]
-            <> memptyIfFalse (var.multi == Just True) [data_ "mode" "select"]
-    script_
-      [text|
-  // Interpolate {{var-*}} placeholders in elements with data-var-template attribute
-  (function() {
-    let cachedSearch = '', cachedParams = null, pending = false;
-    window.interpolateVarTemplates = function() {
-      if (pending) return;
-      pending = true;
-      requestAnimationFrame(() => {
-        pending = false;
-        if (window.location.search !== cachedSearch) {
-          cachedSearch = window.location.search;
-          cachedParams = new URLSearchParams(cachedSearch);
-        }
-        document.querySelectorAll('[data-var-template]').forEach(el => {
-          let text = el.dataset.varTemplate;
-          cachedParams.forEach((value, key) => {
-            if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || '');
-          });
-          el.textContent = text;
-        });
-      });
-    };
-  })();
-
-  window.addEventListener('DOMContentLoaded', () => {
-    const tagifyInstances = new Map();
-    document.querySelectorAll('.tagify-select-input').forEach(input => {
-      const tgfy = createTagify(input, {
-        whitelist: JSON.parse(input.dataset.whitelistjson || "[]"),
-        enforceWhitelist: true,
-        tagTextProp: 'name',
-        mode: input.dataset.mode || "",
-      });
-
-      const inputKey = input.getAttribute('name') || input.id;
-      tagifyInstances.set(inputKey, tgfy);
-
-      tgfy.on('change', (e) => {
-        const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
-        const url = new URL(window.location);
-        url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value);
-        history.pushState({}, '', url);
-        window.dispatchEvent(new Event('update-query'));
-      });
-    });
-
-    window.addEventListener('update-query', async (e) => {
-      document.querySelectorAll('.tagify-select-input[data-reload_on_change="true"]').forEach(async input => {
-        const { query_sql, query } = input.dataset;
-        if (!query_sql && !query) return;
-
-        try {
-          const tagify = tagifyInstances.get(input.getAttribute('name') || input.id);
-          tagify?.loading(true);
-
-          const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)),
-            query, query_sql, data_type: 'text' });
-
-          const { data_text } = await fetch(`/chart_data?$${params}`).then(res => res.json());
-
-          if (tagify) {
-            tagify.settings.whitelist = data_text.map(i => i.length === 1 ? i[0] : { value: i[0], name: i[1] });
-            tagify.loading(false);
-          }
-        } catch (e) {
-          console.error(`Error fetching data for ${input.name}:`, e);
-        }
-      });
-
-      window.interpolateVarTemplates();
-    });
-
-    window.interpolateVarTemplates();
-  });
-    |]
-  let activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
-      widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
+            <> memptyIfFalse (var.multi == Just True) [data_ "tagify-mode" "select"]
+  let pidText = pid.toText
+      dashIdText = dashId.toText
+      activeTabSlug = dash.tabs >>= \tabs -> join (L.lookup activeTabSlugKey allParams) <|> (slugify . (.name) <$> listToMaybe tabs)
+      widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
   section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
@@ -417,6 +339,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     script_
       [text|
       document.addEventListener('DOMContentLoaded', () => {
+        window.interpolateVarTemplates = window.interpolateVarTemplates || function() {};
         GridStack.renderCB = function(el, w) {
           el.innerHTML = w.content;
           const scripts = Array.from(el.querySelectorAll('script'));
@@ -541,10 +464,22 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         // Auto-expand widget if expand param is in URL
         const expandWId = new URLSearchParams(window.location.search).get('expand');
         if (expandWId) {
-          setTimeout(() => {
-            const expandBtn = document.querySelector('[data-expand-btn="' + expandWId + '"]');
-            if (expandBtn) expandBtn.click();
-          }, 100);
+          const drawer = document.getElementById('global-data-drawer');
+          const drawerContent = document.getElementById('global-data-drawer-content');
+          const loaderTmp = document.getElementById('loader-tmp');
+          if (drawer && drawerContent) {
+            drawer.checked = true;
+            document.body.classList.add('overflow-hidden');
+            if (loaderTmp) drawerContent.innerHTML = loaderTmp.innerHTML;
+            fetch('/p/$pidText/dashboards/$dashIdText/widgets/' + expandWId + '/expand')
+              .then(r => r.text())
+              .then(html => {
+                drawerContent.innerHTML = html;
+                htmx.process(drawerContent);
+                if (typeof _hyperscript !== 'undefined') _hyperscript.processNode(drawerContent);
+                if (typeof window.evalScriptsFromContent === 'function') window.evalScriptsFromContent(drawerContent);
+              });
+          }
         }
       });
 
@@ -663,26 +598,22 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
       tabPath = maybe "" ("/tab/" <>) activeTabSlug
       oobAttr = if useOob then [id_ $ modalId <> "-container", hxSwapOob_ "beforeend:body"] else []
   div_ oobAttr do
-    input_ [class_ "modal-toggle", id_ modalId, type_ "checkbox", [__|init set my.checked to true on keyup if event's key is 'Escape' set my.checked to false|]]
-    div_ [class_ "modal w-screen", role_ "dialog"] do
-      label_ [class_ "modal-backdrop", Lucid.for_ modalId] ""
-      div_ [class_ "modal-box relative min-w-80 max-w-md flex flex-col gap-4"] do
-        Components.modalCloseButton_ modalId
-        h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
-        p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
-        whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
-        input_
-          [ type_ "text"
-          , class_ "input input-bordered w-full"
-          , placeholder_ "Search..."
-          , [__|on keyup if event's key is 'Escape' set my value to '' then trigger keyup else show <.var-opt/> in closest .modal-box when its textContent.toLowerCase() contains my value.toLowerCase()|]
-          ]
-        div_ [class_ "max-h-64 overflow-y-auto flex flex-col gap-1"]
-          $ forM_ (fromMaybe [] var.options) \opt -> do
-            let optVal = opt Unsafe.!! 0
-                optLbl = fromMaybe optVal (opt !!? 1)
-                url = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> "var-" <> var.key <> "=" <> optVal
-            a_ [class_ "var-opt p-2 rounded hover:bg-fillWeak cursor-pointer", href_ url] $ toHtml optLbl
+    Components.modalWith_ modalId def{autoOpen = True, boxClass = "min-w-80 max-w-md gap-4"} Nothing do
+      h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
+      p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
+      whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
+      input_
+        [ type_ "text"
+        , class_ "input input-bordered w-full"
+        , placeholder_ "Search..."
+        , [__|on keyup if event's key is 'Escape' set my value to '' then trigger keyup else show <.var-opt/> in closest .modal-box when its textContent.toLowerCase() contains my value.toLowerCase()|]
+        ]
+      div_ [class_ "max-h-64 overflow-y-auto flex flex-col gap-1"]
+        $ forM_ (fromMaybe [] var.options) \opt -> do
+          let optVal = opt Unsafe.!! 0
+              optLbl = fromMaybe optVal (opt !!? 1)
+              url = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> "var-" <> var.key <> "=" <> optVal
+          a_ [class_ "var-opt p-2 rounded hover:bg-fillWeak cursor-pointer", href_ url] $ toHtml optLbl
 
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
@@ -738,6 +669,17 @@ processWidget pid now timeRange allParams widgetBase = do
       pure $ widget' & #children ?~ processedChildren
 
 
+-- | Fetch widget data based on widget type (for stat and chart widgets)
+fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
+fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
+  Widget.WTStat -> do
+    stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
+  _ -> do
+    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    pure $ widget & #dataset ?~ Widget.toWidgetDataset metricsD
+
+
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
@@ -756,9 +698,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
                   (AnomalyList.issueColumns issue.projectId)
                   vm
           )
-  Widget.WTStat -> do
-    stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-    pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
+  Widget.WTStat -> fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget
   Widget.WTTable -> do
     -- Fetch table data
     tableData <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
@@ -784,19 +724,7 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
       $ widget
       & #html
         ?~ renderText (Widget.renderTraceDataTable widget tracesD.dataText grouped spansGrouped colorsJson)
-  _ -> do
-    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
-    pure
-      $ widget
-      & #dataset
-        ?~ Widget.WidgetDataset
-          { source = AE.toJSON $ V.cons (AE.toJSON <$> metricsD.headers) (AE.toJSON <<$>> metricsD.dataset)
-          , rowsPerMin = metricsD.rowsPerMin
-          , value = Just metricsD.rowsCount
-          , from = metricsD.from
-          , to = metricsD.to
-          , stats = metricsD.stats
-          }
+  _ -> fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget
 
 
 -- | Populate widgets with their alert statuses
@@ -819,6 +747,12 @@ populateWidgetAlertStatuses widgets = do
           , Widget.warningThreshold = status.warningThreshold
           , Widget.alertStatus = Just $ display status.alertStatus
           }
+
+
+populateWidgetPngUrls :: (IOE :> es, Log :> es) => Text -> Text -> Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [Widget.Widget] -> Eff es [Widget.Widget]
+populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w -> do
+  url <- BotUtils.widgetPngUrl secret hostUrl pid w sinceStr fromDStr toDStr
+  pure $ if T.null url then w else w{Widget.pngUrl = Just url}
 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
@@ -879,7 +813,34 @@ syncWidgetAlert pid widgetId widget = do
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
-          updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery}
+          updatedMonitor =
+            Monitors.QueryMonitor
+              { Monitors.id = monitor.id
+              , Monitors.createdAt = monitor.createdAt
+              , Monitors.updatedAt = monitor.updatedAt
+              , Monitors.projectId = monitor.projectId
+              , Monitors.checkIntervalMins = monitor.checkIntervalMins
+              , Monitors.alertThreshold = monitor.alertThreshold
+              , Monitors.warningThreshold = monitor.warningThreshold
+              , Monitors.logQuery = newQuery
+              , Monitors.logQueryAsSql = newSqlQuery
+              , Monitors.lastEvaluated = monitor.lastEvaluated
+              , Monitors.warningLastTriggered = monitor.warningLastTriggered
+              , Monitors.alertLastTriggered = monitor.alertLastTriggered
+              , Monitors.triggerLessThan = monitor.triggerLessThan
+              , Monitors.thresholdSustainedForMins = monitor.thresholdSustainedForMins
+              , Monitors.alertConfig = monitor.alertConfig
+              , Monitors.deactivatedAt = monitor.deactivatedAt
+              , Monitors.deletedAt = monitor.deletedAt
+              , Monitors.visualizationType = monitor.visualizationType
+              , Monitors.teams = monitor.teams
+              , Monitors.widgetId = monitor.widgetId
+              , Monitors.dashboardId = monitor.dashboardId
+              , Monitors.alertRecoveryThreshold = monitor.alertRecoveryThreshold
+              , Monitors.warningRecoveryThreshold = monitor.warningRecoveryThreshold
+              , Monitors.currentStatus = monitor.currentStatus
+              , Monitors.currentValue = monitor.currentValue
+              }
       void $ Monitors.queryMonitorUpsert updatedMonitor
 
 
@@ -1000,9 +961,10 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
       -- Process widgets concurrently
       processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
-      -- Populate alert statuses for widgets
+      -- Populate alert statuses and PNG URLs for widgets
       widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-      let dash'' = dash' & #widgets .~ widgetsWithAlerts
+      widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+      let dash'' = dash' & #widgets .~ widgetsWithPngUrls
 
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
 
@@ -1144,7 +1106,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           if isNewWidget
             then button_ [class_ "btn btn-primary btn-sm shadow-sm", type_ "submit", form_ widgetFormId] "Save changes"
             else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-textWeak hover:text-textStrong", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-4 h-4"
+          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-textWeak hover:text-textStrong", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
       div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
         script_ [text| var widgetJSON = ${widgetJSON}; |]
@@ -1229,83 +1191,58 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
     div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
-      widgetAlertConfig_ pid alertFormId alertEndpoint sourceWid widgetToUse
+      widgetAlertConfig_ pid alertFormId alertEndpoint wid sourceWid widgetToUse
 
 
--- | Widget alert configuration form
-widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Widget.Widget -> Html ()
-widgetAlertConfig_ pid alertFormId alertEndpoint widgetId widget = do
+-- | Widget alert configuration form (unified with Log Explorer form structure)
+widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget -> Html ()
+widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget = do
   let hasAlert = isJust widget.alertId
+      defaultTitle = fromMaybe "Widget Alert" widget.title <> " - Threshold Alert"
+  -- Enable Alert toggle
+  label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer mb-4"] do
+    div_ [] do
+      h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
+      p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
+    input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary peer", [__|on change if my.checked then remove .hidden from next <form/> else add .hidden to next <form/>|]] <> [checked_ | hasAlert]
   form_
     [ id_ alertFormId
     , hxPost_ alertEndpoint
     , hxSwap_ "none"
     , hxTrigger_ "submit"
-    , class_ "space-y-6"
+    , hxVals_ "js:{teams: window.getTagValues('#teamHandlesInput')}"
+    , class_ $ "flex flex-col gap-3" <> if hasAlert then "" else " hidden"
+    , [__|on htmx:afterRequest if event.detail.successful set my value to '' then call me.reset() end|]
     ]
     do
       input_ [type_ "hidden", name_ "widgetId", value_ widgetId]
       input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
-      input_
-        [ type_ "hidden"
-        , name_ "vizType"
-        , value_ $ case widget.wType of
-            Widget.WTTimeseries -> "timeseries"
-            Widget.WTTimeseriesLine -> "timeseries_line"
-            _ -> "timeseries"
-        ]
+      input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of Widget.WTTimeseries -> "timeseries"; Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
 
-      label_ [class_ "flex items-center justify-between p-4 bg-fillWeaker rounded-xl border border-strokeWeak cursor-pointer"] do
-        div_ [] do
-          h4_ [class_ "font-medium text-textStrong"] "Enable Alert"
-          p_ [class_ "text-xs text-textWeak"] "Get notified when this widget's value crosses thresholds"
-        input_ $ [type_ "checkbox", name_ "alertEnabled", class_ "toggle toggle-primary"] <> [checked_ | hasAlert]
+      Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate alert"} "Alert name" "title" True Nothing
+      -- Monitor Schedule section (shared component)
+      Alerts.monitorScheduleSection_ True 5 5 (Just "threshold_exceeded") (Just chartTargetId)
+      -- Thresholds section (shared component)
+      Alerts.thresholdsSection_ (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
+      -- Widget-specific: Show threshold lines option
+      let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
+          isOnBreach = widget.showThresholdLines == Just "on_breach"
+          isNever = widget.showThresholdLines == Just "never"
+      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-3"] do
+        Components.formSelectField_ Components.FieldSm "Show threshold lines on chart" "showThresholdLines" False do
+          option_ ([value_ "always"] <> [selected_ "" | isAlways]) "Always"
+          option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
+          option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
-      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4 space-y-4"] do
-        h4_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
-        div_ [class_ "grid grid-cols-2 gap-4"] do
-          Alerts.thresholdInput_ "alertThreshold" "bg-fillError-weak" "Alert threshold" True "input-bordered w-full" [] widget.alertThreshold
-          Alerts.thresholdInput_ "warningThreshold" "bg-fillWarning-weak" "Warning threshold" False "input-bordered w-full" [] widget.warningThreshold
-        Alerts.directionSelect_ False "select-bordered w-full"
-        fieldset_ [class_ "fieldset"] do
-          label_ [class_ "label text-xs"] "Show threshold lines"
-          select_ [name_ "showThresholdLines", class_ "select select-bordered w-full"] do
-            let isAlways = widget.showThresholdLines == Just "always" || isNothing widget.showThresholdLines
-                isOnBreach = widget.showThresholdLines == Just "on_breach"
-                isNever = widget.showThresholdLines == Just "never"
-            option_ ([value_ "always"] <> [selected_ "" | isAlways]) "Always"
-            option_ ([value_ "on_breach"] <> [selected_ "" | isOnBreach]) "Only when breached"
-            option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
+      -- Notification Settings section (shared component) - empty teams, users can configure after creation
+      Alerts.notificationSettingsSection_ Nothing Nothing Nothing True V.empty V.empty alertFormId
 
-      Alerts.collapsibleSection_ "Recovery thresholds" (Just "(prevents flapping)") do
-        p_ [class_ "text-xs text-textWeak mb-3"] "Alert recovers only when value crosses these thresholds"
-        div_ [class_ "grid grid-cols-2 gap-4"] do
-          Alerts.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-bordered w-full" Nothing
-          Alerts.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-bordered w-full" Nothing
-
-      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] $ Alerts.frequencySelect_ 5 True "select-bordered w-full"
-
-      div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak p-4"] do
-        label_ [class_ "text-xs font-medium text-textStrong block mb-2"] "Alert title"
-        input_
-          [ type_ "text"
-          , name_ "title"
-          , class_ "input input-bordered w-full"
-          , placeholder_ "Widget threshold exceeded"
-          , required_ "required"
-          , value_ $ fromMaybe (fromMaybe "Widget Alert" widget.title <> " - Threshold Alert") Nothing
-          ]
-
-      div_ [class_ "flex justify-end gap-3 pt-4"] do
-        when hasAlert do
-          button_
-            [ type_ "button"
-            , class_ "btn btn-ghost btn-sm"
-            , hxDelete_ alertEndpoint
-            , hxSwap_ "none"
-            ]
-            "Remove Alert"
-        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] $ if hasAlert then "Update Alert" else "Create Alert"
+      -- Action buttons
+      div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
+        when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm", hxDelete_ alertEndpoint, hxSwap_ "none"] "Remove Alert"
+        button_ [type_ "submit", class_ "btn btn-primary btn-sm"] do
+          faSprite_ "plus" "regular" "w-3.5 h-3.5"
+          if hasAlert then "Update Alert" else "Create Alert"
 
 
 --------------------------------------------------------------------
@@ -1324,7 +1261,14 @@ data WidgetAlertForm = WidgetAlertForm
   , alertRecoveryThreshold :: Maybe Text
   , warningRecoveryThreshold :: Maybe Text
   , frequency :: Maybe Text
+  , timeWindow :: Maybe Text
+  , conditionType :: Maybe Text
   , title :: Text
+  , severity :: Maybe Text
+  , subject :: Maybe Text
+  , message :: Maybe Text
+  , recipientEmailAll :: Maybe Text
+  , teams :: [UUID.UUID]
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -1363,22 +1307,22 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
               , warningThreshold = form.warningThreshold
               , recipientEmails = []
               , recipientSlacks = []
-              , recipientEmailAll = Nothing
+              , recipientEmailAll = Just (form.recipientEmailAll == Just "true")
               , direction = form.direction
               , title = form.title
-              , severity = "warning"
-              , subject = form.title
-              , message = ""
+              , severity = fromMaybe "Warning" form.severity
+              , subject = fromMaybe form.title form.subject
+              , message = fromMaybe "" form.message
               , query = form.query
               , since = "1h"
               , from = ""
               , to = ""
               , frequency = form.frequency
-              , timeWindow = Nothing
-              , conditionType = Just "threshold_exceeded"
+              , timeWindow = form.timeWindow
+              , conditionType = form.conditionType <|> Just "threshold_exceeded"
               , source = Just "widget"
               , vizType = form.vizType
-              , teams = []
+              , teams = form.teams
               , alertRecoveryThreshold = form.alertRecoveryThreshold
               , warningRecoveryThreshold = form.warningRecoveryThreshold
               , widgetId = Just form.widgetId
@@ -1418,6 +1362,7 @@ data DashboardsGetD = DashboardsGetD
   , tableActions :: Maybe Table.TableHeaderActions
   , filters :: DashboardFilters
   , availableTags :: [Text]
+  , copyMode :: Maybe (Text, Dashboards.DashboardId) -- (widgetId, sourceDashboardId) for copy-to-dashboard mode
   }
   deriving (Generic, Show)
 data DashboardsGet
@@ -1481,7 +1426,7 @@ dashboardsGet_ dg = do
   unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
     [ class_ "flex  h-[90vh] gap-4 group/md"
     , hxPost_ ""
-    , hxVals_ "js:{ teams: getSelectedTeams() }"
+    , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
     ]
     do
       div_ [class_ "w-2/7 space-y-4 h-full flex flex-col"] do
@@ -1506,31 +1451,13 @@ dashboardsGet_ dg = do
             renderDashboardListItem False tmplItemClass (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon dashTmpl.preview
 
       div_ [class_ "w-5/7 px-3 py-5 h-full overflow-y-scroll "] do
-        div_ [class_ "flex items-end justify-between gap-2"] do
-          div_ [class_ "flex items-center w-full justify-between gap-2"] do
-            label_ [class_ "flex flex-col gap-1 w-full"] do
-              span_ [class_ "text-sm font-medium"] "Dashboard name"
-              input_
-                [ type_ "text"
-                , class_ "input input-sm w-full shrink-1"
-                , placeholder_ "Dashboard Title"
-                , name_ "title"
-                , required_ "required"
-                ]
-            label_ [class_ "flex flex-col gap-1 w-full"] do
-              span_ [class_ "text-sm font-medium"] "Teams"
-              input_
-                [ type_ "text"
-                , class_ "input input-sm w-full shrink-1"
-                , id_ "teamHandlesInput"
-                , name_ "teams"
-                , placeholder_ "Add teams"
-                ]
-            label_ [class_ "flex flex-col gap-1 w-full"] do
-              span_ [class_ "text-sm font-medium"] "Folder"
-              input_ [type_ "text", class_ "input input-sm w-full font-mono", name_ "fileDir", placeholder_ "reports/"]
-
-          div_ [class_ "flex items-center justify-center shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
+        div_ [class_ "flex items-end gap-2"] do
+          div_ [class_ "flex w-full gap-2"] do
+            formField_ FieldSm def{placeholder = "Dashboard Title"} "Dashboard name" "title" True Nothing
+            let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
+            formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList]
+            formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
+          div_ [class_ "shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
         div_ [class_ "py-2 border-b border-b-strokeWeak"] do
           span_ [class_ "text-sm "] "Using "
           span_ [class_ "text-sm font-medium", id_ "dItemTitle"] "Custom Dashboard"
@@ -1539,17 +1466,6 @@ dashboardsGet_ dg = do
         div_ [class_ "pt-5"]
           $ div_ [class_ "bg-fillBrand-strong px-2 py-4 rounded-xl w-full flex items-center"]
           $ img_ [src_ "/public/assets/svgs/screens/dashboard_blank.svg", class_ "w-full rounded overflow-hidden", id_ "dItemPreview", term "loading" "lazy", term "decoding" "async"]
-        let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
-        script_
-          [text|
-            let tagify;
-            window.addEventListener('DOMContentLoaded', (event) => {
-              tagify = createTagify('#teamHandlesInput', {tagTextProp: 'name',whitelist: $teamList,});
-            });
-            const getSelectedTeams = () => {
-              return tagify.value.map(item => item.value);
-            }
-        |]
 
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
     let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
@@ -1557,14 +1473,19 @@ dashboardsGet_ dg = do
     let getDashIcon dash = maybe "square-dashed" (\d -> fromMaybe "square-dashed" d.icon) (loadDashboardFromVM dash)
         getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dash)
 
+    let noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
+        inCopyMode = isJust dg.copyMode
+
     let renderNameCol dash = do
           let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText
               folder = folderFromPath dash.filePath
           span_ [class_ "flex items-center gap-2"] do
             span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Dashboard icon"] $ faSprite_ (getDashIcon dash) "regular" "w-3 h-3"
             unless (T.null folder) $ span_ [class_ "text-xs text-textWeak font-mono", data_ "tippy-content" "Folder path for git sync"] $ toHtml folder
-            a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
-            starButton_ dg.projectId dash.id (isJust dash.starredSince)
+            if inCopyMode
+              then span_ [class_ "font-medium text-textStrong"] $ toHtml $ dashTitle dash.title
+              else a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
+            unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
 
     let renderModifiedCol dash = span_ [class_ "monospace text-textWeak", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
@@ -1572,15 +1493,9 @@ dashboardsGet_ dg = do
 
     let baseUrl = "/p/" <> dg.projectId.toText <> "/dashboards"
     let renderTagsCol dash = forM_ (V.toList dash.tags) \tag ->
-          a_
-            [ class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary"
-            , hxGet_ $ baseUrl <> "?tag=" <> toUriStr tag
-            , hxTarget_ "#dashboardsTableContainer"
-            , hxSelect_ "#dashboardsTableContainer"
-            , hxPushUrl_ "true"
-            , hxSwap_ "outerHTML"
-            ]
-            $ toHtml tag
+          if inCopyMode
+            then span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml tag
+            else a_ [class_ "badge badge-sm badge-neutral mr-1 cursor-pointer hover:badge-primary", hxGet_ $ baseUrl <> "?tag=" <> toUriStr tag, hxTarget_ "#dashboardsTableContainer", hxSelect_ "#dashboardsTableContainer", hxPushUrl_ "true", hxSwap_ "outerHTML"] $ toHtml tag
 
     let renderWidgetsCol dash = do
           let count = getWidgetCount dash
@@ -1588,24 +1503,37 @@ dashboardsGet_ dg = do
             faSprite_ "chart-area" "regular" "w-4 h-4 text-iconNeutral"
             span_ [class_ "leading-none monospace"] $ toHtml $ show count
 
-    let tableCols =
-          [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"] & Table.withSort "title"
-          , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"] & Table.withSort "updated_at"
-          , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
-          , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
-          , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
-          ]
+    let tableCols = case dg.copyMode of
+          Just _ ->
+            [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"]
+            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+            ]
+          Nothing ->
+            [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"] & Table.withSort "title"
+            , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"] & Table.withSort "updated_at"
+            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
+            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+            ]
 
-    let noBulkActions = dg.embedded || dg.hideActions
-        table =
+    let table =
           Table
-            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded, Table.addPadding = not dg.embedded && not dg.hideActions, Table.renderAsTable = not dg.embedded, Table.bulkActionsInHeader = if noBulkActions then Nothing else Just 0, Table.noSurface = dg.hideActions}
+            { config = def{Table.elemID = "dashboardsTable", Table.showHeader = not dg.embedded || inCopyMode, Table.addPadding = not dg.embedded && not dg.hideActions && not inCopyMode, Table.renderAsTable = not dg.embedded || inCopyMode, Table.bulkActionsInHeader = if noBulkActions then Nothing else Just 0, Table.noSurface = dg.hideActions || inCopyMode}
             , columns = tableCols
             , rows = dg.dashboards
             , features =
                 def
                   { Table.rowId = if noBulkActions then Nothing else Just \dash -> dash.id.toText
-                  , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                  , Table.rowAttrs = Just $ \dash -> case dg.copyMode of
+                      Just (widgetId, sourceDashId) ->
+                        [ class_ "cursor-pointer hover:bg-fillWeak tap-target"
+                        , hxPost_ $ "/p/" <> dg.projectId.toText <> "/dashboards/" <> dash.id.toText <> "/widgets/" <> widgetId <> "/duplicate?source_dashboard_id=" <> sourceDashId.toText
+                        , hxSwap_ "none"
+                        , [__| on htmx:afterRequest set #dashboards-modal.checked to false |]
+                        ]
+                      Nothing -> [class_ "group/row hover:bg-fillWeaker"]
                   , Table.bulkActions =
                       if noBulkActions
                         then []
@@ -1613,14 +1541,17 @@ dashboardsGet_ dg = do
                           [ Table.BulkAction{icon = Just "plus", title = "Add teams", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/add_teams"}
                           , Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> dg.projectId.toText <> "/dashboards/bulk_action/delete"}
                           ]
-                  , Table.search = if dg.embedded || dg.hideActions then Nothing else Just Table.ClientSide
+                  , Table.search = if dg.embedded || dg.hideActions || inCopyMode then Nothing else Just Table.ClientSide
                   , Table.tableHeaderActions = dg.tableActions
-                  , Table.header = if dg.embedded || null dg.filters.tag then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
+                  , Table.header = if dg.embedded || null dg.filters.tag || inCopyMode then Nothing else Just $ activeFilters_ dg.projectId baseUrl dg.filters
                   , Table.zeroState = if dg.embedded then Nothing else Just Table.ZeroState{icon = "chart-area", title = "No dashboards yet", description = "Create your first dashboard to visualize your data", actionText = "Create Dashboard", destination = Left "newDashboardMdl"}
                   }
             }
 
     div_ [class_ "w-full", id_ "dashboardsTableContainer"] do
+      when inCopyMode $ div_ [class_ "mb-4 p-3 bg-fillWeak rounded-lg text-sm text-textStrong"] do
+        faSprite_ "circle-info" "regular" "w-4 h-4 inline mr-2"
+        "Select a dashboard to copy this widget to"
       toHtml table
 
 
@@ -1654,8 +1585,8 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
     "Clear all"
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
-dashboardsGetH pid sortM embeddedM teamIdM filters = do
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
+dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
 
@@ -1682,10 +1613,11 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
   -- Check if we're requesting in embedded mode (for modals, etc.)
   let embedded = embeddedM == Just "true" || embeddedM == Just "1" || embeddedM == Just "yes"
       isTeamView = isJust teamIdM
+      copyMode = (,) <$> copyWidgetIdM <*> (UUIDId <$> sourceDashIdM)
 
   if embedded || isTeamView
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags}
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode}
     else do
       freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
       let bwconf =
@@ -1711,7 +1643,7 @@ dashboardsGetH pid sortM embeddedM teamIdM filters = do
                 , filterMenus = [tagFilterMenu | not (null availableTags)]
                 , activeFilters = [("Tags", filters.tag) | not (null filters.tag)]
                 }
-      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags})
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags, copyMode})
 
 
 data DashboardRes = DashboardNoContent | DashboardPostError Text | DashboardRenameSuccess Text
@@ -1974,10 +1906,15 @@ data WidgetMoveForm = WidgetMoveForm
 -- It creates a copy of the widget with "(Copy)" appended to the title.
 -- Returns the duplicated widget that will be converted to HTML automatically.
 -- If the original widget has an alert, the alert is also duplicated with the new widget.
-dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders Widget.Widget)
-dashboardDuplicateWidgetPostH pid dashId widgetId = do
-  (_, dash) <- getDashAndVM dashId Nothing
-  case findWidgetInDashboard widgetId dash of
+-- When source_dashboard_id is provided and differs from target dashboard, this copies the widget to a different dashboard.
+dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders Widget.Widget)
+dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
+  let sourceDashId = maybe targetDashId UUIDId sourceDashIdM
+      isCrossDashboard = sourceDashId /= targetDashId
+
+  -- Get source dashboard to find the widget
+  (_, sourceDash) <- getDashAndVM sourceDashId Nothing
+  case findWidgetInDashboard widgetId sourceDash of
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just (tabSlugM, widgetToDuplicate) -> do
       newWidgetId <- UUID.genUUID <&> UUID.toText
@@ -1987,40 +1924,70 @@ dashboardDuplicateWidgetPostH pid dashId widgetId = do
       existingMonitorM <- Monitors.queryMonitorByWidgetId (normalizeWidgetId widgetId)
       newAlertIdM <- forM existingMonitorM \monitor -> do
         newMonitorId <- Monitors.QueryMonitorId <$> liftIO UUID.nextRandom
-        let newMonitor =
-              (monitor :: Monitors.QueryMonitor)
-                { Monitors.id = newMonitorId
-                , Monitors.createdAt = now
-                , Monitors.updatedAt = now
-                , Monitors.widgetId = Just newWidgetId
-                , Monitors.alertLastTriggered = Nothing
-                , Monitors.warningLastTriggered = Nothing
-                , Monitors.currentStatus = Monitors.MSNormal
+        let Monitors.QueryMonitor{id = _, widgetId = _, createdAt = _, updatedAt = _, alertLastTriggered = _, warningLastTriggered = _, currentStatus = _, ..} = monitor
+            newMonitor =
+              Monitors.QueryMonitor
+                { id = newMonitorId
+                , createdAt = now
+                , updatedAt = now
+                , widgetId = Just newWidgetId
+                , alertLastTriggered = Nothing
+                , warningLastTriggered = Nothing
+                , currentStatus = Monitors.MSNormal
+                , ..
                 }
         void $ Monitors.queryMonitorUpsert newMonitor
         pure newMonitorId.toText
 
-      let widgetCopy =
+      -- Get target dashboard name for toast message (if cross-dashboard)
+      targetDashNameM <-
+        if isCrossDashboard
+          then do
+            (targetDashVM, _) <- getDashAndVM targetDashId Nothing
+            pure $ Just $ dashTitle targetDashVM.title
+          else pure Nothing
+
+      let titleSuffix = bool " (Copy)" "" isCrossDashboard
+          widgetCopy =
             widgetToDuplicate
               { Widget.id = Just newWidgetId
               , Widget.title = case widgetToDuplicate.title of
-                  Nothing -> Just "Widget Copy"
-                  Just "" -> Just "Widget Copy"
-                  Just title -> Just (title <> " (Copy)")
+                  Nothing -> Just $ "Widget" <> titleSuffix
+                  Just "" -> Just $ "Widget" <> titleSuffix
+                  Just title -> Just (title <> titleSuffix)
               , Widget._projectId = Just pid
-              , Widget._dashboardId = Just dashId.toText
+              , Widget._dashboardId = Just targetDashId.toText
               , Widget.alertId = newAlertIdM
               , Widget.alertStatus = Nothing
               }
 
-      let updatedDash = case tabSlugM of
-            Just slug -> updateTabBySlug slug (#widgets %~ (<> [widgetCopy])) dash
-            Nothing -> dash & #widgets %~ (<> [widgetCopy])
-      _ <- Dashboards.updateSchemaAndUpdatedAt dashId updatedDash now
-      syncDashboardAndQueuePush pid dashId
+      -- Add widget to target dashboard (might be same as source)
+      (_, targetDash) <- getDashAndVM targetDashId Nothing
+      let targetHasTabs = not $ null $ fromMaybe [] targetDash.tabs
+          addedToTab = targetHasTabs && isJust (viaNonEmpty head (fromMaybe [] targetDash.tabs))
+
+      Log.logTrace "Widget duplication"
+        $ AE.object
+          [ "widgetId" AE..= widgetId
+          , "targetDashboardId" AE..= targetDashId
+          , "addedToTab" AE..= addedToTab
+          , "targetTabCount" AE..= length (fromMaybe [] targetDash.tabs)
+          ]
+
+      let updatedDash =
+            if targetHasTabs
+              then case viaNonEmpty head (fromMaybe [] targetDash.tabs) of
+                Just firstTab -> updateTabBySlug (slugify firstTab.name) (#widgets %~ (<> [widgetCopy])) targetDash
+                Nothing -> targetDash & #widgets %~ (<> [widgetCopy])
+              else targetDash & #widgets %~ (<> [widgetCopy])
+      _ <- Dashboards.updateSchemaAndUpdatedAt targetDashId updatedDash now
+      syncDashboardAndQueuePush pid targetDashId
 
       addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
-      addSuccessToast "Widget duplicated successfully" Nothing
+      let toastMsg = case targetDashNameM of
+            Just name -> "Widget copied to " <> name
+            Nothing -> "Widget duplicated successfully"
+      addSuccessToast toastMsg Nothing
       addRespHeaders widgetCopy
 
 
@@ -2135,8 +2102,8 @@ processConstantsAndExtendParams pid now timeParams allParams constants =
   pooledForConcurrently constants (processConstant pid now timeParams allParams) <&> \pc ->
     ( pc
     , allParams
-        <> [("const-" <> c.key, Just $ DashboardUtils.constantToSQLList $ fromMaybe [] c.result) | c <- pc]
-        <> [("const-" <> c.key <> "-kql", Just $ DashboardUtils.constantToKQLList $ fromMaybe [] c.result) | c <- pc]
+        <> [("const-" <> c.key, Just $ constantToSQLList $ fromMaybe [] c.result) | c <- pc]
+        <> [("const-" <> c.key <> "-kql", Just $ constantToKQLList $ fromMaybe [] c.result) | c <- pc]
     )
 
 
@@ -2189,7 +2156,8 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
             -- Process widgets concurrently for faster initial page load
             processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
             widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
-            pure $ tab & #widgets .~ widgetsWithAlerts
+            widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
+            pure $ tab & #widgets .~ widgetsWithPngUrls
           else pure tab -- Don't process widgets for inactive tabs
       pure $ dash' & #tabs ?~ processedTabs
     Nothing -> pure dash'
@@ -2224,6 +2192,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
 -- This returns only the tab content panel for htmx swapping
 dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
 dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
+  appCtx <- ask @AuthContext
   now <- Time.currentTime
   (_dashVM, dash) <- getDashAndVM dashId fileM
   let timeParams = (sinceStr, fromDStr, toDStr)
@@ -2251,11 +2220,12 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId
         widgetsWithAlerts <- populateWidgetAlertStatuses processedWidgets
+        widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
 
         -- Render tab content panel + OOB modal if variable needs prompting + OOB form URL update
         let widgetOrderUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/widgets_order?tab=" <> tabSlug
         addRespHeaders $ do
-          tabContentPanel_ pid dashId.toText idx tab.name widgetsWithAlerts True True
+          tabContentPanel_ pid dashId.toText idx tab.name widgetsWithPngUrls True True
           whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
           -- OOB swap to update widget-order-trigger form's hx-patch URL for the current tab
           form_
@@ -2383,7 +2353,7 @@ yamlEditorDrawer_ pid dashId = div_ [class_ "drawer drawer-end inline-block w-au
           button_ [class_ "btn btn-outline btn-sm", [__|on click call yamlEditorExport()|]] do
             faSprite_ "download" "regular" "w-3 h-3 mr-1"
             "Export"
-          label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-4 h-4"
+          label_ [class_ "btn btn-ghost btn-sm", Aria.label_ "Close YAML editor", Lucid.for_ drawerId] $ faSprite_ "xmark" "regular" "w-3 h-3"
       div_ [class_ "flex-1 overflow-hidden", id_ "yaml-editor-wrapper", hxGet_ yamlUrl, hxTrigger_ "intersect once", hxTarget_ "#yaml-editor-content"] do
         div_ [id_ "yaml-editor-content", class_ "h-full flex items-center justify-center"] $ loadingIndicator_ LdMD LdDots
       div_ [class_ "p-4 border-t border-strokeWeak flex justify-between items-center shrink-0"] do

@@ -1,0 +1,58 @@
+# Dependencies-only image for faster CI builds
+# This image pre-compiles all Haskell dependencies
+# Rebuilt weekly or when cabal files change
+
+FROM haskell:9.12.2
+
+# Install system dependencies (combined into single layer)
+RUN apt-get update && apt-get install -y \
+  curl ca-certificates lsb-release gnupg \
+  libssl-dev librdkafka-dev libsnappy-dev libgrpc-dev \
+  libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev \
+  pkg-config git wget unzip \
+  && curl -fsSL https://www.postgresql.org/media/keys/ACCC4CF8.asc | gpg --dearmor -o /usr/share/keyrings/postgresql-keyring.gpg \
+  && echo "deb [signed-by=/usr/share/keyrings/postgresql-keyring.gpg] http://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list \
+  && apt-get update && apt-get install -y postgresql-client-16 \
+  && rm -rf /var/lib/apt/lists/*
+
+# Install protoc
+RUN PROTOC_VERSION=29.3 && \
+  ARCH=$(dpkg --print-architecture | sed 's/arm64/aarch_64/;s/amd64/x86_64/') && \
+  wget -q https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/protoc-${PROTOC_VERSION}-linux-${ARCH}.zip && \
+  unzip -q protoc-${PROTOC_VERSION}-linux-${ARCH}.zip -d /usr/local && \
+  rm protoc-${PROTOC_VERSION}-linux-${ARCH}.zip
+
+# Install Node.js and bun for frontend builds
+RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - && \
+  apt-get install -y nodejs && \
+  npm install -g bun workbox-cli@6.5.4 && \
+  rm -rf /var/lib/apt/lists/*
+
+WORKDIR /build
+
+# Copy only files needed for dependency resolution
+COPY *.cabal cabal.project* Setup.hs LICENSE ./
+
+# Update cabal index and build all dependencies
+RUN cabal update && \
+  cabal build --only-dependencies exe:monoscope -j$(nproc)
+
+# Pre-install npm dependencies for faster deploys
+COPY package*.json ./
+RUN npm ci --prefer-offline --no-audit
+
+COPY web-components/package*.json ./web-components/
+RUN cd web-components && npm ci --prefer-offline --no-audit
+
+# Build chart-cli (pre-compiled for faster deployments)
+COPY web-components ./web-components
+RUN cd web-components && bun build --compile src/chart-cli.ts --outfile /usr/local/bin/chart-cli && \
+  chmod +x /usr/local/bin/chart-cli
+
+# The resulting image contains:
+# - All system libraries
+# - GHC 9.12.2
+# - protoc
+# - Node.js, bun, workbox-cli, and pre-built chart-cli
+# - All npm dependencies pre-installed
+# - All Haskell dependencies pre-compiled in ~/.cabal/store

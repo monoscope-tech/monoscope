@@ -10,8 +10,10 @@ module Pkg.TestUtils (
   TestRequestMessages (..),
   convert,
   runTestBackground,
+  runTestBackgroundWithNotifications,
   runTestBg,
   testServant,
+  testServantWithNotifications,
   runAllBackgroundJobs,
   getPendingBackgroundJobs,
   logBackgroundJobsInfo,
@@ -39,7 +41,10 @@ module Pkg.TestUtils (
 where
 
 import BackgroundJobs qualified
+import Configuration.Dotenv qualified as Dotenv
+import Control.Concurrent (threadDelay)
 import Control.Exception (finally, throwIO)
+import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
@@ -87,33 +92,37 @@ import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
-import Pages.Api qualified as Api
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..))
+import Pages.Settings qualified as Api
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Relude
 import Relude.Unsafe qualified as Unsafe
-import RequestMessages qualified
 import Servant qualified
 import Servant.Server qualified as ServantS
 import System.Clock (TimeSpec (TimeSpec))
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Config qualified as Config
-import System.DB (DB)
 import System.Directory (getFileSize, listDirectory)
 import System.Envy (DefConfig (..), decodeWithDefaults)
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
-import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, effToServantHandlerTest)
+import System.Types (ATAuthCtx, ATBackgroundCtx, ATBaseCtx, RespHeaders, atAuthToBase, atAuthToBaseTest, effToServantHandlerTest)
 import Web.Auth qualified as Auth
 import Web.Cookie (SetCookie)
 
 
 migrationsDirr :: FilePath
 migrationsDirr = "./static/migrations/"
+
+
+-- | Test Discord public key (hex-encoded Ed25519 public key derived from deterministic seed)
+-- Matches the public key generated from 32 bytes of 0x42 in BotTestHelpers
+testDiscordPublicKeyHex :: Text
+testDiscordPublicKeyHex = "2152f8d19b791d24453242e15f2eab6cb7cffa7b6a5ed30097960e069881db12"
 
 
 migrate :: TmpPostgres.DB -> IO ()
@@ -202,10 +211,19 @@ withExternalDBSetup f = do
     -- Close all connections in the pool
     destroyAllResources pool
 
-    -- Drop the test database
+    -- Give connections time to fully close
+    threadDelay 100000 -- 100ms
+
+    -- Forcefully terminate any remaining connections to test database
     masterConn' <- connectPostgreSQL masterConnStr
-    _ <-
-      execute
+    (_ :: [Only Bool]) <-
+      PGS.query_
+        masterConn'
+        (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" <> testDbName <> "' AND pid <> pg_backend_pid()")
+
+    -- Now drop the database
+    void
+      $ execute
         masterConn'
         (Query $ encodeUtf8 $ "DROP DATABASE IF EXISTS " <> testDbName)
         ()
@@ -424,12 +442,14 @@ runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
   runTestBackgroundWithLogger logger authCtx action
 
 
-runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackgroundWithLogger logger appCtx process = do
+-- | Run background context and return both notifications and result
+runTestBackgroundWithNotifications :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithNotifications logger appCtx process = do
   tp <- getGlobalTracerProvider
-  (notifications, result) <-
+  notifRef <- newIORef []
+  result <-
     process
-      & Data.Effectful.Notify.runNotifyTest
+      & Data.Effectful.Notify.runNotifyTest notifRef
       & Effectful.Reader.Static.runReader appCtx
       & runWithConnectionPool appCtx.pool
       & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
@@ -437,22 +457,31 @@ runTestBackgroundWithLogger logger appCtx process = do
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
-      & runHTTPWreq
+      & runHTTPGolden "./tests/golden/"
       & ELLM.runLLMGolden "./tests/golden/"
       & runConcurrent
       & Ki.runStructuredConcurrency
       & Effectful.runEff
+  notifications <- reverse <$> readIORef notifRef
+  pure (notifications, result)
+
+
+runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackgroundWithLogger logger appCtx process = do
+  (notifications, result) <- runTestBackgroundWithNotifications logger appCtx process
   -- Log the notifications that would have been sent
   forM_ notifications \notification -> do
     let notifInfo = case notification of
           Data.Effectful.Notify.EmailNotification emailData ->
-            ("Email" :: Text, Data.Effectful.Notify.receiver emailData, fmap fst (Data.Effectful.Notify.templateOptions emailData))
+            ("Email" :: Text, Data.Effectful.Notify.receiver emailData, Just (Data.Effectful.Notify.subject emailData))
           Data.Effectful.Notify.SlackNotification slackData ->
             ("Slack" :: Text, slackData.channelId, Nothing :: Maybe Text)
           Data.Effectful.Notify.DiscordNotification discordData ->
             ("Discord" :: Text, discordData.channelId, Nothing :: Maybe Text)
           Data.Effectful.Notify.WhatsAppNotification whatsappData ->
             ("WhatsApp" :: Text, Data.Effectful.Notify.to whatsappData, Just (Data.Effectful.Notify.template whatsappData))
+          Data.Effectful.Notify.PagerdutyNotification pdData ->
+            ("PagerDuty" :: Text, pdData.dedupKey, Just pdData.summary)
     Log.logInfo "Notification" notifInfo
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Effectful.runEff
@@ -502,10 +531,10 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
   sessAndHeader <- testSessionHeader pool
   tp <- getGlobalTracerProvider
 
-  -- Load OpenAI API key from environment for tests
-  openaiKey <- fromMaybe "" <$> lookupEnv "OPENAI_API_KEY"
+  -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
+  _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
 
-  -- Load config from environment variables (including LOG_LEVEL)
+  -- Load config from environment variables
   envConfig <- decodeWithDefaults defConfig
 
   let atAuthCtx =
@@ -518,14 +547,25 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           logsPatternCache
           projectKeyCache
           ( envConfig
-              { apiKeyEncryptionSecretKey = "monoscope123456123456monoscope12"
+              { -- Override to ensure test database is used (never production DB from .env)
+                databaseUrl = "test-db-connection-from-pool"
+              , timefusionPgUrl = "test-db-connection-from-pool"
+              , apiKeyEncryptionSecretKey = "monoscope123456123456monoscope12"
               , convertkitApiKey = ""
               , convertkitApiSecret = ""
               , requestPubsubTopics = ["monoscope-prod-default"]
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
-              , openaiApiKey = toText openaiKey
+              , -- Fallback values for external services (CI mode without .env)
+                -- .env values take priority if set, otherwise use test defaults
+                discordPublicKey = bool testDiscordPublicKeyHex envConfig.discordPublicKey (T.null envConfig.discordPublicKey)
+              , twilioAccountSid = bool "ACtest_account_sid_for_tests_only" envConfig.twilioAccountSid (T.null envConfig.twilioAccountSid)
+              , twilioAuthToken = bool "test_auth_token_for_tests_only" envConfig.twilioAuthToken (T.null envConfig.twilioAuthToken)
+              , whatsappFromNumber = bool "+15555551234" envConfig.whatsappFromNumber (T.null envConfig.whatsappFromNumber)
+              , slackBotToken = bool "xoxb-test-token-not-real" envConfig.slackBotToken (T.null envConfig.slackBotToken)
+              , discordBotToken = bool "test-discord-bot-token" envConfig.discordBotToken (T.null envConfig.discordBotToken)
+              , openaiApiKey = bool "sk-test-key-not-real" envConfig.openaiApiKey (T.null envConfig.openaiApiKey)
               }
           )
   f
@@ -558,6 +598,21 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
 testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+
+
+-- | Like testServant but also captures notifications sent during handler execution
+testServantWithNotifications :: TestResources -> ATAuthCtx (RespHeaders a) -> IO ([Data.Effectful.Notify.Notification], (RespHeaders a, a))
+testServantWithNotifications TestResources{..} k = do
+  tp <- getGlobalTracerProvider
+  notifRef <- newIORef []
+  headersResp <-
+    ( atAuthToBaseTest notifRef trSessAndHeader k
+        & effToServantHandlerTest trATCtx trLogger tp
+        & ServantS.runHandler
+    )
+      <&> fromRightShow
+  notifications <- reverse <$> readIORef notifRef
+  pure (notifications, (headersResp, Servant.getResponse headersResp))
 
 
 -- | Run a base context handler (like webhookPostH, replayPostH) in test context
@@ -661,7 +716,7 @@ data TestRequestMessages = RequestMessages
 
 -- FIXME: rename to some clearer. like toRequestMessage.
 -- convert is too general
-convert :: AE.Value -> Maybe RequestMessages.RequestMessage
+convert :: AE.Value -> Maybe ProcessMessage.RequestMessage
 convert val = case AE.fromJSON val of
   AE.Success p -> Just p
   AE.Error _ -> Nothing

@@ -24,7 +24,7 @@ import Servant.Server qualified as ServantS
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (effToServantHandlerTest)
 import Test.Hspec
-import Web.ClientMetadata (ClientMetadata (..), clientMetadataH)
+import Web.Auth (ClientMetadata (..), clientMetadataH)
 
 
 testId :: Projects.ProjectId

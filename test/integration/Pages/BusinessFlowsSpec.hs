@@ -16,12 +16,12 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import OddJobs.Job (Job (..))
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.LemonSqueezy qualified as LemonSqueezy
+import Pages.Settings qualified as LemonSqueezy
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
-import Pages.S3 qualified as S3
+import Pages.Settings qualified as S3
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude

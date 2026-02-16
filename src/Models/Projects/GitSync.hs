@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Models.Projects.GitSync (
   GitHubSync (..),
   GitHubSyncId,
@@ -62,9 +60,8 @@ import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
 import Network.HTTP.Types.Status (statusCode)
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (DB, UUIDId (..))
 import Relude
-import System.DB (DB)
 import System.Logging (logWarn)
 import Text.Casing (fromAny, toKebab)
 import UnliftIO.Exception (try)

@@ -1,0 +1,17 @@
+{
+    "explanation": "The analysis of service logs shows that there are 2 services generating warnings, while only 1 service is recording errors. This indicates that warnings are more widespread across multiple services, which could require attention to ensure system stability and prevent potential escalation to errors.",
+    "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
+    "time_range": {
+        "from": null,
+        "since": "2H",
+        "to": null
+    },
+    "visualization": "distribution",
+    "widgets": [
+        {
+            "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
+            "title": "Warning and Error Counts by Service",
+            "type": "distribution"
+        }
+    ]
+}

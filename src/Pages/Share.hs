@@ -15,12 +15,11 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Components (navBar)
+import Pages.Components (BadgeColor (..), ModalCfg (..), iconBadgeLg_, modalWith_, navBar)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -58,33 +57,29 @@ instance ToHtml ShareLinkPost where
 
 copyLink :: Text -> Html ()
 copyLink rid = do
-  div_ [id_ "invite-modal-container"] $ do
-    input_ [type_ "checkbox", id_ "shareModal", class_ "modal-toggle", checked_]
-    div_ [class_ "modal p-8", role_ "dialog"] do
-      div_ [class_ "modal-box flex flex-col gap-4"] $ do
-        div_ [class_ "p-3 bg-[#0acc91]/5 rounded-full w-max border-[#067a57]/20 gap-2 inline-flex"]
-          $ faSprite_ "copy" "regular" "h-6 w-6 text-textSuccess"
-        span_ [class_ " text-textStrong text-2xl font-semibold"] "Copy Share Link"
-        div_ [class_ "text-[#000833]/60"] "Share this link with anyone to give them access to this event. Lasts for 48 hours only."
-        div_ [class_ "h-1 w-full  bg-fillWeak"] pass
-        div_ [class_ "flex-col gap-4 flex"] $ do
-          let url = "https://app.monoscope.tech/share/r/" <> rid
-          div_ [class_ "flex flex-col gap-2 items-center"] do
-            div_ [class_ "mt-2  text-textSuccess"] do
-              strong_ [class_ "block pt-2 text-textWeak text-xs truncate ...", id_ "shareURL"] $ toHtml url
-          button_
-            [ type_ "button"
-            , class_ "self-start bg-fillSuccess-strong px-2 py-1.5 text-white rounded-md text-sm font-medium hover:bg-fillSuccess-weak"
-            , [__|
-               on click
-                 if 'clipboard' in window.navigator then
-                   call navigator.clipboard.writeText(#shareURL's innerText)
-                   send successToast(value:['URL copied to clipboard']) to <body/>
-                 end
-                 |]
-            ]
-            "Copy url"
-      label_ [class_ "modal-backdrop", Lucid.for_ "shareModal"] "Close"
+  div_ [id_ "invite-modal-container"] do
+    modalWith_ "shareModal" def{autoOpen = True, wrapperClass = "p-8"} Nothing do
+      iconBadgeLg_ SuccessBadge "copy"
+      span_ [class_ "text-textStrong text-2xl font-semibold"] "Copy Share Link"
+      div_ [class_ "text-textWeak"] "Share this link with anyone to give them access to this event. Lasts for 48 hours only."
+      div_ [class_ "h-1 w-full bg-fillWeak"] pass
+      div_ [class_ "flex-col gap-4 flex"] do
+        let url = "https://app.monoscope.tech/share/r/" <> rid
+        div_ [class_ "flex flex-col gap-2 items-center"] do
+          div_ [class_ "mt-2 text-textSuccess"] do
+            strong_ [class_ "block pt-2 text-textWeak text-xs truncate", id_ "shareURL"] $ toHtml url
+        button_
+          [ type_ "button"
+          , class_ "self-start bg-fillSuccess-strong px-2 py-1.5 text-white rounded-md text-sm font-medium hover:bg-fillSuccess-weak"
+          , [__|
+             on click
+               if 'clipboard' in window.navigator then
+                 call navigator.clipboard.writeText(#shareURL's innerText)
+                 send successToast(value:['URL copied to clipboard']) to <body/>
+               end
+               |]
+          ]
+          "Copy url"
 
 
 shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet

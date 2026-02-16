@@ -1,7 +1,3 @@
-{-# LANGUAGE GADTs #-}
-{-# LANGUAGE PackageImports #-}
-{-# LANGUAGE RankNTypes #-}
-
 module Utils (
   eitherStrToText,
   onpointerdown_,
@@ -15,6 +11,9 @@ module Utils (
   LoadingType (..),
   loadingIndicator_,
   loadingIndicatorWith_,
+  htmxIndicator_,
+  htmxIndicatorWith_,
+  htmxOverlayIndicator_,
   lookupVecInt,
   lookupVecText,
   lookupVecIntByKey,
@@ -41,6 +40,9 @@ module Utils (
   toXXHash,
   getServiceColors,
   getGrpcStatusColor,
+  -- Hex color mapping for ECharts server-side rendering
+  themeColorsHex,
+  getSeriesColorHex,
   nestedJsonFromDotNotation,
   prettyPrintCount,
   formatWithCommas,
@@ -65,6 +67,7 @@ import Data.ByteString qualified as BS
 import Data.Char (isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HS
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
@@ -88,11 +91,11 @@ import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
 import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
-import Pkg.THUtils (hashFile)
+import Pkg.DeriveUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
 import Text.Printf (printf)
-import Text.RE.TDFA (RE, SearchReplace, ed, re, (*=~/), (?=~))
+import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))
 import Text.Regex.TDFA ((=~))
 import Text.Show
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -163,6 +166,19 @@ loadingIndicator_ size typ = loadingIndicatorWith_ size typ ""
 -- | Loading indicator with extra classes for custom styling
 loadingIndicatorWith_ :: Monad m => LoadingSize -> LoadingType -> Text -> HtmlT m ()
 loadingIndicatorWith_ size typ extraClasses = span_ [class_ $ "loading loading-" <> loadingTypeClass typ <> " loading-" <> loadingSizeClass size <> if T.null extraClasses then "" else " " <> extraClasses, role_ "status", Aria.label_ "Loading"] ""
+
+
+htmxIndicator_ :: Monad m => Text -> LoadingSize -> HtmlT m ()
+htmxIndicator_ elId size = htmxIndicatorWith_ elId size ""
+
+
+htmxIndicatorWith_ :: Monad m => Text -> LoadingSize -> Text -> HtmlT m ()
+htmxIndicatorWith_ elId size extraCls =
+  span_ [id_ elId, class_ $ "htmx-indicator loading loading-dots loading-" <> loadingSizeClass size <> bool "" (" " <> extraCls) (not $ T.null extraCls), role_ "status", Aria.label_ "Loading"] ""
+
+
+htmxOverlayIndicator_ :: Monad m => Text -> HtmlT m ()
+htmxOverlayIndicator_ elId = span_ [id_ elId, class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots z-10 top-10", role_ "status", Aria.label_ "Loading"] ""
 
 
 deleteParam :: Text -> Text -> Text
@@ -506,12 +522,73 @@ getServiceColors = V.foldl' assign HM.empty
        in HM.insert service (serviceColors V.! colorIdx) colors
 
 
+-- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS
+themeColorsHex :: V.Vector Text
+themeColorsHex =
+  V.fromList
+    [ "#1A74A8"
+    , "#91cc75"
+    , "#fac858"
+    , "#ee6666"
+    , "#73c0de"
+    , "#3ba272"
+    , "#fc8452"
+    , "#9a60b4"
+    , "#c71585"
+    , "#37a2da"
+    , "#32c5e9"
+    , "#20b2aa"
+    , "#228b22"
+    , "#ff8c00"
+    , "#ff6347"
+    , "#dc143c"
+    , "#8b008b"
+    , "#4b0082"
+    , "#6a5acd"
+    , "#4169e1"
+    ]
+
+
+nullishNames, percentileNames :: HS.HashSet Text
+nullishNames = HS.fromList ["null", "undefined", "unknown"]
+percentileNames = HS.fromList ["median", "max", "min", "q1", "q3"]
+
+
+-- | Get hex color for chart series - auto-detects type (status code, percentile, or generic)
+getSeriesColorHex :: Text -> Text
+getSeriesColorHex name
+  | T.null name = themeColorsHex V.! 0
+  | HS.member (T.toLower name) nullishNames = "#9ca3af"
+  | isStatusCode name = statusCodeColorHex (fromMaybe 0 $ readMaybe $ toString name)
+  | isPercentile name = percentileColorHex name
+  | otherwise = themeColorsHex V.! hashTextToIndex name
+  where
+    isStatusCode t = T.length t == 3 && T.all isDigit t && T.head t `elem` ['2' .. '5']
+    isPercentile t = T.isPrefixOf "p" (T.toLower t) || HS.member (T.toLower t) percentileNames
+    hashTextToIndex t = fromIntegral (xxHash (encodeUtf8 t)) `mod` V.length themeColorsHex
+    statusCodeColorHex code
+      | code >= 200 && code < 300 = "#1A74A8"
+      | code >= 300 && code < 400 = "#73c0de"
+      | code >= 400 && code < 500 = "#fac858"
+      | code >= 500 = "#ee6666"
+      | otherwise = "#9d96f5"
+    percentileColorHex p = case T.toLower p of
+      "p50" -> "#91cc75"
+      "median" -> "#91cc75"
+      "min" -> "#91cc75"
+      "p75" -> "#3ba272"
+      "q1" -> "#3ba272"
+      "p90" -> "#fac858"
+      "p95" -> "#fc8452"
+      "q3" -> "#fc8452"
+      "p99" -> "#dc2626"
+      "p100" -> "#991b1b"
+      "max" -> "#991b1b"
+      _ -> themeColorsHex V.! hashTextToIndex p
+
+
 toXXHash :: Text -> Text
-toXXHash input = leftPad 8 $ fromString $ showHex (xxHash $ encodeUtf8 input) ""
-
-
-leftPad :: Int -> Text -> Text
-leftPad len txt = T.justifyRight len '0' (T.take len txt)
+toXXHash = T.justifyRight 8 '0' . T.take 8 . fromString . flip showHex "" . xxHash . encodeUtf8
 
 
 -- | Turn a dot‑key + value into a singleton nested Object

@@ -22,6 +22,7 @@ export class SessionReplay extends LitElement {
   @state() private consoleEventsEnable = [true, true, true]; // error, warn, info;
   @state() private paused = false;
   @state() private isLoading = false;
+  @state() private loadError: string | null = null;
 
   @state() private consoleEvents: ConsoleEvent[] = [];
   @state() private currentEventTime: number = 0;
@@ -242,7 +243,11 @@ export class SessionReplay extends LitElement {
   }
 
   async initiatePlayer(events: eventWithTime[] | undefined) {
-    if (!events || events.length < 2) return;
+    if (!events || events.length < 2) {
+      this.loadError = 'Session recording is empty or incomplete';
+      return;
+    }
+    this.loadError = null;
     this.events = events;
     const target = document.querySelector('#playerWrapper') as HTMLElement;
     this.currentTime = 0;
@@ -291,12 +296,34 @@ export class SessionReplay extends LitElement {
       this.player?.destroy();
     } catch (error) {}
     this.isLoading = true;
+    this.loadError = null;
     const url = `/p/${this.projectId}/replay_session/${sessionId}`;
 
     fetch(url, { method: 'GET', headers: { Accept: 'application/json' } })
-      .then((response) => response.json())
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+        return response.json();
+      })
       .then((data) => {
+        if (data.error) {
+          this.loadError = data.error;
+          return;
+        }
+        if (!data.events || !Array.isArray(data.events)) {
+          this.loadError = 'Invalid response format';
+          return;
+        }
+        if (data.events.length < 2) {
+          this.loadError = 'Session recording is empty or incomplete';
+          return;
+        }
         this.initiatePlayer(data.events);
+      })
+      .catch((error) => {
+        console.error('Failed to load session replay:', error);
+        this.loadError = error.message || 'Failed to load session';
       })
       .finally(() => {
         this.isLoading = false;
@@ -349,6 +376,7 @@ export class SessionReplay extends LitElement {
     this.currentTime = 0;
     this.stopTimer();
     this.consoleEvents = [];
+    this.loadError = null;
     this.player?.destroy();
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
@@ -498,12 +526,20 @@ export class SessionReplay extends LitElement {
               style="height:${this.containerHeight}px; width:${this.containerWidth}px"
             ></div>
             <div
-              class="absolute inset-0 flex bg-black opacity-25 items-center  justify-center ${this.paused || this.finished || this.isLoading
+              class="absolute inset-0 flex bg-black opacity-25 items-center justify-center ${this.paused || this.finished || this.isLoading || this.loadError
                 ? ''
                 : 'hidden'}"
             >
               ${this.isLoading
                 ? html`<div class="italic text-7xl font-medium text-gray-100">Loading...</div>`
+                : this.loadError
+                ? html`
+                    <div class="flex flex-col items-center gap-4 text-center px-8">
+                      ${faSprite_('triangle-exclamation', 'regular', 'w-14 h-14 text-red-400')}
+                      <div class="text-2xl font-medium text-gray-100">${this.loadError}</div>
+                      <div class="text-sm text-gray-300">The session recording could not be loaded</div>
+                    </div>
+                  `
                 : this.finished
                 ? html`
                     <button @click=${() => this.goTo(0)} class="cursor-pointer">

@@ -24,7 +24,7 @@ import OddJobs.Job (createJob)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import Network.HTTP.Client (HttpException)
 import Network.Wreq qualified as Wreq
 import Pages.GitSync (GitHubOwner (..), GitHubRepo (..), GitHubWebhookPayload (..), GitSyncForm (..))

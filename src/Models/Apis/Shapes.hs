@@ -19,8 +19,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL qualified as PG
-import Models.Apis.Fields.Types
-import Models.Apis.Fields.Types qualified as Fields
+import Models.Apis.Fields
+import Models.Apis.Fields qualified as Fields
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude

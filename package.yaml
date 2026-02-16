@@ -13,6 +13,7 @@ custom-setup:
   dependencies:
     - base
     - Cabal
+    - proto-lens-setup
 
 build-tools:
   - proto-lens-protoc:proto-lens-protoc
@@ -75,7 +76,7 @@ ghc-options:
   - -Wno-unused-top-binds
   - -Wno-unused-imports
   - -Wno-error=incomplete-record-selectors
-  - -Wno-error=ambiguous-fields
+  - -Wno-ambiguous-fields
   # - -plugin-package hiedb-plugin -fplugin Plugin.HieDb
   # - "-prof"
   # - -g
@@ -111,6 +112,8 @@ default-extensions:
   - ViewPatterns
   - DeriveGeneric
   - BangPatterns
+  - GADTs
+  - PackageImports
 
 description: Please see the README on GitHub at <https://github.com/githubuser/monoscope#readme>
 
@@ -197,6 +200,7 @@ library:
     - slugify
     - fmt
     - PyF
+    - retry
     - generic-lens
     - gogol
     - gogol-core
@@ -217,7 +221,6 @@ library:
     - odd-jobs
     - parser-combinators
     - pg-entity
-    - pg-transact
     - postgresql-migration
     - postgresql-simple
     - regex-tdfa
@@ -225,7 +228,6 @@ library:
     - resource-pool
     - resourcet
     - scientific
-    - sendgrid-v3 >= 0.3.0.0 # todo delete
     - servant
     - servant-htmx
     - servant-lucid
@@ -235,6 +237,7 @@ library:
     - text
     - text-display
     - text-builder-linear
+    - typed-process
     - unliftio
     - time
     - unordered-containers
@@ -265,7 +268,6 @@ library:
     - hs-opentelemetry-api
     - hs-opentelemetry-instrumentation-wai
     - hs-opentelemetry-instrumentation-auto
-    - hs-opentelemetry-instrumentation-postgresql-simple
     - postgresql-libpq
     - ki-effectful
     - grapesy
@@ -275,6 +277,9 @@ library:
     - base16-bytestring
     - minio-hs
     - conduit
+    - mime-mail
+    - smtp-mail
+    - zlib
 
 executables:
   monoscope:
@@ -342,7 +347,6 @@ tests:
       - time
       - uuid
       - uuid-quasi
-      - pg-transact
       - vector
       - cache
       - data-default
@@ -357,6 +361,17 @@ tests:
       - bytestring
       - containers
       - text
+      - cryptonite
+      - aeson-pretty
+      - memory
+      - base16-bytestring
+      - directory
+      - pg-transact
+      - monad-time-effectful
+      - ki
+      - ki-effectful
+      - effectful-core
+      - effectful-postgresql
   unit-tests:
     main: Main.hs
     source-dirs: test/unit

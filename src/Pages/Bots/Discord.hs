@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pages.Bots.Discord (linkDiscordGetH, discordInteractionsH, getDiscordChannels, DiscordInteraction) where
 
 import Data.Aeson qualified as AE
@@ -7,11 +5,13 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Text qualified as T
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
+import Effectful.Ki qualified as Ki
 import Effectful.Reader.Static (ask, asks)
-import Models.Apis.Slack (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
+import Models.Apis.Integrations (DiscordData (..), getDashboardsForDiscord, getDiscordData, insertDiscordData, updateDiscordNotificationChannel)
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Relude hiding (ask, asks)
@@ -34,17 +34,17 @@ import Effectful.Time qualified as Time
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Dashboards qualified as Dashboards
-import Network.HTTP.Types (urlEncode)
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (AIQueryResult (..), BotResponse (..), BotType (..), Channel, authHeader, chartImageUrl, contentTypeHeader, formatHistoryAsContext, handleTableResponse, processAIQuery)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForDiscord, formatTextResponse, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
+import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
-import Servant.Server (ServerError (errBody), err400, err404)
+import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
 import Utils (toUriStr)
@@ -72,7 +72,7 @@ linkDiscordGetH pidM' codeM guildIdM = do
           _ <- registerDiscordCommands envCfg.discordClientId envCfg.discordBotToken guildId
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
-            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf "Discord"
+            else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Discord", Just pid)
         Nothing -> pure $ addHeader "" $ DiscordError $ PageCtx def ()
     _ ->
       pure $ addHeader "" $ DiscordError $ PageCtx def ()
@@ -108,6 +108,15 @@ instance AE.FromJSON InteractionType where
   parseJSON = AE.withScientific "InteractionType" \n -> case round n of
     1 -> pure Ping
     _ -> pure ApplicationCommand
+
+
+-- Discord response type helpers
+pongResponse :: AE.Value
+pongResponse = AE.object ["type" AE..= (1 :: Int)]
+
+
+deferredResponse :: AE.Value
+deferredResponse = AE.object ["type" AE..= (5 :: Int)]
 
 
 -- Interaction data
@@ -148,6 +157,14 @@ data DiscordThreadChannel = DiscordThreadChannel
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripSuffix "_"]] DiscordThreadChannel
 
 
+data InteractionOption = InteractionOption
+  { name :: Text
+  , value :: AE.Value
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
 -- Slash command data
 data InteractionData
   = CommandData
@@ -160,6 +177,7 @@ data InteractionData
       , values :: [Text]
       }
   deriving (Generic, Show)
+  deriving anyclass (AE.ToJSON)
 
 
 instance AE.FromJSON InteractionData where
@@ -182,14 +200,6 @@ instance AE.FromJSON InteractionData where
           AE..:? "options"
 
 
-data InteractionOption = InteractionOption
-  { name :: Text
-  , value :: AE.Value
-  }
-  deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON)
-
-
 getDiscordChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es [Channel]
 getDiscordChannels token guildId = do
   let url = "https://discord.com/api/v10/guilds/" <> toString guildId <> "/channels"
@@ -209,25 +219,29 @@ discordInteractionsH rawBody signatureM timestampM = do
   let envCfg = authCtx.env
   validateSignature envCfg signatureM timestampM rawBody
   interaction <- parseInteraction rawBody
+  Log.logTrace ("Discord interaction received" :: Text) $ AE.object ["type" AE..= show interaction.interaction_type, "guild_id" AE..= interaction.guild_id, "channel_id" AE..= interaction.channel_id, "data" AE..= interaction.data_i]
 
   case interaction.interaction_type of
-    Ping -> pure $ AE.object ["type" AE..= 1]
+    Ping -> pure pongResponse
     ApplicationCommand -> handleApplicationCommand interaction envCfg authCtx
     MessageComponent -> handleApplicationCommand interaction envCfg authCtx
   where
-    validateSignature envCfg (Just sig) (Just tme) body
-      | verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body = pass
-      | otherwise = throwError err404{errBody = "Invalid signature"}
-    validateSignature _ _ _ _ = throwError err404{errBody = "Invalid signature"}
+    validateSignature envCfg (Just sig) (Just tme) body = do
+      valid <- verifyDiscordSignature (encodeUtf8 envCfg.discordPublicKey) sig tme body
+      unless valid $ throwError err401{errBody = "Invalid or missing signature"}
+    validateSignature _ _ _ _ = throwError err401{errBody = "Invalid or missing signature"}
 
     handleApplicationCommand :: DiscordInteraction -> EnvConfig -> AuthContext -> ATBaseCtx AE.Value
     handleApplicationCommand interaction envCfg authCtx = do
       cmdData <- case data_i interaction of
         Nothing -> throwError err400{errBody = "No command data provided"}
         Just cmd -> pure cmd
-      discordData <- getDiscordData (fromMaybe "" (maybe interaction.guild_id (\c -> c.guild_id) interaction.channel))
+      guildId <- case maybe interaction.guild_id (\c -> c.guild_id) interaction.channel of
+        Nothing -> throwError err400{errBody = "Missing guild_id in interaction"}
+        Just gid -> pure gid
+      discordData <- getDiscordData guildId
       case discordData of
-        Nothing -> pure $ contentResponse "Sorry, there was an error processing your request"
+        Nothing -> pure $ AE.object ["type" AE..= (4 :: Int), "data" AE..= formatBotError Discord ServiceError]
         Just d -> handleCommand cmdData interaction envCfg authCtx d
 
     parseInteraction :: BS.ByteString -> ATBaseCtx DiscordInteraction
@@ -241,14 +255,14 @@ discordInteractionsH rawBody signatureM timestampM = do
       case cmdData of
         CommandData name options -> do
           case name of
-            "ask" -> do
+            "monoscope" -> do
               handleAskCommand options interaction envCfg authCtx discordData
               pure $ AE.object []
             "here" -> do
               case (interaction.channel_id, interaction.guild_id) of
                 (Just channelId, Just guildId) -> do
                   _ <- updateDiscordNotificationChannel guildId channelId
-                  pure $ contentResponse "Got it, notifications and alerts on your project will now be sent to this channel"
+                  pure hereSuccessResponse
                 _ -> pure $ contentResponse "No channel ID provided"
             "dashboard" -> do
               handleDashboard options interaction envCfg authCtx discordData
@@ -282,10 +296,8 @@ discordInteractionsH rawBody signatureM timestampM = do
                       whenJust dashboardM $ \dashboard -> do
                         let widgetM = find (\w -> fromMaybe "Untitled-" w.title == widget) dashboard.widgets
                         whenJust widgetM $ \w -> do
-                          now <- Time.currentTime
-                          let widgetQuery = "&widget=" <> decodeUtf8 (urlEncode True (toStrict $ AE.encode $ AE.toJSON w))
-                              chartUrl' = chartImageUrl ("&p=" <> discordData.projectId.toText <> widgetQuery) envCfg.chartShotUrl now
-                              url = envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId
+                          chartUrl' <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl discordData.projectId w Nothing Nothing Nothing
+                          let url = envCfg.hostUrl <> "p/" <> discordData.projectId.toText <> "/dashboards/" <> dashboardId
                               content = sharedWidgetContent widget chartUrl' url
                           sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
                 _ -> pass
@@ -310,114 +322,137 @@ discordInteractionsH rawBody signatureM timestampM = do
             Just (InteractionOption{value = AE.String q} : _) -> q
             _ -> ""
 
-      -- Check if this is a thread interaction
-      case interaction.channel of
-        Just DiscordThreadChannel{type_ = 11, id = threadId} -> do
-          -- Thread conversation - use DB persistence
-          let convId = Issues.discordThreadToConversationId threadId
-
-          -- Ensure conversation exists
-          _ <-
-            Issues.getOrCreateConversation
-              discordData.projectId
-              convId
-              Issues.CTDiscordThread
-              (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
-
-          -- Load existing history from DB
-          existingHistory <- Issues.selectChatHistory convId
-
-          -- One-time migration: if DB is empty, fetch from Discord API
-          when (null existingHistory) $ do
-            msgs <- getThreadStarterMessage interaction envCfg.discordBotToken
-            case msgs of
-              Just messages -> forM_ messages $ \m ->
-                let role = if m.author.username == "APItoolkit" then "assistant" else "user"
-                 in Issues.insertChatMessage discordData.projectId convId role m.content Nothing Nothing
-              Nothing -> pass
-
-          -- Build thread context from DB history
-          dbMessages <- Issues.selectChatHistory convId
-          let threadContext = formatHistoryAsContext "Discord" $ map AI.dbMessageToLLMMessage dbMessages
-
-          -- Process with thread context
-          result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiApiKey
-
-          -- Save user message
-          Issues.insertChatMessage discordData.projectId convId "user" userQuery Nothing Nothing
-
-          case result of
-            Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
-            Right AIQueryResult{..} -> do
-              Issues.insertChatMessage discordData.projectId convId "assistant" query Nothing Nothing
-              sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
-        _ -> do
-          -- Non-thread: use original flow without persistence
-          result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
-          case result of
-            Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= "Sorry, there was an error processing your request"])
-            Right AIQueryResult{..} -> sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTime toTime timeRangeStr now
+      -- Check for report intent first (fast path)
+      case detectReportIntent userQuery of
+        ReportIntent reportType -> do
+          reportResult <- processReportQuery discordData.projectId reportType envCfg
+          case reportResult of
+            Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= err])
+            Right (report, eventsUrl, errorsUrl) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatReportForDiscord report discordData.projectId envCfg eventsUrl errorsUrl
+        GeneralQueryIntent -> case interaction.channel of
+          Just DiscordThreadChannel{type_ = 11, id = threadId} -> do
+            let convId = Issues.discordThreadToConversationId threadId
+            _ <- Issues.getOrCreateConversation discordData.projectId convId Issues.CTDiscordThread (AE.object ["channel_id" AE..= interaction.channel_id, "guild_id" AE..= interaction.guild_id])
+            existingHistory <- Issues.selectChatHistory convId
+            when (null existingHistory) $ do
+              -- Use advisory lock to prevent race condition in thread migration
+              lockAcquired <- Issues.tryAcquireChatMigrationLock convId
+              when lockAcquired $ do
+                msgs <- getThreadStarterMessage interaction envCfg.discordBotToken
+                for_ msgs \messages -> forM_ messages \m ->
+                  let role = if m.author.username `elem` ["APItoolkit", "Monoscope"] then "assistant" else "user"
+                   in Issues.insertChatMessage discordData.projectId convId role m.content Nothing Nothing
+            dbMessages <- Issues.selectChatHistory convId
+            let threadContext = formatHistoryAsContext "Discord" $ map AI.dbMessageToLLMMessage dbMessages
+            result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiApiKey
+            Issues.insertChatMessage discordData.projectId convId "user" userQuery Nothing Nothing
+            case result of
+              Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
+              Right resp -> do
+                whenJust resp.query \q -> Issues.insertChatMessage discordData.projectId convId "assistant" q Nothing Nothing
+                sendDiscordResponse options interaction envCfg authCtx discordData resp now
+          _ -> do
+            result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
+            case result of
+              Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
+              Right resp -> sendDiscordResponse options interaction envCfg authCtx discordData resp now
 
 
-sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> Text -> Maybe Text -> Maybe Time.UTCTime -> Maybe Time.UTCTime -> (Text, Text) -> Time.UTCTime -> ATBaseCtx ()
-sendDiscordResponse options interaction envCfg authCtx discordData query visualization fromTimeM toTimeM timeRangeStr now = do
-  let (from, to) = timeRangeStr
-  case visualization of
-    Just vizType -> do
-      let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-          query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
-          opts = "&q=" <> toUriStr query <> "&p=" <> discordData.projectId.toText <> "&t=" <> chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
-          question = case options of
-            Just (InteractionOption{value = AE.String q} : _) -> q
-            _ -> "[?]"
-          content = getBotContent question query query_url opts authCtx.env.chartShotUrl now
-      sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
-    Nothing -> case parseQueryToAST query of
-      Left err -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (AE.object ["content" AE..= ("Error parsing query: " <> err)])
-      Right query' -> do
-        tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
-        sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
+sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> AI.LLMResponse -> Time.UTCTime -> ATBaseCtx ()
+sendDiscordResponse options interaction envCfg authCtx discordData resp now =
+  let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+      query = fromMaybe "" resp.query
+      hasQuery = isJust resp.query
+      hasExplanation = isJust resp.explanation
+   in case (hasQuery, hasExplanation) of
+        (False, True) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord (fromMaybe "No insights available" resp.explanation)
+        (True, False) -> handleWidgetResponse query fromTimeM toTimeM
+        (True, True) -> do
+          handleWidgetResponse query fromTimeM toTimeM
+          whenJust resp.explanation $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken . formatTextResponse Discord
+        (False, False) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord "No response available"
+  where
+    handleWidgetResponse query fromTimeM toTimeM = case resp.visualization of
+      Just vizType -> do
+        let widgetType = Widget.mapChatTypeToWidgetType vizType
+            chartType = Widget.mapWidgetTypeToChartType widgetType
+            query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
+            question = case options of
+              Just (InteractionOption{value = AE.String q} : _) -> q
+              _ -> "[?]"
+            fromISO = toText . iso8601Show <$> fromTimeM
+            toISO = toText . iso8601Show <$> toTimeM
+        imageUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} Nothing fromISO toISO
+        let content = getBotContentWithUrl question query query_url imageUrl
+        sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
+      Nothing -> case parseQueryToAST query of
+        Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord (QueryParseError query))
+        Right query' -> do
+          tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
 
 
 contentResponse :: Text -> AE.Value
 contentResponse msg = AE.object ["type" AE..= 4, "data" AE..= AE.object ["content" AE..= msg]]
 
 
+-- | Structured success response for /here command
+hereSuccessResponse :: AE.Value
+hereSuccessResponse =
+  AE.object
+    [ "type" AE..= (4 :: Int)
+    , "data"
+        AE..= AE.object
+          [ "flags" AE..= (32768 :: Int)
+          , "components"
+              AE..= AE.Array
+                ( V.singleton
+                    $ AE.object
+                      [ "type" AE..= (17 :: Int)
+                      , "accent_color" AE..= (5763719 :: Int) -- Green accent
+                      , "components"
+                          AE..= AE.Array
+                            ( V.fromList
+                                [ AE.object ["type" AE..= (10 :: Int), "content" AE..= (botEmoji "success" <> " **Notification channel set**")]
+                                , AE.object ["type" AE..= (10 :: Int), "content" AE..= "This channel will now receive:"]
+                                , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections")]
+                                ]
+                            )
+                      ]
+                )
+          ]
+    ]
+
+
 sendDeferredResponse :: HTTP :> es => Text -> Text -> Text -> Eff es ()
 sendDeferredResponse interactionId interactionToken botToken = do
   let url = toString $ "https://discord.com/api/v10/interactions/" <> interactionId <> "/" <> interactionToken <> "/callback"
-      payload = AE.encode $ AE.object ["type" AE..= 5]
+      payload = AE.encode deferredResponse
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") url payload
   pass
 
 
-sendJsonFollowupResponse :: HTTP :> es => Text -> Text -> Text -> AE.Value -> Eff es ()
+sendJsonFollowupResponse :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> AE.Value -> Eff es ()
 sendJsonFollowupResponse appId interactionToken botToken content = do
+  Log.logTrace ("Discord followup response" :: Text) content
   let followupUrl = toString $ "https://discord.com/api/v10/webhooks/" <> appId <> "/" <> interactionToken
   _ <- postWith (defaults & authHeader botToken & contentTypeHeader "application/json") followupUrl content
   pass
 
 
-verifyDiscordSignature
-  :: ByteString
-  -> ByteString
-  -> ByteString
-  -> ByteString
-  -> Bool
-verifyDiscordSignature publicKey signatureHex timestamp rawBody =
-  case Base16.decode signatureHex of
-    Right s ->
-      case Ed25519.signature s of
-        Crypto.CryptoFailed _ -> False
-        Crypto.CryptoPassed sig -> case Base16.decode publicKey of
-          Right pkBytes ->
-            case Ed25519.publicKey pkBytes of
-              Crypto.CryptoFailed e -> False
-              Crypto.CryptoPassed pk ->
-                let message = timestamp <> rawBody
-                 in Ed25519.verify pk message sig
-          _ -> False
-    _ -> False
+verifyDiscordSignature :: Log.Log :> es => ByteString -> ByteString -> ByteString -> ByteString -> Eff es Bool
+verifyDiscordSignature publicKey signatureHex timestamp rawBody = do
+  let result = do
+        s <- first show $ Base16.decode signatureHex
+        sig <- first show $ Crypto.eitherCryptoError $ Ed25519.signature s
+        pkBytes <- first show $ Base16.decode publicKey
+        pk <- first show $ Crypto.eitherCryptoError $ Ed25519.publicKey pkBytes
+        pure $ Ed25519.verify pk (timestamp <> rawBody) sig
+  case result of
+    Right valid -> pure valid
+    Left err -> do
+      Log.logTrace ("Discord signature verification failed: " <> toText err) ()
+      pure False
 
 
 -- Data types for Discord API responses
@@ -438,7 +473,7 @@ data DiscordMessage = DiscordMessage
   deriving anyclass (AE.FromJSON)
 
 
-getThreadStarterMessage :: (HTTP :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
+getThreadStarterMessage :: (HTTP :> es, Ki.StructuredConcurrency :> es, Log.Log :> es) => DiscordInteraction -> Text -> Eff es (Maybe [DiscordMessage])
 getThreadStarterMessage interaction botToken = do
   case interaction.channel_id of
     Just channelId -> case interaction.channel of
@@ -447,38 +482,39 @@ getThreadStarterMessage interaction botToken = do
             url = toString $ baseUrl <> channelId <> "/messages?limit=50"
             starterMessageUrl = toString $ baseUrl <> pId <> "/messages/" <> channelId
             opts = defaults & authHeader botToken & contentTypeHeader "application/json"
-        response <- getWith opts url
-        response' <- getWith opts starterMessageUrl
+        (response, response') <- Ki.scoped \scope -> do
+          t1 <- Ki.fork scope $ getWith opts url
+          t2 <- Ki.fork scope $ getWith opts starterMessageUrl
+          liftA2 (,) (Ki.atomically $ Ki.await t1) (Ki.atomically $ Ki.await t2)
         case AE.eitherDecode (response ^. responseBody) of
           Left err -> do
             Log.logAttention ("Error decoding Discord thread messages: " <> toText err) ()
             return Nothing
           Right messages -> do
             case AE.eitherDecode (response' ^. responseBody) of
-              Left err -> do
-                return $ Just messages
+              Left err -> return $ Just messages
               Right (message :: DiscordMessage) -> return $ Just (messages <> [message])
       _ -> pure Nothing
     Nothing -> pure Nothing
 
 
-getBotContent :: Text -> Text -> Text -> Text -> Text -> Time.UTCTime -> AE.Value
-getBotContent question query query_url chartOptions baseUrl now =
+getBotContentWithUrl :: Text -> Text -> Text -> Text -> AE.Value
+getBotContentWithUrl question query query_url imageUrl =
   AE.object
-    [ "flags" AE..= 32768
+    [ "flags" AE..= (32768 :: Int)
     , "components"
         AE..= AE.Array
           ( V.singleton
               $ AE.object
-                [ "type" AE..= 17
-                , "accent_color" AE..= 26879
+                [ "type" AE..= (17 :: Int)
+                , "accent_color" AE..= (26879 :: Int)
                 , "components"
                     AE..= AE.Array
                       ( V.fromList
-                          [ AE.object ["type" AE..= 10, "content" AE..= ("### " <> question)]
-                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= chartImageUrl chartOptions baseUrl now]])]
-                          , AE.object ["type" AE..= 10, "content" AE..= ("**Query used:** " <> query)]
-                          , AE.object ["type" AE..= 1, "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open explorer", "url" AE..= query_url, "style" AE..= 5]])]
+                          [ AE.object ["type" AE..= (10 :: Int), "content" AE..= (botEmoji "chart" <> " **" <> question <> "**")]
+                          , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= imageUrl], "description" AE..= ("Chart visualization: " <> question)])]
+                          , AE.object ["type" AE..= (10 :: Int), "content" AE..= ("**Query:** `" <> query <> "`")]
+                          , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= (2 :: Int), "label" AE..= (botEmoji "search" <> " View in Log Explorer"), "url" AE..= query_url, "style" AE..= (5 :: Int)]])]
                           ]
                       )
                 ]
@@ -489,19 +525,19 @@ getBotContent question query query_url chartOptions baseUrl now =
 sharedWidgetContent :: Text -> Text -> Text -> AE.Value
 sharedWidgetContent widgetTitle chartUrl dashboardUrl =
   AE.object
-    [ "flags" AE..= 32768
+    [ "flags" AE..= (32768 :: Int)
     , "components"
         AE..= AE.Array
           ( V.singleton
               $ AE.object
-                [ "type" AE..= 17
-                , "accent_color" AE..= 26879
+                [ "type" AE..= (17 :: Int)
+                , "accent_color" AE..= (26879 :: Int)
                 , "components"
                     AE..= AE.Array
                       ( V.fromList
-                          [ AE.object ["type" AE..= 10, "content" AE..= ("### " <> widgetTitle)]
-                          , AE.object ["type" AE..= 12, "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= chartUrl]])]
-                          , AE.object ["type" AE..= 1, "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= 2, "label" AE..= "Open dashboard", "url" AE..= dashboardUrl, "style" AE..= 5]])]
+                          [ AE.object ["type" AE..= (10 :: Int), "content" AE..= (botEmoji "chart" <> " **" <> widgetTitle <> "**")]
+                          , AE.object ["type" AE..= (12 :: Int), "items" AE..= AE.Array (V.singleton $ AE.object ["media" AE..= AE.object ["url" AE..= chartUrl], "description" AE..= ("Dashboard widget: " <> widgetTitle)])]
+                          , AE.object ["type" AE..= (1 :: Int), "components" AE..= AE.Array (V.fromList [AE.object ["type" AE..= (2 :: Int), "label" AE..= "Open dashboard", "url" AE..= dashboardUrl, "style" AE..= (5 :: Int)]])]
                           ]
                       )
                 ]
@@ -530,19 +566,17 @@ discordSelectContent dashboards sId placeholder =
 registerDiscordCommands :: HTTP :> es => Text -> Text -> Text -> Eff es (Either Text ())
 registerDiscordCommands appId botToken guildId = do
   let url = toString $ "https://discord.com/api/v10/applications/" <> appId <> "/guilds/" <> guildId <> "/commands"
-      askCommand =
+      monoscopeCommand =
         AE.object
-          [ "name" AE..= ("ask" :: Text)
-          , "description" AE..= ("Ask a question about your project using natural language" :: Text)
-          , "type" AE..= 1
-          , "options" AE..= AE.Array (V.fromList [AE.object ["name" AE..= "question", "description" AE..= "Your question in natural language", "type" AE..= 3, "required" AE..= True]])
+          [ "name" AE..= ("monoscope" :: Text)
+          , "description" AE..= ("Ask about your project or get reports" :: Text)
+          , "type" AE..= (1 :: Int)
+          , "options" AE..= AE.Array (V.fromList [AE.object ["name" AE..= ("question" :: Text), "description" AE..= ("Your question in natural language" :: Text), "type" AE..= (3 :: Int), "required" AE..= True]])
           ]
-
-      hereCommand = AE.object ["name" AE..= "here", "description" AE..= "Channel for monoscope to send notifications", "type" AE..= 1]
-      dashboard = AE.object ["name" AE..= "dashboard", "description" AE..= "Select and share dashboard widget", "type" AE..= 1]
+      hereCommand = AE.object ["name" AE..= ("here" :: Text), "description" AE..= ("Channel for monoscope to send notifications" :: Text), "type" AE..= (1 :: Int)]
+      dashboard = AE.object ["name" AE..= ("dashboard" :: Text), "description" AE..= ("Select and share dashboard widget" :: Text), "type" AE..= (1 :: Int)]
       opts = defaults & authHeader botToken & contentTypeHeader "application/json"
-
-  _ <- postWith opts url (AE.encode askCommand)
+  _ <- postWith opts url (AE.encode monoscopeCommand)
   _ <- postWith opts url (AE.encode hereCommand)
   _ <- postWith opts url (AE.encode dashboard)
   pure $ Right ()

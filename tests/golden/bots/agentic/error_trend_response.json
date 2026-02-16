@@ -1,0 +1,17 @@
+{
+    "explanation": "The error trend shows a slight fluctuation over time with a peak of 6 errors observed during multiple intervals. Specifically, there were six errors recorded consecutively in three intervals, indicating a potential recurring issue worth investigating further. The lowest point recorded was 1 error in an interval.",
+    "query": "level == \"ERROR\" | summarize count() by bin_auto(timestamp)",
+    "time_range": {
+        "from": null,
+        "since": "2H",
+        "to": null
+    },
+    "visualization": "timeseries",
+    "widgets": [
+        {
+            "query": "level == \"ERROR\" | summarize count() by bin_auto(timestamp)",
+            "title": "Error Trend Over Time",
+            "type": "timeseries"
+        }
+    ]
+}

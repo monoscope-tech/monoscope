@@ -24,7 +24,6 @@ import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
-import Data.Default.Instances ()
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -45,11 +44,11 @@ import Effectful
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
-import Models.Apis.Fields.Types ()
+import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DBUtils (WrappedEnumShow (..))
+import Pkg.DeriveUtils (WrappedEnumShow (..))
 import Pkg.Parser
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
@@ -400,8 +399,12 @@ data FieldValue
 
 
 -- | Convert FieldValue to JSON
+-- For FText: if it looks like JSON (starts with [ or {), try to parse it
+-- This handles to_json() results from DataFusion which return JSON as TEXT
 fieldValueToJson :: FieldValue -> AE.Value
-fieldValueToJson (FText t) = AE.String t
+fieldValueToJson (FText t)
+  | Just c <- T.uncons t, fst c == '[' || fst c == '{' = fromMaybe (AE.String t) (AE.decodeStrict $ encodeUtf8 t)
+  | otherwise = AE.String t
 fieldValueToJson (FInt i) = AE.Number (fromIntegral i)
 fieldValueToJson (FDouble d) = AE.Number (realToFrac d)
 fieldValueToJson (FBool b) = AE.Bool b

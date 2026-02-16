@@ -1,0 +1,26 @@
+{
+    "data": {
+        "components": [
+            {
+                "accent_color": 5763719,
+                "components": [
+                    {
+                        "content": "🟢 **Notification channel set**",
+                        "type": 10
+                    },
+                    {
+                        "content": "This channel will now receive:",
+                        "type": 10
+                    },
+                    {
+                        "content": "• 🔴 Error alerts\n• 📊 Daily & weekly reports\n• 🟡 Anomaly detections",
+                        "type": 10
+                    }
+                ],
+                "type": 17
+            }
+        ],
+        "flags": 32768
+    },
+    "type": 4
+}

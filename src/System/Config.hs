@@ -1,11 +1,8 @@
-{-# LANGUAGE FlexibleContexts #-}
-
 module System.Config (EnvConfig (..), AuthContext (..), getAppContext, configToEnv, DeploymentEnv (..)) where
 
 import Colourista.IO (blueMessage)
 import Data.Cache (Cache, newCache)
 import Data.Default (Default (..))
-import Data.Default.Instances ()
 import Data.Pool as Pool (Pool, defaultPoolConfig, newPool, setNumStripes)
 import Data.Text qualified as T
 import Data.Text.Lazy qualified as TL
@@ -17,7 +14,7 @@ import Effectful
 import Effectful.Fail (Fail)
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
-import Pkg.DBUtils qualified as DBUtils
+import Pkg.DeriveUtils qualified as DeriveUtils
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
@@ -41,6 +38,7 @@ data EnvConfig = EnvConfig
   , auth0LogoutRedirect :: Text
   , auth0Callback :: Text
   , testEmail :: Maybe Text
+  , testPhoneNumber :: Maybe Text
   , apiKeyEncryptionSecretKey :: Text
   , messagesPerPubsubPullBatch :: Int
   , migrateAndInitializeOnStart :: Bool
@@ -54,6 +52,7 @@ data EnvConfig = EnvConfig
   , enableKafkaService :: Bool
   , smtpHost :: Text
   , smtpPort :: Int
+  , smtpTls :: Bool
   , smtpUsername :: Text
   , smtpPassword :: Text
   , smtpSender :: Text
@@ -85,10 +84,10 @@ data EnvConfig = EnvConfig
   , lemonSqueezyUrl :: Text
   , lemonSqueezyCriticalUrl :: Text
   , postmarkToken :: Text
+  , postmarkFromEmail :: Text
   , lemonSqueezyWebhookSecret :: Text
   , openaiApiKey :: Text
   , openaiBaseUrl :: Text
-  , chartShotUrl :: Text
   , hostUrl :: Text
   , monoscopePusherServiceAccountB64 :: Text
   , twilioAccountSid :: Text
@@ -114,6 +113,7 @@ data EnvConfig = EnvConfig
   , kafkaDeadLetterTopic :: Text
   , enableFreetier :: Bool
   , enableBrowserMonitoring :: Bool
+  , enableSessionReplay :: Bool
   , -- External scripts configuration
     googleTagManagerId :: Maybe Text
   , googleAdsConversionId :: Maybe Text
@@ -148,8 +148,10 @@ instance DefConfig EnvConfig where
       , loggingDestination = Logging.StdOut
       , logLevel = LogInfo -- Default to Info level
       , smtpPort = 465
+      , smtpTls = True
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       , showDemoProject = False -- Default to hidden
+      , postmarkFromEmail = "hello@monoscope.tech"
       }
 
 
@@ -200,7 +202,7 @@ instance Default DeploymentEnv where
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 config.databaseUrl
-  let createTimefusionPgConnIO = DBUtils.connectPostgreSQL $ encodeUtf8 config.timefusionPgUrl
+  let createTimefusionPgConnIO = DeriveUtils.connectPostgreSQL $ encodeUtf8 config.timefusionPgUrl
   when config.migrateAndInitializeOnStart $ liftIO do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization

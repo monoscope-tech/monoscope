@@ -1,5 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-
 module Models.Users.Sessions (
   PersistentSessionId (..),
   PersistentSession (..),
@@ -15,6 +13,16 @@ module Models.Users.Sessions (
   insertSession,
   getPersistentSession,
   newPersistentSessionId,
+  -- Users
+  User (..),
+  UserId (..),
+  createUser,
+  userIdByEmail,
+  createUserId,
+  insertUser,
+  userById,
+  userByEmail,
+  createEmptyUser,
 ) where
 
 import Data.Default
@@ -36,13 +44,11 @@ import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
+import Models.Projects.Projects (User (..), UserId (..), createEmptyUser, createUser, createUserId, insertUser, userByEmail, userById, userIdByEmail)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users
-import Models.Users.Users qualified as Users
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (DB, UUIDId (..))
 import Relude
 import Servant (Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
-import System.DB (DB)
 import Web.Cookie (
   SetCookie (
     setCookieHttpOnly,
@@ -76,13 +82,13 @@ newtype SessionData = SessionData {getSessionData :: Map Text Text}
     via Aeson (Map Text Text)
 
 
-newtype PSUser = PSUser {getUser :: Users.User}
+newtype PSUser = PSUser {getUser :: User}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
   deriving anyclass (Default)
   deriving
     (FromField, ToField)
-    via Aeson Users.User
+    via Aeson User
 
 
 newtype PSProjects = PSProjects {getProjects :: V.Vector Projects.Project}
@@ -165,7 +171,7 @@ craftSessionCookie (PersistentSessionId content) rememberSession =
 emptySessionCookie :: SetCookie
 emptySessionCookie =
   defaultSetCookie
-    { setCookieName = "apitoolkit_session"
+    { setCookieName = "monoscope_session"
     , setCookieValue = ""
     , setCookieMaxAge = Just 0
     }
@@ -178,7 +184,7 @@ addCookie = addHeader
 data Session = Session
   { sessionId :: PersistentSessionId
   , persistentSession :: PersistentSession
-  , user :: Users.User
+  , user :: User
   , requestID :: Text
   , isSidebarClosed :: Bool
   , theme :: Text

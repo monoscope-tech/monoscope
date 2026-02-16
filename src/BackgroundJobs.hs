@@ -5,6 +5,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
@@ -39,13 +40,11 @@ import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Errors qualified as Errors
-import Models.Apis.Fields.Facets qualified as Facets
-import Models.Apis.Fields.Types qualified as Fields
+import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.Reports qualified as Reports
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -53,29 +52,31 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.SystemLogs (insertSystemLog, mkSystemLog)
-import Models.Telemetry.Telemetry (SeverityLevel (..))
+import Models.Telemetry.SummaryGenerator (generateSummary)
+import Models.Telemetry.Telemetry (SeverityLevel (..), insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
-import Network.HTTP.Types (urlEncode)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
+import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
+import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
-import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPostmarkEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
-import ProcessMessage (processSpanToEntities)
+import ProcessMessage (processErrors, processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
-import RequestMessages qualified
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
@@ -116,6 +117,8 @@ data BgJobs
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
+  | CompressReplaySessions
+  | SaveMergedReplayEvents Projects.ProjectId UUID.UUID AE.Value
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
@@ -180,15 +183,9 @@ processBackgroundJob authCtx bgJob =
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = authCtx.env.hostUrl <> "p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-             "user_name": #{firstName},
-             "project_name": #{projectTitle'},
-             "project_url": #{project_url}
-          }|]
-        sendPostmarkEmail reciever (Just ("project-invite", templateVars)) Nothing
+        let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
+            (subj, html) = ET.projectInviteEmail user.firstName projectTitle' projectUrl
+        sendRenderedEmail reciever subj (ET.renderEmail subj html)
     SendDiscordData userId projectId fullName stack foundUsFrom -> whenJustM (Projects.projectById projectId) \project -> do
       users <- Projects.usersByProjectId projectId
       let stackString = intercalate ", " $ map toString stack
@@ -211,29 +208,15 @@ processBackgroundJob authCtx bgJob =
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
       userM <- Users.userById userId
       whenJust userM \user -> do
-        let firstName = user.firstName
-        let project_url = authCtx.env.hostUrl <> "p/" <> projectId.toText
-        let templateVars =
-              [aesonQQ|{
-            "user_name": #{firstName},
-            "project_name": #{projectTitle},
-            "project_url": #{project_url}
-          }|]
-        sendPostmarkEmail reciever (Just ("project-created", templateVars)) Nothing
+        let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
+            (subj, html) = ET.projectCreatedEmail user.firstName projectTitle projectUrl
+        sendRenderedEmail reciever subj (ET.renderEmail subj html)
     DeletedProject pid -> do
       users <- Projects.usersByProjectId pid
       projectM <- Projects.projectById pid
-      forM_ projectM \pr -> do
-        forM_ users \user -> do
-          let firstName = user.firstName
-          let projectTitle = pr.title
-          let userEmail = CI.original user.email
-          let templateVars =
-                [aesonQQ|{
-             "user_name": #{firstName},
-             "project_name": #{projectTitle}
-           }|]
-          sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
+      forM_ projectM \pr -> forM_ users \user -> do
+        let (subj, html) = ET.projectDeletedEmail user.firstName pr.title
+        sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
     ErrorAssigned pid errId assigneeId -> do
       errM <- Errors.getErrorById errId
       userM <- Users.userById assigneeId
@@ -389,6 +372,8 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
+    CompressReplaySessions -> Replay.compressAndMergeReplaySessions
+    SaveMergedReplayEvents pid sid events -> Replay.saveMergedReplayEvents pid sid events
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
     NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
@@ -440,6 +425,10 @@ runHourlyJob scheduledTime hour = do
   deletedCount <- QueryCache.cleanupExpiredCache
   Relude.when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
 
+  -- Compress & merge inactive replay sessions
+  liftIO $ withResource ctx.jobsPool \conn ->
+    void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
+
   Log.logInfo "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
 
 
@@ -460,7 +449,7 @@ generateOtelFacetsBatch projectIds timestamp = do
         ]
         $ \sp -> do
           addEvent sp "facet_generation.started" []
-          result <- try $ Facets.generateAndSaveFacets pid "otel_logs_and_spans" Facets.facetColumns 50 timestamp
+          result <- try $ Fields.generateAndSaveFacets pid "otel_logs_and_spans" Fields.facetColumns 50 timestamp
           case result of
             Left (e :: SomeException) -> do
               addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]
@@ -517,9 +506,9 @@ processFiveMinuteSpans scheduledTime pid = do
             (pid, fiveMinutesAgo, scheduledTime, skip, perPage)
       -- Only log if there are actually spans to process (reduces noise in tests)
       Relude.when (V.length httpSpans > 0) $ do
-        Log.logInfo "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
+        Log.logTrace "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
         processProjectSpans pid httpSpans fiveMinutesAgo scheduledTime
-        Log.logInfo "Processing complete for page" ("skip", skip)
+        Log.logTrace "Processing complete for page" ("skip", skip)
       Relude.when (V.length httpSpans == perPage) $ do
         processSpansWithPagination fiveMinutesAgo (skip + perPage)
 
@@ -782,7 +771,7 @@ processProjectErrors pid errors = do
     -- Process a single error - the error already has requestMethod and requestPath
     -- set by getAllATErrors if it was extracted from span context
     processError :: Errors.ATError -> (Errors.ATError, Query, [DBField])
-    processError = RequestMessages.processErrors pid
+    processError = processErrors pid
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
@@ -828,7 +817,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
 
   -- Only log if there are actually entities to process (reduces noise in tests)
   Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0)
-    $ Log.logInfo
+    $ Log.logTrace
       "Entities extracted"
       ( object
           [ "project_id" AE..= pid.toText
@@ -855,7 +844,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
       let spansWithHashes = V.filter (\(_, hashes) -> not $ V.null hashes) $ V.zip spans spanUpdates
       Relude.when (V.length spansWithHashes > 0) $ do
         let expectedCount = V.length spansWithHashes
-        Log.logInfo "Updating spans with computed hashes" ("span_count", AE.toJSON expectedCount)
+        Log.logTrace "Updating spans with computed hashes" ("span_count", AE.toJSON expectedCount)
         let dbSpanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
             hashValues = PGArray $ V.toList $ V.map (AE.toJSON . snd) spansWithHashes
         rowsUpdated <-
@@ -873,7 +862,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
             (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
         Relude.when (fromIntegral rowsUpdated /= expectedCount)
           $ Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
-        Log.logInfo "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
+        Log.logTrace "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
     projectCacheDefault =
@@ -975,25 +964,22 @@ buildMonitorAlert monitorE issue hostUrl =
 
 
 sendNotifications :: Monitors.QueryMonitorEvaled -> [ProjectMembers.Team] -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
-sendNotifications monitorE teams p alert = do
-  for_ teams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title (emailQueryMonitorAlert monitorE)
-  Relude.when (null teams) $ sendFallbackNotifications monitorE
+sendNotifications monitorE teams p alert@MonitorsAlert{monitorUrl} = do
+  targetTeams <-
+    if null teams
+      then maybeToList <$> ProjectMembers.getEveryoneTeam monitorE.projectId
+      else pure teams
+  for_ targetTeams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title monitorUrl (emailQueryMonitorAlert monitorE)
+sendNotifications _ _ _ _ = pass
 
 
-sendFallbackNotifications :: Monitors.QueryMonitorEvaled -> ATBackgroundCtx ()
-sendFallbackNotifications monitorE = do
-  Relude.when monitorE.alertConfig.emailAll do
-    users <- Projects.usersByProjectId monitorE.projectId
-    forM_ users \u -> emailQueryMonitorAlert monitorE u.email (Just u)
-  forM_ monitorE.alertConfig.emails \email -> emailQueryMonitorAlert monitorE email Nothing
-  unless (null monitorE.alertConfig.slackChannels) $ sendSlackMessage monitorE.projectId [fmtTrim| 🤖 *Log Alert triggered for `{monitorE.alertConfig.title}`*|]
-
-
-dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
-dispatchTeamNotifications team alert projectId projectTitle emailAction = do
-  for_ team.notify_emails \email -> emailAction (CI.mk email) Nothing
+dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
+dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailAction = do
+  emails <- ProjectMembers.resolveTeamEmails projectId team
+  for_ emails (`emailAction` Nothing)
   for_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
   for_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
+  for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
 
 
 -- Send notifications
@@ -1077,9 +1063,9 @@ sendReportForProject pid rType = do
   ctx <- ask @Config.AuthContext
   users <- Projects.usersByProjectId pid
   currentTime <- Time.currentTime
-  let (prv, typTxt, intv) = case rType of
-        WeeklyReport -> (6 * 86400, "weekly", "1d")
-        _ -> (86400, "daily", "1h")
+  let (prv, typTxt) = case rType of
+        WeeklyReport -> (6 * 86400, "weekly")
+        _ -> (86400, "daily")
 
   let startTime = addUTCTime (negate prv) currentTime
   projectM <- Projects.projectById pid
@@ -1127,7 +1113,7 @@ sendReportForProject pid rType = do
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
     let report =
-          Reports.Report
+          Issues.Report
             { id = reportId
             , reportJson = rp_json
             , createdAt = utcToZonedTime timeZone currentTime
@@ -1137,17 +1123,18 @@ sendReportForProject pid rType = do
             , endTime = currentTime
             , reportType = typTxt
             }
-    res <- Reports.addReport report
+    res <- Issues.addReport report
     Log.logInfo "Completed report generation for" pid
     unless ((typTxt == "daily" && not pr.dailyNotif) || (typTxt == "weekly" && not pr.weeklyNotif)) $ do
       Log.logInfo "Sending report notifications for" pid
       let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-          chartShotUrl = ctx.env.chartShotUrl <> "?t=bar&p=" <> pid.toText <> "&from=" <> stmTxt <> "&to=" <> currentTimeTxt
-          allQ = chartShotUrl <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-          errQ = chartShotUrl <> "&theme=roma" <> "&q=" <> decodeUtf8 (urlEncode True (encodeUtf8 "status_code == \"ERROR\" | summarize count(*) by bin(timestamp," <> intv <> "), resource___service___name"))
-          alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
+          eventsWidget = def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"}
+          errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
+      allQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
+      errQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
+      let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
         Projects.NDiscord -> do
@@ -1159,49 +1146,35 @@ sendReportForProject pid rType = do
         _ -> do
           totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
           Relude.when (totalRequest > 0) do
+            let dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
+                sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
+                dayStart = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone sevenDaysAgoUTCTime))
+                totalAnomalies = length anomalies'
+                (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
+                pctOf n = if totalAnomalies == 0 then 0 else (fromIntegral n / fromIntegral totalAnomalies) * 99
             forM_ users \user -> do
-              let firstName = user.firstName
-                  projectTitle = pr.title
-                  userEmail = CI.original user.email
-                  anmls = if total_anomalies == 0 then [AE.object ["message" AE..= "No anomalies detected yet."]] else RP.getAnomaliesEmailTemplate anomalies'
-                  perf_count = V.length endpointPerformance
-                  perf_shrt = if perf_count == 0 then [AE.object ["message" AE..= "No performance data yet."]] else (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageLatency" AE..= d, "latencyChange" AE..= dc]) <$> V.take 10 endpointPerformance
-                  rp_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-                  dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
-                  sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
-                  sevenDaysAgoZonedTime = utcToZonedTime timeZone sevenDaysAgoUTCTime
-                  dayStart = show $ localDay (zonedTimeToLocalTime sevenDaysAgoZonedTime)
-                  freeTierLimitExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
-                  slowQueriesCount = V.length slowDbQueries
-                  slowQueriesList = if slowQueriesCount == 0 then [AE.object ["message" AE..= "No slow queries detected."]] else (\(x, y, z) -> AE.object ["statement" AE..= x, "latency" AE..= z, "total" AE..= y]) <$> slowDbQueries
-                  totalAnomalies = length anomalies'
-                  (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.APIChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
-                  runtimeErrorsBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral errTotal / fromIntegral totalAnomalies) * 99
-                  apiChangesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral apiTotal / fromIntegral totalAnomalies) * 99
-                  alertIssuesBarPercentage = if totalAnomalies == 0 then 0 else (fromIntegral qTotal / fromIntegral totalAnomalies) * 99
-                  templateVars =
-                    [aesonQQ|{
-                     "user_name": #{firstName},
-                     "total_events": #{totalEvents},
-                     "total_errors": #{totalErrors},
-                     "events_chart_url": #{allQ},
-                     "errors_chart_url": #{errQ},
-                     "project_name": #{projectTitle},
-                     "anomalies_count": #{total_anomalies},
-                     "errors_bar_per": #{runtimeErrorsBarPercentage},
-                     "api_bar_per": #{apiChangesBarPercentage},
-                     "alerts_bar_per": #{alertIssuesBarPercentage},
-                     "anomalies":  #{anmls},
-                     "report_url": #{rp_url},
-                     "performance_count": #{perf_count},
-                     "performance": #{perf_shrt},
-                     "queries": #{slowQueriesList},
-                     "slow_queries_count": #{slowQueriesCount},
-                     "start_date": #{dayStart},
-                     "end_date": #{dayEnd},
-                     "free_exceeded": #{freeTierLimitExceeded}
-              }|]
-              sendPostmarkEmail userEmail (Just ("weekly-report", templateVars)) Nothing
+              let reportData =
+                    ET.WeeklyReportData
+                      { userName = user.firstName
+                      , projectName = pr.title
+                      , reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+                      , startDate = dayStart
+                      , endDate = dayEnd
+                      , eventsChartUrl = allQ
+                      , errorsChartUrl = errQ
+                      , totalEvents
+                      , totalErrors
+                      , anomaliesCount = total_anomalies
+                      , runtimeErrorsPct = pctOf errTotal
+                      , apiChangesPct = pctOf apiTotal
+                      , alertsPct = pctOf qTotal
+                      , anomalies = anomalies'
+                      , performance = endpointPerformance
+                      , slowQueries = slowDbQueries
+                      , freeTierExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
+                      }
+                  (subj, html) = ET.weeklyReportEmail reportData
+              sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
       Log.logInfo "Completed sending report notifications for" pid
 
 
@@ -1236,13 +1209,45 @@ newAnomalyJob :: Projects.ProjectId -> ZonedTime -> Text -> Text -> V.Vector Tex
 newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
   authCtx <- ask @Config.AuthContext
   let anomalyType = fromMaybe (error "parseAnomalyTypes returned Nothing") $ Anomalies.parseAnomalyTypes anomalyTypesT
-  Log.logInfo "Processing new anomalies" ()
+  Log.logTrace "Processing new anomalies" ()
   case anomalyType of
     -- API Change anomalies (endpoint, shape, format) - group into single issue per endpoint
     -- This prevents notification spam when multiple related changes occur
     Anomalies.ATEndpoint -> processAPIChangeAnomalies pid targetHashes
     Anomalies.ATShape -> processAPIChangeAnomalies pid targetHashes
     Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
+    -- Runtime exceptions get individual issues
+    -- Each unique error pattern gets its own issue for tracking
+    Anomalies.ATRuntimeException -> do
+      errors <- Anomalies.errorsByHashes pid targetHashes
+
+      -- Create one issue per error
+      forM_ errors \err -> do
+        issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
+        Issues.insertIssue issue
+        -- Queue enhancement job
+        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
+          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        -- Send notifications only if project exists and has alerts enabled
+        projectM <- Projects.projectById pid
+        whenJust projectM \project -> Relude.when project.errorAlerts do
+          users <- Projects.usersByProjectId pid
+          let issueId = UUID.toText issue.id.unUUIDId
+          forM_ project.notificationsChannel \case
+            Projects.NSlack ->
+              forM_ errors \err' -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
+            Projects.NDiscord ->
+              forM_ errors \err' -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title Nothing
+            Projects.NPhone ->
+              forM_ errors \err' ->
+                sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData}) pid project.title project.whatsappNumbers
+            Projects.NEmail ->
+              forM_ users \u -> do
+                let errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                    (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl (map (.errorData) errors)
+                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+            Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts, not runtime errors
+            -- Ignore other anomaly types
     _ -> pass
 
 
@@ -1316,16 +1321,12 @@ processAPIChangeAnomalies pid targetHashes = do
         Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
         Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
         Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+        Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
         Projects.NEmail -> do
           forM_ users \u -> do
-            let templateVars =
-                  AE.object
-                    [ "user_name" AE..= u.firstName
-                    , "project_name" AE..= project.title
-                    , "anomaly_url" AE..= (authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues")
-                    , "endpoint_name" AE..= endpointInfo
-                    ]
-            sendPostmarkEmail (CI.original u.email) (Just ("anomaly-endpoint-2", templateVars)) Nothing
+            let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
+                (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl endpointInfo
+            sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
 -- | Group anomalies by endpoint hash
@@ -1602,7 +1603,7 @@ gitSyncPushAllDashboards pid = do
 
 checkTriggeredQueryMonitors :: ATBackgroundCtx ()
 checkTriggeredQueryMonitors = do
-  Log.logInfo "Checking query monitors" ()
+  Log.logTrace "Checking query monitors" ()
   monitors <- Monitors.getActiveQueryMonitors
   forM_ monitors \monitor -> do
     startWall <- Time.currentTime
@@ -1646,7 +1647,7 @@ evaluateQueryMonitor monitor startWall = do
           , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
           ]
       otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall
-  insertSystemLog otelLog
+  insertSystemLog otelLog{Telemetry.summary = generateSummary otelLog}
   void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
   Relude.when (status /= Monitors.MSNormal) do
     Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)

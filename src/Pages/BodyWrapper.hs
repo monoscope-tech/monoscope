@@ -6,15 +6,13 @@ import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
 import Pages.Components qualified as Components
-import Pkg.Components.ExternalHeadScripts (externalHeadScripts_)
-import Pkg.THUtils
+import Pkg.DeriveUtils (hashAssetFile)
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
@@ -145,7 +143,7 @@ bodyWrapper bcfg child = do
         -- script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
 
-        script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
+        when bcfg.config.enableBrowserMonitoring $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
         -- Flag for widget initialization - set to true after web-components loads
         script_ "window.widgetDepsReady = false;"
@@ -158,15 +156,6 @@ bodyWrapper bcfg child = do
       a=t.getElementsByTagName(n)[0],a.parentNode.insertBefore(u,a))}(window,document,'script');
       twq('config','om5gt');
       |]
-
-        script_
-          [text|
-          function getTags() {
-            const tag = window.tagify.value
-            const values = tag.map(tag => tag.value);
-            return values || []
-          }
-        |]
 
         let swURI = $(hashAssetFile "/public/sw.js")
         script_
@@ -433,7 +422,7 @@ bodyWrapper bcfg child = do
                 sideNav'
                 section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
                   when
-                    (currUser.email == "hello@apitoolkit.io")
+                    (currUser.email == "hello@monoscope.tech")
                     loginBanner
                   unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                   section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
@@ -451,11 +440,13 @@ bodyWrapper bcfg child = do
                       input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
 
                       div_
-                        [ class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+                        [ id_ "dashboards-modal-content"
+                        , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
                         , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
-                        , hxTrigger_ "intersect once"
+                        , hxTrigger_ "loadDashboards"
                         , hxSelect_ "#itemsListPage"
                         , hxSwap_ "innerHTML"
+                        , hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value}"
                         ]
                         do
                           div_ [class_ "skeleton h-16 w-full"] ""
@@ -564,18 +555,20 @@ bodyWrapper bcfg child = do
                 });
       |]
       -- Initialize Monoscope only when telemetryProjectId is available
-      when (bcfg.config.telemetryProjectId /= "")
-        $ script_
-          [text| 
-            window.monoscope = new Monoscope({ 
-              projectId: "${telemetryProjectId}", 
-              serviceName: "${telemetryServiceName}", 
-              user: {
-                email: ${email}, 
-                name: "${name}"
-              }
-            });
-        |]
+      when (bcfg.config.telemetryProjectId /= "" && bcfg.config.enableBrowserMonitoring)
+        $ let enableReplay = bool "false" "true" bcfg.config.enableSessionReplay
+           in script_
+                [text|
+                  window.monoscope = new Monoscope({
+                    projectId: "${telemetryProjectId}",
+                    serviceName: "${telemetryServiceName}",
+                    sessionReplay: ${enableReplay},
+                    user: {
+                      email: ${email},
+                      name: "${name}"
+                    }
+                  });
+              |]
 
 
 projectsDropDown :: Projects.Project -> V.Vector Projects.Project -> Html ()
@@ -625,7 +618,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
         -- Full logos (shown when sidebar is expanded)
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle set @aria-expanded to (if event.target.checked then 'false' else 'true')|]] do
+      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
@@ -683,7 +676,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , target_ "blank"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Documentation"
-      , href_ "https://apitoolkit.io/docs/"
+      , href_ "https://monoscope.tech/docs/"
       ]
       $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
@@ -735,7 +728,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
-navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Users.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Sessions.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full px-4 py-2 flex flex-row border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
@@ -793,7 +786,7 @@ loginBanner = do
       span_ [class_ "font-medium text-textStrong"] "Demo Project"
       span_ [class_ "hidden sm:inline text-textWeak"] "· Explore APIToolkit's features"
     div_ [class_ "flex items-center gap-3"] do
-      a_ [class_ "text-textBrand hover:underline underline-offset-2", href_ "https://apitoolkit.io/docs/onboarding/"] "Docs"
+      a_ [class_ "text-textBrand hover:underline underline-offset-2", href_ "https://monoscope.tech/docs/onboarding/"] "Docs"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login"] "Start Free Trial"
 
@@ -817,7 +810,7 @@ navBottomList pidTxt =
   , ("dollar", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
   , ("bucket", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
-  , ("github", "GitHub sync", "/p/" <> pidTxt <> "/settings/git-sync", Nothing, Nothing, Nothing)
+  , ("github", "GitHub Sync", "/p/" <> pidTxt <> "/settings/git-sync", Nothing, Nothing, Nothing)
   , ("trash", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
   ]
 
@@ -841,3 +834,103 @@ renderNavBottomItem curr (iconName, linkText, link, targetBlankM, onClickM, hxGe
       a_ attrs $ do
         faSprite_ iconName "regular" "shrink-0 h-4 w-4"
         span_ [class_ "text-lg"] (toHtml linkText)
+
+
+externalHeadScripts_ :: EnvConfig -> Html ()
+externalHeadScripts_ config = do
+  -- Google Ads
+  whenJust config.googleAdsConversionId $ \conversionId -> do
+    script_ [async_ "true", src_ $ "https://www.googletagmanager.com/gtag/js?id=" <> conversionId] ("" :: Text)
+    script_
+      [fmt|
+            window.dataLayer = window.dataLayer || [];
+            function gtag(){{dataLayer.push(arguments);}}
+            gtag('js', new Date());
+            gtag('config', '{conversionId}');
+
+            function gtag_report_conversion(url) {{
+              var callback = function () {{
+                if (typeof(url) != 'undefined') {{
+                  window.location = url;
+                }}
+              }};
+              gtag('event', 'conversion', {{
+                  'send_to': '{conversionId}/IUBqCKOA-8sYEIvoroUq',
+                  'event_callback': callback
+              }});
+              return false;
+            }} |]
+
+  -- Facebook Pixel Code
+  when (isJust config.facebookPixelId1 || isJust config.facebookPixelId2) $ do
+    let pixelInitScript =
+          mconcat
+            $ catMaybes
+              [ config.facebookPixelId1 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
+              , config.facebookPixelId2 <&> \pixelId -> [fmt|fbq('init', '{pixelId}'); fbq('track', 'PageView');|]
+              ]
+    script_
+      [fmt|
+          setTimeout(function(){{
+      !function(f,b,e,v,n,t,s)
+    {{if(f.fbq)return;n=f.fbq=function(){{n.callMethod?
+    n.callMethod.apply(n,arguments):n.queue.push(arguments)}};
+    if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';
+    n.queue=[];t=b.createElement(e);t.async=!0;
+    t.src=v;s=b.getElementsByTagName(e)[0];
+    s.parentNode.insertBefore(t,s)}}(window,document,'script',
+    'https://connect.facebook.net/en_US/fbevents.js');
+      {pixelInitScript}
+      }},3000);
+      |]
+    whenJust config.facebookPixelId2 $ \pixelId ->
+      noscript_ $ img_ [height_ "1", width_ "1", src_ $ "https://www.facebook.com/tr?id=" <> pixelId <> "&ev=PageView&noscript=1"]
+  -- End Facebook Pixel Code
+
+  -- Google Tag Manager
+  whenJust config.googleTagManagerId $ \gtmId -> do
+    script_
+      [fmt|
+    (function(w,d,s,l,i){{w[l]=w[l]||[];w[l].push({{'gtm.start':
+    new Date().getTime(),event:'gtm.js'}});var f=d.getElementsByTagName(s)[0],
+    j=d.createElement(s),dl=l!='dataLayer'?'&l='+l:'';j.async=true;j.src=
+    'https://www.googletagmanager.com/gtm.js?id='+i+dl;f.parentNode.insertBefore(j,f);
+    }})(window,document,'script','dataLayer','{gtmId}');
+      |]
+    noscript_ $ iframe_ [height_ "0", width_ "0", style_ "display:none;visibility:hidden", src_ $ "https://www.googletagmanager.com/ns.html?id=" <> gtmId] ""
+  -- End Google Tag Manager
+
+  -- LinkedIn pixel
+  whenJust config.linkedInPartnerId $ \partnerId -> do
+    script_
+      [fmt|
+    _linkedin_partner_id = "{partnerId}"; window._linkedin_data_partner_ids = window._linkedin_data_partner_ids || [];
+    window._linkedin_data_partner_ids.push(_linkedin_partner_id);
+      |]
+    script_
+      [raw|
+    setTimeout(function(){
+    (function(l) { if (!l){window.lintrk = function(a,b){window.lintrk.q.push([a,b])}; window.lintrk.q=[]} var s = document.getElementsByTagName("script")[0]; var b = document.createElement("script"); b.type = "text/javascript";b.async = true; b.src = "https://snap.licdn.com/li.lms-analytics/insight.min.js"; s.parentNode.insertBefore(b, s);})(window.lintrk);
+                  },3000);
+      |]
+    noscript_ $ img_ [height_ "0", width_ "0", style_ "display:none;visibility:hidden", src_ $ "https://px.ads.linkedin.com/collect/?pid=" <> partnerId <> "&fmt=gif"]
+  -- End LinkedIn
+
+  -- PostHog
+  whenJust config.postHogApiKey $ \apiKey -> do
+    let apiHost = fromMaybe "https://eu.i.posthog.com" config.postHogApiHost
+    script_
+      [fmt|
+(function() {{
+    !function(t,e){{var o,n,p,r;e.__SV||(window.posthog=e,e._i=[],e.init=function(i,s,a){{function g(t,e){{var o=e.split(".");2==o.length&&(t=t[o[0]],e=o[1]),t[e]=function(){{t.push([e].concat(Array.prototype.slice.call(arguments,0)))}}}}(p=t.createElement("script")).type="text/javascript",p.crossOrigin="anonymous",p.async=!0,p.src=s.api_host.replace(".i.posthog.com","-assets.i.posthog.com")+"/static/array.js",(r=t.getElementsByTagName("script")[0]).parentNode.insertBefore(p,r);var u=e;for(void 0!==a?u=e[a]=[]:a="posthog",u.people=u.people||[],u.toString=function(t){{var e="posthog";return"posthog"!==a&&(e+="."+a),t||(e+=" (stub)"),e}},u.people.toString=function(){{return u.toString(1)+".people (stub)"}},o="init Ce Ls Ns Te As js capture Xe calculateEventProperties qs register register_once register_for_session unregister unregister_for_session Gs getFeatureFlag getFeatureFlagPayload isFeatureEnabled reloadFeatureFlags updateEarlyAccessFeatureEnrollment getEarlyAccessFeatures on onFeatureFlags onSurveysLoaded onSessionId getSurveys getActiveMatchingSurveys renderSurvey canRenderSurvey canRenderSurveyAsync identify setPersonProperties group resetGroups setPersonPropertiesForFlags resetPersonPropertiesForFlags setGroupPropertiesForFlags resetGroupPropertiesForFlags reset get_distinct_id getGroups get_session_id get_session_replay_url alias set_config startSessionRecording stopSessionRecording sessionRecordingStarted captureException loadToolbar get_property getSessionProperty Hs Us createPersonProfile Ws Os Js opt_in_capturing opt_out_capturing has_opted_in_capturing has_opted_out_capturing get_explicit_consent_status is_capturing clear_opt_in_out_capturing zs debug L Bs getPageViewId captureTraceFeedback captureTraceMetric".split(" "),n=0;n<o.length;n++)g(u,o[n]);e._i.push([i,s,a])}},e.__SV=1)}}(document,window.posthog||[]);
+    posthog.init('{apiKey}', {{
+        api_host: '{apiHost}',
+        defaults: '2025-05-24',
+        person_profiles: 'identified_only'
+    }})
+}})();
+        |]
+  -- Crisp chat
+  whenJust config.crispWebsiteId $ \websiteId ->
+    script_
+      [fmt|window.$crisp = []; window.CRISP_WEBSITE_ID = "{websiteId}"; (function () {{ d = document; s = d.createElement("script"); s.src = "https://client.crisp.chat/l.js"; s.async = 1; d.getElementsByTagName("head")[0].appendChild(s); }})();|]

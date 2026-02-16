@@ -1,13 +1,8 @@
-{-# LANGUAGE AllowAmbiguousTypes #-}
-{-# LANGUAGE KindSignatures #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE StandaloneKindSignatures #-}
-
 module System.Types (
   ATBaseCtx,
   ATAuthCtx,
   ATBackgroundCtx,
-  module System.DB,
+  DB,
   runBackground,
   addRespHeaders,
   addTriggerEvent,
@@ -25,6 +20,7 @@ module System.Types (
   effToServantHandlerTest,
   effToHandler,
   atAuthToBase,
+  atAuthToBaseTest,
 )
 where
 
@@ -50,6 +46,7 @@ import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
+import Pkg.DeriveUtils (DB)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
@@ -57,7 +54,6 @@ import Servant qualified
 import Servant.Htmx (HXRedirect, HXTriggerAfterSettle)
 import Servant.Server.Experimental.Auth (AuthServerData)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.DB
 import System.Logging qualified as Logging
 import System.Tracing (Tracing)
 import System.Tracing qualified as Tracing
@@ -81,7 +77,8 @@ type HXReswap = Maybe Text
 
 
 type CommonWebEffects =
-  '[ Effectful.Reader.Static.Reader AuthContext
+  '[ ELLM.LLM
+   , Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
    , HTTP
    , WithConnection
@@ -101,7 +98,8 @@ type ATBaseCtx = Effectful.Eff CommonWebEffects
 
 type ATAuthCtx =
   Effectful.Eff
-    ( State.State TriggerEvents
+    ( Data.Effectful.Notify.Notify
+        ': State.State TriggerEvents
         ': State.State HXRedirectDest
         ': State.State XWidgetJSON
         ': Effectful.Reader.Static.Reader (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
@@ -112,6 +110,18 @@ type ATAuthCtx =
 atAuthToBase :: Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
 atAuthToBase sessionWithCookies page =
   page
+    & Data.Effectful.Notify.runNotifyProduction
+    & State.evalState Map.empty -- TriggerEvents
+    & State.evalState Nothing -- HXRedirectDest
+    & State.evalState Nothing -- XWidgetJSON
+    & Effectful.Reader.Static.runReader sessionWithCookies
+
+
+-- | Test variant that captures notifications in provided IORef
+atAuthToBaseTest :: IORef [Data.Effectful.Notify.Notification] -> Headers '[Header "Set-Cookie" SetCookie] Sessions.Session -> ATAuthCtx a -> ATBaseCtx a
+atAuthToBaseTest notifRef sessionWithCookies page =
+  page
+    & Data.Effectful.Notify.runNotifyTest notifRef
     & State.evalState Map.empty -- TriggerEvents
     & State.evalState Nothing -- HXRedirectDest
     & State.evalState Nothing -- XWidgetJSON
@@ -122,6 +132,7 @@ atAuthToBase sessionWithCookies page =
 effToServantHandler :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandler env logger tp app =
   app
+    & ELLM.runLLMReal
     & Effectful.Reader.Static.runReader env
     & runUUID
     & runHTTPWreq
@@ -140,9 +151,10 @@ effToServantHandler env logger tp app =
 effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
 effToServantHandlerTest env logger tp app =
   app
+    & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
-    & runHTTPGolden "./golden/"
+    & runHTTPGolden "./tests/golden/"
     & runWithConnectionPool env.pool
     & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)

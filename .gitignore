@@ -21,6 +21,7 @@ static/public/assets/css/tailwind.min.css
 .hiedb
 dist-newstyle
 .env
+.env.prod
 .envx
 env
 apitoolkit-server-exe
@@ -47,3 +48,5 @@ stack-work
 tests.log
 tests_optimized.log
 .playwright-mcp/
+chart-cli
+web-components/bun.lock

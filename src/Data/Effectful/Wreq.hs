@@ -1,9 +1,3 @@
-{-# LANGUAGE DataKinds #-}
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE RankNTypes #-}
-{-# LANGUAGE ScopedTypeVariables #-}
-{-# LANGUAGE TypeOperators #-}
-
 module Data.Effectful.Wreq (
   HTTP (..),
   get,
@@ -37,7 +31,7 @@ import Data.ByteString.Lazy qualified as LBS
 import Data.CaseInsensitive qualified as CI
 import Effectful
 import Effectful.Dispatch.Dynamic
-import Network.HTTP.Client (createCookieJar, defaultRequest)
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), createCookieJar, defaultRequest)
 import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
 import Network.HTTP.Types.Status (Status (..), statusCode, statusMessage)
 import Network.HTTP.Types.Version (http11)
@@ -46,6 +40,7 @@ import Network.Wreq.Types qualified as W
 import Relude hiding (get, put)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
+import UnliftIO.Exception (throwIO, try)
 
 
 -- Re-export types from Wreq
@@ -153,7 +148,7 @@ runHTTPGolden goldenDir = interpret $ \_ -> \case
 
 -- Helper functions
 sanitizeFileName :: String -> String
-sanitizeFileName = map (\c -> if c `elem` ['/', ':', '?', '&'] then '_' else c)
+sanitizeFileName = map (\c -> if c `elem` (['/', ':', '?', '&'] :: [Char]) then '_' else c)
 
 
 data WreqResponse = WreqResponse
@@ -209,14 +204,34 @@ getOrCreateGoldenResponse :: FilePath -> String -> IO (W.Response LBS.ByteString
 getOrCreateGoldenResponse goldenDir fileName action = do
   let filePath = goldenDir </> fileName
   exists <- doesFileExist filePath
-  if exists
+  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
+
+  if exists && not updateGolden
     then do
+      -- Read cached response
       content <- readFileLBS filePath
       case AE.decode content of
         Just response -> return $ toWreqResponse response
         Nothing -> error $ fromString $ "Failed to decode response from file: " <> filePath
-    else do
-      createDirectoryIfMissing True goldenDir
-      response <- action
-      writeFileLBS filePath (AE.encode $ fromWreqResponse response)
-      return response
+    else
+      if not exists && not updateGolden
+        then
+          error
+            $ fromString
+            $ "Golden file not found: "
+            <> filePath
+            <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
+            <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
+        else do
+          -- UPDATE_GOLDEN=true: create or update golden file
+          createDirectoryIfMissing True goldenDir
+          -- Catch HTTP exceptions and convert them to responses
+          result <- try action
+          response <- case result of
+            Right resp -> return resp
+            Left (HttpExceptionRequest _ (StatusCodeException resp body)) ->
+              -- Convert 4xx/5xx responses to normal responses for golden files
+              return resp{responseBody = LBS.fromStrict body}
+            Left (ex :: HttpException) -> throwIO ex -- Re-throw other exceptions
+          writeFileLBS filePath (AE.encode $ fromWreqResponse response)
+          return response

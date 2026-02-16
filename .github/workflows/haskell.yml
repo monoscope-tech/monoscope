@@ -7,13 +7,49 @@ on:
 env:
   LANG: C.UTF-8
   LD_LIBRARY_PATH: '/usr/local/lib:$LD_LIBRARY_PATH'
-  # GitHub Actions runners have 2 cores for Linux
   CABAL_JOBS: 2
   GHC_VERSION: 9.12.2
 
 jobs:
+  # Build frontend once and share via artifacts
+  frontend:
+    name: Build Frontend
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            web-components/package-lock.json
+
+      - name: Build frontend assets
+        run: |
+          mkdir -p static/public/assets/css
+          mkdir -p static/public/assets/web-components/dist/js
+          mkdir -p static/public/assets/web-components/dist/css
+          npm ci
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          cd web-components
+          npm ci
+          NODE_ENV=production npx vite build --mode production --sourcemap false
+
+      - name: Upload frontend artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-assets
+          path: |
+            static/public/assets/css/tailwind.min.css
+            static/public/assets/web-components/dist
+          retention-days: 1
+
   test:
-    name: Test
+    name: Test ${{ matrix.test }}
+    needs: frontend
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -35,7 +71,6 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      # Free up disk space
       - name: Free Disk Space
         run: |
           echo "Disk space before cleanup:"
@@ -48,7 +83,6 @@ jobs:
           echo "Disk space after cleanup:"
           df -h
 
-      # Install and cache system dependencies
       - name: Install system dependencies
         uses: awalsh128/cache-apt-pkgs-action@latest
         with:
@@ -65,7 +99,7 @@ jobs:
           ghc-version: ${{ env.GHC_VERSION }}
           cabal-version: 'latest'
 
-      # Cache Haskell dependencies
+      # Shared cache across all test matrix jobs
       - name: Cache Haskell dependencies
         uses: actions/cache@v5
         with:
@@ -73,32 +107,21 @@ jobs:
             ~/.cabal/store
             dist-newstyle/build
             dist-newstyle/cache
-          key: ${{ runner.os }}-${{ matrix.test }}-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
           restore-keys: |
-            ${{ runner.os }}-${{ matrix.test }}-
-            ${{ runner.os }}-
+            ${{ runner.os }}-cabal-
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v6
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: '22'
+          name: frontend-assets
+          path: static/public/assets
 
-      - name: Generate required static files
+      - name: Setup static directories
         run: |
-          # Create directories if they don't exist
           mkdir -p static/public/assets/css
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
-          
-          # Install dependencies and build Tailwind CSS
-          npm install
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-          
-          # Build web components
-          cd web-components
-          npm install
-          NODE_ENV=production npx vite build --mode production --sourcemap false
-          cd ..
 
       - name: Update cabal index
         run: cabal update
@@ -115,6 +138,9 @@ jobs:
       - name: Run ${{ matrix.test }}
         env:
           USE_EXTERNAL_DB: true
+          LOG_LEVEL: ${{ matrix.test == 'integration-tests' && 'warn' || '' }}
+          TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
+          DISCORD_CLIENT_ID: "1328384474395967631"
         run: |
           echo "::group::Running ${{ matrix.test }}"
           cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct

@@ -40,7 +40,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/tonyalaribe/proto-lens
-  tag: da3a3c7d8f43b7b22a3325a6706eb2aad98f41be
+  tag: 0199b421a2e5ae03285adcd59711f9fbca7c126e
   subdir: proto-lens-setup
   subdir: proto-lens-protoc
   subdir: proto-lens-runtime
@@ -65,7 +65,7 @@ source-repository-package
 source-repository-package
   type: git
   location: https://github.com/google/ghc-source-gen.git
-  tag: 42d650d3b62c6bc4e3d33d1abc91e3e60f446941
+  tag: 79ecc01213131da03a7198fc377606ce72ac037a
   subdir: .
 
 -- source-repository-package

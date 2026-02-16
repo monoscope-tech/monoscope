@@ -51,6 +51,10 @@ extra-source-files:
     static/migrations/0023_anomaly_chat_messages.sql
     static/migrations/0024_ai_conversations_updated_at_trigger.sql
     static/migrations/0025_widget_alerts.sql
+    static/migrations/0026_pagerduty.sql
+    static/migrations/0027_notification_test.sql
+    static/migrations/0028_everyone_team.sql
+    static/migrations/0029_replay_sessions.sql
 
 source-repository head
   type: git
@@ -65,7 +69,6 @@ custom-setup
 library
   exposed-modules:
       BackgroundJobs
-      Data.Default.Instances
       Data.Effectful.LLM
       Data.Effectful.Notify
       Data.Effectful.UUID
@@ -74,15 +77,13 @@ library
       Models.Apis.Anomalies
       Models.Apis.Endpoints
       Models.Apis.Errors
-      Models.Apis.Fields.Facets
-      Models.Apis.Fields.Types
+      Models.Apis.Fields
+      Models.Apis.Integrations
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
       Models.Apis.Monitors
-      Models.Apis.Reports
       Models.Apis.RequestDumps
       Models.Apis.Shapes
-      Models.Apis.Slack
       Models.Apis.LogPatterns
       Models.Projects.Dashboards
       Models.Projects.GitSync
@@ -91,15 +92,11 @@ library
       Models.Projects.Projects
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
-      Models.Telemetry.SystemLogs
       Models.Telemetry.Telemetry
       Models.Users.Sessions
-      Models.Users.Users
-      Network.Wai.Middleware.Heartbeat
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
       Pages.Anomalies
-      Pages.Api
       Pages.BodyWrapper
       Pages.Bots.Discord
       Pages.Bots.Slack
@@ -111,7 +108,6 @@ library
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog
       Pages.GitSync
-      Pages.LemonSqueezy
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
@@ -120,20 +116,17 @@ library
       Pages.Projects
       Pages.Replay
       Pages.Reports
-      Pages.S3
+      Pages.Settings
       Pages.Share
       Pages.Telemetry
       Pkg.AI
-      Pkg.Components.ExternalHeadScripts
       Pkg.Components.LogQueryBox
       Pkg.Components.Table
       Pkg.Components.TimePicker
       Pkg.Components.Widget
-      Pkg.ConvertKit
-      Pkg.DashboardUtils
-      Pkg.DBUtils
       Pkg.DeriveUtils
       Pkg.Drain
+      Pkg.EmailTemplates
       Pkg.GitHub
       Pkg.Mail
       Pkg.Parser
@@ -142,20 +135,15 @@ library
       Pkg.QueryCache
       Pkg.Queue
       Pkg.TestUtils
-      Pkg.THUtils
       ProcessMessage
-      RequestMessages
       Start
       System.Config
-      System.DB
       System.Logging
       System.Server
       System.Tracing
       System.Types
       Utils
       Web.Auth
-      Web.ClientMetadata
-      Web.Error
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
       Proto.Opentelemetry.Proto.Common.V1.Common_Fields
@@ -229,7 +217,9 @@ library
       ViewPatterns
       DeriveGeneric
       BangPatterns
-  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields
+      GADTs
+      PackageImports
+  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
@@ -280,7 +270,6 @@ library
     , hashtables
     , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto
-    , hs-opentelemetry-instrumentation-postgresql-simple
     , hs-opentelemetry-instrumentation-wai
     , hs-opentelemetry-sdk
     , http-api-data
@@ -301,6 +290,7 @@ library
     , lucid-svg >=0.7.1.1
     , megaparsec
     , memory
+    , mime-mail
     , minio-hs
     , mmark
     , monad-time-effectful
@@ -312,7 +302,6 @@ library
     , parallel
     , parser-combinators
     , pg-entity
-    , pg-transact
     , postgresql-libpq
     , postgresql-migration
     , postgresql-simple
@@ -324,11 +313,11 @@ library
     , relude >=1.2.0.0
     , resource-pool
     , resourcet
+    , retry
     , safe
     , safe-exceptions
     , scientific
     , scotty
-    , sendgrid-v3 >=0.3.0.0
     , servant
     , servant-htmx
     , servant-lucid
@@ -336,6 +325,7 @@ library
     , servant-queryparam-server
     , servant-server
     , slugify
+    , smtp-mail
     , template-haskell
     , temporary
     , text
@@ -343,6 +333,7 @@ library
     , text-display
     , time
     , tmp-postgres
+    , typed-process
     , unliftio
     , unordered-containers
     , uuid
@@ -358,6 +349,7 @@ library
     , wreq
     , xxhash
     , yaml
+    , zlib
   default-language: GHC2021
 
 executable monoscope
@@ -393,7 +385,9 @@ executable monoscope
       ViewPatterns
       DeriveGeneric
       BangPatterns
-  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields -threaded -fplugin AutoInstrument -rtsopts -with-rtsopts=-N -j4 +RTS -N -A128m -n2m -RTS
+      GADTs
+      PackageImports
+  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -fplugin AutoInstrument -rtsopts -with-rtsopts=-N -j4 +RTS -N -A128m -n2m -RTS
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
@@ -439,7 +433,9 @@ test-suite doctests
       ViewPatterns
       DeriveGeneric
       BangPatterns
-  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
+      GADTs
+      PackageImports
+  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:
@@ -459,12 +455,21 @@ test-suite integration-tests
       Opentelemetry.OtlpServerSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec
+      Pages.Bots.AgenticSpec
+      Pages.Bots.BotFixtures
+      Pages.Bots.BotTestHelpers
+      Pages.Bots.DiscordSpec
+      Pages.Bots.SeedTestData
+      Pages.Bots.SlackSpec
+      Pages.Bots.WhatsappSpec
+      Pages.Bots.WorkflowsSpec
       Pages.BusinessFlowsSpec
       Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
       Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
       Pages.MonitorsSpec
+      Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
       Pages.Projects.ProjectsSpec
       Pages.QueryCacheSpec
@@ -504,28 +509,40 @@ test-suite integration-tests
       ViewPatterns
       DeriveGeneric
       BangPatterns
-  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
+      GADTs
+      PackageImports
+  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       hspec-discover:hspec-discover
     , proto-lens-protoc:proto-lens-protoc
   build-depends:
       aeson
+    , aeson-pretty
     , aeson-qq
     , base
+    , base16-bytestring
     , base64
     , bytestring
     , cache
     , clock
     , containers
+    , cryptonite
     , data-default
+    , directory
     , effectful
+    , effectful-core
+    , effectful-postgresql
     , generic-lens
     , grapesy
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , http-client
+    , ki
+    , ki-effectful
     , lens
     , lens-aeson
+    , memory
+    , monad-time-effectful
     , monoscope
     , odd-jobs
     , pg-entity
@@ -551,7 +568,6 @@ test-suite unit-tests
   main-is: Main.hs
   other-modules:
       Data.Effectful.NotifySpec
-      Pkg.AI.AgenticSpec
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec
       Pkg.ParserSpec
@@ -589,7 +605,9 @@ test-suite unit-tests
       ViewPatterns
       DeriveGeneric
       BangPatterns
-  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-error=ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
+      GADTs
+      PackageImports
+  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
   build-depends:

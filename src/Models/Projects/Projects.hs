@@ -1,4 +1,15 @@
 module Models.Projects.Projects (
+  -- Users
+  User (..),
+  UserId (..),
+  createUser,
+  userIdByEmail,
+  createUserId,
+  insertUser,
+  userById,
+  userByEmail,
+  createEmptyUser,
+  -- Projects
   Project (..),
   Project' (..),
   ProjectId,
@@ -41,12 +52,14 @@ module Models.Projects.Projects (
 where
 
 import Data.Aeson qualified as AE
+import Data.CaseInsensitive qualified as CI
 import Data.Default
+import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Pool (Pool)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_insert)
+import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
 import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -56,17 +69,108 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time, currentTime)
 import GHC.Records (HasField (getField))
-import Models.Users.Users qualified as Users
-import Pkg.DBUtils (WrappedEnumSC (..))
-import Pkg.DeriveUtils (UUIDId (..), idFromText)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData)
-import System.DB (DB)
 import Web.FormUrlEncoded (FromForm)
 
 
+instance AE.FromJSON (CI.CI Text) where
+  parseJSON = fmap CI.mk . AE.parseJSON
+
+
+instance AE.ToJSON (CI.CI Text) where
+  toJSON = AE.toJSON . CI.original
+
+
+newtype UserId = UserId {getUserId :: UUID.UUID}
+  deriving stock (Eq, Generic, Show)
+  deriving newtype (NFData)
+  deriving anyclass (FromRow, ToRow)
+  deriving
+    (AE.FromJSON, AE.ToJSON, Default, FromField, FromHttpApiData, Ord, ToField)
+    via UUID.UUID
+
+
+instance HasField "toText" UserId Text where
+  getField = UUID.toText . getUserId
+
+
+data User = User
+  { id :: UserId
+  , createdAt :: UTCTime
+  , updatedAt :: UTCTime
+  , deletedAt :: Maybe UTCTime
+  , active :: Bool
+  , firstName :: Text
+  , lastName :: Text
+  , displayImageUrl :: Text
+  , email :: CI.CI Text
+  , phoneNumber :: Maybe Text
+  , isSudo :: Bool
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
+  deriving
+    (AE.FromJSON, AE.ToJSON)
+    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] User
+
+
+createUserId :: UUIDEff :> es => Eff es UserId
+createUserId = UserId <$> genUUID
+
+
+createUser :: (Time :> es, UUIDEff :> es) => Text -> Text -> Text -> Text -> Eff es User
+createUser firstName lastName picture email = do
+  uid <- createUserId
+  now <- currentTime
+  pure
+    $ User
+      { id = uid
+      , createdAt = now
+      , updatedAt = now
+      , deletedAt = Nothing
+      , active = True
+      , firstName = firstName
+      , lastName = lastName
+      , displayImageUrl = picture
+      , email = CI.mk email
+      , phoneNumber = Nothing
+      , isSudo = False
+      }
+
+
+insertUser :: DB es => User -> Eff es ()
+insertUser user = void $ PG.execute (_insert @User) user
+
+
+userById :: DB es => UserId -> Eff es (Maybe User)
+userById userId = listToMaybe <$> PG.query (_selectWhere @User [[field| id |]]) (Only userId)
+
+
+userByEmail :: DB es => Text -> Eff es (Maybe User)
+userByEmail email = listToMaybe <$> PG.query (_selectWhere @User [[field| email |]]) (Only email)
+
+
+userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
+userIdByEmail email = listToMaybe <$> PG.query q (Only email)
+  where
+    q = [sql|select id from users.users where email=?|]
+
+
+createEmptyUser :: DB es => Text -> Eff es (Maybe UserId)
+createEmptyUser email = listToMaybe <$> PG.query q (Only email)
+  where
+    q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
+
+
+---------------------------------
 type ProjectId = UUIDId "project"
 
 
@@ -79,6 +183,7 @@ data NotificationChannel
   | NSlack
   | NDiscord
   | NPhone
+  | NPagerduty
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "N", DAE.CamelToSnake]] NotificationChannel
@@ -275,7 +380,7 @@ getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
     q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
 
 
-selectProjectsForUser :: DB es => Users.UserId -> Eff es [Project']
+selectProjectsForUser :: DB es => UserId -> Eff es [Project']
 selectProjectsForUser uid = PG.query q (Only uid)
   where
     q =
@@ -296,7 +401,7 @@ selectProjectsForUser uid = PG.query q (Only uid)
       |]
 
 
-usersByProjectId :: DB es => ProjectId -> Eff es [Users.User]
+usersByProjectId :: DB es => ProjectId -> Eff es [User]
 usersByProjectId pid = PG.query q (Only pid)
   where
     q =
@@ -338,11 +443,11 @@ deleteProject pid = PG.execute q (Only pid)
       [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
 
 
-updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> Eff es Int64
-updateNotificationsChannel pid channels phones = PG.execute q (list, V.fromList phones, pid)
+updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> [Text] -> Eff es Int64
+updateNotificationsChannel pid channels phones emails = PG.execute q (list, V.fromList phones, V.fromList emails, pid)
   where
     list = V.fromList channels
-    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=? WHERE id=?;|]
+    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=?, notify_emails=? WHERE id=?;|]
 
 
 updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64
@@ -372,7 +477,7 @@ data QueryLibItem = QueryLibItem
   , projectId :: ProjectId
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
-  , userId :: Users.UserId
+  , userId :: UserId
   , queryType :: QueryLibType
   , queryText :: Text
   , queryAst :: AE.Value
@@ -383,7 +488,7 @@ data QueryLibItem = QueryLibItem
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, NFData, ToRow)
 
 
-queryLibHistoryForUser :: DB es => ProjectId -> Users.UserId -> Eff es [QueryLibItem]
+queryLibHistoryForUser :: DB es => ProjectId -> UserId -> Eff es [QueryLibItem]
 queryLibHistoryForUser pid uid = PG.query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
   where
     q =
@@ -414,7 +519,7 @@ UNION ALL
     |]
 
 
-queryLibInsert :: DB es => QueryLibType -> ProjectId -> Users.UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
+queryLibInsert :: DB es => QueryLibType -> ProjectId -> UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
 queryLibInsert qKind pid uid qt qast title = void $ PG.execute q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
   where
     q =
@@ -443,13 +548,13 @@ ON CONFLICT DO NOTHING;
     |]
 
 
-queryLibTitleEdit :: DB es => ProjectId -> Users.UserId -> Text -> Text -> Eff es ()
+queryLibTitleEdit :: DB es => ProjectId -> UserId -> Text -> Text -> Eff es ()
 queryLibTitleEdit pid uid qId title = void $ PG.execute q (title, pid, uid, qId)
   where
     q = [sql|UPDATE projects.query_library SET title=? where project_id=? AND user_id=? AND id=?::uuid|]
 
 
-queryLibItemDelete :: DB es => ProjectId -> Users.UserId -> Text -> Eff es ()
+queryLibItemDelete :: DB es => ProjectId -> UserId -> Text -> Eff es ()
 queryLibItemDelete pid uid qId = void $ PG.execute q (pid, uid, qId)
   where
     q = [sql|DELETE from projects.query_library where project_id=? AND user_id=? AND id=?::uuid|]

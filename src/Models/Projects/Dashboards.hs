@@ -56,12 +56,12 @@ import Effectful.PostgreSQL qualified as PG
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DashboardUtils qualified as DashboardUtils
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.Parser (replacePlaceholders, variablePresets)
 import Relude
 import Servant (ServerError (..), err404)
 import System.Directory (listDirectory)
@@ -231,13 +231,13 @@ readDashboardEndpoint uri = do
 replaceQueryVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Variable -> Variable
 replaceQueryVariables pid mf mt allParams currentTime v = v & #sql . _Just %~ replace & #query . _Just %~ replace
   where
-    replace = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText mf mt allParams currentTime)
+    replace = replacePlaceholders (variablePresets pid.toText mf mt allParams currentTime)
 
 
 replaceConstantVariables :: Projects.ProjectId -> Maybe UTCTime -> Maybe UTCTime -> [(Text, Maybe Text)] -> UTCTime -> Constant -> Constant
 replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just %~ replace & #query . _Just %~ replace
   where
-    replace = DashboardUtils.replacePlaceholders (DashboardUtils.variablePresets pid.toText mf mt allParams currentTime)
+    replace = replacePlaceholders (variablePresets pid.toText mf mt allParams currentTime)
 
 
 getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)

@@ -14,22 +14,30 @@ module Models.Projects.ProjectMembers (
   activateAllMembers,
   TeamDetails (..),
   createTeam,
+  createEveryoneTeam,
   updateTeam,
   getTeams,
   getTeamByHandle,
   getTeamsByHandles,
   getTeamsVM,
+  getEveryoneTeam,
   TeamVM (..),
   deleteTeamByHandle,
   deleteTeams,
   getTeamsById,
   Team (..),
   TeamMemberVM (..),
+  teamToDetails,
+  addSlackChannelToEveryoneTeam,
+  addDiscordChannelToEveryoneTeam,
+  removeSlackChannelsFromEveryoneTeam,
+  resolveTeamEmails,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
-import Data.Default.Instances ()
+import Data.CaseInsensitive qualified as CI
+import Data.Set qualified as Set
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -51,8 +59,8 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
-import Pkg.DBUtils (WrappedEnumSC (..))
+import Models.Users.Sessions qualified as Users
+import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
@@ -100,7 +108,7 @@ insertProjectMembers :: DB es => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers [] = pure 0
 insertProjectMembers members = PG.executeMany q members
   where
-    q = [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE |]
+    q = [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL |]
 
 
 data ProjectMemberVM = ProjectMemberVM
@@ -198,26 +206,51 @@ data TeamDetails = TeamDetails
   , slackChannels :: V.Vector Text
   , discordChannels :: V.Vector Text
   , phoneNumbers :: V.Vector Text
+  , pagerdutyServices :: V.Vector Text
   }
   deriving stock (Eq, Generic, Show)
 
 
 createTeam :: DB es => Projects.ProjectId -> Users.UserId -> TeamDetails -> Eff es Int64
-createTeam pid uid TeamDetails{..} = PG.execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers)
+createTeam pid uid TeamDetails{..}
+  | handle == "everyone" = pure 0 -- Prevent creating team with reserved handle
+  | otherwise = PG.execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices)
   where
     q =
       [sql| INSERT INTO projects.teams
-               (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers)
-               VALUES (?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?, ?)
+               (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
+               VALUES (?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?, ?, ?)
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
+createEveryoneTeam :: DB es => Projects.ProjectId -> Users.UserId -> Eff es Int64
+createEveryoneTeam pid uid = PG.execute q (pid, uid)
+  where
+    q =
+      [sql| INSERT INTO projects.teams
+               (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
+               VALUES (?, ?, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
+                       '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
+               ON CONFLICT (project_id, handle) DO NOTHING |]
+
+
+getEveryoneTeam :: DB es => Projects.ProjectId -> Eff es (Maybe Team)
+getEveryoneTeam pid = listToMaybe <$> PG.query q (Only pid)
+  where
+    q =
+      [sql|
+      SELECT t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
+      FROM projects.teams t
+      WHERE t.project_id = ? AND t.is_everyone = TRUE AND t.deleted_at IS NULL
+    |]
+
+
 updateTeam :: DB es => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
-updateTeam pid tid TeamDetails{..} = PG.execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pid, tid)
+updateTeam pid tid TeamDetails{..} = PG.execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, pid, tid)
   where
     q =
       [sql| UPDATE projects.teams
-               SET name = ?, description = ?, handle = ?, members = ?::uuid[], notify_emails = ?, slack_channels = ?, discord_channels = ?, phone_numbers = ?
+               SET name = ?, description = ?, handle = ?, members = ?::uuid[], notify_emails = ?, slack_channels = ?, discord_channels = ?, phone_numbers = ?, pagerduty_services = ?
                WHERE project_id = ? AND id = ? |]
 
 
@@ -234,6 +267,8 @@ data Team = Team
   , slack_channels :: V.Vector Text
   , discord_channels :: V.Vector Text
   , phone_numbers :: V.Vector Text
+  , pagerduty_services :: V.Vector Text
+  , is_everyone :: Bool
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -244,7 +279,7 @@ getTeams pid = PG.query q (Only pid)
   where
     q =
       [sql|
-      SELECT t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
+      SELECT t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
       FROM projects.teams t
       WHERE t.project_id = ? AND t.deleted_at IS NULL
     |]
@@ -267,6 +302,8 @@ getTeamsVM pid = PG.query q (Only pid)
         t.slack_channels,
         t.discord_channels,
         t.phone_numbers,
+        t.pagerduty_services,
+        t.is_everyone,
         COALESCE(
           array_agg(
             jsonb_build_object(
@@ -283,7 +320,8 @@ getTeamsVM pid = PG.query q (Only pid)
       LEFT JOIN users.users u ON u.id = mid
       WHERE t.project_id = ? AND t.deleted_at IS NULL
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
-               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
+               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
+      ORDER BY t.is_everyone DESC, t.created_at ASC
     |]
 
 
@@ -299,6 +337,8 @@ data TeamVM = TeamVM
   , slack_channels :: V.Vector Text
   , discord_channels :: V.Vector Text
   , phone_numbers :: V.Vector Text
+  , pagerduty_services :: V.Vector Text
+  , is_everyone :: Bool
   , members :: V.Vector TeamMemberVM
   }
   deriving stock (Eq, Generic, Show)
@@ -317,47 +357,14 @@ data TeamMemberVM = TeamMemberVM
 
 
 getTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
-getTeamByHandle pid handle = listToMaybe <$> PG.query q (pid, handle)
-  where
-    q =
-      [sql|
-      SELECT
-        t.id,
-        t.created_at,
-        t.updated_at,
-        t.created_by,
-        t.name,
-        t.handle,
-        t.description,
-        t.notify_emails,
-        t.slack_channels,
-        t.discord_channels,
-        t.phone_numbers,
-        COALESCE(
-          array_agg(
-            jsonb_build_object(
-              'memberId', u.id,
-              'memberName', concat_ws(' ', u.first_name, u.last_name),
-              'memberEmail', u.email,
-              'memberAvatar', '/api/avatar/' || u.id::text
-            ) ORDER BY u.first_name, u.last_name
-          ) FILTER (WHERE u.id IS NOT NULL),
-          '{}'
-        ) AS members
-      FROM projects.teams t
-      LEFT JOIN unnest(t.members) AS mid ON true
-      LEFT JOIN users.users u ON u.id = mid
-      WHERE t.project_id = ? AND t.handle = ? AND t.deleted_at IS NULL
-      GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
-               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
-    |]
+getTeamByHandle pid handle = listToMaybe <$> getTeamsByHandles pid [handle]
 
 
 deleteTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es ()
 deleteTeamByHandle pid handle = void $ PG.execute q (pid, handle)
   where
     q =
-      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? |]
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? AND is_everyone = FALSE |]
 
 
 deleteTeams :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
@@ -366,7 +373,7 @@ deleteTeams pid tids
   | otherwise = void $ PG.execute q (pid, tids)
   where
     q =
-      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) |]
+      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) AND is_everyone = FALSE |]
 
 
 getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
@@ -386,7 +393,9 @@ getTeamsById pid tids = if V.null tids then pure [] else PG.query q (pid, tids)
         t.notify_emails,
         t.slack_channels,
         t.discord_channels,
-        t.phone_numbers
+        t.phone_numbers,
+        t.pagerduty_services,
+        t.is_everyone
       FROM projects.teams t
       WHERE t.project_id = ? AND t.id = ANY(?::uuid[]) AND t.deleted_at IS NULL
     |]
@@ -411,6 +420,8 @@ getTeamsByHandles pid handles = PG.query q (pid, V.fromList handles)
         t.slack_channels,
         t.discord_channels,
         t.phone_numbers,
+        t.pagerduty_services,
+        t.is_everyone,
         COALESCE(
           array_agg(
             jsonb_build_object(
@@ -427,5 +438,60 @@ getTeamsByHandles pid handles = PG.query q (pid, V.fromList handles)
       LEFT JOIN users.users u ON u.id = mid
       WHERE t.project_id = ? AND t.handle = ANY(?) AND t.deleted_at IS NULL
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
-               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers
+               t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
     |]
+
+
+-- | Convert Team to TeamDetails for updates
+teamToDetails :: Team -> TeamDetails
+teamToDetails t = TeamDetails{name = t.name, description = t.description, handle = t.handle, members = t.members, notifyEmails = t.notify_emails, slackChannels = t.slack_channels, discordChannels = t.discord_channels, phoneNumbers = t.phone_numbers, pagerdutyServices = t.pagerduty_services}
+
+
+-- | Generic function to add a unique channel to @everyone team
+-- Returns True if channel was added, False if it already existed
+addChannelToEveryoneTeam
+  :: DB es
+  => (Team -> V.Vector Text)
+  -> (TeamDetails -> V.Vector Text -> TeamDetails)
+  -> Projects.ProjectId
+  -> Text
+  -> Eff es Bool
+addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
+  everyoneTeamM <- getEveryoneTeam pid
+  maybe (pure False) addIfNotExists everyoneTeamM
+  where
+    addIfNotExists team = do
+      let channelExists = Set.member channelId $ Set.fromList $ V.toList $ getChannels team
+      if channelExists
+        then pure False
+        else void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True
+
+
+-- | Add unique Slack channel to @everyone team's channel list
+-- Returns True if channel was added, False if it already existed
+addSlackChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+addSlackChannelToEveryoneTeam = addChannelToEveryoneTeam (.slack_channels) \d cs -> d{slackChannels = cs}
+
+
+-- | Add unique Discord channel to @everyone team's channel list
+-- Returns True if channel was added, False if it already existed
+addDiscordChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
+addDiscordChannelToEveryoneTeam = addChannelToEveryoneTeam (.discord_channels) \d cs -> d{discordChannels = cs}
+
+
+resolveTeamEmails :: DB es => Projects.ProjectId -> Team -> Eff es [CI Text]
+resolveTeamEmails projectId team =
+  if team.is_everyone
+    then do
+      memberEmails <- fmap (.email) <$> selectActiveProjectMembers projectId
+      pure $ memberEmails <> V.toList (fmap CI.mk team.notify_emails)
+    else pure $ V.toList $ fmap CI.mk team.notify_emails
+
+
+-- | Remove all Slack channels from @everyone team
+removeSlackChannelsFromEveryoneTeam :: DB es => Projects.ProjectId -> Eff es ()
+removeSlackChannelsFromEveryoneTeam pid = do
+  everyoneTeamM <- getEveryoneTeam pid
+  traverse_ clearChannels everyoneTeamM
+  where
+    clearChannels team = void $ updateTeam pid team.id (teamToDetails team){slackChannels = V.empty}

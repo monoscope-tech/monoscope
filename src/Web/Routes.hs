@@ -1,16 +1,15 @@
-{-# LANGUAGE PackageImports #-}
-
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH) where
 
 -- Standard library imports
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Map qualified as Map
+import Data.Ord (clamp)
 import Data.Pool (Pool)
 import Data.UUID qualified as UUID
 import GHC.TypeLits (Symbol)
-import Relude
+import Relude hiding (ask)
 
 -- Database imports
 import Database.PostgreSQL.Simple qualified as PGS
@@ -18,10 +17,12 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL qualified as PG
 
 -- Effectful imports
+import Data.Effectful.Notify qualified as Notify
 import Effectful (runPureEff)
 import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (runReader)
+import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
@@ -43,12 +44,15 @@ import Web.Cookie (SetCookie)
 
 -- System and configuration imports
 import Deriving.Aeson qualified as DAE
-import System.Config (AuthContext)
+import Pages.Bots.Utils (verifyWidgetSignature)
+import System.Config (AuthContext (..), EnvConfig (..))
+import System.Exit (ExitCode (..))
+import System.Logging qualified as Log
+import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
+import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Web.Auth (APItoolkitAuthContext, authHandler)
+import Web.Auth (APItoolkitAuthContext, authHandler, renderError)
 import Web.Auth qualified as Auth
-import Web.ClientMetadata qualified as ClientMetadata
-import Web.Error
 
 -- Model imports
 
@@ -58,13 +62,12 @@ import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.Reports qualified as ReportsM
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import Models.Users.Users qualified as Users
-import UnliftIO.Exception (try)
+import Models.Users.Sessions qualified as Users
+import UnliftIO.Exception (handle)
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
@@ -77,7 +80,6 @@ import Models.Apis.Issues qualified as Anomalies
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Anomalies qualified as AnomalyList
-import Pages.Api qualified as Api
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
@@ -87,7 +89,6 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
-import Pages.LemonSqueezy qualified as LemonSqueezy
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -100,12 +101,13 @@ import Pages.Projects qualified as ListProjects
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as Reports
-import Pages.S3 qualified as S3
+import Pages.Settings qualified as Settings
 import Pages.Share qualified as Share
 import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
+import Pkg.EmailTemplates qualified as ET
 import Utils
 
 
@@ -177,7 +179,7 @@ data Routes mode = Routes
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
-  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> Capture "project_id" Projects.ProjectId :> QPT "code" :> QPT "onboarding" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
+  , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
   , slackInteractions :: mode :- "interactions" :> "slack" :> ReqBody '[FormUrlEncoded] Slack.SlackInteraction :> Post '[JSON] AE.Value
@@ -185,12 +187,13 @@ data Routes mode = Routes
   , slackEventsPost :: mode :- "slack" :> "events" :> ReqBody '[JSON] Slack.SlackEventPayload :> Post '[JSON] AE.Value
   , externalOptionsGet :: mode :- "interactions" :> "external_options" :> ReqBody '[JSON] AE.Value :> Post '[JSON] AE.Value
   , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
-  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] ClientMetadata.ClientMetadata
-  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] LemonSqueezy.WebhookData :> Post '[HTML] (Html ())
+  , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
+  , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] Settings.WebhookData :> Post '[HTML] (Html ())
   , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   }
   deriving stock (Generic)
 
@@ -205,7 +208,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
     dashboardRedirectGet :: mode :- "p" :> ProjectId :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , endpointDetailsRedirect :: mode :- "p" :> ProjectId :> "endpoints" :> "details" :> AllQueryParams :> GetRedirect '[HTML] (Headers '[Header "Location" Text] NoContent)
   , dashboardsGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "file" :> QPT "from" :> QPT "to" :> QPT "since" :> AllQueryParams :> Get '[HTML] (RespHeaders (PageCtx Dashboards.DashboardGet))
-  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QPUUId "teamId" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
+  , dashboardsGetList :: mode :- "p" :> ProjectId :> "dashboards" :> QPT "sort" :> QPT "embedded" :> QPUUId "teamId" :> QPT "copy_widget_id" :> QPUUId "source_dashboard_id" :> RecordParam KeepPrefixExp Dashboards.DashboardFilters :> Get '[HTML] (RespHeaders Dashboards.DashboardsGet)
   , dashboardsPost :: mode :- "p" :> ProjectId :> "dashboards" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardForm :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardWidgetPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> QPT "widget_id" :> QPT "tab" :> ReqBody '[JSON] Widget.Widget :> Put '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetReorderPatchH :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets_order" :> QPT "tab" :> ReqBody '[JSON] (Map Text Dashboards.WidgetReorderItem) :> Patch '[HTML] (RespHeaders NoContent)
@@ -213,7 +216,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardRenamePatch :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "rename" :> ReqBody '[FormUrlEncoded] Dashboards.DashboardRenameForm :> Patch '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardDuplicatePost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[HTML] (RespHeaders Dashboards.DashboardRes)
   , dashboardStarPost :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[HTML] (RespHeaders (Html ()))
-  , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> Post '[HTML] (RespHeaders Widget.Widget)
+  , dashboardDuplicateWidget :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "duplicate" :> QPUUId "source_dashboard_id" :> Post '[HTML] (RespHeaders Widget.Widget)
   , dashboardWidgetExpandGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> "expand" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Widget alert routes
     widgetAlertUpsert :: mode :- "p" :> ProjectId :> "widgets" :> Capture "widget_id" Text :> "alert" :> QPUUId "dashboard_id" :> ReqBody '[FormUrlEncoded] Dashboards.WidgetAlertForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -226,13 +229,13 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , dashboardYamlGet :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[HTML] (RespHeaders (Html ()))
   , dashboardYamlPut :: mode :- "p" :> ProjectId :> "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> ReqBody '[FormUrlEncoded] Dashboards.YamlForm :> Put '[HTML] (RespHeaders (Html ()))
   , -- API routes
-    apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Api.ApiGet)
-  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Api.ApiMut)
-  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Api.ApiMut)
-  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Api.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Api.ApiMut)
+    apiGet :: mode :- "p" :> ProjectId :> "apis" :> Get '[HTML] (RespHeaders Settings.ApiGet)
+  , apiDelete :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Delete '[HTML] (RespHeaders Settings.ApiMut)
+  , apiPatch :: mode :- "p" :> ProjectId :> "apis" :> Capture "keyID" ProjectApiKeys.ProjectApiKeyId :> Patch '[HTML] (RespHeaders Settings.ApiMut)
+  , apiPost :: mode :- "p" :> ProjectId :> "apis" :> ReqBody '[FormUrlEncoded] Settings.GenerateAPIKeyForm :> Post '[HTML] (RespHeaders Settings.ApiMut)
   , -- Charts and widgets
     chartsDataGet :: mode :- "chart_data" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
+  , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
   , flamegraphGet :: mode :- "p" :> ProjectId :> "widget" :> "flamegraph" :> Capture "traceId" Text :> QPT "shapeView" :> Get '[HTML] (RespHeaders (Html ()))
@@ -241,11 +244,11 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
-  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" ReportsM.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Anomalies.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
   , -- Billing
-    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders LemonSqueezy.BillingGet)
+    manageBillingGet :: mode :- "p" :> ProjectId :> "manage_billing" :> QPT "from" :> Get '[HTML] (RespHeaders Settings.BillingGet)
   , replaySessionGet :: mode :- "p" :> ProjectId :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] (RespHeaders AE.Value)
   , bringS3 :: mode :- "p" :> ProjectId :> "byob_s3" :> Get '[HTML] (RespHeaders (Html ()))
   , bringS3Post :: mode :- "p" :> ProjectId :> "byob_s3" :> ReqBody '[FormUrlEncoded] Projects.ProjectS3Bucket :> Post '[HTML] (RespHeaders (Html ()))
@@ -258,6 +261,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , -- Dev routes
+    emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (RespHeaders (Html ()))
+  , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
@@ -367,7 +373,12 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , teamBulkAction :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Notifications
-    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders Integrations.NotificationsUpdatePost)
+    notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
+  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
+  , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "slack" :> Delete '[HTML] (RespHeaders (Html ()))
+  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
   , -- Onboarding routes
     onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)
@@ -408,18 +419,20 @@ server pool =
     , slackEventsPost = Slack.slackEventsPostH
     , externalOptionsGet = Slack.externalOptionsH
     , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
-    , clientMetadata = ClientMetadata.clientMetadataH
-    , lemonWebhook = LemonSqueezy.webhookPostH
+    , clientMetadata = Auth.clientMetadataH
+    , lemonWebhook = Settings.webhookPostH
     , githubWebhook = GitSync.githubWebhookPostH
     , chartsDataShot = Charts.queryMetrics
     , rrwebPost = Replay.replayPostH
     , avatarGet = avatarGetH
+    , widgetPngGet = widgetPngGetH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
           (Proxy @'[APItoolkitAuthContext])
           ( \page ->
               page
+                & Notify.runNotifyProduction
                 & State.evalState Map.empty -- TriggerEvents
                 & State.evalState Nothing -- HXRedirectDest
                 & State.evalState Nothing -- XWidgetJSON
@@ -456,10 +469,10 @@ cookieProtectedServer =
     , dashboardYamlGet = Dashboards.dashboardYamlGetH
     , dashboardYamlPut = Dashboards.dashboardYamlPutH
     , -- API handlers
-      apiGet = Api.apiGetH
-    , apiDelete = Api.apiDeleteH
-    , apiPatch = Api.apiActivateH
-    , apiPost = Api.apiPostH
+      apiGet = Settings.apiGetH
+    , apiDelete = Settings.apiDeleteH
+    , apiPatch = Settings.apiActivateH
+    , apiPost = Settings.apiPostH
     , -- Chart and widget handlers
       chartsDataGet = Charts.queryMetrics
     , widgetPost = Widget.widgetPostH
@@ -472,9 +485,9 @@ cookieProtectedServer =
     , reportsPost = Reports.reportsPostH
     , shareLinkPost = Share.shareLinkPostH
     , replaySessionGet = Replay.replaySessionGetH
-    , bringS3 = S3.bringS3GetH
-    , bringS3Post = S3.brings3PostH
-    , bringS3Remove = S3.brings3RemoveH
+    , bringS3 = Settings.bringS3GetH
+    , bringS3Post = Settings.brings3PostH
+    , bringS3Remove = Settings.brings3RemoveH
     , gitSyncSettings = GitSync.gitSyncSettingsGetH
     , gitSyncSettingsPost = GitSync.gitSyncSettingsPostH
     , gitSyncSettingsDelete = GitSync.gitSyncSettingsDeleteH
@@ -483,10 +496,13 @@ cookieProtectedServer =
     , githubAppRepos = GitSync.githubAppReposH
     , githubAppSelectRepo = GitSync.githubAppSelectRepoH
     , -- Billing handlers
-      manageBillingGet = LemonSqueezy.manageBillingGetH
+      manageBillingGet = Settings.manageBillingGetH
     , -- Endpoint handlers
       endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
+    , -- Dev routes
+      emailPreviewList = emailPreviewListH
+    , emailPreview = emailPreviewH
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer
@@ -565,6 +581,11 @@ projectsServer =
     , deleteGet = CreateProject.deleteProjectGetH
     , deleteProjectH = CreateProject.projectDeleteGetH
     , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
+    , pagerdutyConnect = Integrations.pagerdutyConnectH
+    , pagerdutyDisconnect = Integrations.pagerdutyDisconnectH
+    , slackDisconnect = Integrations.slackDisconnectH
+    , notificationsTestPost = Settings.notificationsTestPostH
+    , notificationsTestHistoryGet = Settings.notificationsTestHistoryGetH
     , deleteProjectGet = CreateProject.deleteProjectGetH
     , membersManageGet = ManageMembers.manageMembersGetH
     , membersManagePost = ManageMembers.manageMembersPostH
@@ -605,11 +626,10 @@ statusH :: ATBaseCtx Status
 statusH = do
   let q = [sql| select version(); |]
   versionM <- listToMaybe <$> PG.query_ q
-  let version = versionM <&> \(PGS.Only v) -> v
   let gi = $$tGitInfoCwd
   pure
     Status
-      { dbVersion = version
+      { dbVersion = versionM <&> \(PGS.Only v) -> v
       , gitHash = toText $ giHash gi
       , gitCommitDate = toText $ giCommitDate gi
       }
@@ -620,59 +640,79 @@ pingH = pure "pong"
 
 
 avatarGetH :: Users.UserId -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-avatarGetH userId = do
-  userM <- Users.userById userId
-  case userM of
-    Nothing -> fetchGravatar "" "?"
-    Just user -> do
-      let imageUrl = user.displayImageUrl
-          email = CI.original user.email
-      if T.null imageUrl
-        then fetchGravatar email (user.firstName <> " " <> user.lastName)
-        else do
-          result <- try $ Wreq.get (toString imageUrl)
-          case result of
-            Right resp -> do
-              let body = resp ^. Wreq.responseBody
-              pure $ addHeader @"Cache-Control" "public, max-age=604800, immutable" $ addHeader @"Content-Type" "image/jpeg" body
-            Left (_ :: SomeException) -> fetchGravatar email (user.firstName <> " " <> user.lastName)
+avatarGetH userId =
+  Users.userById userId >>= maybe (fetchGravatar "" "?") \user ->
+    let email = CI.original user.email
+        name = user.firstName <> " " <> user.lastName
+     in if T.null user.displayImageUrl
+          then fetchGravatar email name
+          else fetchImage user.displayImageUrl "image/jpeg" "public, max-age=604800, immutable" (fetchGravatar email name)
   where
-    fetchGravatar email name = do
-      let emailMd5 = decodeUtf8 $ MD5.hash $ encodeUtf8 $ T.toLower email
-          sanitizedName = T.replace " " "+" name
-          gravatarUrl = "https://www.gravatar.com/avatar/" <> emailMd5 <> "?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/" <> sanitizedName <> "/128"
-      result <- try $ Wreq.get (toString gravatarUrl)
-      case result of
-        Right resp -> do
-          let body = resp ^. Wreq.responseBody
-          pure $ addHeader @"Cache-Control" "public, max-age=604800" $ addHeader @"Content-Type" "image/png" body
-        Left (_ :: SomeException) -> pure $ addHeader @"Cache-Control" "public, max-age=60" $ addHeader @"Content-Type" "image/png" ""
+    fetchGravatar email name =
+      fetchImage
+        (mkGravatarUrl email name)
+        "image/png"
+        "public, max-age=604800"
+        (pure $ addImageHeaders "image/png" "public, max-age=60" "")
+
+    fetchImage url ct cache fallback =
+      handle
+        (\(_ :: SomeException) -> fallback)
+        (Wreq.get (toString url) <&> addImageHeaders ct cache . (^. Wreq.responseBody))
+
+    toMd5 msg = decodeUtf8 $ MD5.hash $ encodeUtf8 $ T.toLower msg
+    mkGravatarUrl email name = "https://www.gravatar.com/avatar/" <> toMd5 email <> "?d=https%3A%2F%2Fui-avatars.com%2Fapi%2F/" <> T.replace " " "+" name <> "/128"
+    addImageHeaders ct cache body = addHeader @"Cache-Control" cache $ addHeader @"Content-Type" ct body
 
 
 -- Widget GET handler that accepts dashboard parameters
 widgetGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders Widget.Widget)
 widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
-  -- Parse the widgetJSON parameter
-  let v = fromMaybe "" widgetJsonM
-  widget <- case AE.eitherDecode (encodeUtf8 v) of
-    Right w -> pure w
-    Left err -> do
-      Error.throwError $ err400{errBody = "Invalid or missing widgetJSON parameter"}
-
-  -- Get the current time for processing
+  widget <-
+    AE.eitherDecode (encodeUtf8 $ fromMaybe "" widgetJsonM)
+      & either (\_ -> Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure
   now <- Time.currentTime
-
-  -- Process the widget with dashboard parameters (similar to how processWidget works in Dashboards)
   let widgetWithPid = widget & #_projectId ?~ pid
-
-  -- Process eager widgets (tables, stats, etc.) with dashboard parameters
+      isEager = widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
   processedWidget <-
-    if widgetWithPid.eager == Just True || widgetWithPid.wType `elem` [Widget.WTTable, Widget.WTTraces, Widget.WTStat, Widget.WTAnomalies]
+    if isEager
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
-      else pure widgetWithPid
-
-  -- Return the processed widget
+      else
+        Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
+          <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
   addRespHeaders processedWidget
+
+
+-- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
+widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  let v = fromMaybe "" widgetJsonM
+      width = clamp (100, 2000) $ fromMaybe 900 widthM
+      height = clamp (100, 2000) $ fromMaybe 300 heightM
+
+  Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
+  whenLeft_ (verifyWidgetSignature ctx.env.apiKeyEncryptionSecretKey pid v sigM) \err -> Error.throwError $ err403{errBody = err}
+
+  widget <- either (const $ Error.throwError err400{errBody = "Invalid or missing widgetJSON parameter"}) pure $ AE.eitherDecode (encodeUtf8 v)
+  processedWidget <- Dashboards.fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams $ widget & #_projectId ?~ pid & #eager ?~ True
+
+  let input =
+        AE.encode
+          $ AE.object
+            [ "echarts" AE..= Widget.widgetToECharts (processedWidget & #_staticRender ?~ True)
+            , "width" AE..= width
+            , "height" AE..= height
+            , "theme" AE..= fromMaybe "default" processedWidget.theme
+            ]
+
+  pngBytes <-
+    liftIO (timeout 30000000 $ readProcess $ setStdin (byteStringInput input) $ proc "./chart-cli" []) >>= \case
+      Nothing -> Error.throwError err504{errBody = "Chart rendering timed out"} <* Log.logAttention "widgetPngGetH: chart render timed out" (AE.object ["widgetId" AE..= processedWidget.id, "width" AE..= width, "height" AE..= height])
+      Just (ExitSuccess, bytes, _) -> pure bytes
+      Just (ExitFailure code, _, errOut) -> Error.throwError err500{errBody = "Chart rendering failed"} <* Log.logAttention "widgetPngGetH: chart render failed" (AE.object ["exitCode" AE..= code, "stderr" AE..= decodeUtf8 @Text (toStrict errOut), "widgetId" AE..= processedWidget.id])
+
+  pure $ addHeader @"Cache-Control" (bool "public, max-age=300" "public, max-age=31536000, immutable" $ isJust fromDStr && isJust toDStr) $ addHeader @"Content-Type" "image/png" pngBytes
 
 
 -- flamegraph GET handler
@@ -682,28 +722,21 @@ flamegraphGetH pid trId shapeViewM = do
   spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
   let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList spanRecords'
       serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
-  let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
-  sp <- case shapeViewM of
-    Just _ -> do
-      shapesAvgs <- Telemetry.getTraceShapes pid $ V.singleton trId
-      let spansJson =
-            ( \x ->
-                let targ = find (\(_, n, _, _) -> n == x.spanName) shapesAvgs
-                 in getSpanJson targ x
-            )
-              <$> spanRecords
-      pure spansJson
-    Nothing -> do
-      let spansJson = getSpanJson Nothing <$> spanRecords
-      pure spansJson
+      colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
+
+  sp <-
+    maybe
+      (pure $ getSpanJson Nothing <$> spanRecords)
+      (\_ -> Telemetry.getTraceShapes pid (V.singleton trId) <&> \shapesAvgs -> (\x -> getSpanJson (find (\(_, n, _, _) -> n == x.spanName) shapesAvgs) x) <$> spanRecords)
+      shapeViewM
+
   let spjson = decodeUtf8 $ AE.encode sp
   addRespHeaders $ do
     div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ "time-container"] pass
     div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> trId] pass
-    div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] do
-      div_ [class_ "relative h-full"] do
-        div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
-        div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
+    div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] $ div_ [class_ "relative h-full"] $ do
+      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
+      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
     script_ [text|flameGraphChart($spjson, "a$trId", $colorsJson);|]
 
 
@@ -721,6 +754,45 @@ getSpanJson tgtM sp =
     ]
   where
     start = utcTimeToNanoseconds sp.startTime
+
+
+-- =============================================================================
+-- Email Preview Handlers (dev only)
+-- =============================================================================
+
+emailTemplateNames :: [Text]
+emailTemplateNames = ["project-invite", "project-created", "project-deleted", "weekly-report", "runtime-errors", "anomaly-endpoint"]
+
+
+guardDevOnly :: ATAuthCtx ()
+guardDevOnly = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  unless (T.toUpper ctx.config.environment == "DEV") $ Error.throwError err404
+
+
+emailPreviewListH :: ATAuthCtx (RespHeaders (Html ()))
+emailPreviewListH = do
+  guardDevOnly
+  addRespHeaders $ ET.emailWrapper "Email Templates" do
+    ET.emailBody do
+      h1_ "Email Template Previews"
+      p_ "Click a template to preview:"
+      ul_ $ forM_ emailTemplateNames \name ->
+        li_ [style_ "margin: 8px 0;"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
+
+
+emailPreviewH :: Text -> ATAuthCtx (RespHeaders (Html ()))
+emailPreviewH templateName = do
+  guardDevOnly
+  let (subject, content) = case templateName of
+        "project-invite" -> ET.sampleProjectInvite
+        "project-created" -> ET.sampleProjectCreated
+        "project-deleted" -> ET.sampleProjectDeleted
+        "weekly-report" -> ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
+        "runtime-errors" -> ET.sampleRuntimeErrors
+        "anomaly-endpoint" -> ET.sampleAnomalyEndpoint
+        _ -> ("Unknown", p_ "Template not found")
+  addRespHeaders $ ET.emailWrapper subject content
 
 
 -- =============================================================================

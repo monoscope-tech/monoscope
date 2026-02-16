@@ -1,5 +1,3 @@
-{-# LANGUAGE PackageImports #-}
-
 module Pkg.GitHub (
   generateAppJWT,
   getInstallationToken,

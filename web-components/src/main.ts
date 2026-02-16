@@ -22,12 +22,12 @@ const getDashboardConstants = (el?: Element | null): Record<string, string> => {
 };
 (window as any).getDashboardConstants = getDashboardConstants;
 
-// HTMX extension to forward current page query parameters and dashboard constants to GET requests
+// HTMX extension to forward current page query parameters and dashboard constants to GET/POST requests
 (window as any).htmx.defineExtension('forward-page-params', {
   onEvent: function (name: string, evt: any) {
     if (name === 'htmx:configRequest') {
-      // Only process GET requests
-      if (evt.detail.verb === 'get') {
+      // Process GET and POST requests (add params to URL query string)
+      if (evt.detail.verb === 'get' || evt.detail.verb === 'post') {
         const url = new URL(evt.detail.path, window.location.origin);
         const currentParams = new URLSearchParams(window.location.search);
 
@@ -284,3 +284,105 @@ function tagifyTemplateFunc(tagData: any) {
 }
 
 (window as any).tagifyTemplateFunc = tagifyTemplateFunc;
+
+// Auto-initialize tagify inputs from data attributes
+// Uses data-tagify-* prefix to avoid collision with Tagify's built-in data attribute handling
+function initTagifyElement(el: HTMLElement) {
+  if ((el as any)._tagifyInstance) return;
+  try {
+    const options: any = {};
+    const wl = el.getAttribute('data-tagify-whitelist');
+    if (wl) {
+      try { options.whitelist = JSON.parse(wl); } catch (e) {
+        console.error('[Tagify auto-init] Failed to parse whitelist:', el.id, e);
+      }
+    }
+    if (el.hasAttribute('data-tagify-enforce-whitelist')) options.enforceWhitelist = true;
+    if (el.hasAttribute('data-tagify-mode')) options.mode = el.getAttribute('data-tagify-mode');
+    if (el.hasAttribute('data-tagify-text-prop')) options.tagTextProp = el.getAttribute('data-tagify-text-prop');
+
+    const tagify = window.createTagify(el, options);
+    (el as any)._tagifyInstance = tagify;
+
+    const initial = el.getAttribute('data-tagify-initial');
+    if (initial) {
+      try {
+        const tags = JSON.parse(initial);
+        if (el.hasAttribute('data-tagify-resolve') && options.whitelist) {
+          tagify.addTags(tags.map((id: any) => options.whitelist.find((v: any) => v.value === id || v.value == id)).filter(Boolean));
+        } else {
+          tagify.addTags(tags);
+        }
+      } catch (e) {
+        console.error('[Tagify auto-init] Failed to parse initial tags:', el.id, e);
+      }
+    }
+
+    // Dashboard variable: sync tagify changes to URL params and fire update-query
+    if (el.classList.contains('dash-variable-input')) {
+      tagify.on('change', (e: any) => {
+        const varName = e.detail.tagify.DOM.originalInput.getAttribute('name');
+        const url = new URL(window.location.href);
+        url.searchParams.set('var-' + varName, e.detail?.tagify?.value[0]?.value || '');
+        history.pushState({}, '', url.toString());
+        window.dispatchEvent(new Event('update-query'));
+      });
+    }
+  } catch (e) {
+    console.error('[Tagify auto-init] Failed to init element:', el.id, e);
+  }
+}
+
+// Interpolate {{var-*}} placeholders in elements with data-var-template
+let _cachedSearch = '', _cachedParams: URLSearchParams | null = null, _interpolatePending = false;
+(window as any).interpolateVarTemplates = function () {
+  if (_interpolatePending) return;
+  _interpolatePending = true;
+  requestAnimationFrame(() => {
+    _interpolatePending = false;
+    if (window.location.search !== _cachedSearch) { _cachedSearch = window.location.search; _cachedParams = new URLSearchParams(_cachedSearch); }
+    document.querySelectorAll('[data-var-template]').forEach((el: any) => {
+      let text = el.dataset.varTemplate;
+      _cachedParams!.forEach((value, key) => { if (key.startsWith('var-')) text = text.replaceAll('{{' + key + '}}', value || ''); });
+      el.textContent = text;
+    });
+  });
+};
+
+// Reload whitelist for dashboard variables with data-tagify-reload-on-change on update-query
+window.addEventListener('update-query', async () => {
+  document.querySelectorAll<HTMLElement>('.dash-variable-input[data-tagify-reload-on-change="true"]').forEach(async (input) => {
+    const querySql = input.getAttribute('data-tagify-query-sql') || '';
+    const query = input.getAttribute('data-tagify-query') || '';
+    if (!querySql && !query) return;
+    const tgfy = (input as any)._tagifyInstance;
+    try {
+      tgfy?.loading(true);
+      const params = new URLSearchParams({ ...Object.fromEntries(new URLSearchParams(location.search)), query, query_sql: querySql, data_type: 'text' });
+      const { data_text } = await fetch(`/chart_data?${params}`).then(res => res.json());
+      if (tgfy) { tgfy.settings.whitelist = data_text.map((i: any) => i.length === 1 ? i[0] : { value: i[0], name: i[1] }); tgfy.loading(false); }
+    } catch (e) { console.error(`Error fetching data for ${(input as any).name}:`, e); }
+  });
+  (window as any).interpolateVarTemplates();
+});
+
+function initAllTagifyInputs(root: Document | Element = document) {
+  root.querySelectorAll<HTMLElement>('[data-tagify]').forEach(initTagifyElement);
+}
+
+window.getTagValues = (selector: string): string[] => {
+  const el = document.querySelector(selector);
+  return (el as any)?._tagifyInstance?.value?.map((t: any) => t.value || t) || [];
+};
+
+// Signal that web components are ready
+(window as any).widgetDepsReady = true;
+window.dispatchEvent(new CustomEvent('widgetDepsReady'));
+
+// Init tagify elements - run now, on DOMContentLoaded, and after HTMX swaps
+initAllTagifyInputs();
+(window as any).interpolateVarTemplates();
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', () => { initAllTagifyInputs(); (window as any).interpolateVarTemplates(); });
+}
+document.addEventListener('htmx:afterSettle', (e: any) => { initAllTagifyInputs(e.detail?.elt || document); (window as any).interpolateVarTemplates(); });

@@ -965,9 +965,11 @@ pSection = do
     , try pExtendSection
     , try pProjectSection
     , try pWhereSection -- Try to parse 'where' clause first
-    , Search <$> pExpr -- Fall back to bare expression for backward compatibility
-    , Source <$> pSource
+    , try (Source <$> pSource) -- Try source before bare expressions
+    , Search <$> (notFollowedBy reservedKeyword *> pExpr) -- Fall back to bare expression for backward compatibility
     ]
+  where
+    reservedKeyword = void $ choice @[] [string "project" *> space, string "extend" *> space, string "summarize" *> space, string "sort" *> space, string "take" *> space, string "where" *> space]
 
 
 -- find what source to use when processing a query. By default, the requests source is used

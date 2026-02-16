@@ -448,12 +448,12 @@
   /* Dropdown chevron rotation */
   .dropdown summary svg,
   .dropdown [tabindex] svg,
-  details summary svg {
+  details summary > svg:last-child {
     transition: transform 200ms var(--ease-out-expo);
   }
   .dropdown:has(:focus) summary svg,
   .dropdown[open] summary svg,
-  details[open] summary svg,
+  details[open] summary > svg:last-child,
   .dropdown:has(.dropdown-content:not(.hidden)) [tabindex] svg {
     transform: rotate(180deg);
   }
@@ -526,16 +526,16 @@
   }
 
   /* Enhanced focus visibility with offset */
-  :focus-visible:not(.no-focus-ring) {
-    outline: 2px solid var(--color-strokeFocus);
-    outline-offset: 2px;
-  }
+  /* :focus-visible:not(.no-focus-ring) { */
+  /*   outline: 2px solid var(--color-strokeFocus); */
+  /*   outline-offset: 2px; */
+  /* } */
   .no-focus-ring:focus-visible {
     outline: none !important;
   }
-  .btn:focus-visible, .input:focus-visible, .select:focus-visible, .textarea:focus-visible {
-    outline-offset: 1px;
-  }
+  /* .btn:focus-visible, .input:focus-visible, .select:focus-visible, .textarea:focus-visible { */
+  /*   outline-offset: 1px; */
+  /* } */
 
   /* Progress bar subtle glow */
   .htmx-progress.htmx-request {
@@ -1023,7 +1023,7 @@ body, :host {
 @layer custom {
   /* Badge component - solid filled badges */
   .badge {
-    @apply inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textInverse-strong shadow-sm;
+    @apply px-2 py-0.5 /* @apply inline-flex items-center justify-center rounded-md border border-transparent px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textInverse-strong shadow-sm; */
   }
   /* Badge component - outline badges */
   .badge-outline {
@@ -1079,10 +1079,16 @@ body, :host {
     display: none;
   }
   .alert {
-    --color-success: var(--color-fillSuccess-weak);
-    --color-error: var(--color-fillError-weak);
-    --color-warning: var(--color-fillWarning-weak);
-    --color-info: var(--color-fillInformation-weak);
+    --color-success: rgba(10 204 146 / 0.15);
+    --color-error: rgba(255 74 74 / 0.15);
+    --color-warning: rgba(255 192 46 / 0.15);
+    --color-info: rgba(38 176 255 / 0.15);
+  }
+  [data-theme="dark"] .alert {
+    --color-success: rgba(119 199 175 / 0.2);
+    --color-error: rgba(255 156 156 / 0.2);
+    --color-warning: rgba(224 190 112 / 0.2);
+    --color-info: rgba(126 192 229 / 0.2);
   }
 
 
@@ -1399,7 +1405,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-success {
-  @apply bg-fillSuccess-strong text-textSuccess font-medium;
+  @apply bg-fillSuccess-weak text-textSuccess font-medium;
 }
 
 @utility badge-error {
@@ -1608,6 +1614,10 @@ code, pre, .code, .monospace {
     --fallback-pc: var(--color-textStrong); /*bg-textStrong */
     --fallback-bc: var(--color-strokeStrong); /*border color strokeStrong*/
   }
+}
+
+@layer custom {
+  .no-dividers :is(tr, th, td) { border-style: none; }
 }
 
 @layer custom {

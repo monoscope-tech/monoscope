@@ -1,5 +1,6 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_) where
 
+import Data.Default (Default (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Fmt (commaizeF, fmt, (+|))
@@ -104,7 +105,7 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
             end
       |]
     ]
-  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block tap-target", Aria.label_ "Open drawer"] trigger
+  label_ [Lucid.for_ drawerId, class_ "drawer-button inline-block", Aria.label_ "Open drawer"] trigger
   div_ [class_ "drawer-side top-0 left-0 w-full h-full flex z-10000 overflow-y-scroll "] do
     label_ [Lucid.for_ drawerId, Aria.label_ "Close drawer", class_ "w-full drawer-overlay grow flex-1"] ""
     div_ [style_ "width: min(90vw, 1200px)", class_ "bg-bgRaised h-full overflow-y-scroll overflow-x-hidden w-full"] do
@@ -176,7 +177,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                function priceChange() {
                  const value = price_indicator.value
                  let num_reqs = Math.floor(value/1000000)
-                 let calculatedPrice = value <= 20_000_000 ? 34 : 34 + ((value- 20_000_000)/500_000)
+                 let calculatedPrice = value <= 20_000_000 ? 29 : 29 + ((value- 20_000_000)/500_000)
                  let calculatedPriceCritical = value <= 100_000_000 ? 199 : 199 + ((value - 100_000_000)/500_000)
                  priceContainer.innerText = calculatedPrice
                  criticalContainer.innerText = calculatedPriceCritical
@@ -457,7 +458,7 @@ navBar :: Html ()
 navBar = do
   nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-4 py-4 bg-base-100 flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
-      a_ [href_ "https://apitoolkit.io", class_ "flex items-center text-textWeak hover:text-textStrong"] do
+      a_ [href_ "https://monoscope.tech", class_ "flex items-center text-textWeak hover:text-textStrong"] do
         -- Only show full logos (no mini version needed for navbar)
         img_
           [ class_ "h-12 dark:hidden"
@@ -470,40 +471,7 @@ navBar = do
 
 
 modal_ :: T.Text -> Html () -> Html () -> Html ()
-modal_ modalId btnTrigger contentHtml = do
-  label_ [Lucid.for_ modalId] btnTrigger
-  input_
-    [ class_ "modal-toggle"
-    , Lucid.id_ modalId
-    , Lucid.type_ "checkbox"
-    , Aria.label_ "Toggle modal"
-    , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
-          on closeModal from body set my.checked to false end
-          on change if my.checked then
-            add .overflow-hidden to <body/>
-            wait 50ms then
-            set :focusable to my.closest('.modal').querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
-            if :focusable then call :focusable.focus() end
-          else
-            remove .overflow-hidden from <body/>
-          end
-      |]
-    ]
-  div_
-    [ class_ "modal w-screen"
-    , role_ "dialog"
-    , Aria.label_ "Modal dialog"
-    , style_ "--color-base-100: var(--color-fillWeaker)"
-    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
-        set :form to target.closest('form') then
-        if :form then call :form.requestSubmit() then halt end
-      |]
-    ]
-    do
-      label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
-      div_ [class_ "modal-box relative w-auto flex flex-col gap-5 max-w-5xl"] do
-        modalCloseButton_ modalId
-        div_ contentHtml
+modal_ modalId btnTrigger = modalWith_ modalId def (Just btnTrigger)
 
 
 modalCloseButton_ :: Monad m => Text -> HtmlT m ()
@@ -622,3 +590,217 @@ statBoxSkeleton_ withIcon = div_ [class_ "bg-fillWeaker rounded-3xl flex flex-co
     div_ [class_ "flex gap-2 items-center"] do
       div_ [class_ "h-4 w-20 skeleton-shimmer rounded"] ""
       div_ [class_ "h-4 w-4 skeleton-shimmer rounded-full"] ""
+
+
+data FieldSize = FieldSm | FieldMd
+
+
+data FieldCfg = FieldCfg
+  { icon :: Maybe Text
+  , inputType :: Text
+  , placeholder :: Text
+  , value :: Text
+  , extraAttrs :: [Attribute]
+  , dot :: Maybe Text -- colored circle class before label, e.g. "bg-fillError-strong"
+  , suffix :: Maybe Text -- text at right edge of input, e.g. "events"
+  }
+
+
+instance Default FieldCfg where def = FieldCfg Nothing "text" "" "" [] Nothing Nothing
+
+
+-- | Unified form field: auto-generates input from cfg, or uses custom content when provided
+formField_ :: Monad m => FieldSize -> FieldCfg -> Text -> Text -> Bool -> Maybe (HtmlT m ()) -> HtmlT m ()
+formField_ size cfg lbl name required customM =
+  fieldset_ [class_ wrapperCls] do
+    label_ [class_ labelCls, Lucid.for_ name] do
+      whenJust cfg.dot \color -> div_ [class_ $ "w-1.5 h-1.5 rounded-full shrink-0 " <> color] ""
+      whenJust cfg.icon \ic -> faSprite_ ic "solid" "w-4 h-4 text-iconNeutral shrink-0"
+      toHtml lbl
+      when required $ span_ [class_ reqCls] "*"
+    case customM of
+      Just content -> content
+      Nothing -> case (cfg.inputType, cfg.suffix) of
+        ("textarea", _) -> textarea_ ([class_ textareaCls, name_ name, id_ name, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs) $ toHtml cfg.value
+        (_, Just sfx) -> div_ [class_ "relative"] do
+          input_ $ [class_ $ inputCls <> " pr-14", value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs
+          span_ [class_ "absolute right-2 top-1/2 -translate-y-1/2 text-xs text-textWeak"] $ toHtml sfx
+        _ -> input_ $ [class_ inputCls, value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs
+  where
+    (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
+      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full", "text-textError")
+      FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
+
+
+formSelectField_ :: Monad m => FieldSize -> Text -> Text -> Bool -> HtmlT m () -> HtmlT m ()
+formSelectField_ size lbl name required options =
+  fieldset_ [class_ wrapperCls] do
+    label_ [class_ labelCls, Lucid.for_ name] do
+      toHtml lbl
+      when required $ span_ [class_ reqCls] "*"
+    select_ ([class_ selectCls, name_ name, id_ name] <> [required_ "true" | required]) options
+  where
+    (wrapperCls, labelCls, selectCls, reqCls) = case size of
+      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "select select-sm w-full", "text-textError")
+      FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "select w-full h-12", "text-textWeak")
+
+
+data PanelCfg = PanelCfg
+  { icon :: Maybe Text
+  , subtitle :: Maybe Text
+  , collapsible :: Maybe Bool -- Nothing = static section, Just True = starts open, Just False = starts closed
+  , sectionId :: Maybe Text -- id attribute on the details element
+  , raised :: Bool -- surface-raised card wrapper
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+panel_ :: Monad m => PanelCfg -> Text -> HtmlT m () -> HtmlT m ()
+panel_ cfg title content = case cfg.collapsible of
+  Nothing -> wrapper do
+    header do
+      whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-4 h-4 text-iconNeutral"
+      toHtml title
+      whenJust cfg.subtitle $ span_ [class_ "normal-case tracking-normal font-normal"] . toHtml
+    content
+    where
+      wrapper = if cfg.raised then div_ [class_ "surface-raised rounded-2xl p-4 relative"] else div_ [class_ "space-y-4"]
+      header = if cfg.raised then span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong mb-3"] else h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider flex items-center gap-2"]
+  Just startOpen ->
+    details_ ([class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] <> [open_ "" | startOpen] <> maybe [] (pure . id_) cfg.sectionId) do
+      summary_ [class_ "p-3 cursor-pointer list-none flex items-center justify-between gap-2 hover:bg-fillWeak transition-colors"] do
+        div_ [class_ "flex items-center gap-2"] do
+          whenJust cfg.icon \ic -> faSprite_ ic "regular" "w-3.5 h-3.5 text-iconNeutral"
+          span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml title
+          whenJust cfg.subtitle $ span_ [class_ "text-xs text-textWeak"] . toHtml
+        faSprite_ "chevron-down" "regular" "w-3.5 h-3.5 text-iconNeutral"
+      div_ [class_ "px-3 pb-3"] content
+
+
+formCheckbox_ :: Monad m => FieldSize -> Text -> Text -> [Attribute] -> HtmlT m ()
+formCheckbox_ FieldSm lbl name extraAttrs =
+  label_ [class_ "flex items-center gap-2 text-xs cursor-pointer"] do
+    input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ name] <> extraAttrs
+    span_ [] $ toHtml lbl
+formCheckbox_ FieldMd lbl name extraAttrs =
+  label_ [class_ "label cursor-pointer flex items-center gap-2"] do
+    input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ name] <> extraAttrs
+    span_ [class_ "text-sm"] $ toHtml lbl
+
+
+tagInput_ :: Monad m => Text -> Text -> [Attribute] -> HtmlT m ()
+tagInput_ inputId ph attrs = textarea_ ([class_ "textarea w-full min-h-12 resize-none", id_ inputId, placeholder_ ph, data_ "tagify" ""] <> attrs) ""
+
+
+formActionsModal_ :: Monad m => Text -> HtmlT m () -> HtmlT m ()
+formActionsModal_ modalId submitBtn = div_ [class_ "mt-3 flex justify-end gap-2"] do
+  label_ [Lucid.for_ modalId, class_ "btn btn-outline cursor-pointer"] "Cancel"
+  submitBtn
+
+
+connectionBadge_ :: Monad m => Text -> HtmlT m ()
+connectionBadge_ status = span_ [class_ $ "badge badge-sm gap-1 " <> badgeCls] do
+  whenJust iconM \icon -> faSprite_ icon "regular" "h-3 w-3"
+  toHtml status
+  where
+    (badgeCls, iconM) = case status of
+      "Active" -> ("badge-soft badge-success", Just "circle-check")
+      "Connected" -> ("badge-soft badge-success", Just "circle-check")
+      "Not connected" -> ("badge-soft badge-secondary", Just "circle-info")
+      "Configure" -> ("badge-soft badge-secondary", Nothing)
+      _ -> ("badge-soft badge-secondary", Nothing)
+
+
+data BadgeColor = BrandBadge | SuccessBadge | ErrorBadge | NeutralBadge
+
+
+iconBadge_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadge_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-full"
+
+
+iconBadgeSq_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadgeSq_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-lg"
+
+
+iconBadgeLg_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadgeLg_ = iconBadgeWith_ "p-3" "h-6 w-6" "rounded-full"
+
+
+iconBadgeXs_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
+iconBadgeXs_ = iconBadgeWith_ "p-1.5" "h-3.5 w-3.5" "rounded-md"
+
+
+iconBadgeWith_ :: Monad m => Text -> Text -> Text -> BadgeColor -> Text -> HtmlT m ()
+iconBadgeWith_ pad iconSize shape color icon =
+  div_ [class_ $ pad <> " shrink-0 " <> shape <> " " <> bg color] $ faSprite_ icon "regular" (iconSize <> " " <> fg color)
+  where
+    bg = \case BrandBadge -> "bg-fillBrand-weak"; SuccessBadge -> "bg-fillSuccess-weak"; ErrorBadge -> "bg-fillError-weak"; NeutralBadge -> "bg-fillWeak"
+    fg = \case BrandBadge -> "text-iconBrand"; SuccessBadge -> "text-iconSuccess"; ErrorBadge -> "text-iconError"; NeutralBadge -> "text-iconNeutral"
+
+
+data ModalCfg = ModalCfg
+  { autoOpen :: Bool
+  , boxClass :: Text
+  , boxStyle :: Text
+  , wrapperClass :: Text
+  , hideClose :: Bool
+  }
+  deriving stock (Generic)
+  deriving anyclass (Default)
+
+
+modalWith_ :: T.Text -> ModalCfg -> Maybe (Html ()) -> Html () -> Html ()
+modalWith_ modalId cfg triggerM contentHtml = do
+  whenJust triggerM $ label_ [Lucid.for_ modalId]
+  input_
+    $ [ class_ "modal-toggle"
+      , Lucid.id_ modalId
+      , Lucid.type_ "checkbox"
+      , Aria.label_ "Toggle modal"
+      , [__|on keyup if the event's key is 'Escape' set my.checked to false trigger keyup end
+          on closeModal from body set my.checked to false end
+          on change if my.checked then
+            add .overflow-hidden to <body/>
+            wait 50ms then
+            set :modal to the next <.modal/> then
+            set :focusable to :modal.querySelector('input:not([type=hidden]):not([type=checkbox]), textarea, select, [tabindex]:not([tabindex="-1"])') then
+            if :focusable then call :focusable.focus() end
+          else
+            remove .overflow-hidden from <body/>
+          end
+      |]
+      ]
+    <> [checked_ | cfg.autoOpen]
+  div_
+    [ class_ $ "modal w-screen " <> cfg.wrapperClass
+    , role_ "dialog"
+    , Aria.label_ "Modal dialog"
+    , style_ "--color-base-100: var(--color-fillWeaker)"
+    , [__|on keydown[key=='Enter' and target.tagName=='INPUT' and target.type!='textarea'] from .modal-box
+        set :form to target.closest('form') then
+        if :form then call :form.requestSubmit() then halt end
+      |]
+    ]
+    do
+      label_ [class_ "modal-backdrop", Lucid.for_ modalId, Aria.label_ "Close modal"] ""
+      div_
+        ( [class_ $ "modal-box relative w-auto flex flex-col gap-5 " <> bool "max-w-5xl" cfg.boxClass (not $ T.null cfg.boxClass)]
+            <> [style_ cfg.boxStyle | not $ T.null cfg.boxStyle]
+        )
+        do
+          unless cfg.hideClose $ modalCloseButton_ modalId
+          div_ [class_ "space-y-2"] contentHtml
+
+
+confirmModal_ :: Text -> Text -> Text -> [Attribute] -> Text -> Html ()
+confirmModal_ modalId title description confirmAttrs confirmText =
+  modalWith_ modalId def{boxClass = "p-6", hideClose = True} Nothing do
+    div_ [class_ "flex items-start gap-3 mb-4"] do
+      iconBadgeWith_ "p-2" "h-5 w-5" "rounded-full" ErrorBadge "triangle-alert"
+      div_ do
+        h3_ [class_ "text-lg font-semibold text-textStrong"] $ toHtml title
+        p_ [class_ "text-sm text-textWeak mt-1"] $ toHtml description
+    div_ [class_ "flex justify-end gap-2 mt-6"] do
+      label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
+      button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText

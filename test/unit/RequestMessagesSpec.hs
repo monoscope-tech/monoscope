@@ -1,10 +1,9 @@
-{-# LANGUAGE QuasiQuotes #-}
 module RequestMessagesSpec (spec) where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ
 import Relude
-import RequestMessages qualified
+import ProcessMessage qualified as RequestMessages
 import Test.Hspec
 import NeatInterpolation (text)
 import Utils qualified

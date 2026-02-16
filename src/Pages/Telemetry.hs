@@ -27,6 +27,8 @@ import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -36,6 +38,8 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
+import Pkg.Components.Table (Table (..))
+import Pkg.Components.Table qualified as Table
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -44,29 +48,14 @@ import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, getDurationNSMS, getServiceColors, loadingIndicator_, onpointerdown_, parseTime, prettyPrintCount, utcTimeToNanoseconds)
 
 
--- Metrics types
-data MetricNode = MetricNode
-  { parent :: Text
-  , current :: Text
-  }
-  deriving (Eq, Show)
-
-
-data MetricTree = MetricTree
-  { spanRecord :: MetricNode
-  , children :: [MetricTree]
-  }
-  deriving (Generic, Show)
-
-
 data MetricsOverViewGet
-  = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint))
+  = MetricsOVDataPointMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricDataPoint, Map Text (Int, Int, Int)))
   | MetricsOVChartsMain (PageCtx (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, V.Vector Text, Text, Text, Maybe Text))
   | MetricsOVChartsPaginated (Projects.ProjectId, V.Vector Telemetry.MetricChartListData, Text, Maybe Text)
 
 
 instance ToHtml MetricsOverViewGet where
-  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints
+  toHtml (MetricsOVDataPointMain (PageCtx bwconf (pid, datapoints, refCounts))) = toHtml $ PageCtx bwconf $ dataPointsPage pid datapoints refCounts
   toHtml (MetricsOVChartsMain (PageCtx bwconf (pid, mList, serviceNames, source, prefix, nextUrl))) = toHtml $ PageCtx bwconf $ chartsPage pid mList serviceNames source prefix nextUrl
   toHtml (MetricsOVChartsPaginated (pid, mList, source, nextUrl)) = toHtml $ chartList pid source mList nextUrl
   toHtmlRaw = toHtml
@@ -105,6 +94,60 @@ data SpanTree = SpanTree
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
 
+-- Metric tree types
+data MetricNode = MetricNode {parent :: Text, current :: Text} deriving (Eq, Show)
+
+
+data MetricTree = MetricTree MetricNode [MetricTree]
+
+
+pathToNodes :: Text -> [MetricNode]
+pathToNodes path =
+  let segments = T.splitOn "." path
+   in zipWith MetricNode ("___root___" : scanl1 (\acc s -> acc <> "." <> s) segments) segments
+
+
+buildMetricTree :: [Text] -> [MetricTree]
+buildMetricTree metrics =
+  let nodeMap = foldr insertNode Map.empty (concatMap pathToNodes metrics)
+   in buildTree_ nodeMap Nothing
+  where
+    insertNode sp m =
+      let k = if sp.parent == "___root___" then Nothing else Just sp.parent
+       in Map.insertWith (\new old -> if sp `elem` old then old else new ++ old) k [sp] m
+    buildTree_ nodeMap parentId = case Map.lookup parentId nodeMap of
+      Nothing -> []
+      Just nodes ->
+        [ MetricTree mt (buildTree_ nodeMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
+        | mt <- nodes
+        ]
+
+
+data MetricRow = MetricRow
+  { level :: Int
+  , segment :: Text
+  , parentPath :: Text
+  , fullPath :: Text
+  , isGroup :: Bool
+  , childCount :: Int
+  , continuations :: [Bool]
+  , metric :: Maybe Telemetry.MetricDataPoint
+  }
+
+
+flattenMetricTree :: Map Text Telemetry.MetricDataPoint -> [MetricTree] -> Int -> [Bool] -> V.Vector MetricRow
+flattenMetricTree dataMap trees lvl conts = V.concat $ zipWith flatten trees isLastFlags
+  where
+    isLastFlags = replicate (length trees - 1) False ++ [True]
+    flatten (MetricTree nd children) isLast =
+      let fp = if nd.parent == "___root___" then nd.current else nd.parent <> "." <> nd.current
+          hasChildren = not $ null children
+          row = MetricRow{level = lvl, segment = nd.current, parentPath = nd.parent, fullPath = fp, isGroup = hasChildren, childCount = length children, continuations = conts, metric = Map.lookup fp dataMap}
+          childIsLast = replicate (length children - 1) False ++ [True]
+          childRows = V.concat $ zipWith (\c cLast -> flattenMetricTree dataMap [c] (lvl + 1) (conts ++ [not cLast])) children childIsLast
+       in V.cons row childRows
+
+
 instance ToHtml TraceDetailsGet where
   toHtml (TraceDetails pid tr spanRecs) = toHtml $ tracePage pid tr spanRecs
   toHtml (SpanDetails pid s aptSpn left right) = toHtml $ LogItem.expandedItemView pid s aptSpn left right
@@ -130,7 +173,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] "Events"
               a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Metrics"
-          , docsLink = Just "https://apitoolkit.io/docs/dashboard/dashboard-pages/metrics/"
+          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/metrics/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
@@ -138,7 +181,10 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
   if tab == "datapoints"
     then do
       dataPoints <- Telemetry.getDataPointsData pid (from, to)
-      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf (pid, V.fromList dataPoints)
+      dashboards <- Dashboards.selectDashboardsSortedBy pid "updated_at"
+      monitors <- Monitors.queryMonitorsAll pid
+      let refCounts = metricRefCounts dashboards monitors (map (.metricName) dataPoints)
+      addRespHeaders $ MetricsOVDataPointMain $ PageCtx bwconf (pid, V.fromList dataPoints, refCounts)
     else do
       let cursor = fromMaybe 0 cursorM
       metricList <- V.fromList <$> Telemetry.getMetricChartListData pid sourceM prefixM (from, to) cursor
@@ -231,30 +277,30 @@ overViewTabs pid tab = do
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Maybe Text -> Html ()
 chartsPage pid metricList sources source mFilter nextUrl = do
-  div_ [class_ "flex flex-col gap-4 px-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
+  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] $ do
     overViewTabs pid "charts"
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
       div_ [class_ "w-full flex gap-1 items-start"] do
         select_
-          [ class_ "select bg-fillWeaker border !border-strokeWeak h-12 rounded-xl w-36 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+          [ class_ "select select-sm bg-bgRaised border border-strokeStrong h-10 w-36 shadow-none"
           , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
           ]
           do
             option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "Data Source"
             forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-        div_ [class_ "flex items-center gap-2 w-full rounded-xl px-3 h-12 border border-strokeWeak bg-fillWeaker"] do
-          faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
+        label_ [class_ "input input-sm flex w-full h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
+          faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
           input_
-            [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden focus:ring-0"
+            [ class_ "grow"
             , type_ "text"
             , placeholder_ "Search"
             , id_ "search-input"
             , [__| on input show .metric_filterble in #metric_list_container when its textContent.toLowerCase() contains my value.toLowerCase() |]
             ]
         select_
-          [ class_ "select bg-fillWeaker h-12 border !border-strokeWeak rounded-xl w-42 focus:outline-hidden focus:ring-2 focus:ring-strokeFocus"
+          [ class_ "select select-sm bg-bgRaised border border-strokeStrong h-10 w-42 shadow-none"
           , onchange_ "(() => {window.setQueryParamAndReload('metric_prefix', this.value)})()"
           ]
           do
@@ -305,26 +351,67 @@ chartList pid source metricList nextUrl = do
     a_ [hxTrigger_ "intersect once", hxSwap_ "outerHTML", hxGet_ url] pass
 
 
-dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Html ()
-dataPointsPage pid metrics = do
-  div_ [class_ "flex flex-col gap-2 px-4 h-[calc(100%-60px)] overflow-y-scroll"] $ do
+dataPointsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text (Int, Int, Int) -> Html ()
+dataPointsPage pid metrics refCounts = do
+  let dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
+      tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
+      rows = flattenMetricTree dataMap tree 0 []
+  div_ [class_ "flex flex-col gap-2 px-4  overflow-y-scroll"] $ do
     overViewTabs pid "datapoints"
-    div_
-      [ class_ "w-full rounded-2xl mt-4 border flex flex-col"
-      ]
-      do
-        div_ [class_ "flex px-4 justify-between py-3 text-sm font-medium border-b text-textStrong"] $ do
-          div_ [class_ " w-[calc(40vw-46px)]"] "Metric"
-          div_ [class_ "w-[10vw] "] "Sources"
-          div_ [class_ "w-[8vw] ml-2"] "Datapoint"
-          div_ [class_ "w-[10vw] ml-2"] "Referenced in"
-        if V.null metrics
-          then
-            div_ [class_ "w-full flex items-center justify-center h-96"]
-              $ Components.emptyState_ (Just "chart-line") "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
-          else div_ [class_ "w-full"] $ do
-            let metrMap = Map.fromList $ V.toList $ V.map (\mdp -> (mdp.metricName, mdp)) metrics
-            metricsTree pid metrics metrMap
+    Components.drawer_ "global-data-drawer" Nothing Nothing ""
+    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
+    toHtml
+      Table
+        { config = def{Table.elemID = "dataPointsTable", Table.showHeader = True, Table.renderAsTable = True, Table.noDividers = True}
+        , columns =
+            [ Table.col "Metric" \r -> do
+                let indent = 28 :: Int
+                div_ [class_ "flex items-center relative", style_ "min-height:20px"] do
+                  when (r.level > 0) $ forM_ (zip [0 ..] r.continuations) \(i, continues) -> do
+                    let px = show (i * indent + 12) <> "px"
+                    if i < r.level - 1
+                      then when continues $ div_ [class_ "absolute top-0 bottom-0 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
+                      else do
+                        if continues
+                          then div_ [class_ "absolute top-0 bottom-0 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
+                          else div_ [class_ "absolute top-0 h-1/2 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
+                        div_ [class_ "absolute h-[1px] bg-strokeWeak", style_ $ "left:" <> px <> "; top:50%; width:16px"] pass
+                  div_ [class_ "flex items-center gap-2", style_ $ "padding-left:" <> show (r.level * indent) <> "px"] do
+                    when r.isGroup do
+                      div_ [class_ "border border-strokeWeak min-w-7 flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
+                        faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
+                        span_ [class_ "text-xs"] $ toHtml $ show r.childCount
+                    unless (r.parentPath == "___root___") $ span_ [class_ "text-textDisabled"] $ toHtml $ r.parentPath <> "."
+                    span_ [class_ "text-textStrong font-medium"] $ toHtml r.segment
+            , Table.col "Sources" (\r -> div_ [class_ "flex gap-1 flex-wrap"] $ whenJust r.metric \m -> forM_ m.serviceNames \s -> span_ [class_ "badge badge-ghost text-xs"] $ toHtml s) & Table.withAttrs [class_ "w-48"]
+            , Table.col "Datapoints" (\r -> whenJust r.metric \m -> span_ [class_ "tabular-nums"] $ toHtml $ prettyPrintCount m.dataPointsCount) & Table.withAttrs [class_ "w-28"]
+            , Table.col
+                "Referenced in"
+                ( \r -> whenJust r.metric \_ -> do
+                    let (d, w, a) = fromMaybe (0, 0, 0) $ Map.lookup r.fullPath refCounts
+                    div_ [class_ "flex gap-2 items-center text-xs"] do
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Dashboards"] do faSprite_ "grid" "regular" "w-3 h-3"; toHtml $ show d
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Widgets"] do faSprite_ "chart-line" "regular" "w-3 h-3"; toHtml $ show w
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Alerts"] do faSprite_ "bell" "regular" "w-3 h-3"; toHtml $ show a
+                )
+                & Table.withAttrs [class_ "w-40"]
+            ]
+        , rows
+        , features =
+            def
+              { Table.search = Just Table.ClientSide
+              , Table.treeConfig = Just Table.TreeConfig{rowLevel = (.level), rowPath = (.fullPath), isGroupRow = (.isGroup)}
+              , Table.rowAttrs = Just \r ->
+                  if r.isGroup
+                    then [class_ "cursor-pointer"]
+                    else
+                      let detailUrl = "/p/" <> pid.toText <> "/metrics/details/" <> r.fullPath <> "/?source=all"
+                       in [ class_ "cursor-pointer"
+                          , term "_" $ "on pointerdown or click set #global-data-drawer.checked to true then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML then fetch `" <> detailUrl <> "` then set #global-data-drawer-content.innerHTML to it then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)"
+                          ]
+              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data.", actionText = "", destination = Right ""}
+              }
+        }
 
 
 metricsDetailsPage :: Projects.ProjectId -> V.Vector Text -> Telemetry.MetricDataPoint -> Text -> Maybe (Text, Text) -> Html ()
@@ -419,104 +506,24 @@ metricBreakdown pid label values = do
         div_ [class_ "h-48"] pass
 
 
-pathToNodes :: Text -> [MetricNode]
-pathToNodes path =
-  let segments = T.splitOn "." path
-   in zipWith toNode ("___root___" : scanl1 combine segments) segments
+-- Metric reference counting: (dashboardCount, widgetCount, alertCount) per metric
+metricRefCounts :: [Dashboards.DashboardVM] -> [Monitors.QueryMonitor] -> [Text] -> Map Text (Int, Int, Int)
+metricRefCounts dashboards monitors metricNames = Map.fromList $ map countRefs metricNames
   where
-    combine acc segment = acc <> "." <> segment
-    toNode = MetricNode
-
-
-buildMetricNodes :: [Text] -> [MetricNode]
-buildMetricNodes = concatMap pathToNodes
-
-
-buildMetricMap :: [MetricNode] -> Map (Maybe Text) [MetricNode]
-buildMetricMap = Relude.foldr insertNode Map.empty
-  where
-    insertNode :: MetricNode -> Map (Maybe Text) [MetricNode] -> Map (Maybe Text) [MetricNode]
-    insertNode sp m =
-      let key = if parent sp == "___root___" then Nothing else Just (parent sp)
-          newEntry = [sp]
-       in Map.insertWith
-            (\new old -> if sp `elem` old then old else new ++ old)
-            key
-            newEntry
-            m
-
-
-buildMetricTree :: [Text] -> [MetricTree]
-buildMetricTree metrics =
-  let metricsNodes = buildMetricNodes metrics
-      metricMap = buildMetricMap metricsNodes
-   in buildTree_ metricMap Nothing
-  where
-    buildTree_ metricMap parentId =
-      case Map.lookup parentId metricMap of
-        Nothing -> []
-        Just metrics' ->
-          [ MetricTree
-              MetricNode
-                { parent = mt.parent
-                , current = mt.current
-                }
-              (buildTree_ metricMap (if mt.parent == "___root___" then Just mt.current else Just $ mt.parent <> "." <> mt.current))
-          | mt <- metrics'
-          ]
-
-
-metricsTree :: Projects.ProjectId -> V.Vector Telemetry.MetricDataPoint -> Map Text Telemetry.MetricDataPoint -> Html ()
-metricsTree pid metrics dp = do
-  let tr = buildMetricTree $ V.toList $ (.metricName) <$> metrics
-  div_ [class_ "px-4 py-2 flex flex-col gap-2"] do
-    forM_ (Relude.zip [0 ..] tr) \(i, c) -> do
-      buildMetricTree_ pid c 0 True dp
-
-
-buildMetricTree_ :: Projects.ProjectId -> MetricTree -> Int -> Bool -> Map Text Telemetry.MetricDataPoint -> Html ()
-buildMetricTree_ pid sp level isLasChild dp = do
-  let hasChildren = not $ null sp.children
-  let paddingLeft = show (35 * level + 46) <> "px)"
-  div_ [class_ "flex items-start w-full relative span-filterble"] do
-    when (level /= 0) $ div_ [class_ "w-8 shrink-0 ml-2 h-[1px] mt-2 bg-strokeWeak"] pass
-    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-strokeWeak"] pass
-    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-strokeWeak"] pass
-    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-strokeWeak relative"] do
-      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-strokeWeak"] pass
-      div_
-        [ class_ "w-full cursor-pointer flex tree_opened justify-between max-w-full items-center h-5 hover:bg-fillWeaker"
-        , [__| on click toggle .tree_opened on me|]
-        ]
-        do
-          div_ [class_ "flex w-full justify-between items-center"] do
-            div_ [class_ "flex items-center overflow-y-hidden", style_ $ "width: calc(40vw - " <> paddingLeft] do
-              when hasChildren $ faSprite_ "chevron-up" "regular" "toggler rotate-0 w-4 border border-strokeWeak h-4 shadow-xs rounded-sm px-0.5 z-50 bg-fillWeaker mr-1 shrink-0 text-textStrong"
-              unless (sp.spanRecord.parent == "___root___") $ span_ [class_ "text-textDisabled"] $ toHtml $ sp.spanRecord.parent <> "."
-              span_ [class_ "text-textStrong "] $ toHtml sp.spanRecord.current
-              when hasChildren $ span_ [class_ "badge badge-ghost text-xs"] $ toHtml $ show $ length sp.children
-            unless hasChildren $ do
-              let fullPath = (if sp.spanRecord.parent == "___root___" then "" else sp.spanRecord.parent <> ".") <> sp.spanRecord.current
-              let target = Map.lookup fullPath dp
-              whenJust target $ \t -> do
-                span_ [class_ "w-[10vw] truncate"] $ toHtml $ T.intercalate ", " $ V.toList t.serviceNames
-                div_ [class_ "w-[8vw]"] do
-                  span_ [class_ "badge badge-ghost"] $ toHtml $ prettyPrintCount t.dataPointsCount
-            div_ [class_ "flex w-[10vw] items-center text-xs"] do
-              div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
-                faSprite_ "dashboard" "regular" "w-4 h-4"
-                span_ "0"
-              div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
-                faSprite_ "dashboard" "regular" "w-4 h-4"
-                span_ "10"
-              div_ [class_ "flex gap-1 items-center badge badge-ghost"] do
-                faSprite_ "caution" "regular" "w-4 h-4"
-                span_ "5"
-
-      when hasChildren $ do
-        div_ [class_ "flex-col hidden children_container gap-2 mt-2"] do
-          forM_ (zip [0 ..] sp.children) \(i, c) -> do
-            buildMetricTree_ pid c (level + 1) (i == length sp.children - 1) dp
+    countRefs mn = (mn, (length matchingDashboards, totalWidgets, alertCount mn))
+      where
+        matchingDashboards = filter (dashboardHasMetric mn) dashboards
+        totalWidgets = sum $ map (countWidgetsWithMetric mn) dashboards
+    alertCount mn = length $ filter (\m -> any (`T.isInfixOf` m.logQuery) ["\"" <> mn <> "\"", "'" <> mn <> "'", "metric=" <> mn, "metric_name=" <> mn]) monitors
+    dashboardHasMetric mn d = any (widgetRefsMetric mn) (allWidgets d)
+    countWidgetsWithMetric mn d = length $ filter (widgetRefsMetric mn) (allWidgets d)
+    allWidgets d = case d.schema of
+      Nothing -> []
+      Just schema -> schema.widgets <> concatMap (.widgets) (fromMaybe [] schema.tabs)
+    widgetRefsMetric mn w =
+      let allTexts = maybeToList w.query <> maybeToList w.sql
+          quoted = "\"" <> mn <> "\""
+       in any (T.isInfixOf quoted) allTexts || any (widgetRefsMetric mn) (fromMaybe [] w.children)
 
 
 -- Trace UI components

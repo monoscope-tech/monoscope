@@ -1,9 +1,11 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTraceDataTable, renderTableWithDataAndParams) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTraceDataTable, renderTableWithDataAndParams) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
+import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
 import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
@@ -13,7 +15,11 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
+import Effectful (Eff, (:>))
+import Effectful.Log (Log)
+import Effectful.Reader.Static qualified
 import Language.Haskell.TH.Syntax qualified as THS
+import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
@@ -25,12 +31,15 @@ import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Relude
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Printf (printf)
 import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 -- Generic instance for parsing JSON arrays from form data
@@ -153,6 +162,8 @@ data Widget = Widget
   , showThresholdLines :: Maybe Text -- 'always' | 'on_breach' | 'never'
   , alertStatus :: Maybe Text -- 'normal' | 'warning' | 'alerting' (runtime)
   , description :: Maybe Text -- Help text shown in info icon tooltip
+  , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
+  , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -175,6 +186,19 @@ data WidgetDataset = WidgetDataset
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "w", DAE.CamelToSnake]] WidgetDataset
+
+
+-- | Convert MetricsData to WidgetDataset (timestamps already in ms from queryMetrics)
+toWidgetDataset :: Charts.MetricsData -> WidgetDataset
+toWidgetDataset md =
+  WidgetDataset
+    { source = AE.toJSON $ V.cons (AE.toJSON <$> md.headers) (AE.toJSON <<$>> md.dataset)
+    , rowsPerMin = md.rowsPerMin
+    , value = Just md.rowsCount
+    , from = md.from
+    , to = md.to
+    , stats = md.stats
+    }
 
 
 data WidgetAxis = WidgetAxis
@@ -262,8 +286,28 @@ renderRowClickScript tableId onRowClick columns = do
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
-widgetPostH :: Projects.ProjectId -> Widget -> ATAuthCtx (RespHeaders Widget)
-widgetPostH pid widget = addRespHeaders (widget & (#_projectId ?~ pid))
+widgetPostH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Widget -> ATAuthCtx (RespHeaders Widget)
+widgetPostH pid sinceM fromM toM widget = do
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  let widgetWithPid = widget & #_projectId ?~ pid
+  pngUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid widgetWithPid sinceM fromM toM
+  addRespHeaders $ if T.null pngUrl then widgetWithPid else widgetWithPid{pngUrl = Just pngUrl}
+
+
+widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
+widgetPngUrl secret hostUrl pid widget since fromM toM =
+  let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
+      encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
+      sig = signWidgetUrl secret pid widgetJson
+      timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", fromM), ("to", toM)] :: [(Text, Maybe Text)])
+      url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
+   in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure "" else pure url
+
+
+signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
+signWidgetUrl secret pid widgetJson =
+  let payload = pid.toText <> ":" <> widgetJson
+   in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
 
 
 -- use either index or the xxhash as id
@@ -324,11 +368,11 @@ widgetHelper_ w' = case w.wType of
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
 renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
   when (widget._centerTitle == Just True) $ div_ ""
-  div_ [class_ "inline-flex gap-3 items-center group/h"] do
-    span_ [class_ "text-sm text-textWeak flex items-center gap-1"] do
+  div_ [class_ "inline-flex gap-3 items-center group/h min-w-0"] do
+    span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-      span_ (foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ toHtml $ maybeToMonoid title
+      span_ ([class_ "truncate"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ toHtml $ maybeToMonoid title
       whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
     span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
@@ -403,11 +447,12 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
             , term
                 "_"
                 [text|
-              on click 
-              set #dashboards-modal.checked to true
-              then set #dashboards-modal-widget-id.value to "${wId}"
+              on click
+              set #dashboards-modal-widget-id.value to "${wId}"
               then set #dashboards-modal-source-dashboard-id.value to "${dashId}"
-              then set (the closest <details/>).open to false 
+              then set #dashboards-modal.checked to true
+              then trigger loadDashboards on #dashboards-modal-content
+              then set (the closest <details/>).open to false
             |]
             ]
             "Copy to dashboard"
@@ -447,6 +492,16 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               |]
             ]
             "Copy KQL"
+        whenJust widget.pngUrl \url ->
+          li_
+            $ a_
+              [ class_ "p-2 w-full text-left block cursor-pointer"
+              , data_ "tippy-content" "Download widget as PNG image"
+              , href_ url
+              , download_ $ maybeToMonoid widget.title <> ".png"
+              , target_ "_blank"
+              ]
+              "Download PNG"
 
         -- Only show the "Duplicate widget" option if we're in a dashboard context
         when (isJust widget._dashboardId) do
@@ -804,6 +859,18 @@ renderChart widget = do
 -- -- selectFormatter WTTimeseries = "{a} <br/>{b}: {c}ms"
 -- -- selectFormatter _ = "{a} <br/>{b}: {c}"
 
+-- Helper: Extract series names from dataset source (headers[1:])
+extractSeriesNamesFromDataset :: Maybe WidgetDataset -> [Text]
+extractSeriesNamesFromDataset (Just wd) = case wd.source of
+  AE.Array arr | not (V.null arr) -> case V.head arr of
+    AE.Array headers | V.length headers > 1 -> mapMaybe getText $ V.toList $ V.tail headers
+    _ -> []
+  _ -> []
+  where
+    getText (AE.String t) = Just t; getText _ = Nothing
+extractSeriesNamesFromDataset Nothing = []
+
+
 -- Function to convert Widget to ECharts options
 widgetToECharts :: Widget -> AE.Value
 widgetToECharts widget =
@@ -811,6 +878,10 @@ widgetToECharts widget =
       axisVisibility = not isStat
       gridLinesVisibility = not isStat
       legendVisibility = not isStat && widget.hideLegend /= Just True
+      seriesNames = extractSeriesNamesFromDataset widget.dataset
+      -- Detect categorical widget types (no time axis)
+      isCategorical = widget.wType `elem` [WTDistribution, WTPieChart, WTTopList, WTTreeMap, WTFunnel]
+      xAxisType = if isCategorical then "category" else "time"
    in AE.object
         [ "tooltip"
             AE..= AE.object
@@ -840,15 +911,16 @@ widgetToECharts widget =
                       "md" -> (14, 12, 12, [4, 8, 4, 8])
                       "lg" -> (16, 14, 14, [5, 10, 5, 10])
                       _ -> (12, 9, 9, [3, 6, 3, 6]) -- sm (default)
+                    isStatic = widget._staticRender == Just True
                  in [ "show" AE..= legendVisibility
-                    , "type" AE..= "scroll"
+                    , "type" AE..= if isStatic then "plain" else "scroll"
                     , "top" AE..= vPos
                     , "textStyle" AE..= AE.object ["fontSize" AE..= AE.Number (fromIntegral fontSize), "padding" AE..= AE.Array [AE.Number 0, AE.Number 0, AE.Number 0, AE.Number (-2)]]
                     , "itemWidth" AE..= AE.Number (fromIntegral itemSize)
                     , "itemHeight" AE..= AE.Number (fromIntegral itemSize)
                     , "itemGap" AE..= AE.Number (fromIntegral itemGap)
                     , "padding" AE..= AE.Array (V.fromList $ map (AE.Number . fromIntegral) pad)
-                    , "data" AE..= fromMaybe [] (extractLegend widget)
+                    , "data" AE..= fromMaybe seriesNames (extractLegend widget) -- Use series names from dataset if no explicit queries
                     ]
                       <> [K.fromText h AE..= (0 :: Int) | Just h <- [hPos]]
               )
@@ -863,19 +935,21 @@ widgetToECharts widget =
               ]
         , "xAxis"
             AE..= AE.object
-              [ "type" AE..= ("time" :: Text)
-              , "scale" AE..= True
-              , "min" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #from . _Just)
-              , "max" AE..= maybe AE.Null (AE.Number . fromIntegral . (* 1000)) (widget ^? #dataset . _Just . #to . _Just)
-              , "boundaryGap" AE..= ([0, 0.01] :: [Double])
-              , "splitLine"
-                  AE..= AE.object
-                    [ "show" AE..= False
-                    ]
-              , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
-              , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just))]
-              , "show" AE..= (axisVisibility || fromMaybe False (widget ^? #xAxis . _Just . #showAxisLabel . _Just))
-              ]
+              ( [ "type" AE..= xAxisType
+                , "scale" AE..= True
+                , "boundaryGap" AE..= if isCategorical then AE.Bool True else AE.Array (V.fromList [AE.Number 0, AE.Number 0.01])
+                , "splitLine" AE..= AE.object ["show" AE..= False]
+                , "axisLine" AE..= AE.object ["show" AE..= axisVisibility, "lineStyle" AE..= AE.object ["color" AE..= "#000833A6", "type" AE..= "solid", "opacity" AE..= 0.1]]
+                , "axisLabel" AE..= AE.object ["show" AE..= (axisVisibility && fromMaybe True (widget ^? #xAxis . _Just . #showAxisLabel . _Just))]
+                , "show" AE..= (axisVisibility || fromMaybe False (widget ^? #xAxis . _Just . #showAxisLabel . _Just))
+                ]
+                  <> if isCategorical
+                    then [] -- For categorical, ECharts will derive categories from dataset
+                    else
+                      [ "min" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #from . _Just)
+                      , "max" AE..= maybe AE.Null (AE.Number . fromIntegral) (widget ^? #dataset . _Just . #to . _Just)
+                      ]
+              )
         , "yAxis"
             AE..= AE.object
               [ "type" AE..= ("value" :: Text)
@@ -911,7 +985,7 @@ widgetToECharts widget =
         , "dataset"
             AE..= AE.object
               ["source" AE..= maybe AE.Null (.source) widget.dataset]
-        , "series" AE..= addMarkLinesToFirstSeries widget (map (createSeries widget.wType) ([] :: [Maybe Query]))
+        , "series" AE..= addMarkLinesToFirstSeries widget (createSeriesFromHeaders widget.wType seriesNames)
         , "animation" AE..= False
         , if widget.allowZoom == Just True
             then
@@ -968,45 +1042,41 @@ extractLegend :: Widget -> Maybe [Text]
 extractLegend widget = fmap (map (fromMaybe "Unnamed Series" . (.query))) widget.queries
 
 
--- Helper: Create series
-createSeries :: WidgetType -> Maybe Query -> AE.Value
-createSeries widgetType query =
+-- Helper: Create series from dataset headers with colors and encode for dataset binding
+createSeriesFromHeaders :: WidgetType -> [Text] -> [AE.Value]
+createSeriesFromHeaders wType = zipWith (createSeries wType) [1 ..]
+
+
+-- Helper: Create a single series with name, column index, and color
+createSeries :: WidgetType -> Int -> Text -> AE.Value
+createSeries widgetType colIdx name =
   let isStat = widgetType == WTTimeseriesStat
-      gradientStyle =
-        AE.object
-          [ "color"
-              AE..= AE.object
-                [ "type" AE..= ("linear" :: Text)
-                , "x" AE..= (0 :: Int)
-                , "y" AE..= (0 :: Int)
-                , "x2" AE..= (0 :: Int)
-                , "y2" AE..= (1 :: Int)
-                -- , "colorStops"
-                --     AE..= AE. [ AE.object ["offset" AE..= (0 :: Double), "color" AE..= ("rgba(0, 136, 212, 0.7)" :: Text)]
-                --           , AE.object ["offset" AE..= (1 :: Double), "color" AE..= ("rgba(0, 136, 212, 0.1)" :: Text)]
-                --           ]
-                ]
-          ]
+      gradientStyle = AE.object ["color" AE..= AE.object ["type" AE..= ("linear" :: Text), "x" AE..= (0 :: Int), "y" AE..= (0 :: Int), "x2" AE..= (0 :: Int), "y2" AE..= (1 :: Int)]]
    in AE.object
-        [ "name" AE..= fromMaybe "Unnamed Series" (query >>= (.query))
+        [ "name" AE..= name
         , "type" AE..= mapWidgetTypeToChartType widgetType
         , "stack" AE..= ("Stack" :: Text)
-        , "markArea"
-            AE..= AE.object
-              [ "show" AE..= True
-              , "data"
-                  AE..= AE.Array V.empty
-              ]
+        , "encode" AE..= AE.object ["x" AE..= (0 :: Int), "y" AE..= colIdx]
+        , "itemStyle" AE..= AE.object ["color" AE..= getSeriesColorHex name]
         , "showBackground" AE..= not isStat
-        , "backgroundStyle"
-            AE..= AE.object
-              ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)] -- This will be overridden in JS based on theme
+        , "backgroundStyle" AE..= AE.object ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
         , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
         , "lineStyle" AE..= AE.object ["width" AE..= if isStat then 0 else 1]
         ]
 
 
--- Helper: Map widget type to ECharts chart type
+-- | Map widget type to ECharts chart type
+--
+-- >>> mapWidgetTypeToChartType WTTimeseries
+-- "bar"
+-- >>> mapWidgetTypeToChartType WTTimeseriesLine
+-- "line"
+-- >>> mapWidgetTypeToChartType WTDistribution
+-- "bar"
+-- >>> mapWidgetTypeToChartType WTHeatmap
+-- "heatmap"
+-- >>> mapWidgetTypeToChartType WTServiceMap
+-- "graph"
 mapWidgetTypeToChartType :: WidgetType -> Text
 mapWidgetTypeToChartType WTTimeseries = "bar"
 mapWidgetTypeToChartType WTTimeseriesLine = "line"

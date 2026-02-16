@@ -4,10 +4,48 @@ on: pull_request
 
 env:
   LANG: C.UTF-8
+  GHC_VERSION: 9.12.2
 
 jobs:
+  # Build frontend once and share via artifacts
+  frontend:
+    name: Build Frontend
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: |
+            package-lock.json
+            web-components/package-lock.json
+
+      - name: Build frontend assets
+        run: |
+          mkdir -p static/public/assets/css
+          mkdir -p static/public/assets/web-components/dist/js
+          mkdir -p static/public/assets/web-components/dist/css
+          npm ci
+          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
+          cd web-components
+          npm ci
+          NODE_ENV=production npx vite build --mode production --sourcemap false
+
+      - name: Upload frontend artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: frontend-assets
+          path: |
+            static/public/assets/css/tailwind.min.css
+            static/public/assets/web-components/dist
+          retention-days: 1
+
   build:
     name: Build
+    needs: frontend
     runs-on: ubuntu-24.04
     permissions:
       contents: 'read'
@@ -28,8 +66,9 @@ jobs:
 
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: 9.12.2
+          ghc-version: ${{ env.GHC_VERSION }}
           cabal-version: 'latest'
+
       - name: Cache Haskell dependencies
         uses: actions/cache@v5
         with:
@@ -40,24 +79,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cabal-
 
-      - name: Setup node env
-        uses: actions/setup-node@v6
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: 22
+          name: frontend-assets
+          path: static/public/assets
 
-      - name: Generate required static files
+      - name: Setup static directories
         run: |
           mkdir -p static/public/assets/css
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
-
-          npm install
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-
-          cd web-components
-          npm install
-          NODE_ENV=production npx vite build --mode production --sourcemap false
-          cd ..
 
       - name: Update cabal index
         run: cabal update
@@ -109,7 +141,7 @@ jobs:
 
       - uses: haskell-actions/setup@v2
         with:
-          ghc-version: 9.12.2
+          ghc-version: ${{ env.GHC_VERSION }}
           cabal-version: 'latest'
 
       - name: Cache Haskell dependencies
@@ -122,24 +154,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-cabal-
 
-      - name: Setup node env
-        uses: actions/setup-node@v6
+      - name: Download frontend artifacts
+        uses: actions/download-artifact@v4
         with:
-          node-version: 22
+          name: frontend-assets
+          path: static/public/assets
 
-      - name: Generate required static files
+      - name: Setup static directories
         run: |
           mkdir -p static/public/assets/css
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
-
-          npm install
-          npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --minify
-
-          cd web-components
-          npm install
-          NODE_ENV=production npx vite build --mode production --sourcemap false
-          cd ..
 
       - name: Update cabal index
         run: cabal update
@@ -156,6 +181,9 @@ jobs:
       - name: Run ${{ matrix.test-suite }}
         env:
           USE_EXTERNAL_DB: true
+          LOG_LEVEL: ${{ matrix.test-suite == 'integration-tests' && 'warn' || '' }}
+          TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
+          DISCORD_CLIENT_ID: "1328384474395967631"
         run: |
           echo "::group::Running ${{ matrix.test-suite }}"
           cabal test ${{ matrix.test-suite }} --ghc-options="-O0 -j8" --test-show-details=direct
@@ -195,12 +223,14 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
-      - name: Setup node env
+      - name: Setup Node.js
         uses: actions/setup-node@v6
         with:
-          node-version: 22
+          node-version: '22'
+          cache: 'npm'
+          cache-dependency-path: web-components/package-lock.json
       - name: Run UI tests
         run: |
           cd web-components
-          npm install
+          npm ci
           npm test

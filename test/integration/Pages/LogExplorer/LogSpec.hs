@@ -1,7 +1,3 @@
-{-# LANGUAGE BlockArguments #-}
-{-# LANGUAGE LambdaCase #-}
-{-# LANGUAGE TupleSections #-}
-
 module Pages.LogExplorer.LogSpec (spec) where
 
 import Data.Aeson qualified as AE

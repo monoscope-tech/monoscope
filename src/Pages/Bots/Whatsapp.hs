@@ -1,4 +1,4 @@
-module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage) where
+module Pages.Bots.Whatsapp (whatsappIncomingPostH, TwilioWhatsAppMessage (..)) where
 
 import Control.Lens ((?~))
 import Control.Lens.Setter ((.~))
@@ -7,18 +7,22 @@ import Data.Aeson.Key qualified as KEYM
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (forkIO)
+import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import Models.Apis.Integrations (getDashboardsForWhatsapp)
 import Models.Apis.RequestDumps qualified as RequestDumps
-import Models.Apis.Slack (getDashboardsForWhatsapp)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Network.Wreq
-import Pages.Bots.Utils (AIQueryResult (..), BotType (..), handleTableResponse, processAIQuery)
+import Pages.Bots.Utils (BotType (..), QueryIntent (..), botEmoji, detectReportIntent, formatReportForWhatsApp, handleTableResponse, processAIQuery, processReportQuery)
+import Pkg.AI qualified as AI
+import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (idFromText)
 import Pkg.Parser (parseQueryToAST)
@@ -36,10 +40,12 @@ joiner = "___"
 
 whatsappIncomingPostH :: TwilioWhatsAppMessage -> ATBaseCtx AE.Value
 whatsappIncomingPostH val = do
+  Log.logTrace ("WhatsApp interaction received" :: Text) $ AE.object ["from" AE..= val.from, "body" AE..= val.body]
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = authCtx.config
   let fromN = T.dropWhile (/= '+') val.from
   projectM <- Projects.getProjectByPhoneNumber fromN
+  Log.logTrace ("WhatsApp project lookup" :: Text) $ AE.object ["fromN" AE..= fromN, "found" AE..= isJust projectM]
   let bodyType = parseWhatsappBody val.body
   case projectM of
     Just p -> do
@@ -90,31 +96,49 @@ whatsappIncomingPostH val = do
     handlePrompt :: TwilioWhatsAppMessage -> EnvConfig -> Projects.Project -> ATBaseCtx ()
     handlePrompt reqBody envCfg project = do
       now <- Time.currentTime
-      result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiApiKey
-      case result of
-        Left _ -> do
-          _ <- sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Sorry, I couldn't proess your request")
-          pass
-        Right AIQueryResult{..} -> do
-          let (from, to) = timeRangeStr
-          case visualization of
-            Just vizType -> do
-              let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
-                  opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr from <> "&to=" <> toUriStr to
-                  query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
-                  content' = getBotContent reqBody.body query query_url opts
-              _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
-              pass
-            Nothing -> case parseQueryToAST query of
-              Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotChart (Just "Error processing query")
-              Right query' -> do
-                tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromTime, toTime) [] Nothing Nothing
-                let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
-                      AE.Object o -> case KEM.lookup "body" o of
-                        Just (AE.String c) -> c
-                        _ -> "Error processing query"
-                      _ -> "Error processing query"
-                sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
+      case detectReportIntent reqBody.body of
+        ReportIntent reportType -> do
+          reportResult <- processReportQuery project.id reportType envCfg
+          case reportResult of
+            Left err -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just err)
+            Right (report, _, _) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ formatReportForWhatsApp report project.id envCfg)
+        GeneralQueryIntent -> do
+          result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiApiKey
+          case result of
+            Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
+            Right resp -> do
+              let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+                  query = fromMaybe "" resp.query
+                  hasQuery = isJust resp.query
+                  hasExplanation = isJust resp.explanation
+              case (hasQuery, hasExplanation) of
+                (False, True) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ fromMaybe "No insights available" resp.explanation)
+                (True, False) -> handleWidgetResponse now reqBody envCfg project query resp.visualization fromTimeM toTimeM
+                (True, True) -> do
+                  handleWidgetResponse now reqBody envCfg project query resp.visualization fromTimeM toTimeM
+                  whenJust resp.explanation $ sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText . Just
+                (False, False) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just "No response available")
+
+    handleWidgetResponse now reqBody envCfg project query visualization fromTimeM toTimeM = case visualization of
+      Just vizType -> do
+        let chartType = Widget.mapWidgetTypeToChartType $ Widget.mapChatTypeToWidgetType vizType
+            fromISO = maybe "" (toText . iso8601Show) fromTimeM
+            toISO = maybe "" (toText . iso8601Show) toTimeM
+            opts = "time=" <> toUriStr (show now) <> "&q=" <> toUriStr query <> "&p=" <> toUriStr project.id.toText <> "&t=" <> toUriStr chartType <> "&from=" <> toUriStr fromISO <> "&to=" <> toUriStr toISO
+            query_url = project.id.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+            content' = getBotContent reqBody.body query query_url opts
+        _ <- sendWhatsappResponse content' reqBody.from envCfg.whatsappBotChart Nothing
+        pass
+      Nothing -> case parseQueryToAST query of
+        Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'")
+        Right query' -> do
+          tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
+                AE.Object o -> case KEM.lookup "body" o of
+                  Just (AE.String c) -> c
+                  _ -> "Error processing query"
+                _ -> "Error processing query"
+          sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just content)
 
 
 data BodyType
@@ -153,7 +177,9 @@ getWhatsappList typ body vals' skip = AE.object $ ("1" AE..= body) : vars
     vals = V.map (first (T.take 24)) (V.drop skip vals')
     paddedVals =
       let missing = 3 - V.length vals
-          duplicates' = if V.length vals == 1 then V.replicate missing (V.head vals) else V.take missing vals
+          duplicates' = case vals V.!? 0 of
+            Just v | V.length vals == 1 -> V.replicate missing v
+            _ -> V.take missing vals
           duplicates = V.imap (\i (k, v) -> (k <> " " <> show (i + 1), v <> joiner <> show (i + 1))) duplicates'
        in if missing > 0
             then vals <> duplicates
@@ -236,6 +262,7 @@ instance FromForm TwilioWhatsAppMessage where
 
 sendWhatsappResponse :: AE.Value -> Text -> Text -> Maybe Text -> ATBaseCtx ()
 sendWhatsappResponse contentVariables to template bodyM = do
+  Log.logTrace ("WhatsApp response" :: Text) $ AE.object ["to" AE..= to, "template" AE..= template, "body" AE..= bodyM, "contentVariables" AE..= contentVariables]
   appCtx <- Effectful.Reader.Static.ask @AuthContext
   let from = appCtx.config.whatsappFromNumber
       accountSid = appCtx.config.twilioAccountSid

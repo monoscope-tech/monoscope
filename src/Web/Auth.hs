@@ -1,7 +1,3 @@
-{-# LANGUAGE FlexibleContexts #-}
-{-# LANGUAGE PackageImports #-}
-{-# LANGUAGE RankNTypes #-}
-
 module Web.Auth (
   logoutH,
   loginRedirectH,
@@ -11,12 +7,17 @@ module Web.Auth (
   authHandler,
   APItoolkitAuthContext,
   authorizeUserAndPersist,
+  renderError,
+  ClientMetadata (..),
+  clientMetadataH,
 ) where
 
 import Control.Error (note)
 import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
+import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
+import Data.Aeson.Types (ToJSON)
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
@@ -25,6 +26,7 @@ import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Deriving.Aeson qualified as DAE
 import Effectful (
   Eff,
   Effect,
@@ -49,34 +51,22 @@ import Lucid.Html5 (
   httpEquiv_,
   meta_,
  )
+import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions (craftSessionCookie, emptySessionCookie)
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users qualified as Users
-import Network.HTTP.Types (hAuthorization, hCookie)
+import Models.Users.Sessions qualified as Users
+import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
-import Pkg.ConvertKit qualified as ConvertKit
+import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
+import Relude.Unsafe ((!!))
 import Servant (Header, Headers, NoContent (..), addHeader, noHeader)
 import Servant qualified
-import Servant.Server (Handler, ServerError (errHeaders), err302, err401)
+import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
-import System.Config (
-  AuthContext (config, env, pool),
-  EnvConfig (
-    auth0Callback,
-    auth0ClientId,
-    auth0Domain,
-    auth0LogoutRedirect,
-    auth0Secret,
-    basicAuthEnabled,
-    basicAuthPassword,
-    basicAuthUsername,
-    convertkitApiKey,
-    environment,
-    logLevel
-  ),
- )
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
 import System.Types (ATBaseCtx, DB)
 import Utils (escapedQueryPartial)
@@ -165,7 +155,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthE
         Just u -> do
           if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u) || T.isInfixOf "pid=00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
             then do
-              sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@apitoolkit.io"
+              sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@monoscope.tech"
               mbPess <- join <$> mapM Sessions.getPersistentSession (Just sessId)
               let mU = mbPess <&> (.user.getUser)
               case (mU, mbPess) of
@@ -337,7 +327,8 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Nothing -> do
       user <- Users.createUser firstName lastName picture email
       -- Make basic auth users sudo for admin access
-      let userWithSudo =
+      let userWithSudo :: Users.User
+          userWithSudo =
             if T.isSuffixOf "@basic-auth.local" email
               then user{Users.isSudo = True}
               else user
@@ -346,5 +337,50 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
     Just user -> pure user.id
   persistentSessId <- Sessions.newPersistentSessionId
   Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
-  _ <- whenJust convertkitApiKeyM \ckKey -> ConvertKit.addUser ckKey email firstName lastName "" "" ""
+  _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName "" "" ""
   pure persistentSessId
+
+
+renderError :: forall (es :: [Effect]) (a :: Type). Error ServerError :> es => AuthContext -> Status -> Eff es a
+renderError _env status = throwError $ ServerError{errHTTPCode = statusCode status, errBody = "error page: " <> show @LByteString status, errReasonPhrase = "", errHeaders = []}
+
+
+data ClientMetadata = ClientMetadata
+  { projectId :: Projects.ProjectId
+  , topicId :: Text
+  , pubsubProjectId :: Text
+  , pubsubPushServiceAccount :: AE.Value
+  }
+  deriving stock (Generic, Show)
+  deriving (ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ClientMetadata
+
+
+clientMetadataH :: Maybe Text -> ATBaseCtx ClientMetadata
+clientMetadataH Nothing = throwError err401
+clientMetadataH (Just authTextB64) = do
+  appCtx <- ask @AuthContext
+  let authTextE = B64.decodeBase64Untyped (encodeUtf8 $ T.replace "Bearer " "" authTextB64)
+  case authTextE of
+    Left err -> Logging.logAttention "Auth Error in clientMetadata" (toString err) >> throwError err401
+    Right authText -> do
+      let decryptedKey = ProjectApiKeys.decryptAPIKey (encodeUtf8 appCtx.config.apiKeyEncryptionSecretKey) authText
+      case ProjectApiKeys.ProjectApiKeyId <$> UUID.fromASCIIBytes decryptedKey of
+        Nothing -> throwError err401
+        Just apiKeyUUID -> do
+          (pApiKey, project) <- do
+            pApiKeyM <- ProjectApiKeys.getProjectApiKey apiKeyUUID
+            case pApiKeyM of
+              Nothing -> error "no api key with given id"
+              Just pApiKey -> do
+                project <- Projects.projectById pApiKey.projectId
+                pure (pApiKey, project)
+          let serviceAccountJson = case AE.decodeStrict . B64.decodeBase64Lenient . encodeUtf8 $ appCtx.config.monoscopePusherServiceAccountB64 of
+                Just val -> val
+                Nothing -> error "Failed to decode service account from environment variable"
+          pure
+            $ ClientMetadata
+              { projectId = pApiKey.projectId
+              , pubsubProjectId = "past-3"
+              , topicId = appCtx.config.requestPubsubTopics !! 0
+              , pubsubPushServiceAccount = serviceAccountJson
+              }

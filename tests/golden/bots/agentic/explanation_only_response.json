@@ -1,0 +1,11 @@
+{
+    "explanation": "The analysis reveals that there were a total of 21 errors logged across the services during the queried timeframe. This indicates a concerning rate of errors that may require further investigation to identify root causes and implement solutions.",
+    "query": "level == \"ERROR\" | summarize count() by resource.service.name",
+    "time_range": {
+        "from": null,
+        "since": null,
+        "to": null
+    },
+    "visualization": "distribution",
+    "widgets": []
+}

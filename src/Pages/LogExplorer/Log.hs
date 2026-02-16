@@ -29,8 +29,8 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
-import Models.Apis.Fields.Facets qualified as Facets
-import Models.Apis.Fields.Types (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
+import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -46,20 +46,21 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecIntByKey, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, htmxIndicatorWith_, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecIntByKey, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
 import Models.Apis.Monitors (MonitorAlertConfig (..))
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ManageMembers
-import Pages.Components (resizer_)
+import Pages.Components (FieldCfg (..), FieldSize (..), formField_, resizer_)
 import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
 import BackgroundJobs qualified
 import Data.Pool (withResource)
 import OddJobs.Job (createJob)
+import Pages.Bots.Utils qualified as BotUtils
 
 
 -- $setup
@@ -70,7 +71,7 @@ import OddJobs.Job (createJob)
 
 
 -- | Render facet data for Log Explorer sidebar in a compact format
--- | The facet counts are already scaled in the Facets.getFacetSummary function based on the selected time range
+-- | The facet counts are already scaled in the Fields.getFacetSummary function based on the selected time range
 -- | Facets are normally generated for a 24-hour period, but will be proportionally adjusted for the user's time selection
 renderFacets :: FacetSummary -> Html ()
 renderFacets facetSummary = do
@@ -402,7 +403,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   (queryLibRecent, queryLibSaved) <- bimap V.fromList V.fromList . L.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
 
   -- Get facet summary for the time range specified
-  facetSummary <- Facets.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+  facetSummary <- Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
 
   -- Queue facet generation if no precomputed facets exist (new projects)
   when (isNothing facetSummary)
@@ -486,42 +487,53 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
         colors = getServiceColors (V.catMaybes serviceNames)
         patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
-        page =
-          ApiLogsPageData
-            { pid
-            , resultCount
-            , requestVecs = finalVecs
-            , cols = curatedColNames
-            , colIdxMap
-            , nextLogsURL
-            , resetLogsURL
-            , recentLogsURL
-            , currentRange
-            , exceededFreeTier = freeTierExceeded
-            , query = queryM'
-            , cursor = reqLastCreatedAtM
-            , isTestLog = Nothing
-            , emptyStateUrl = Nothing
-            , source
-            , targetSpans = targetSpansM
-            , serviceColors = colors
-            , daysCountDown = Nothing
-            , queryLibRecent
-            , queryLibSaved
-            , fromD
-            , toD
-            , detailsWidth = detailWM
-            , targetEvent = targetEventM
-            , showTrace = showTraceM
-            , facets = facetSummary
-            , vizType = effectiveVizType
-            , alert = alertDM
-            , patterns = patterns
-            , patternsToSkip
-            , targetPattern = pTargetM
-            , project = project
-            , teams
-            }
+
+      -- Build widgets with PNG URLs
+      let baseChartWidget = logChartWidget pid effectiveVizType pTargetM
+          baseLatencyWidget = logLatencyWidget pid
+      chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
+      latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
+      let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
+          latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
+
+      let page =
+            ApiLogsPageData
+              { pid
+              , resultCount
+              , requestVecs = finalVecs
+              , cols = curatedColNames
+              , colIdxMap
+              , nextLogsURL
+              , resetLogsURL
+              , recentLogsURL
+              , currentRange
+              , exceededFreeTier = freeTierExceeded
+              , query = queryM'
+              , cursor = reqLastCreatedAtM
+              , isTestLog = Nothing
+              , emptyStateUrl = Nothing
+              , source
+              , targetSpans = targetSpansM
+              , serviceColors = colors
+              , daysCountDown = Nothing
+              , queryLibRecent
+              , queryLibSaved
+              , fromD
+              , toD
+              , detailsWidth = detailWM
+              , targetEvent = targetEventM
+              , showTrace = showTraceM
+              , facets = facetSummary
+              , vizType = effectiveVizType
+              , alert = alertDM
+              , patterns = patterns
+              , patternsToSkip
+              , targetPattern = pTargetM
+              , project = project
+              , teams
+              , chartWidget
+              , latencyWidget
+              }
 
       let jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount (V.length requestVecs)
       addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
@@ -543,6 +555,49 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
 textToUTC :: Text -> Maybe UTCTime
 textToUTC = iso8601ParseM . toString
+
+
+-- Widget definitions for log explorer charts
+logChartWidget :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Widget.Widget
+logChartWidget pid vizType targetPattern =
+  (def :: Widget.Widget)
+    { Widget.wType = tp
+    , Widget.query = Just query
+    , Widget.unit = Just "rows"
+    , Widget.title = Just title
+    , Widget.legendPosition = Just "top-right"
+    , Widget.legendSize = Just "xs"
+    , Widget._projectId = Just pid
+    , Widget.standalone = Just True
+    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+    , Widget.allowZoom = Just True
+    , Widget.showMarkArea = Just True
+    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+    }
+  where
+    patternTarget = fromMaybe "log_pattern" targetPattern
+    nm = fromMaybe "Log" $ viaNonEmpty head $ T.splitOn "_" patternTarget
+    (tp, query, title) = case vizType of
+      Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
+      _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
+
+
+logLatencyWidget :: Projects.ProjectId -> Widget.Widget
+logLatencyWidget pid =
+  (def :: Widget.Widget)
+    { Widget.wType = WTTimeseriesLine
+    , Widget.standalone = Just True
+    , Widget.title = Just "Latency percentiles"
+    , Widget.hideSubtitle = Just True
+    , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
+    , Widget.summarizeBy = Just Widget.SBMax
+    , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
+    , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
+    , Widget.unit = Just "ns"
+    , Widget.legendPosition = Just "top-right"
+    , Widget.legendSize = Just "xs"
+    , Widget._projectId = Just pid
+    }
 
 
 data LogsGet
@@ -599,7 +654,7 @@ data ApiLogsPageData = ApiLogsPageData
   , detailsWidth :: Maybe Text
   , targetEvent :: Maybe Text
   , showTrace :: Maybe Text
-  , facets :: Maybe Models.Apis.Fields.Types.FacetSummary
+  , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
   , patterns :: Maybe (V.Vector (Text, Int))
@@ -607,6 +662,8 @@ data ApiLogsPageData = ApiLogsPageData
   , targetPattern :: Maybe Text
   , project :: Projects.Project
   , teams :: V.Vector ManageMembers.Team
+  , chartWidget :: Widget.Widget
+  , latencyWidget :: Widget.Widget
   }
 
 
@@ -670,28 +727,8 @@ apiLogsPage page = do
           }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
-        let patternTarget = fromMaybe "log_pattern" page.targetPattern
-            nm = fromMaybe "Log" $ viaNonEmpty head $ T.splitOn "_" patternTarget
-        let (tp, query, title) = case page.vizType of
-              Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
-              _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
-        Widget.widget_ $ (def :: Widget.Widget){Widget.wType = tp, Widget.query = Just query, Widget.unit = Just "rows", Widget.title = Just title, Widget.legendPosition = Just "top-right", Widget.legendSize = Just "xs", Widget._projectId = Just page.pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
-        unless (page.vizType == Just "patterns")
-          $ Widget.widget_
-          $ (def :: Widget.Widget)
-            { Widget.wType = WTTimeseriesLine
-            , Widget.standalone = Just True
-            , Widget.title = Just "Latency percentiles"
-            , Widget.hideSubtitle = Just True
-            , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-            , Widget.summarizeBy = Just Widget.SBMax
-            , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-            , Widget.query = Just "duration != null | summarize percentiles(duration, 50, 75, 90, 95) by bin_auto(timestamp)"
-            , Widget.unit = Just "ns"
-            , Widget.legendPosition = Just "top-right"
-            , Widget.legendSize = Just "xs"
-            , Widget._projectId = Just page.pid
-            }
+        Widget.widget_ page.chartWidget
+        unless (page.vizType == Just "patterns") $ Widget.widget_ page.latencyWidget
     whenJust page.patterns \patternsData ->
       div_ [class_ "overflow-y-auto max-h-96 border border-strokeWeak rounded mt-3"] do
         patternList patternsData page.pid page.patternsToSkip False page.targetPattern
@@ -769,7 +806,7 @@ apiLogsPage page = do
               , hxTarget_ "this"
               , hxSwap_ "innerHTML"
               , hxVals_ "js:{...widgetJSON}"
-              , hxExt_ "json-enc"
+              , hxExt_ "json-enc,forward-page-params"
               , term "hx-sync" "this:replace"
               ]
               ""
@@ -795,7 +832,7 @@ apiLogsPage page = do
         div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
         div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto", id_ "log_details_container"] do
-          span_ [class_ "htmx-indicator query-indicator absolute loading left-1/2 -translate-x-1/2 loading-dots absoute z-10 top-10", id_ "details_indicator"] ""
+          htmxOverlayIndicator_ "details_indicator"
           whenJust page.targetEvent \te -> do
             script_
               [text|
@@ -837,7 +874,7 @@ aiSearchH pid requestBody = do
         else do
           -- Fetch precomputed facets for context (last 24 hours)
           let dayAgo = addUTCTime (-86400) now
-          facetSummaryM <- Facets.getFacetSummary pid "otel_logs_and_spans" dayAgo now
+          facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
           let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM}
           result <- AI.runAgenticQuery config inputText envCfg.openaiApiKey
 
@@ -845,11 +882,12 @@ aiSearchH pid requestBody = do
             Left errMsg -> do
               addErrorToast "AI search failed" (Just errMsg)
               throwError Servant.err502{Servant.errBody = encodeUtf8 errMsg}
-            Right AI.ChatLLMResponse{..} -> do
+            Right resp -> do
               addRespHeaders
                 $ AE.object
-                  [ "query" AE..= query
-                  , "visualization_type" AE..= visualization
+                  [ "query" AE..= resp.query
+                  , "visualization_type" AE..= resp.visualization
+                  , "commentary" AE..= resp.explanation
                   ]
 
 
@@ -906,14 +944,14 @@ alertConfigurationForm_ project alertM teams = do
         , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
         , [__|on click set #create-alert-toggle.checked to false|]
         ]
-        $ faSprite_ "xmark" "regular" "w-4 h-4 text-textWeak"
+        $ faSprite_ "xmark" "regular" "w-3 h-3 text-textWeak"
 
     -- Form content wrapper with scrolling
     div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
       form_
         [ id_ "alert-form"
         , hxPost_ $ "/p/" <> pid.toText <> "/monitors/alerts"
-        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: getSelectedTeams()}"
+        , hxVals_ "js:{query:getQueryFromEditor(), since: getTimeRange().since, from: getTimeRange().from, to:getTimeRange().to, source: params().source || 'spans', vizType: getVizType(), teams: window.getTagValues('#alert-form-teams')}"
         , hxSwap_ "none"
         , class_ "flex flex-col gap-3"
         , [__|on htmx:afterRequest
@@ -924,218 +962,20 @@ alertConfigurationForm_ project alertM teams = do
           |]
         ]
         do
-          -- Alert name field (more compact)
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]
-          fieldset_ [class_ "fieldset"] do
-            label_ [class_ "label text-xs font-medium text-textStrong mb-1"] "Alert name"
-            input_
-              [ type_ "text"
-              , name_ "title"
-              , value_ $ maybe "" (\x -> x.alertConfig.title) alertM
-              , placeholder_ "e.g. High error rate on checkout API"
-              , class_ "input input-sm w-full"
-              , required_ ""
-              ]
+          formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Alert name" "title" True Nothing
 
-          -- Monitor Schedule (collapsible)
-          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-            label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-              div_ [class_ "flex items-center gap-2"] do
-                faSprite_ "clock" "regular" "w-4 h-4 text-iconNeutral"
-                span_ [class_ "text-sm font-medium text-textStrong"] "Monitor Schedule"
-              input_ [type_ "checkbox", class_ "hidden peer", checked_]
-              faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
+          -- Monitor Schedule section (shared component)
+          let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
+              conditionType = if maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM then Just "threshold_exceeded" else Just "has_matches"
+          AlertUI.monitorScheduleSection_ isByos defaultFrequency 5 conditionType Nothing
 
-            div_ [class_ "gap-3 p-3 pt-0 peer-has-[:checked]:flex hidden"] do
-              let timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
-                  defaultInterval = maybe 5 (.checkIntervalMins) alertM
-                  mkOpt (m, l) =
-                    let isDisabled = not isByos && m < 5
-                        attrs =
-                          [value_ (show m <> "m")]
-                            <> [disabled_ "" | isDisabled]
-                            <> [selected_ "" | m == defaultInterval]
-                            <> [term "data-tippy-content" "Upgrade to a higher plan to access this frequency" | isDisabled]
-                     in option_ attrs ("every " <> l)
+          -- Thresholds section (shared component)
+          AlertUI.thresholdsSection_ Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)
 
-              -- Frequency
-              fieldset_ [class_ "fieldset flex-1"] do
-                label_ [class_ "label text-xs"] "Execute the query"
-                select_ [name_ "frequency", class_ "select select-sm"] $ forM_ timeOpts mkOpt
-
-              -- Time window
-              fieldset_ [class_ "fieldset flex-1"] do
-                label_ [class_ "label text-xs"] "Include rows from"
-                select_
-                  [ name_ "timeWindow"
-                  , class_ "select select-sm"
-                  , id_ "timeWindow"
-                  , [__|on change
-                       set qb to document.querySelector('query-builder')
-                       if qb exists then
-                         call qb.updateBinInQuery('timestamp', my.value)
-                       end
-                     |]
-                  ]
-                  do
-                    forM_
-                      (zip timeOpts [False, False, True, False, False, False, False, False, False, False])
-                      \((m, l), sel) -> option_ (value_ (show m <> "m") : [selected_ "" | sel]) ("the last " <> l)
-
-              -- Condition type
-              fieldset_ [class_ "fieldset flex-1"] do
-                label_ [class_ "label text-xs"] "Notify me when"
-                select_
-                  [ name_ "conditionType"
-                  , class_ "select select-sm"
-                  , id_ "condType"
-                  , [__|on change 
-                     if my value == 'threshold_exceeded' then remove .hidden from #thresholds
-                     else add .hidden to #thresholds end
-                     |]
-                  ]
-                  do
-                    -- option_ [value_ "matches_changed"] "the query's results change"
-                    option_ ([value_ "threshold_exceeded"] <> [selected_ "" | maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM]) "threshold is exceeded"
-                    option_ ([value_ "has_matches"] <> [selected_ "" | maybe False (\x -> x.alertThreshold == 0 && isNothing x.warningThreshold) alertM]) "the query has any results"
-
-          -- Thresholds (collapsible, only visible when threshold_exceeded is selected)
-          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden", id_ "thresholds"] do
-            label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-              div_ [class_ "flex items-center gap-2"] do
-                faSprite_ "chart-line" "regular" "w-4 h-4 text-iconNeutral"
-                span_ [class_ "text-sm font-medium text-textStrong"] "Thresholds"
-              input_ [type_ "checkbox", class_ "hidden peer", checked_]
-              faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-
-            div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-              let chartUpdateAttr =
-                    [__|on input set chart to #visualization-widget
-                                        if chart exists call chart.applyThresholds({alert: parseFloat(#alertThreshold.value), warning: parseFloat(#warningThreshold.value)}) end|]
-              div_ [class_ "flex flex-row gap-3"] do
-                AlertUI.thresholdInput_ "alertThreshold" "bg-fillError-strong" "Alert threshold" True "input-sm" [chartUpdateAttr] (fmap (.alertThreshold) alertM)
-                AlertUI.thresholdInput_ "warningThreshold" "bg-fillWarning-strong" "Warning threshold" False "input-sm" [chartUpdateAttr] ((.warningThreshold) =<< alertM)
-                AlertUI.directionSelect_ (maybe False (.triggerLessThan) alertM) "select-sm"
-              -- Recovery thresholds (hysteresis)
-              div_ [class_ "mt-3 pt-3 border-t border-strokeWeak"] do
-                div_ [class_ "mb-2"] do
-                  label_ [class_ "text-xs font-medium text-textStrong"] "Recovery thresholds "
-                  span_ [class_ "text-xs text-textWeak"] "(optional)"
-                  p_ [class_ "text-xs text-textWeak mt-0.5"] "Alert recovers only when value crosses these thresholds"
-                div_ [class_ "flex flex-row gap-3"] do
-                  AlertUI.recoveryInput_ "alertRecoveryThreshold" "bg-fillError-weak" "Alert recovery" "input-sm" ((.alertRecoveryThreshold) =<< alertM)
-                  AlertUI.recoveryInput_ "warningRecoveryThreshold" "bg-fillWarning-weak" "Warning recovery" "input-sm" ((.warningRecoveryThreshold) =<< alertM)
-
-          -- Notification settings (collapsible)
-          div_ [class_ "bg-bgBase rounded-xl border border-strokeWeak overflow-hidden"] do
-            label_ [class_ "flex items-center justify-between p-3 cursor-pointer hover:bg-fillWeak transition-colors peer"] do
-              div_ [class_ "flex items-center gap-2"] do
-                faSprite_ "envelope" "regular" "w-4 h-4 text-iconNeutral"
-                span_ [class_ "text-sm font-medium text-textStrong"] "Notification Settings"
-              input_ [type_ "checkbox", class_ "hidden peer"]
-              faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral peer-checked:rotate-180 transition-transform"
-
-            div_ [class_ "p-3 pt-0 peer-has-[:checked]:block hidden"] do
-              -- Severity and Subject row
-              let defaultSeverity = maybe "Error" (.alertConfig.severity) alertM
-              div_ [class_ "flex items-center w-full gap-2 mb-3"] do
-                fieldset_ [class_ "fieldset"] do
-                  label_ [class_ "label text-xs font-medium mb-1"] "Severity"
-                  select_ [class_ "select select-sm w-28", name_ "severity"] do
-                    option_ [selected_ "" | defaultSeverity == "Info"] "Info"
-                    option_ [selected_ "" | defaultSeverity == "Error"] "Error"
-                    option_ [selected_ "" | defaultSeverity == "Warning"] "Warning"
-                    option_ [selected_ "" | defaultSeverity == "Critical"] "Critical"
-
-                fieldset_ [class_ "fieldset w-full"] do
-                  label_ [class_ "label text-xs font-medium mb-1"] "Subject"
-                  input_
-                    [ placeholder_ "e.g. Alert triggered for high error rate"
-                    , class_ "input input-sm w-full"
-                    , name_ "subject"
-                    , value_ (maybe "Alert triggered" (\x -> x.alertConfig.subject) alertM)
-                    ]
-
-              -- Message field
-              fieldset_ [class_ "fieldset w-full mb-3"] do
-                label_ [class_ "label text-xs font-medium mb-1"] "Message"
-                textarea_
-                  [ placeholder_ "Alert message details"
-                  , class_ "textarea textarea-sm p-2 rounded-lg w-full"
-                  , name_ "message"
-                  , rows_ "3"
-                  ]
-                  $ toHtml
-                  $ maybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." (.alertConfig.message) alertM
-
-              -- Recovery Thresholds section with improved spacing
-              div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
-                div_ [class_ "mb-3"] do
-                  h4_ [class_ "font-medium text-sm text-textStrong mb-1"] "Recovery Thresholds"
-                  p_ [class_ "text-xs text-textWeak"] "Continue notifications until monitor recovers"
-
-                div_ [class_ "space-y-3"] do
-                  -- Renotify option
-                  div_ [class_ "flex items-center"] do
-                    label_ [class_ "flex items-center gap-2 text-xs"] do
-                      input_ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "notifyAfterCheck"]
-                      span_ [] "Renotify every"
-                    select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"]
-                      $ zipWithM_ (\v t -> option_ (value_ v : [selected_ "" | v == "30m"]) (toHtml t)) ["10m", "20m", "30m", "1h", "6h", "24h"] ["10 mins", "20 mins", "30 mins", "1 hour", "6 hours", "24 hours"]
-
-                  -- Stop after option
-                  div_ [class_ "flex items-center"] do
-                    label_ [class_ "flex items-center gap-2 text-xs"] do
-                      input_
-                        [ type_ "checkbox"
-                        , class_ "checkbox checkbox-sm"
-                        , name_ "stopAfterCheck"
-                        , [__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]
-                        ]
-                      span_ [] "Stop after"
-                    div_ [class_ "flex items-center gap-1.5 ml-2 hidden", id_ "stopAfterInput"] do
-                      input_ [type_ "number", class_ "input input-sm w-16", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
-                      span_ [class_ "text-xs text-textWeak"] "occurrences"
-              -- Teams
-              div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
-                div_ [class_ "flex flex-col gap-1"] do
-                  span_ [class_ "text text-sm"] "Teams"
-                  span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
-                textarea_ [class_ "input max-h-max w-full mt-2 resize-none", name_ "teams"] ""
-              let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> teams
-                  -- alertConfig.teams is a list of team IDs
-                  -- teams is a list of TeamVM with id and name
-                  -- map all team IDs to names
-                  teamName tId teamVMs =
-                    case V.find (\t -> t.id == tId) teamVMs of
-                      Just t -> t.handle
-                      Nothing -> "Unknown Team"
-
-                  existingTeams = decodeUtf8 $ AE.encode $ case alertM of
-                    Nothing -> []
-                    Just am -> (\tId -> AE.object ["name" AE..= teamName tId teams, "value" AE..= tId]) <$> am.teams
-              script_
-                [text|
-                window.addEventListener('DOMContentLoaded', () => {
-                      const tagify = createTagify('#alert-form textarea[name="teams"]', {
-                      tagTextProp: 'name',
-                      whitelist: $teamList,
-                    });
-                  tagify.addTags($existingTeams);
-                })
-                const getSelectedTeams = () => {
-                    return tagify.value.map(item => item.value);
-                }
-              |]
-
-              -- Recipients checkbox with better spacing
-              div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
-                label_ [class_ "label cursor-pointer flex items-center gap-2"] do
-                  input_ $ [type_ "checkbox", class_ "checkbox checkbox-sm", name_ "recipientEmailAll", value_ "true"] ++ [checked_ | maybe True (.alertConfig.emailAll) alertM]
-                  span_ [class_ "text-sm"] "Send to all team members"
-
-                span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"]
-                  $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"
+          -- Notification Settings section (shared component)
+          let selectedTeamIds = maybe V.empty (.teams) alertM
+          AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form"
 
           -- Action buttons with proper spacing
           div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
@@ -1219,7 +1059,7 @@ loadMore url =
         [class_ "col-span-4 w-full relative w-full cursor-pointer flex items-center p-1 text-textBrand"]
         do
           "Load more"
-          span_ [id_ "rowsIndicator", class_ "ml-2 htmx-indicator loading loading-dots loading-md"] ""
+          htmxIndicatorWith_ "rowsIndicator" LdMD "ml-2"
 
 
 renderPattern :: (Text, Int) -> Int -> Projects.ProjectId -> Html ()

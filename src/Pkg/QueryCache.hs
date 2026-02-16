@@ -9,6 +9,7 @@ module Pkg.QueryCache (
   trimToRange,
   trimOldData,
   hasSummarizeWithBin,
+  hasCategoricalGroupBy,
   rewriteBinAutoToFixed,
   cleanupExpiredCache,
   slidingWindowSeconds,
@@ -27,12 +28,11 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
-import Pkg.DeriveUtils (AesonText (..))
+import Pkg.DeriveUtils (AesonText (..), DB)
 import Pkg.Parser (SqlQueryCfg (..), calculateAutoBinWidth)
 import Pkg.Parser.Expr (ToQueryText (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), Sources (..), SummarizeByClause (..), defaultBinSize)
 import Relude
-import System.DB (DB)
 import Utils (toXXHash)
 
 
@@ -69,6 +69,18 @@ hasSummarizeWithBin = any \case
   SummarizeCommand _ (Just (SummarizeByClause items)) -> any isBinFunc items
   _ -> False
   where
+    isBinFunc (ByBinFunc _) = True
+    isBinFunc _ = False
+
+
+-- | Check if query has a summarize command with GROUP BY but NO time binning (categorical data)
+hasCategoricalGroupBy :: [Section] -> Bool
+hasCategoricalGroupBy = any \case
+  SummarizeCommand _ (Just (SummarizeByClause items)) -> any isNonBinField items && not (any isBinFunc items)
+  _ -> False
+  where
+    isNonBinField (ByBinFunc _) = False
+    isNonBinField _ = True
     isBinFunc (ByBinFunc _) = True
     isBinFunc _ = False
 

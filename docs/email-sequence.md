@@ -82,7 +82,7 @@ If you have any questions or need some help, reply directly to this email.
 
 ## [···] Logs and traces, finally together (2/6)
 
-**Subject:** [···] Logs and traces, finally in the same view (2/6)
+**Subject:** [···] Logs and traces, finally in the same tree (2/6)
 
 ![Monoscope Logo](monoscope.png)
 

@@ -58,15 +58,26 @@ module Models.Apis.Issues (
   getOrCreateConversation,
   insertChatMessage,
   selectChatHistory,
+  tryAcquireChatMigrationLock,
 
   -- * Thread ID Helpers
   slackThreadToConversationId,
   discordThreadToConversationId,
+
+  -- * Reports
+  Report (..),
+  ReportId,
+  ReportListItem (..),
+  addReport,
+  reportHistoryByProject,
+  getReportById,
+  getLatestReportByType,
 ) where
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (Default, def)
+import Data.Hashable (hash)
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, getCurrentTime)
@@ -74,7 +85,7 @@ import Data.Time.LocalTime (ZonedTime, utcToLocalZonedTime)
 import Data.UUID.V4 qualified as UUID4
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_selectWhere)
+import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (..), fromField, returnError)
@@ -83,7 +94,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
+import Effectful.Error.Static (Error, throwError)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
@@ -91,11 +103,11 @@ import Models.Apis.Errors qualified as Errors
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
+import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
-import Pkg.DBUtils (WrappedEnumSC (..))
-import Pkg.DeriveUtils (UUIDId (..), idToText)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText)
 import Relude hiding (id)
+import Servant (ServerError, err500, errBody)
 import System.Types (DB)
 import Utils (formatUTC)
 
@@ -331,7 +343,7 @@ selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id 
 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectIssueByHash pid hash = listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| endpoint_hash |]]) (pid, hash)
+selectIssueByHash pid endpointHash = listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| endpoint_hash |]]) (pid, endpointHash)
 
 
 -- | Select issues with filters, returns issues and total count for pagination
@@ -619,9 +631,10 @@ data AIChatMessage = AIChatMessage
 
 
 -- | Get or create a conversation (race-condition safe via ON CONFLICT + RETURNING)
-getOrCreateConversation :: DB es => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
-getOrCreateConversation pid convId convType ctx =
-  fromMaybe (error "getOrCreateConversation: RETURNING clause must return a row") . listToMaybe <$> PG.query q (pid, convId, convType, Aeson ctx)
+getOrCreateConversation :: (DB es, Error ServerError :> es) => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
+getOrCreateConversation pid convId convType ctx = do
+  result <- PG.query q (pid, convId, convType, Aeson ctx)
+  maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure $ listToMaybe result
   where
     q =
       [sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
@@ -634,25 +647,21 @@ insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Tex
 insertChatMessage pid convId role content widgetsM metadataM = void $ PG.execute q params
   where
     q =
-      [sql|
-      INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
-      VALUES (?, ?, ?, ?, ?, ?)
-    |]
+      [sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
+            VALUES (?, ?, ?, ?, ?, ?) |]
     params = (pid, convId, role, content, Aeson <$> widgetsM, Aeson <$> metadataM)
 
 
--- | Select chat history for a conversation (oldest first, limited to 20)
+-- | Select chat history for a conversation (oldest first)
 selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
 selectChatHistory convId = PG.query q (Only convId)
   where
     q =
-      [sql|
-      SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
-      FROM apis.ai_chat_messages
-      WHERE conversation_id = ?
-      ORDER BY created_at ASC
-      LIMIT 20
-    |]
+      [sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
+            FROM apis.ai_chat_messages
+            WHERE conversation_id = ?
+            ORDER BY created_at ASC
+            LIMIT 200 |]
 
 
 -- | Generate deterministic UUID v5 from text (uses OID namespace)
@@ -666,6 +675,70 @@ slackThreadToConversationId cid ts = textToConversationId (cid <> ":" <> ts)
 
 discordThreadToConversationId :: Text -> UUIDId "conversation"
 discordThreadToConversationId = textToConversationId
+
+
+-- | Try to acquire an advisory lock for chat migration to prevent race conditions.
+-- Returns True if lock was acquired, False if already locked (another request is migrating).
+-- Uses PostgreSQL advisory locks which are automatically released on connection close.
+tryAcquireChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es Bool
+tryAcquireChatMigrationLock convId = do
+  -- Use conversation ID hash as lock key (pg_try_advisory_lock takes bigint)
+  let lockKey = fromIntegral @Int @Int64 $ abs $ hash $ show convId.unwrap
+  -- Try to acquire lock, returns immediately with True/False
+  result <- PG.query [sql| SELECT pg_try_advisory_lock(?) |] (Only lockKey)
+  pure $ fromMaybe False $ viaNonEmpty head result >>= \(Only acquired) -> Just acquired
+
+
+-- Reports
+
+type ReportId = UUIDId "report"
+
+
+data Report = Report
+  { id :: ReportId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , reportType :: Text
+  , reportJson :: AE.Value
+  , startTime :: UTCTime
+  , endTime :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
+
+
+data ReportListItem = ReportListItem
+  { id :: ReportId
+  , createdAt :: ZonedTime
+  , projectId :: Projects.ProjectId
+  , reportType :: Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData, ToRow)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
+
+
+addReport :: DB es => Report -> Eff es ()
+addReport report = void $ PG.execute (_insert @Report) report
+
+
+getReportById :: DB es => ReportId -> Eff es (Maybe Report)
+getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |]]) (Only id')
+
+
+reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
+reportHistoryByProject pid page = PG.query q (pid, offset)
+  where
+    offset = page * 20
+    q = [sql| SELECT id, created_at, project_id, report_type FROM apis.reports WHERE project_id = ? ORDER BY created_at DESC LIMIT 20 OFFSET ?; |]
+
+
+getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
+getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportType)
+  where
+    q = [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]
 
 
 -- | Create an issue for a log pattern rate change
