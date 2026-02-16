@@ -1,6 +1,6 @@
 module Models.Apis.Errors (
   Error (..),
-  ErrorId,
+  ErrorId (..),
   ErrorState (..),
   ErrorEvent (..),
   ErrorEventId,
@@ -19,6 +19,8 @@ module Models.Apis.Errors (
   resolveError,
   upsertErrorQueryAndParam,
   assignError,
+  updateErrorSubscription,
+  setErrorAssignee,
   -- Error Events (for baseline/spike detection)
   HourlyBucket (..),
   ErrorEventStats (..),
@@ -142,6 +144,9 @@ data Error = Error
   , assignedAt :: Maybe ZonedTime
   , resolvedAt :: Maybe ZonedTime
   , regressedAt :: Maybe ZonedTime
+  , subscribed :: Bool
+  , notifyEveryMinutes :: Int
+  , lastNotifiedAt :: Maybe ZonedTime
   , occurrences1m :: Int
   , occurrences5m :: Int
   , occurrences1h :: Int
@@ -189,6 +194,9 @@ data ErrorL = ErrorL
   , assignedAt :: Maybe ZonedTime
   , resolvedAt :: Maybe ZonedTime
   , regressedAt :: Maybe ZonedTime
+  , subscribed :: Bool
+  , notifyEveryMinutes :: Int
+  , lastNotifiedAt :: Maybe ZonedTime
   , occurrences1m :: Int
   , occurrences5m :: Int
   , occurrences1h :: Int
@@ -292,6 +300,7 @@ getErrors pid mstate limit offset = PG.query q (pid, maybe "%" errorStateToText 
                environment, service, runtime, error_data,
                first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
+               subscribed, notify_every_minutes, last_notified_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
@@ -317,6 +326,7 @@ getErrorById eid = do
                environment, service, runtime, error_data,
                first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
+               subscribed, notify_every_minutes, last_notified_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
@@ -340,6 +350,7 @@ getErrorByHash pid hash = do
                environment, service, runtime, error_data,
                first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
+               subscribed, notify_every_minutes, last_notified_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
@@ -362,6 +373,7 @@ getErrorLByHash pid hash = do
                environment, service, runtime, error_data,
                first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
+               subscribed, notify_every_minutes, last_notified_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
@@ -386,6 +398,7 @@ getActiveErrors pid = PG.query q (Only pid)
                environment, service, runtime, error_data,
                first_trace_id, recent_trace_id, first_event_id, last_event_id,
                state, assignee_id, assigned_at, resolved_at, regressed_at,
+               subscribed, notify_every_minutes, last_notified_at,
                occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
@@ -446,6 +459,35 @@ assignError :: DB es => ErrorId -> Users.UserId -> Eff es Int64
 assignError eid uid = PG.execute q (uid, eid)
   where
     q = [sql| UPDATE apis.errors SET assignee_id = ?, assigned_at = NOW(), updated_at = NOW() WHERE id = ? |]
+
+
+setErrorAssignee :: DB es => ErrorId -> Maybe Users.UserId -> Eff es Int64
+setErrorAssignee eid assigneeIdM =
+  PG.execute q (assigneeIdM, assigneeIdM, eid)
+  where
+    q =
+      [sql|
+        UPDATE apis.errors SET
+          assignee_id = ?,
+          assigned_at = CASE WHEN ? IS NULL THEN NULL ELSE NOW() END,
+          updated_at = NOW()
+        WHERE id = ?
+      |]
+
+
+updateErrorSubscription :: DB es => ErrorId -> Bool -> Int -> Eff es Int64
+updateErrorSubscription eid subscribed notifyEveryMinutes =
+  PG.execute q (subscribed, notifyEveryMinutes, subscribed, eid)
+  where
+    q =
+      [sql|
+        UPDATE apis.errors SET
+          subscribed = ?,
+          notify_every_minutes = ?,
+          last_notified_at = CASE WHEN ? THEN NULL ELSE last_notified_at END,
+          updated_at = NOW()
+        WHERE id = ?
+      |]
 
 
 -- | Update baseline data for an error

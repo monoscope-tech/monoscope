@@ -22,7 +22,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (SomePostgreSqlException)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
@@ -119,6 +119,7 @@ data BgJobs
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
+  | ErrorAssigned Projects.ProjectId Errors.ErrorId Users.UserId -- projectId, errorId, assigneeId
   | LogPatternBaselineCalculation Projects.ProjectId
   | LogPatternSpikeDetection Projects.ProjectId
   | NewLogPatternDetected Projects.ProjectId Text
@@ -233,6 +234,33 @@ processBackgroundJob authCtx bgJob =
              "project_name": #{projectTitle}
            }|]
           sendPostmarkEmail userEmail (Just ("project-deleted", templateVars)) Nothing
+    ErrorAssigned pid errId assigneeId -> do
+      errM <- Errors.getErrorById errId
+      userM <- Users.userById assigneeId
+      projectM <- Projects.projectById pid
+      case (projectM, errM, userM) of
+        (Just project, Just err, Just user) -> do
+          let userEmail = CI.original user.email
+          let userName = if T.null user.firstName then userEmail else user.firstName
+          issueM <- Issues.selectIssueByHash pid err.hash
+          let (issueTitle, issuePath) = case issueM of
+                Just issue -> (issue.title, issue.id.toText)
+                Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
+              issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issuePath
+              projectTitle = project.title
+              errorType = err.errorType 
+              errorMessage = err.message
+              templateVars =
+                [aesonQQ|{
+              "user_name": #{userName},
+              "project_name": #{projectTitle},
+              "issue_title": #{issueTitle},
+              "issue_url": #{issueUrl},
+              "error_type": #{errorType},
+              "error_message": #{errorMessage}
+            }|]
+          sendPostmarkEmail userEmail (Just ("issue-assigned", templateVars)) Nothing
+        _ -> pass
     DailyJob ->
       unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
         >> Relude.when authCtx.config.enableDailyJobScheduling (withAdvisoryLock "daily_job_scheduling" runDailyJobScheduling)
@@ -590,6 +618,7 @@ processOneMinuteErrors scheduledTime pid = do
   Relude.when ctx.config.enableEventsTableUpdates $ do
     let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
+    notifyErrorSubscriptions pid
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
     processErrorsPaginated oneMinuteAgo skip = do
@@ -656,6 +685,78 @@ processOneMinuteErrors scheduledTime pid = do
       Relude.when (V.length spansWithErrors == 30) $ do
         processErrorsPaginated oneMinuteAgo (skip + 30)
         pass
+
+
+data ErrorSubscriptionDue = ErrorSubscriptionDue
+  { errorId :: Errors.ErrorId
+  , errorData :: Errors.ATError
+  , issueId :: Issues.IssueId
+  , issueTitle :: Text
+  , notifyEveryMinutes :: Int
+  , lastNotifiedAt :: Maybe UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData)
+
+
+notifyErrorSubscriptions :: Projects.ProjectId -> ATBackgroundCtx ()
+notifyErrorSubscriptions pid = do
+  ctx <- ask @Config.AuthContext
+  dueErrors <-
+    (PG.query
+      [sql|
+        SELECT e.id, e.error_data, i.id, i.title,
+               e.notify_every_minutes, e.last_notified_at
+        FROM apis.errors e
+        JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
+        WHERE e.project_id = ?
+          AND e.subscribed = TRUE
+          AND e.state != 'resolved'
+          AND i.issue_type = 'runtime_exception'
+          AND e.updated_at > COALESCE(e.last_notified_at, 'epoch'::timestamptz)
+          AND (
+            e.last_notified_at IS NULL
+            OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
+          )
+      |]
+      (Only pid) :: ATBackgroundCtx [ErrorSubscriptionDue])
+  unless (null dueErrors) do
+    projectM <- Projects.projectById pid
+    whenJust projectM \project -> Relude.when project.errorAlerts do
+      let runtimeAlert ed issueId = RuntimeErrorAlert{issueId = Issues.issueIdText issueId, errorData = ed}
+      forM_ dueErrors \sub -> do
+        forM_ project.notificationsChannel \case
+          Projects.NSlack -> sendSlackAlert (runtimeAlert sub.errorData sub.issueId) pid project.title Nothing
+          Projects.NDiscord -> sendDiscordAlert (runtimeAlert sub.errorData sub.issueId) pid project.title Nothing
+          Projects.NPhone -> sendWhatsAppAlert (runtimeAlert sub.errorData sub.issueId) pid project.title project.whatsappNumbers
+          Projects.NEmail -> do
+            users <- Projects.usersByProjectId pid
+            forM_ users \u -> do
+              let e = sub.errorData
+                  errorsJ =
+                    V.singleton
+                      $ AE.object
+                        [ "root_error_message" AE..= e.rootErrorMessage
+                        , "error_type" AE..= e.errorType
+                        , "error_message" AE..= e.message
+                        , "stack_trace" AE..= e.stackTrace
+                        , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
+                        , "hash" AE..= e.hash
+                        , "tech" AE..= e.technology
+                        , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                        , "root_error_type" AE..= e.rootErrorType
+                        ]
+                  title = project.title
+                  errors_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                  templateVars =
+                    [aesonQQ|{
+                        "project_name": #{title},
+                        "errors_url": #{errors_url},
+                        "errors": #{errorsJ}
+                   }|]
+              sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+    let errIds = V.fromList $ map (.errorId) dueErrors
+    void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ANY(?::uuid[]) |] (Only errIds)
 
 
 -- Log.logInfo "Completed 1-minute error processing" ()

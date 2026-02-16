@@ -18,6 +18,11 @@ module Pages.Anomalies (
   AnomalyAction (..),
   IssueVM (..),
   issueColumns,
+  AssignErrorForm (..),
+  assignErrorPostH,
+  resolveErrorPostH,
+  ErrorSubscriptionForm (..),
+  errorSubscriptionPostH,
   -- AI Chat
   AIChatForm (..),
   aiChatPostH,
@@ -27,13 +32,16 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
+import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.Map qualified as Map
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import GHC.Records (HasField)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -52,11 +60,14 @@ import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Models.Users.Users (User (id))
+import Models.Users.Users qualified as Users
 import NeatInterpolation (text)
+import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components (emptyState_, resizer_, statBox_)
 import Pages.LogExplorer.Log (virtualTable)
@@ -74,6 +85,8 @@ import Text.Time.Pretty (prettyTimeAuto)
 import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 import Models.Apis.Errors qualified as Errors
+import Models.Apis.Errors (ErrorId(..))
+import BackgroundJobs qualified as BackgroundJobs
 
 
 newtype AnomalyBulkForm = AnomalyBulk
@@ -179,6 +192,8 @@ anomalyDetailCore pid firstM fetchIssue = do
   appCtx <- ask @AuthContext
 
   issueM <- fetchIssue pid
+  members <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
+  userPermission <- ProjectMembers.getUserPermission pid sess.user.id
   now <- Time.currentTime
 
   let baseBwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Anomaly Detail", config = appCtx.config}
@@ -189,11 +204,23 @@ anomalyDetailCore pid firstM fetchIssue = do
         $ PageCtx baseBwconf
         $ toHtml ("Issue not found" :: Text)
     Just issue -> do
+      errorM <-
+        issue.issueType & \case
+          Issues.RuntimeException -> Errors.getErrorLByHash pid issue.targetHash
+          _ -> pure Nothing
+      let canResolve =
+            userPermission == Just ProjectMembers.PAdmin
+              || any (\err -> err.assigneeId == Just sess.user.id) errorM
       let bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
+                  when (issue.issueType == Issues.RuntimeException) do
+                    whenJust errorM \err ->
+                      errorResolveAction pid err.id err.state canResolve
+                    whenJust errorM \err ->
+                      errorSubscriptionAction pid err
               }
       errorM <-
         issue.issueType & \case
@@ -214,7 +241,7 @@ anomalyDetailCore pid firstM fetchIssue = do
                 Nothing -> pure (Nothing, V.empty)
             Nothing -> pure (Nothing, V.empty)
         Nothing -> pure (Nothing, V.empty)
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members
 
 
 -- | Abbreviate time unit (e.g., "hours" → "hrs")
@@ -254,8 +281,8 @@ timeStatBox_ title timeStr
   | otherwise = pass
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Errors.ErrorL -> UTCTime -> Bool -> Html ()
-anomalyDetailPage pid issue tr otellogs errM now isFirst = do
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Errors.ErrorL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
   div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 overflow-auto pb-32"] do
@@ -343,6 +370,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                           div_ [] do
                             span_ [class_ "text-sm text-textWeak"] "Service:"
                             span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown service" err.errorData.serviceName
+                      errorAssigneeSection pid (Just err.id) err.assigneeId members
           _ -> pass
   
       Issues.QueryAlert -> do
@@ -449,6 +477,169 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
 
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
+
+
+errorAssigneeSection :: Projects.ProjectId -> Maybe Errors.ErrorId -> Maybe Users.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+errorAssigneeSection pid errIdM assigneeIdM members = do
+  let isDisabled = isNothing errIdM || V.null members
+  div_ [id_ "error-assignee", class_ "flex flex-col gap-2 border-t border-strokeWeak pt-3"] do
+    span_ [class_ "text-xs text-textWeak"] "Assignee"
+    case errIdM of
+      Nothing ->
+        select_ ([class_ "select select-sm w-full", disabled_ "true"] <> [name_ "assigneeId"]) do
+          option_ [value_ ""] "Unassigned"
+      Just errId -> do
+        let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorId <> "/assign"
+        form_ [hxPost_ actionUrl, hxTarget_ "#error-assignee", hxSwap_ "outerHTML", hxTrigger_ "change"] do
+          select_
+            ( [class_ "select select-sm w-full", name_ "assigneeId"]
+                <> [disabled_ "true" | isDisabled]
+            )
+            $ do
+              option_ ([value_ ""] <> [selected_ "true" | isNothing assigneeIdM]) "Unassigned"
+              forM_ members \member -> do
+                let memberIdText = UUID.toText $ Users.getUserId member.userId
+                let fullName = T.strip $ member.first_name <> " " <> member.last_name
+                let emailText = CI.original member.email
+                let label =
+                      if T.null fullName
+                        then emailText
+                        else fullName <> " (" <> emailText <> ")"
+                option_
+                  ([value_ memberIdText] <> [selected_ "true" | assigneeIdM == Just member.userId])
+                  $ toHtml label
+
+
+errorResolveAction :: Projects.ProjectId -> Errors.ErrorId -> Errors.ErrorState -> Bool -> Html ()
+errorResolveAction pid errId errState canResolve =
+  when canResolve do
+    let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorId <> "/resolve"
+    div_ [id_ "error-resolve-action"] do
+      if errState == Errors.ESResolved
+        then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] "Resolved"
+        else
+          button_
+            [ class_ "btn btn-sm btn-ghost text-textSuccess hover:bg-fillSuccess-weak"
+            , hxPost_ actionUrl
+            , hxTarget_ "#error-resolve-action"
+            , hxSwap_ "outerHTML"
+            ]
+            "Resolve"
+
+
+errorSubscriptionAction :: ( HasField "subscribed" err Bool , HasField "notifyEveryMinutes" err Int , HasField "id" err Errors.ErrorId ) => Projects.ProjectId -> err -> Html ()
+errorSubscriptionAction pid err = do
+  let isActive = err.subscribed
+  let notifyEvery = err.notifyEveryMinutes
+  let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText err.id.unErrorId <> "/subscribe"
+  form_
+    [ id_ "issue-subscription-action"
+    , class_ "flex items-center gap-2"
+    , hxPost_ actionUrl
+    , hxTarget_ "#issue-subscription-action"
+    , hxSwap_ "outerHTML"
+    , hxTrigger_ "change"
+    ] do
+    span_ [class_ "text-xs text-textWeak flex items-center gap-1"] do
+      faSprite_ "bell" "regular" "w-3 h-3"
+      "Subscribe"
+    select_ [class_ "select select-sm w-32", name_ "notifyEveryMinutes"] do
+      option_ ([value_ "0"] <> [selected_ "true" | not isActive]) "Off"
+      let opts :: [(Int, Text)]
+          opts = [(10, "10 mins"), (20, "20 mins"), (30, "30 mins"), (60, "1 hour"), (360, "6 hours"), (1440, "24 hours")]
+      forM_ opts \(val, label) ->
+        option_ ([value_ (show val)] <> [selected_ "true" | isActive && val == notifyEvery]) (toHtml label)
+
+
+newtype AssignErrorForm = AssignErrorForm
+  { assigneeId :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+data ErrorSubscriptionForm = ErrorSubscriptionForm
+  { notifyEveryMinutes :: Maybe Int
+  , action :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuthCtx (RespHeaders (Html ()))
+assignErrorPostH pid errUuid form = do
+  (_sess, _project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  let errId = Errors.ErrorId errUuid
+      assigneeIdM = form.assigneeId >>= UUID.fromText <&> Users.UserId
+  members <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
+  errM <- Errors.getErrorById errId
+  let render eidM aidM = addRespHeaders $ errorAssigneeSection pid eidM aidM members
+      isMember = maybe True (\uid -> any (\m -> m.userId == uid) members) assigneeIdM
+  case errM of
+    Nothing -> addErrorToast "Error not found" Nothing >> render Nothing Nothing
+    Just err
+      | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> render (Just err.id) err.assigneeId
+      | not isMember -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
+      | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
+      | otherwise -> do
+          _ <- Errors.setErrorAssignee err.id assigneeIdM
+          whenJust assigneeIdM \assigneeId ->
+            void $ liftIO $ withResource appCtx.pool \conn ->
+              createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
+          addSuccessToast "Assignee updated" Nothing
+          errM' <- Errors.getErrorById err.id
+          render (errM' <&> (.id)) (errM' >>= (.assigneeId))
+
+
+resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+resolveErrorPostH pid errUuid = do
+  (sess, _project) <- Sessions.sessionAndProject pid
+  errM <- Errors.getErrorById (Errors.ErrorId errUuid)
+  userPermission <- ProjectMembers.getUserPermission pid sess.user.id
+  let canResolve err = userPermission == Just ProjectMembers.PAdmin || err.assigneeId == Just sess.user.id
+  case errM of
+    Nothing -> addErrorToast "Error not found" Nothing >> addRespHeaders mempty
+    Just err
+      | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> addRespHeaders mempty
+      | not (canResolve err) -> do
+          addErrorToast "You do not have permission to resolve this error" Nothing
+          addRespHeaders $ errorResolveAction pid err.id err.state False
+      | otherwise -> do
+          when (err.state /= Errors.ESResolved) $ void $ Errors.resolveError err.id
+          addSuccessToast "Error resolved" Nothing
+          addRespHeaders $ errorResolveAction pid err.id Errors.ESResolved True
+
+
+errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (RespHeaders (Html ()))
+errorSubscriptionPostH pid errUuid form = do
+  (_sess, _project) <- Sessions.sessionAndProject pid
+  let errId = Errors.ErrorId errUuid
+  errM <- Errors.getErrorById errId
+  case errM of
+    Nothing -> addErrorToast "Error not found" Nothing >> addRespHeaders mempty
+    Just err
+      | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> addRespHeaders mempty
+      | otherwise -> do
+          let notifyEveryRaw = fromMaybe 0 form.notifyEveryMinutes
+          let notifyEvery = max 1 $ min 1440 $ if notifyEveryRaw == 0 then 30 else notifyEveryRaw
+          let action' = fromMaybe "" form.action
+          let shouldSubscribe =
+                case action' of
+                  "unsubscribe" -> False
+                  "subscribe" -> True
+                  _ -> notifyEveryRaw > 0
+          if shouldSubscribe
+            then do
+              _ <- Errors.updateErrorSubscription err.id True notifyEvery
+              addSuccessToast "Subscribed to error" Nothing
+              errM' <- Errors.getErrorById err.id
+              maybe (addRespHeaders mempty) (addRespHeaders . errorSubscriptionAction pid) errM'
+            else do
+              _ <- Errors.updateErrorSubscription err.id False notifyEvery
+              addSuccessToast "Unsubscribed from error" Nothing
+              errM' <- Errors.getErrorById err.id
+              maybe (addRespHeaders mempty) (addRespHeaders . errorSubscriptionAction pid) errM'
 
 
 -- | Form for AI chat input
