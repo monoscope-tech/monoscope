@@ -344,7 +344,10 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
         $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
           tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
           forM_ endpointNames
-            $ tr_ . td_ [style_ "padding: 3px 0;"] . span_ [class_ "monoscope-code"] . toHtml
+            $ tr_
+            . td_ [style_ "padding: 3px 0;"]
+            . span_ [class_ "monoscope-code"]
+            . toHtml
       emailButton anomalyUrl "Explore the Endpoint"
       emailHelpLinks
       br_ []
