@@ -18,7 +18,7 @@
   "license": "ISC",
   "dependencies": {
     "@lit-labs/virtualizer": "^2.1.1",
-    "@napi-rs/canvas": "^0.1.89",
+    "@napi-rs/canvas": "^0.1.92",
     "@rrweb/replay": "^2.0.0-alpha.18",
     "@rrweb/types": "^2.0.0-alpha.18",
     "@types/lodash": "^4.17.23",
@@ -28,9 +28,9 @@
     "date-fns": "^4.1.0",
     "echarts": "^6.0.0",
     "js-yaml": "^4.1.1",
-    "jsonpath": "^1.1.1",
+    "jsonpath": "^1.2.1",
     "lit": "^3.3.2",
-    "lodash": "^4.17.21",
+    "lodash": "^4.17.23",
     "monaco-editor": "^0.55.1",
     "vite": "^7.3.1"
   },
