@@ -60,7 +60,6 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
 import Pkg.DeriveUtils (BaselineState (..))
 import Relude hiding (id)
 import System.Types (DB)
@@ -140,7 +139,7 @@ data Error = Error
   , firstEventId :: Maybe ErrorEventId
   , lastEventId :: Maybe ErrorEventId
   , state :: ErrorState
-  , assigneeId :: Maybe Users.UserId
+  , assigneeId :: Maybe Projects.UserId
   , assignedAt :: Maybe ZonedTime
   , resolvedAt :: Maybe ZonedTime
   , regressedAt :: Maybe ZonedTime
@@ -190,7 +189,7 @@ data ErrorL = ErrorL
   , firstEventId :: Maybe ErrorEventId
   , lastEventId :: Maybe ErrorEventId
   , state :: ErrorState
-  , assigneeId :: Maybe Users.UserId
+  , assigneeId :: Maybe Projects.UserId
   , assignedAt :: Maybe ZonedTime
   , resolvedAt :: Maybe ZonedTime
   , regressedAt :: Maybe ZonedTime
@@ -455,13 +454,13 @@ resolveError eid = PG.execute q (Only eid)
     q = [sql| UPDATE apis.errors SET state = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = ? |]
 
 
-assignError :: DB es => ErrorId -> Users.UserId -> Eff es Int64
+assignError :: DB es => ErrorId -> Projects.UserId -> Eff es Int64
 assignError eid uid = PG.execute q (uid, eid)
   where
     q = [sql| UPDATE apis.errors SET assignee_id = ?, assigned_at = NOW(), updated_at = NOW() WHERE id = ? |]
 
 
-setErrorAssignee :: DB es => ErrorId -> Maybe Users.UserId -> Eff es Int64
+setErrorAssignee :: DB es => ErrorId -> Maybe Projects.UserId -> Eff es Int64
 setErrorAssignee eid assigneeIdM =
   PG.execute q (assigneeIdM, assigneeIdM, eid)
   where

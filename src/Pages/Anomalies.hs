@@ -68,8 +68,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import Models.Users.Users (User (id))
-import Models.Users.Users qualified as Users
+import Models.Projects.Projects (User (id))
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -221,10 +220,6 @@ anomalyDetailCore pid firstM fetchIssue = do
                     whenJust errorM \err ->
                       errorSubscriptionAction pid err
               }
-      errorM <-
-        issue.issueType & \case
-          Issues.RuntimeException -> Errors.getErrorLByHash pid issue.targetHash
-          _ -> pure Nothing
       (trItem, spanRecs) <- case errorM of
         Just err -> do
           let targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
@@ -284,6 +279,9 @@ anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace
 anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
+      severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
+      severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
+      severityBadge _ = pass
   div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 overflow-auto pb-32"] do
     -- Header
     div_ [class_ "flex flex-col gap-3"] do
@@ -474,7 +472,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
     anomalyAIChat_ pid issue.id
 
 
-errorAssigneeSection :: Projects.ProjectId -> Maybe Errors.ErrorId -> Maybe Users.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+errorAssigneeSection :: Projects.ProjectId -> Maybe Errors.ErrorId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 errorAssigneeSection pid errIdM assigneeIdM members = do
   let isDisabled = isNothing errIdM || V.null members
   div_ [id_ "error-assignee", class_ "flex flex-col gap-2 border-t border-strokeWeak pt-3"] do
@@ -493,7 +491,7 @@ errorAssigneeSection pid errIdM assigneeIdM members = do
             $ do
               option_ ([value_ ""] <> [selected_ "true" | isNothing assigneeIdM]) "Unassigned"
               forM_ members \member -> do
-                let memberIdText = UUID.toText $ Users.getUserId member.userId
+                let memberIdText = UUID.toText $ Projects.getUserId member.userId
                 let fullName = T.strip $ member.first_name <> " " <> member.last_name
                 let emailText = CI.original member.email
                 let label =
@@ -567,7 +565,7 @@ assignErrorPostH pid errUuid form = do
   (_sess, _project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let errId = Errors.ErrorId errUuid
-      assigneeIdM = form.assigneeId >>= UUID.fromText <&> Users.UserId
+      assigneeIdM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
   members <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   errM <- Errors.getErrorById errId
   let render eidM aidM = addRespHeaders $ errorAssigneeSection pid eidM aidM members
@@ -769,9 +767,7 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Title**: " <> iss.title
           , Just $ "- **Type**: " <> show iss.issueType
           , Just $ "- **Severity**: " <> iss.severity
-          , Just $ "- **Service**: " <> iss.service
-          , Just $ "- **Affected Requests**: " <> show iss.affectedRequests
-          , Just $ "- **Affected Clients**: " <> show iss.affectedClients
+          , ("- **Service**: " <>) <$> iss.service
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
           , errM >>= \err ->

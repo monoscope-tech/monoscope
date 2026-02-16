@@ -54,6 +54,7 @@ import Models.Apis.Fields qualified as Fields (
   FieldTypes,
   FormatId,
  )
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
@@ -335,7 +336,7 @@ data IssuesData
   | IDNewFieldIssue NewFieldIssue
   | IDNewFormatIssue NewFormatIssue
   | IDNewEndpointIssue NewEndpointIssue
-  | IDNewRuntimeExceptionIssue RequestDumps.ATError
+  | IDNewRuntimeExceptionIssue Errors.ATError
   | IDEmpty
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -530,7 +531,7 @@ data ATError = ATError
   , hash :: Text
   , errorType :: Text
   , message :: Text
-  , errorData :: RequestDumps.ATError
+  , errorData :: Errors.ATError
   , firstTraceId :: Maybe Text
   , recentTraceId :: Maybe Text
   }
@@ -561,7 +562,7 @@ errorByHash pid hash = do
             FROM apis.errors WHERE project_id=? AND hash=?; |]
 
 
-insertErrorQueryAndParams :: Projects.ProjectId -> RequestDumps.ATError -> (Query, [DBField])
+insertErrorQueryAndParams :: Projects.ProjectId -> Errors.ATError -> (Query, [DBField])
 insertErrorQueryAndParams pid err = (q, params)
   where
     q =
@@ -570,7 +571,7 @@ insertErrorQueryAndParams pid err = (q, params)
     params =
       [ MkDBField pid
       , MkDBField err.when
-      , MkDBField $ Unsafe.fromJust err.hash -- Illegal should not happen
+      , MkDBField err.hash
       , MkDBField err.errorType
       , MkDBField err.message
       , MkDBField err

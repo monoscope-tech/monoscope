@@ -69,6 +69,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
+import Models.Apis.Errors qualified as Errors
 import Utils (DBField (), b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
@@ -595,20 +596,10 @@ replaceNullChars = T.replace "\\u0000" ""
 
 -- | Process errors with optional HTTP-specific fields
 -- If HTTP fields are not provided, they remain as Nothing in the error record
-processErrors :: Projects.ProjectId -> Maybe RequestDumps.SDKTypes -> Maybe Text -> Maybe Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, params)
+processErrors :: Projects.ProjectId -> Errors.ATError -> (Errors.ATError, Query, [DBField])
+processErrors pid err = (err, q, params)
   where
-    (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
-    normalizedError =
-      err
-        { RequestDumps.projectId = Just pid
-        , RequestDumps.hash = Just $ fromMaybe defaultHash err.hash
-        , RequestDumps.technology = maybeSdkType <|> err.technology
-        , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
-        , RequestDumps.requestPath = maybePath <|> err.requestPath
-        }
-    defaultHash = toXXHash (pid.toText <> fromMaybe "" err.serviceName <> err.errorType <> replaceAllFormats (err.message <> err.stackTrace) <> maybe "" show maybeSdkType)
-
+    (q, params) = Errors.upsertErrorQueryAndParam pid err
 
 sortVector :: Ord a => V.Vector a -> V.Vector a
 sortVector vec = runST $ do

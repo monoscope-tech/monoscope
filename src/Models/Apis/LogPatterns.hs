@@ -36,9 +36,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Users qualified as Users
-import Pkg.DBUtils (WrappedEnumSC (..))
-import Pkg.DeriveUtils (BaselineState (..))
+import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
 
@@ -74,7 +72,7 @@ data LogPattern = LogPattern
   , lastSeenAt :: ZonedTime
   , occurrenceCount :: Int64
   , state :: LogPatternState
-  , acknowledgedBy :: Maybe Users.UserId
+  , acknowledgedBy :: Maybe Projects.UserId
   , acknowledgedAt :: Maybe ZonedTime
   , baselineState :: BaselineState
   , baselineVolumeHourlyMean :: Maybe Double
@@ -135,7 +133,7 @@ getLogPatternByHash pid hash = do
 
 
 -- | Acknowledge log patterns
-acknowledgeLogPatterns :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
+acknowledgeLogPatterns :: DB es => Projects.UserId -> V.Vector Text -> Eff es Int64
 acknowledgeLogPatterns uid patternHashes
   | V.null patternHashes = pure 0
   | otherwise = PG.execute q (uid, patternHashes)

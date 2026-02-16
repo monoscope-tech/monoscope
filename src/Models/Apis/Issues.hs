@@ -500,7 +500,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
 
 
 -- | Create Runtime Exception issue
-createRuntimeExceptionIssue :: Projects.ProjectId -> RequestDumps.ATError -> IO Issue
+createRuntimeExceptionIssue :: Projects.ProjectId -> Errors.ATError -> IO Issue
 createRuntimeExceptionIssue projectId atError = do
   issueId <- UUIDId <$> UUID4.nextRandom
   errorZonedTime <- utcToLocalZonedTime atError.when
@@ -524,7 +524,7 @@ createRuntimeExceptionIssue projectId atError = do
       , updatedAt = errorZonedTime
       , projectId = projectId
       , issueType = RuntimeException
-      , endpointHash = fromMaybe "" atError.hash
+      , endpointHash = atError.hash
       , sourceType = ""
       , targetHash = ""
       , environment = Nothing

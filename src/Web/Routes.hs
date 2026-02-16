@@ -791,6 +791,7 @@ emailPreviewH templateName = do
         "weekly-report" -> ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
         "runtime-errors" -> ET.sampleRuntimeErrors
         "anomaly-endpoint" -> ET.sampleAnomalyEndpoint
+        "issue-assigned" -> ET.sampleIssueAssigned
         _ -> ("Unknown", p_ "Template not found")
   addRespHeaders $ ET.emailWrapper subject content
 

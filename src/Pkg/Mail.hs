@@ -359,7 +359,7 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
       endpointNames = T.intercalate ", " $ V.toList endpoints
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
 sendPagerdutyAlertToService integrationKey (RuntimeErrorAlert issueId errorData) projectTitle projectUrl =
-  let errorUrl = projectUrl <> "/anomalies/by_hash/" <> fromMaybe issueId errorData.hash
+  let errorUrl = projectUrl <> "/anomalies/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
 sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
 sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
@@ -373,22 +373,23 @@ sampleAlert = \case
       $ RuntimeErrorAlert
         "test-123"
         def
-          { RequestDumps.when = UTCTime (fromGregorian 2025 1 1) 0
-          , RequestDumps.errorType = "🧪 TEST: TypeError"
-          , RequestDumps.rootErrorType = "TypeError"
-          , RequestDumps.message = "Sample error message for testing"
-          , RequestDumps.rootErrorMessage = "Sample error"
-          , RequestDumps.stackTrace = "at sampleFunction (sample.js:42:15)"
-          , RequestDumps.hash = Just "test-hash-xyz"
-          , RequestDumps.technology = Just RequestDumps.JsExpress
-          , RequestDumps.requestMethod = Just "GET"
-          , RequestDumps.requestPath = Just "/api/test"
-          , RequestDumps.spanId = Just "test-span-id"
-          , RequestDumps.traceId = Just "test-trace-id"
-          , RequestDumps.serviceName = Just "api"
-          , RequestDumps.stack = Just "at sampleFunction (sample.js:42:15)"
+          { Errors.when = UTCTime (fromGregorian 2025 1 1) 0
+          , Errors.errorType = "🧪 TEST: TypeError"
+          , Errors.rootErrorType = "TypeError"
+          , Errors.message = "Sample error message for testing"
+          , Errors.rootErrorMessage = "Sample error"
+          , Errors.stackTrace = "at sampleFunction (sample.js:42:15)"
+          , Errors.hash = "test-hash-xyz"
+          , Errors.technology =  Just RequestDumps.JsExpress
+          , Errors.requestMethod = Just "GET"
+          , Errors.requestPath = Just "/api/test"
+          , Errors.spanId = Just "test-span-id"
+          , Errors.traceId = Just "test-trace-id"
+          , Errors.serviceName = Just "api"
+          , Errors.runtime = Just "nodejs"
           }
-  QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
+  _ -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
+  
 
 
 sampleReport :: Text -> NotificationAlerts

@@ -10,6 +10,7 @@ module Pkg.EmailTemplates (
   projectDeletedEmail,
   runtimeErrorsEmail,
   anomalyEndpointEmail,
+  issueAssignedEmail,
   weeklyReportEmail,
   WeeklyReportData (..),
 
@@ -19,6 +20,7 @@ module Pkg.EmailTemplates (
   sampleProjectDeleted,
   sampleRuntimeErrors,
   sampleAnomalyEndpoint,
+  sampleIssueAssigned,
   sampleWeeklyReport,
 ) where
 
@@ -29,6 +31,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
@@ -281,7 +284,7 @@ projectDeletedEmail userName projectName =
 -- Runtime Errors Template
 -- =============================================================================
 
-runtimeErrorsEmail :: Text -> Text -> [RequestDumps.ATError] -> (Text, Html ())
+runtimeErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
 runtimeErrorsEmail projectName errorsUrl errors =
   ( "[···] New Runtime Exception(s) Detected - " <> projectName
   , emailBody do
@@ -301,7 +304,7 @@ runtimeErrorsEmail projectName errorsUrl errors =
   )
 
 
-errorCard :: RequestDumps.ATError -> Html ()
+errorCard :: Errors.ATError -> Html ()
 errorCard e =
   table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
     tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
@@ -314,7 +317,7 @@ errorCard e =
           metaCell "When:" $ toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
           metaCell "Technology:" $ maybe "" (toText . show) e.technology
         tr_ do
-          metaCell "Hash:" $ fromMaybe "" e.hash
+          metaCell "Hash:" e.hash
           metaCell "Request:" $ fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath
     tr_ $ td_ [style_ "padding: 10px 20px 20px 20px;"] do
       h3_ [style_ "margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"] "Stack Trace"
@@ -350,6 +353,44 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
       br_ []
       emailSignoff
       emailFallbackUrl anomalyUrl
+  )
+
+
+-- =============================================================================
+-- Issue Assigned Template
+-- =============================================================================
+
+issueAssignedEmail :: Text -> Text -> Text -> Text -> Text -> Text -> (Text, Html ())
+issueAssignedEmail userName projectName issueTitle issueUrl errorType errorMessage =
+  ( "[···] Issue Assigned: " <> issueTitle
+  , emailBody do
+      emailGreeting (Just userName)
+      p_ do
+        "You have been assigned to an issue in the "
+        b_ $ toHtml projectName
+        " project."
+      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+        tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
+          p_ [class_ "error-card-header"] $ toHtml errorType
+          p_ [class_ "error-card-sub"] $ toHtml errorMessage
+        tr_
+          $ td_ [style_ "padding: 10px 20px 20px 20px;"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+          $ tr_ do
+            td_ [width_ "50%", style_ "padding-bottom: 10px;"]
+              $ span_ [class_ "error-card-meta"] do
+                b_ [class_ "error-card-label"] "Issue:"
+                " "
+                toHtml @Text issueTitle
+            td_ [width_ "50%", style_ "padding-bottom: 10px;"]
+              $ span_ [class_ "error-card-meta"] do
+                b_ [class_ "error-card-label"] "Project:"
+                " "
+                toHtml @Text projectName
+      emailButton issueUrl "View Issue"
+      emailDivider
+      emailSignoff
+      emailFallbackUrl issueUrl
   )
 
 
@@ -503,31 +544,35 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
   where
     sampleError1 =
       def
-        { RequestDumps.errorType = "TypeError"
-        , RequestDumps.message = "Cannot read property 'map' of undefined"
-        , RequestDumps.rootErrorType = "TypeError"
-        , RequestDumps.rootErrorMessage = "Cannot read property 'map' of undefined"
-        , RequestDumps.stackTrace = "at Array.map (<anonymous>)\n  at processItems (src/handlers/items.js:42:15)\n  at async Router.handle (node_modules/express/lib/router.js:174:12)"
-        , RequestDumps.hash = Just "abc123def"
-        , RequestDumps.requestMethod = Just "GET"
-        , RequestDumps.requestPath = Just "/api/v1/items"
-        , RequestDumps.technology = Just RequestDumps.JsExpress
+        { Errors.errorType = "TypeError"
+        , Errors.message = "Cannot read property 'map' of undefined"
+        , Errors.rootErrorType = "TypeError"
+        , Errors.rootErrorMessage = "Cannot read property 'map' of undefined"
+        , Errors.stackTrace = "at Array.map (<anonymous>)\n  at processItems (src/handlers/items.js:42:15)\n  at async Router.handle (node_modules/express/lib/router.js:174:12)"
+        , Errors.hash = "abc123def"
+        , Errors.requestMethod = Just "GET"
+        , Errors.requestPath = Just "/api/v1/items"
+        , Errors.technology = Just RequestDumps.JsExpress
         }
     sampleError2 =
       def
-        { RequestDumps.errorType = "NullPointerException"
-        , RequestDumps.message = "Attempt to invoke method on null reference"
-        , RequestDumps.rootErrorType = "NullPointerException"
-        , RequestDumps.rootErrorMessage = "null reference in UserService.getUser()"
-        , RequestDumps.stackTrace = "at com.example.UserService.getUser(UserService.java:56)\n  at com.example.ApiController.handleRequest(ApiController.java:123)"
-        , RequestDumps.hash = Just "xyz789abc"
-        , RequestDumps.requestMethod = Just "POST"
-        , RequestDumps.requestPath = Just "/api/v1/users"
+        { Errors.errorType = "NullPointerException"
+        , Errors.message = "Attempt to invoke method on null reference"
+        , Errors.rootErrorType = "NullPointerException"
+        , Errors.rootErrorMessage = "null reference in UserService.getUser()"
+        , Errors.stackTrace = "at com.example.UserService.getUser(UserService.java:56)\n  at com.example.ApiController.handleRequest(ApiController.java:123)"
+        , Errors.hash = "xyz789abc"
+        , Errors.requestMethod = Just "POST"
+        , Errors.requestPath = Just "/api/v1/users"
         }
 
 
 sampleAnomalyEndpoint :: (Text, Html ())
 sampleAnomalyEndpoint = anomalyEndpointEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id/issues" ["POST /api/v1/orders", "GET /api/v1/orders/:id"]
+
+
+sampleIssueAssigned :: (Text, Html ())
+sampleIssueAssigned = issueAssignedEmail "Jane Doe" "My API Project" "TypeError: Cannot read property 'map' of undefined" "https://app.monoscope.tech/p/sample-id/anomalies/by_hash/abc123" "TypeError" "Cannot read property 'map' of undefined"
 
 
 sampleWeeklyReport :: Text -> Text -> (Text, Html ())

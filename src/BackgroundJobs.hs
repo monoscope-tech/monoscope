@@ -233,16 +233,8 @@ processBackgroundJob authCtx bgJob =
               projectTitle = project.title
               errorType = err.errorType
               errorMessage = err.message
-              templateVars =
-                [aesonQQ|{
-              "user_name": #{userName},
-              "project_name": #{projectTitle},
-              "issue_title": #{issueTitle},
-              "issue_url": #{issueUrl},
-              "error_type": #{errorType},
-              "error_message": #{errorMessage}
-            }|]
-          sendPostmarkEmail userEmail (Just ("issue-assigned", templateVars)) Nothing
+              (subj, html) = ET.issueAssignedEmail userName projectTitle issueTitle issueUrl errorType errorMessage
+          sendRenderedEmail userEmail subj (ET.renderEmail subj html)
         _ -> pass
     DailyJob ->
       unless authCtx.config.enableDailyJobScheduling (Log.logInfo "Daily job scheduling is disabled, skipping" ())
@@ -722,30 +714,13 @@ notifyErrorSubscriptions pid = do
           Projects.NPhone -> sendWhatsAppAlert (runtimeAlert sub.errorData sub.issueId) pid project.title project.whatsappNumbers
           Projects.NEmail -> do
             users <- Projects.usersByProjectId pid
-            forM_ users \u -> do
-              let e = sub.errorData
-                  errorsJ =
-                    V.singleton
-                      $ AE.object
-                        [ "root_error_message" AE..= e.rootErrorMessage
-                        , "error_type" AE..= e.errorType
-                        , "error_message" AE..= e.message
-                        , "stack_trace" AE..= e.stackTrace
-                        , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                        , "hash" AE..= e.hash
-                        , "tech" AE..= e.technology
-                        , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                        , "root_error_type" AE..= e.rootErrorType
-                        ]
-                  title = project.title
-                  errors_url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                  templateVars =
-                    [aesonQQ|{
-                        "project_name": #{title},
-                        "errors_url": #{errors_url},
-                        "errors": #{errorsJ}
-                   }|]
-              sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+            let e = sub.errorData
+
+                errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl [e]
+            forM_ users \u ->
+              sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+          Projects.NPagerduty -> pass
     let errIds = V.fromList $ map (.errorId) dueErrors
     void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ANY(?::uuid[]) |] (Only errIds)
 
@@ -1804,31 +1779,12 @@ processNewError pid errorHash authCtx = do
             Projects.NSlack -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
             Projects.NDiscord -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title Nothing
             Projects.NPhone -> sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err.errorData}) pid project.title project.whatsappNumbers
-            Projects.NEmail ->
-              forM_ users \u -> do
-                let e = err.errorData
-                    errorsJ =
-                      V.singleton
-                        $ AE.object
-                          [ "root_error_message" AE..= e.rootErrorMessage
-                          , "error_type" AE..= e.errorType
-                          , "error_message" AE..= e.message
-                          , "stack_trace" AE..= e.stackTrace
-                          , "when" AE..= formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-                          , "hash" AE..= e.hash
-                          , "tech" AE..= e.technology
-                          , "request_info" AE..= (fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-                          , "root_error_type" AE..= e.rootErrorType
-                          ]
-                    title = project.title
-                    errors_url = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                    templateVars =
-                      [aesonQQ|{
-                          "project_name": #{title},
-                          "errors_url": #{errors_url},
-                          "errors": #{errorsJ}
-                     }|]
-                sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
+            Projects.NEmail -> do
+              let errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                  (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl [err.errorData]
+              forM_ users \u ->
+                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+            Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
 
         Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
 
