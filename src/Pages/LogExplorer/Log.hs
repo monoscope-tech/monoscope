@@ -63,7 +63,6 @@ import BackgroundJobs qualified
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
-import Data.Set qualified as Set
 import Deriving.Aeson qualified as DAE
 import OddJobs.Job (createJob)
 import Pages.Bots.Utils qualified as BotUtils
@@ -82,11 +81,12 @@ data TraceTreeEntry = TraceTreeEntry
 
 
 -- Internal type for span info extraction
-data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text, isQueryResult :: Bool}
+data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: Text, startNs :: Int64, dur :: Int64, timestamp :: Maybe Text}
 
 
 -- | Build trace tree from flat rows, mirroring JS groupSpans logic.
--- Takes colIdxMap, queryResultCount (number of direct query result rows), and all rows.
+-- A span is a root if its parent is Nothing or its parent ID is not in the data.
+-- A span is a child if its parent ID IS in the data.
 --
 -- >>> import Relude
 -- >>> import Data.Vector qualified as V
@@ -96,13 +96,54 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> let row1 = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "lb1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let row2 = V.fromList [AE.String "s2", AE.String "t1", AE.String "lb1", AE.Number 200, AE.Number 500, AE.String "lb2", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let vecs = V.fromList [row1, row2]
--- >>> let result = buildTraceTree colIdx 1 vecs
+-- >>> let result = buildTraceTree colIdx vecs
 -- >>> length result
 -- 1
 -- >>> fmap (.root) (viaNonEmpty head result)
 -- Just "lb1"
-buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> [TraceTreeEntry]
-buildTraceTree colIdxMap queryResultCount rows = sortBy (comparing (Down . (.startTime))) entries
+--
+-- Orphan spans (parent not in result set) become separate roots:
+--
+-- >>> import Data.Map.Strict qualified as Map
+-- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_span_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let root = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "root", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
+-- >>> let child = V.fromList [AE.String "s2", AE.String "t1", AE.String "root", AE.Number 200, AE.Number 500, AE.String "child1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
+-- >>> let orphan = V.fromList [AE.String "s3", AE.String "t1", AE.String "missing-parent", AE.Number 300, AE.Number 100, AE.String "orphan", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:02Z"]
+-- >>> let r = buildTraceTree colIdx (V.fromList [root, child, orphan])
+-- >>> length r
+-- 2
+-- >>> let rootEntry = find (\e -> e.root == "root") r
+-- >>> Map.lookup "root" . (.children) =<< rootEntry
+-- Just ["child1"]
+--
+-- Deeply nested spans (>5 levels) preserve full hierarchy:
+--
+-- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_span_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let mkSpan lb par ns = V.fromList [AE.String lb, AE.String "t1", maybe AE.Null AE.String par, AE.Number ns, AE.Number 100, AE.String lb, AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
+-- >>> let rows = V.fromList [mkSpan "L0" Nothing 100, mkSpan "L1" (Just "L0") 200, mkSpan "L2" (Just "L1") 300, mkSpan "L3" (Just "L2") 400, mkSpan "L4" (Just "L3") 500, mkSpan "L5" (Just "L4") 600, mkSpan "L6" (Just "L5") 700]
+-- >>> let r = buildTraceTree colIdx rows
+-- >>> length r
+-- 1
+-- >>> Map.size . (.children) <$> viaNonEmpty head r
+-- Just 6
+-- >>> Map.lookup "L4" . (.children) =<< viaNonEmpty head r
+-- Just ["L5"]
+--
+-- Mixed logs (kind=log) and spans in same trace; log parents via latency_breakdown:
+--
+-- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_span_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let rootSpan = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "root-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
+-- >>> let childSpan = V.fromList [AE.String "s2", AE.String "t1", AE.String "root-span", AE.Number 200, AE.Number 500, AE.String "child-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
+-- >>> let logEntry = V.fromList [AE.String "log1", AE.String "t1", AE.Null, AE.Number 250, AE.Number 0, AE.String "child-span", AE.String "log", AE.Null, AE.String "2025-01-01T00:00:02Z"]
+-- >>> let r = buildTraceTree colIdx (V.fromList [rootSpan, childSpan, logEntry])
+-- >>> length r
+-- 1
+-- >>> Map.lookup "root-span" . (.children) =<< viaNonEmpty head r
+-- Just ["child-span"]
+-- >>> Map.lookup "child-span" . (.children) =<< viaNonEmpty head r
+-- Just ["log1"]
+buildTraceTree :: HM.HashMap Text Int -> V.Vector (V.Vector AE.Value) -> [TraceTreeEntry]
+buildTraceTree colIdxMap rows = sortBy (comparing (Down . (.startTime))) entries
   where
     lookupIdx = flip HM.lookup colIdxMap
     valText v idx = case v V.!? idx of Just (AE.String t) | not (T.null t) -> Just t; _ -> Nothing
@@ -119,7 +160,7 @@ buildTraceTree colIdxMap queryResultCount rows = sortBy (comparing (Down . (.sta
           sns = fromMaybe 0 $ lookupIdx "start_time_ns" >>= valInt64 row
           d = if isLog then 0 else fromMaybe 0 (lookupIdx "duration" >>= valInt64 row)
           ts = lookupIdx "timestamp" >>= valText row
-       in SpanInfo sid pid tid sns d ts (idx < queryResultCount)
+       in SpanInfo sid pid tid sns d ts
 
     spanInfos = V.imap mkSpanInfo rows
 
@@ -131,11 +172,10 @@ buildTraceTree colIdxMap queryResultCount rows = sortBy (comparing (Down . (.sta
     buildTraceEntries :: [SpanInfo] -> [TraceTreeEntry]
     buildTraceEntries spans =
       let spanMap = Map.fromList $ map (\s -> (s.spanId, s)) spans
-          queryResultIds = Set.fromList [s.spanId | s <- spans, s.isQueryResult]
           childrenMap :: Map.Map Text [Text]
-          childrenMap = Map.fromListWith (<>) [(pid, [s.spanId]) | s <- spans, not (Set.member s.spanId queryResultIds), Just pid <- [s.parentId]]
+          childrenMap = Map.fromListWith (<>) [(pid, [s.spanId]) | s <- spans, Just pid <- [s.parentId], Map.member pid spanMap]
           sortedChildrenMap = Map.map (sortWith \x -> maybe 0 (.startNs) (Map.lookup x spanMap)) childrenMap
-          roots = filter (.isQueryResult) spans
+          roots = filter (\s -> maybe True (\pid -> not (Map.member pid spanMap)) s.parentId) spans
           traceStartTime = viaNonEmpty head $ sort $ mapMaybe (.timestamp) spans
           tid = maybe "" (.traceIdVal) (viaNonEmpty head spans)
        in map (buildEntry tid sortedChildrenMap spanMap traceStartTime) roots
@@ -617,8 +657,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , latencyWidget
               }
 
-      let traces = buildTraceTree colIdxMap (V.length requestVecs) finalVecs
-          jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount (V.length requestVecs) traces
+      let traces = buildTraceTree colIdxMap finalVecs
+          jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount traces
       addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
         (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip pTargetM
         (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
@@ -687,7 +727,7 @@ data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
-  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text [Text] (HM.HashMap Text Int) Int Int [TraceTreeEntry]
+  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text [Text] (HM.HashMap Text Int) Int [TraceTreeEntry]
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
   | LogsPatternList Projects.ProjectId (V.Vector (Text, Int)) Int (Maybe Text)
 
@@ -703,7 +743,7 @@ instance ToHtml LogsGet where
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count queryResultCount traces) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL, "cols" AE..= cols, "colIdxMap" AE..= colIdxMap, "count" AE..= count, "queryResultCount" AE..= queryResultCount, "traces" AE..= traces]
+  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count traces) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL, "cols" AE..= cols, "colIdxMap" AE..= colIdxMap, "count" AE..= count, "traces" AE..= traces]
   toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
   toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
   toJSON _ = AE.object ["error" AE..= True]
