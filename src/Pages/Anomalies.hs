@@ -329,13 +329,21 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                   toHtml d.endpointHost
               div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
                 timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
-                div_ [class_ "col-span-4"] $ Widget.widget_ $ (def :: Widget.Widget)
-                  { Widget.standalone = Just True, Widget.id = Just $ issueId <> "-api-change-timeline", Widget.naked = Just True, Widget.wType = Widget.WTTimeseries
-                  , Widget.title = Just "Request trend", Widget.showTooltip = Just True
-                  , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True}), Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-                  , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
-                  , Widget._projectId = Just issue.projectId, Widget.hideLegend = Just True
-                  }
+                div_ [class_ "col-span-4"]
+                  $ Widget.widget_
+                  $ (def :: Widget.Widget)
+                    { Widget.standalone = Just True
+                    , Widget.id = Just $ issueId <> "-api-change-timeline"
+                    , Widget.naked = Just True
+                    , Widget.wType = Widget.WTTimeseries
+                    , Widget.title = Just "Request trend"
+                    , Widget.showTooltip = Just True
+                    , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
+                    , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+                    , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
+                    , Widget._projectId = Just issue.projectId
+                    , Widget.hideLegend = Just True
+                    }
             _ -> pass
           Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (d :: Issues.LogPatternData) -> do
