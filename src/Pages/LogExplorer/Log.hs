@@ -146,8 +146,8 @@ buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> 
 buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) entries
   where
     lookupIdx = flip HM.lookup colIdxMap
-    valText v idx = case v V.!? idx of Just (AE.String t) | not (T.null t) -> Just t; _ -> Nothing
-    valInt64 v idx = case v V.!? idx of Just (AE.Number n) -> toBoundedInteger n :: Maybe Int64; _ -> Nothing
+    valText v = (v V.!?) >=> \case AE.String t | not (T.null t) -> Just t; _ -> Nothing
+    valInt64 v = (v V.!?) >=> \case AE.Number n -> toBoundedInteger n :: Maybe Int64; _ -> Nothing
 
     mkSpanInfo :: Int -> V.Vector AE.Value -> SpanInfo
     mkSpanInfo idx row =
@@ -165,7 +165,7 @@ buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) 
     spanInfos = V.imap mkSpanInfo rows
 
     grouped :: Map.Map Text [SpanInfo]
-    grouped = Map.fromListWith (<>) $ V.toList $ V.map (\si -> (si.traceIdVal, [si])) spanInfos
+    grouped = foldMap (\si -> Map.singleton si.traceIdVal [si]) spanInfos
 
     entries = concatMap buildTraceEntries (Map.elems grouped)
 
