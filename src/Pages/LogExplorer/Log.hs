@@ -143,7 +143,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> Map.lookup "child-span" . (.children) =<< viaNonEmpty head r
 -- Just ["log1"]
 buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> [TraceTreeEntry]
-buildTraceTree colIdxMap queryResultCount rows = sortBy (comparing (Down . (.startTime))) entries
+buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) entries
   where
     lookupIdx = flip HM.lookup colIdxMap
     valText v idx = case v V.!? idx of Just (AE.String t) | not (T.null t) -> Just t; _ -> Nothing
