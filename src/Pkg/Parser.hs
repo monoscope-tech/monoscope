@@ -489,6 +489,7 @@ defaultSelectSqlQuery (Just SSpans) =
   , "errors is not null as errors"
   , "summary"
   , "context___span_id as latency_breakdown"
+  , "kind"
   ]
 
 

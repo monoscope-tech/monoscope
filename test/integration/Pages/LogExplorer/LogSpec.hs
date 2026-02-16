@@ -3,6 +3,7 @@ module Pages.LogExplorer.LogSpec (spec) where
 import Data.Aeson qualified as AE
 import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
+import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
@@ -320,10 +321,83 @@ spec = aroundAll withTestResources do
 
     it "should handle missing time range (default behavior)" \tr -> do
       -- When no time range is specified, it should use a default (e.g., last 24 hours)
-      (_, pg) <- testServant tr $ 
+      (_, pg) <- testServant tr $
         Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
-      
+
       case pg of
         Log.LogsGetJson _ _ _ _ _ cols _ _ _ -> do
           cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
+
+  describe "Trace Tree" do
+    it "should include traces field with tree structure" \tr -> do
+      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+          nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+          msgs = map (\i -> ("tm" <> show i, toStrict $ AE.encode reqMsg)) ([1 .. 5] :: [Int])
+      void $ runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
+      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+
+      case pg of
+        Log.LogsGetJson requestVecs _ _ _ _ _ _ _ traces -> do
+          V.length requestVecs `shouldSatisfy` (>= 5)
+          length traces `shouldSatisfy` (> 0)
+          forM_ traces \entry -> do
+            entry.traceId `shouldNotBe` ""
+            entry.root `shouldNotBe` ""
+            entry.startTime `shouldSatisfy` (>= 0)
+            entry.duration `shouldSatisfy` (>= 0)
+        _ -> error "Expected JSON response"
+
+    it "traces should match request vecs trace IDs" \tr -> do
+      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+          nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+          reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
+          msgs = [("tt1", toStrict $ AE.encode reqMsg1), ("tt2", toStrict $ AE.encode reqMsg2)]
+      void $ runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
+      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+
+      case pg of
+        Log.LogsGetJson requestVecs _ _ _ _ _ colIdxMap _ traces -> do
+          -- All trace IDs in entries should appear somewhere in the request vecs
+          let traceIdx = HashMap.lookup "trace_id" colIdxMap
+          case traceIdx of
+            Just idx -> do
+              let vecTraceIds = V.toList $ V.mapMaybe (\v -> case v V.!? idx of Just (AE.String t) -> Just t; _ -> Nothing) requestVecs
+              forM_ traces \entry -> vecTraceIds `shouldContain` [entry.traceId]
+            Nothing -> pass -- trace_id column not projected, skip
+        _ -> error "Expected JSON response"
+
+    it "children map values reference valid span IDs" \tr -> do
+      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+          nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+          reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+          msgs = map (\i -> ("cv" <> show i, toStrict $ AE.encode reqMsg)) ([1 .. 10] :: [Int])
+      void $ runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+
+      let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
+          toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
+      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+
+      case pg of
+        Log.LogsGetJson requestVecs _ _ _ _ _ colIdxMap _ traces -> do
+          let lbIdx = HashMap.lookup "latency_breakdown" colIdxMap
+              idIdx = HashMap.lookup "id" colIdxMap
+          case (lbIdx, idIdx) of
+            (Just lbi, Just idi) -> do
+              let allSpanIds = V.toList $ V.mapMaybe (\v -> case v V.!? lbi of Just (AE.String t) -> Just t; _ -> case v V.!? idi of Just (AE.String t) -> Just t; _ -> Nothing) requestVecs
+              forM_ traces \entry -> do
+                -- Root should be a valid span ID
+                allSpanIds `shouldContain` [entry.root]
+                -- All children values should reference valid span IDs
+                forM_ (Map.elems entry.children) \childIds ->
+                  forM_ childIds \cid -> allSpanIds `shouldContain` [cid]
+            _ -> pass
+        _ -> error "Expected JSON response"

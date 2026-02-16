@@ -487,16 +487,16 @@ notificationsTestPostH pid TestForm{..} = do
     ("all", Just tid) ->
       getTeam tid >>= traverse_ \t -> do
         resolveEmails t >>= mapM_ sendTestEmail
-        forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
-        forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
-        when (not $ V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
+        forM_ t.slack_channels $ sendSlackAlert alert pid project.title . Just
+        forM_ t.discord_channels $ sendDiscordAlert alert pid project.title . Just
+        unless (V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
         forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
-    ("email", Just tid) -> getTeam tid >>= traverse_ \t -> resolveEmails t >>= mapM_ sendTestEmail
+    ("email", Just tid) -> getTeam tid >>= traverse_ (resolveEmails >=> mapM_ sendTestEmail)
     ("email", Nothing) -> forM_ project.notifyEmails sendTestEmail
-    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
+    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels $ sendSlackAlert alert pid project.title . Just
     ("slack", Nothing) -> getProjectSlackData pid >>= traverse_ \s -> sendSlackAlert alert pid project.title (Just s.channelId)
-    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
-    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId \c -> sendDiscordAlert alert pid project.title (Just c)
+    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels $ sendDiscordAlert alert pid project.title . Just
+    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId $ sendDiscordAlert alert pid project.title . Just
     ("whatsapp", _) -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
     ("pagerduty", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
     ("pagerduty", Nothing) -> getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title projectUrl

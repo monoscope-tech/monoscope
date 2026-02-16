@@ -383,7 +383,7 @@ dataPointsPage pid metrics refCounts = do
                         span_ [class_ "text-xs"] $ toHtml $ show r.childCount
                     unless (r.parentPath == "___root___") $ span_ [class_ "text-textDisabled"] $ toHtml $ r.parentPath <> "."
                     span_ [class_ "text-textStrong font-medium"] $ toHtml r.segment
-            , Table.col "Sources" (\r -> div_ [class_ "flex gap-1 flex-wrap"] $ whenJust r.metric \m -> forM_ m.serviceNames \s -> span_ [class_ "badge badge-ghost text-xs"] $ toHtml s) & Table.withAttrs [class_ "w-48"]
+            , Table.col "Sources" (\r -> div_ [class_ "flex gap-1 flex-wrap"] $ whenJust r.metric \m -> forM_ m.serviceNames $ span_ [class_ "badge badge-ghost text-xs"] . toHtml) & Table.withAttrs [class_ "w-48"]
             , Table.col "Datapoints" (\r -> whenJust r.metric \m -> span_ [class_ "tabular-nums"] $ toHtml $ prettyPrintCount m.dataPointsCount) & Table.withAttrs [class_ "w-28"]
             , Table.col
                 "Referenced in"
@@ -519,7 +519,7 @@ metricRefCounts dashboards monitors metricNames = Map.fromList $ map countRefs m
     countWidgetsWithMetric mn d = length $ filter (widgetRefsMetric mn) (allWidgets d)
     allWidgets d = case d.schema of
       Nothing -> []
-      Just schema -> schema.widgets <> concatMap (.widgets) (fromMaybe [] schema.tabs)
+      Just schema -> schema.widgets <> maybe [] (concatMap (.widgets)) schema.tabs
     widgetRefsMetric mn w =
       let allTexts = maybeToList w.query <> maybeToList w.sql
           quoted = "\"" <> mn <> "\""

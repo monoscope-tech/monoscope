@@ -87,10 +87,8 @@ export interface APTEvent {
   children: APTEvent[];
   parent: string | null;
   data: any[];
-  type: 'span' | 'log' | 'virtual-parent';
+  type: 'span' | 'log';
   timestamp?: string;
-  missingParentId?: string;
-  isQueryResult?: boolean;
 }
 
 export type TraceData = Omit<Trace, 'spans'> & { spans: Map<string, APTEvent>; minStart: number; trace_start_time: Date | null };
@@ -115,11 +113,21 @@ export type EventLine = {
   _latencyCache?: { content: any; width: number; expanded: boolean };
 } & Omit<APTEvent, 'children'>;
 
+export interface ServerTraceEntry {
+  trace_id: string;
+  start_time: number;
+  duration: number;
+  trace_start_time: string | null;
+  root: string;
+  children: Record<string, string[]>;
+}
+
 export type Trace = {
   traceId: string;
   spans: APTEvent[];
   startTime: number;
   duration: number;
+  trace_start_time: Date | null;
 };
 
 export type ChildrenForLatency = { startNs: number; duration: number; data: any[] };

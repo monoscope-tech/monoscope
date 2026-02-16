@@ -249,7 +249,7 @@ projectNotifEmail kind userNameM projectName ctaM =
   , emailBody do
       emailGreeting userNameM
       p_ $ toHtmlRaw @Text message
-      whenJust ctaM \(url, label) -> emailButton url label
+      whenJust ctaM $ uncurry emailButton
       emailHelpLinks
       br_ []
       emailSignoff
@@ -343,8 +343,11 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
       div_ [class_ "highlight-box"]
         $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
           tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
-          forM_ endpointNames \ep ->
-            tr_ $ td_ [style_ "padding: 3px 0;"] $ span_ [class_ "monoscope-code"] $ toHtml ep
+          forM_ endpointNames
+            $ tr_
+            . td_ [style_ "padding: 3px 0;"]
+            . span_ [class_ "monoscope-code"]
+            . toHtml
       emailButton anomalyUrl "Explore the Endpoint"
       emailHelpLinks
       br_ []
@@ -478,7 +481,7 @@ reportTable title headers rows =
   table_ [class_ "report-table", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
     tr_ do
       th_ $ toHtml title
-      forM_ headers \h -> th_ $ toHtml h
+      forM_ headers $ th_ . toHtml
     sequence_ rows
 
 

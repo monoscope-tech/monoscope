@@ -161,7 +161,7 @@ logQueryBox_ config = do
               div_ [class_ "gap-[2px] flex items-center"] do
                 span_ [class_ "text-textWeak"] "in"
                 select_
-                  [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
+                  [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-bgBase border-strokeStrong"
                   , name_ "target-spans"
                   , id_ "spans-toggle"
                   , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"

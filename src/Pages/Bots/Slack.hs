@@ -137,7 +137,7 @@ linkProjectGetH slack_code stateM = do
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
             result <- try @SomeException $ sendSlackWelcomeMessage envCfg.slackBotToken token'.incomingWebhook.channelId project'.title
-            either (logWelcomeMessageFailure token'.incomingWebhook.channelId) (const pass) result
+            whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
             else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Slack", Just pid)
@@ -158,7 +158,7 @@ slackInteractionsH interaction = do
           projectM <- Projects.projectById slackData.projectId
           whenJust projectM \project -> do
             result <- try @SomeException $ sendSlackWelcomeMessage authCtx.env.slackBotToken interaction.channel_id project.title
-            either (logWelcomeMessageFailure interaction.channel_id) (const pass) result
+            whenLeft_ result (logWelcomeMessageFailure interaction.channel_id)
       let channelDisplay = if T.null interaction.channel_name then "this channel" else "#" <> interaction.channel_name
           resp =
             AE.object
@@ -197,7 +197,7 @@ slackInteractionsH interaction = do
         resultE <- try @SomeException $ case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError)
           Just slackData -> handleAskCommand interaction slackData authCtx
-        either (\err -> Log.logAttention "Slack slash command background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= interaction.team_id]) (const pass) resultE
+        whenLeft_ resultE \err -> Log.logAttention "Slack slash command background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= interaction.team_id]
       let loadingMsg = getLoadingMessage (detectReportIntent interaction.text)
           resp = AE.object ["text" AE..= loadingMsg, "replace_original" AE..= True, "delete_original" AE..= True]
       Log.logTrace ("Slack interaction response" :: Text) resp
@@ -656,7 +656,7 @@ slackEventsPostH payload = do
     EventCallback cb -> do
       void $ forkIO $ do
         resultE <- try @SomeException $ handleEventCallback envCfg cb.event cb.team_id now
-        either (\err -> Log.logAttention "Slack event callback background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= cb.team_id]) (const pass) resultE
+        whenLeft_ resultE \err -> Log.logAttention "Slack event callback background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= cb.team_id]
       pure $ AE.object []
   where
     handleEventCallback envCfg event teamId now =
