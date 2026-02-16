@@ -622,6 +622,5 @@ test-suite unit-tests
     , relude >=1.2.0.0
     , time
     , uuid
-    , uuid-quasi
     , vector
   default-language: GHC2021

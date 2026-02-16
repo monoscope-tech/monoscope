@@ -386,7 +386,6 @@ tests:
       - relude >= 1.2.0.0
       - aeson
       - uuid
-      - uuid-quasi
       - neat-interpolation
       - aeson-qq
       - extra
