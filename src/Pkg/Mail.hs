@@ -388,6 +388,8 @@ sampleAlert = \case
           , RequestDumps.stack = Just "at sampleFunction (sample.js:42:15)"
           }
   QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
+  LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test"
+  LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test"
 
 
 sampleReport :: Text -> NotificationAlerts
