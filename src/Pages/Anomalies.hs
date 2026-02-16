@@ -252,7 +252,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
 
     -- Metrics & Timeline Row (8-column grid: 4 stats + chart)
     div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-      forM_ [("Affected Requests" :: Text, T.show issue.affectedRequests), ("Affected Clients" :: Text, T.show issue.affectedClients)] \(label, val) ->
+      forM_ [("Affected Requests" :: Text, "0" :: Text), ("Affected Clients" :: Text, "0" :: Text)] \(label, val) ->
         statBox_ (Just pid) Nothing label "" val Nothing Nothing
       whenJust errM \err -> do
         timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
@@ -317,6 +317,51 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "mb-4"] do
                 span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
                 div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+            _ -> pass
+          Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (d :: Issues.APIChangeData) -> do
+              div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+                span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+                span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+                div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+                span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+                  faSprite_ "server" "regular" "h-3 w-3"
+                  toHtml d.endpointHost
+              div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
+                timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
+                div_ [class_ "col-span-4"] $ Widget.widget_ $ (def :: Widget.Widget)
+                  { Widget.standalone = Just True, Widget.id = Just $ issueId <> "-api-change-timeline", Widget.naked = Just True, Widget.wType = Widget.WTTimeseries
+                  , Widget.title = Just "Request trend", Widget.showTooltip = Just True
+                  , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True}), Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+                  , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
+                  , Widget._projectId = Just issue.projectId, Widget.hideLegend = Just True
+                  }
+            _ -> pass
+          Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (d :: Issues.LogPatternData) -> do
+              div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
+                statBox_ (Just pid) Nothing "Log Level" "" (fromMaybe "Unknown" d.logLevel) Nothing Nothing
+                statBox_ (Just pid) Nothing "Service" "" (fromMaybe "Unknown" d.serviceName) Nothing Nothing
+                statBox_ (Just pid) Nothing "Occurrences" "" (show d.occurrenceCount) Nothing Nothing
+                timeStatBox_ "First Seen" $ prettyTimeAuto now d.firstSeenAt
+              div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
+              whenJust d.sampleMessage \msg ->
+                div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+                  div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
+                  div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml msg
+            _ -> pass
+          Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
+            AE.Success (d :: Issues.LogPatternRateChangeData) -> do
+              div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
+                statBox_ (Just pid) Nothing "Direction" "" d.changeDirection Nothing Nothing
+                statBox_ (Just pid) Nothing "Change" "" (show (round d.changePercent :: Int) <> "%") Nothing Nothing
+                statBox_ (Just pid) Nothing "Current Rate" "" (show (round d.currentRatePerHour :: Int) <> "/hr") Nothing Nothing
+                statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineMean :: Int) <> "/hr") Nothing Nothing
+              div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
             _ -> pass
           _ -> pass
 
@@ -494,9 +539,9 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Title**: " <> iss.title
           , Just $ "- **Type**: " <> show iss.issueType
           , Just $ "- **Severity**: " <> iss.severity
-          , Just $ "- **Service**: " <> iss.service
-          , Just $ "- **Affected Requests**: " <> show iss.affectedRequests
-          , Just $ "- **Affected Clients**: " <> show iss.affectedClients
+          , Just $ "- **Service**: " <> fromMaybe "unknown-service" iss.service
+          , Just $ "- **Affected Requests**: " <> "0"
+          , Just $ "- **Affected Clients**: " <> "0"
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
           , errM >>= \err ->
@@ -980,7 +1025,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
       div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-      span_ [class_ "text-textStrong"] $ toHtml issue.service
+      span_ [class_ "text-textStrong"] $ toHtml $ fromMaybe "unknown-service" issue.service
     -- Time since
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
@@ -1026,6 +1071,22 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
         div_ [class_ "mb-4"] do
           span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
           div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+      _ -> pass
+    Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternData) ->
+        div_ [class_ "border border-strokeWeak rounded-lg mb-4"] do
+          label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
+            toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
+          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
+      _ -> pass
+    Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
+      AE.Success (d :: Issues.LogPatternRateChangeData) ->
+        div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
+          label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
+            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
+            toHtml $ "Rate " <> d.changeDirection <> " (" <> show (round d.changePercent :: Int) <> "%)"
+            input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
+          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
       _ -> pass
     _ -> pass
 
@@ -1286,6 +1347,8 @@ issueTypeBadge issueType critical = badge cls icon txt
     (cls, icon, txt) = case issueType of
       Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
       Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
+      Issues.LogPattern -> ("bg-fillInformation-strong", "file-text", "LOG PATTERN")
+      Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "trending-up", "RATE CHANGE")
       Issues.APIChange
         | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
         | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
