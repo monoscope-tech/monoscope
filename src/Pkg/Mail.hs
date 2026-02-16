@@ -8,7 +8,6 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Effectful.Notify qualified as Notify
 import Data.Pool ()
 import Data.Text qualified as T
-import Models.Apis.Errors qualified as Errors
 import Data.Time
 import Data.Vector qualified as V
 import Effectful (
@@ -17,6 +16,7 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Slack (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.Projects qualified as Projects

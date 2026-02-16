@@ -30,6 +30,7 @@ module Pages.Anomalies (
 )
 where
 
+import BackgroundJobs qualified as BackgroundJobs
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.CaseInsensitive qualified as CI
@@ -41,13 +42,13 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.LocalTime (zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import GHC.Records (HasField)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import GHC.Records (HasField)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -56,11 +57,13 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Errors (ErrorId (..))
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDump
-import Models.Projects.Projects qualified as Projects
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
@@ -84,9 +87,6 @@ import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, lookupValueText, methodFillColor, statusFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
-import Models.Apis.Errors qualified as Errors
-import Models.Apis.Errors (ErrorId(..))
-import BackgroundJobs qualified as BackgroundJobs
 
 
 newtype AnomalyBulkForm = AnomalyBulk
@@ -209,7 +209,8 @@ anomalyDetailCore pid firstM fetchIssue = do
           Issues.RuntimeException -> Errors.getErrorLByHash pid issue.targetHash
           _ -> pure Nothing
       let canResolve =
-            userPermission == Just ProjectMembers.PAdmin
+            userPermission
+              == Just ProjectMembers.PAdmin
               || any (\err -> err.assigneeId == Just sess.user.id) errorM
       let bwconf =
             baseBwconf
@@ -313,7 +314,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
               , Widget.hideLegend = Just True
               }
     -- Two Column Layout
-    case issue.issueType of 
+    case issue.issueType of
       Issues.RuntimeException -> do
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
@@ -372,7 +373,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
                             span_ [class_ "ml-2 text-sm"] $ toHtml $ fromMaybe "Unknown service" err.errorData.serviceName
                       errorAssigneeSection pid (Just err.id) err.assigneeId members
           _ -> pass
-  
       Issues.QueryAlert -> do
         case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (alertData :: Issues.QueryAlertData) -> do
@@ -527,7 +527,7 @@ errorResolveAction pid errId errState canResolve =
             "Resolve"
 
 
-errorSubscriptionAction :: ( HasField "subscribed" err Bool , HasField "notifyEveryMinutes" err Int , HasField "id" err Errors.ErrorId ) => Projects.ProjectId -> err -> Html ()
+errorSubscriptionAction :: (HasField "id" err Errors.ErrorId, HasField "notifyEveryMinutes" err Int, HasField "subscribed" err Bool) => Projects.ProjectId -> err -> Html ()
 errorSubscriptionAction pid err = do
   let isActive = err.subscribed
   let notifyEvery = err.notifyEveryMinutes
@@ -539,16 +539,17 @@ errorSubscriptionAction pid err = do
     , hxTarget_ "#issue-subscription-action"
     , hxSwap_ "outerHTML"
     , hxTrigger_ "change"
-    ] do
-    span_ [class_ "text-xs text-textWeak flex items-center gap-1"] do
-      faSprite_ "bell" "regular" "w-3 h-3"
-      "Subscribe"
-    select_ [class_ "select select-sm w-32", name_ "notifyEveryMinutes"] do
-      option_ ([value_ "0"] <> [selected_ "true" | not isActive]) "Off"
-      let opts :: [(Int, Text)]
-          opts = [(10, "10 mins"), (20, "20 mins"), (30, "30 mins"), (60, "1 hour"), (360, "6 hours"), (1440, "24 hours")]
-      forM_ opts \(val, label) ->
-        option_ ([value_ (show val)] <> [selected_ "true" | isActive && val == notifyEvery]) (toHtml label)
+    ]
+    do
+      span_ [class_ "text-xs text-textWeak flex items-center gap-1"] do
+        faSprite_ "bell" "regular" "w-3 h-3"
+        "Subscribe"
+      select_ [class_ "select select-sm w-32", name_ "notifyEveryMinutes"] do
+        option_ ([value_ "0"] <> [selected_ "true" | not isActive]) "Off"
+        let opts :: [(Int, Text)]
+            opts = [(10, "10 mins"), (20, "20 mins"), (30, "30 mins"), (60, "1 hour"), (360, "6 hours"), (1440, "24 hours")]
+        forM_ opts \(val, label) ->
+          option_ ([value_ (show val)] <> [selected_ "true" | isActive && val == notifyEvery]) (toHtml label)
 
 
 newtype AssignErrorForm = AssignErrorForm

@@ -38,6 +38,7 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields.Facets qualified as Facets
 import Models.Apis.Fields.Types qualified as Fields
 import Models.Apis.Issues qualified as Issues
@@ -82,7 +83,6 @@ import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
 import Utils (DBField, toXXHash)
-import Models.Apis.Errors qualified as Errors
 
 
 data BgJobs
@@ -248,7 +248,7 @@ processBackgroundJob authCtx bgJob =
                 Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
               issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issuePath
               projectTitle = project.title
-              errorType = err.errorType 
+              errorType = err.errorType
               errorMessage = err.message
               templateVars =
                 [aesonQQ|{
@@ -703,8 +703,8 @@ notifyErrorSubscriptions :: Projects.ProjectId -> ATBackgroundCtx ()
 notifyErrorSubscriptions pid = do
   ctx <- ask @Config.AuthContext
   dueErrors <-
-    (PG.query
-      [sql|
+    ( PG.query
+        [sql|
         SELECT e.id, e.error_data, i.id, i.title,
                e.notify_every_minutes, e.last_notified_at
         FROM apis.errors e
@@ -719,7 +719,9 @@ notifyErrorSubscriptions pid = do
             OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
           )
       |]
-      (Only pid) :: ATBackgroundCtx [ErrorSubscriptionDue])
+        (Only pid)
+        :: ATBackgroundCtx [ErrorSubscriptionDue]
+    )
   unless (null dueErrors) do
     projectM <- Projects.projectById pid
     whenJust projectM \project -> Relude.when project.errorAlerts do
@@ -1828,7 +1830,6 @@ processNewError pid errorHash authCtx = do
                 sendPostmarkEmail (CI.original u.email) (Just ("runtime-errors", templateVars)) Nothing
 
         Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
-
 
 
 -- ============================================================================

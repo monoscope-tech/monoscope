@@ -56,7 +56,6 @@ module Models.Apis.Issues (
   AIChatMessage (..),
   ConversationType (..),
   getOrCreateConversation,
-  
   insertChatMessage,
   selectChatHistory,
 
@@ -88,6 +87,7 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -98,7 +98,7 @@ import Pkg.DeriveUtils (UUIDId (..), idToText)
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (formatUTC)
-import Models.Apis.Errors qualified as Errors
+
 
 type IssueId = UUIDId "issue"
 
@@ -787,6 +787,7 @@ mkIssue projectId issueType targetHash endpointHash service critical severity ti
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
+
 
 createErrorSpikeIssue :: Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> IO Issue
 createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
