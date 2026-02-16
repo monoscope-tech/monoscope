@@ -102,7 +102,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> fmap (.root) (viaNonEmpty head result)
 -- Just "lb1"
 buildTraceTree :: HM.HashMap Text Int -> Int -> V.Vector (V.Vector AE.Value) -> [TraceTreeEntry]
-buildTraceTree colIdxMap queryResultCount rows = sortBy (flip $ comparing (.startTime)) entries
+buildTraceTree colIdxMap queryResultCount rows = sortBy (comparing (Down . (.startTime))) entries
   where
     lookupIdx = flip HM.lookup colIdxMap
     valText v idx = case v V.!? idx of Just (AE.String t) | not (T.null t) -> Just t; _ -> Nothing
@@ -133,8 +133,8 @@ buildTraceTree colIdxMap queryResultCount rows = sortBy (flip $ comparing (.star
       let spanMap = Map.fromList $ map (\s -> (s.spanId, s)) spans
           queryResultIds = Set.fromList [s.spanId | s <- spans, s.isQueryResult]
           childrenMap :: Map.Map Text [Text]
-          childrenMap = Map.fromListWith (<>) [(pid, [s.spanId]) | s <- spans, Just pid <- [s.parentId], not (Set.member s.spanId queryResultIds)]
-          sortedChildrenMap = Map.map (sortBy $ comparing \x -> maybe 0 (.startNs) (Map.lookup x spanMap)) childrenMap
+          childrenMap = Map.fromListWith (<>) [(pid, [s.spanId]) | s <- spans, not (Set.member s.spanId queryResultIds), Just pid <- [s.parentId]]
+          sortedChildrenMap = Map.map (sortWith \x -> maybe 0 (.startNs) (Map.lookup x spanMap)) childrenMap
           roots = filter (.isQueryResult) spans
           traceStartTime = viaNonEmpty head $ sort $ mapMaybe (.timestamp) spans
           tid = maybe "" (.traceIdVal) (viaNonEmpty head spans)
@@ -151,7 +151,7 @@ buildTraceTree colIdxMap queryResultCount rows = sortBy (flip $ comparing (.star
                   newAcc = if null kids then acc else Map.insert x kids acc
                in go (kids ++ xs) (min minS si.startNs) (max maxE ce) newAcc
           rootKids = fromMaybe [] (Map.lookup root'.spanId fullChildrenMap)
-          initAcc = if null rootKids then Map.empty else Map.singleton root'.spanId rootKids
+          initAcc = if null rootKids then Map.empty else one (root'.spanId, rootKids)
           (minStart, maxEnd, subtreeChildren) = go rootKids root'.startNs (root'.startNs + root'.dur) initAcc
        in TraceTreeEntry tid minStart (maxEnd - minStart) tst root'.spanId subtreeChildren
 

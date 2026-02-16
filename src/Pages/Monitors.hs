@@ -395,5 +395,5 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
         span_ [class_ "text-xs text-textWeak"] "Add teams to notify (if no team is added, project level notification channels will be used)"
       tagInput_ (formId <> "-teams") "" [name_ "teams", data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList, data_ "tagify-initial" existingTeams]
     div_ [class_ "flex items-center gap-2 mt-4 pt-3 border-t border-strokeWeak"] do
-      formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ [value_ "true"] ++ [checked_ | emailAll]
+      formCheckbox_ FieldMd "Send to all team members" "recipientEmailAll" $ value_ "true" : [checked_ | emailAll]
       span_ [class_ "tooltip", term "data-tip" "Configure specific recipients in alert settings after creation"] $ faSprite_ "circle-info" "regular" "w-3.5 h-3.5 text-iconNeutral"

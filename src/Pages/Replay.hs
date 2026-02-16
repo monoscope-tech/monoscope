@@ -105,9 +105,7 @@ getMinioFile conn bucket objKey = do
         AE.Array a -> pure a
         _ -> pure V.empty
       Left _ -> pure V.empty
-  case res of
-    Right arr -> pure arr
-    Left _ -> pure V.empty
+  whenRight V.empty res pure
 
 
 getSessionEvents :: Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> Text -> ATAuthCtx AE.Array
@@ -118,7 +116,7 @@ getSessionEvents conn pid bucket sessionId = do
   res <- liftIO $ Minio.runMinio conn $ do
     items <- runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
     let objectNames = [Minio.oiObject info | Minio.ListItemObject info <- items]
-        (mergedFiles, individualFiles) = partition (\n -> n == mergedKey) objectNames
+        (mergedFiles, individualFiles) = partition (== mergedKey) objectNames
         hasMerged = not $ null mergedFiles
         hasIndividual = not $ null individualFiles
     mergedEvents <-
@@ -158,7 +156,7 @@ getSessionEvents conn pid bucket sessionId = do
 
 
 sortEvents :: AE.Array -> AE.Array
-sortEvents events = V.fromList $ sortBy (comparing getEventTimestamp) $ V.toList events
+sortEvents events = V.fromList $ sortWith getEventTimestamp $ V.toList events
   where
     getEventTimestamp :: AE.Value -> Double
     getEventTimestamp val = fromMaybe 0 $ AET.parseMaybe (AE.withObject "event" (AE..: "timestamp")) val
@@ -337,5 +335,5 @@ mergeOneSession conn bucket sessionId = do
           $ Minio.removeObject bucket objName
 
   case res of
-    Right _ -> pure ()
+    Right _ -> pass
     Left err -> error $ "Failed to merge session " <> toText session <> ": " <> toText (show err)

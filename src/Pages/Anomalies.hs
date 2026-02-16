@@ -625,11 +625,11 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
     div_ [class_ "flex items-start gap-3 mb-4 pb-4 border-b border-strokeWeak"] do
       iconBadgeSq_ NeutralBadge "user"
       p_ [class_ "text-sm text-textStrong"] $ toHtml userQuery
-    whenJust systemPromptM \systemPrompt ->
-      div_ [class_ "mb-4"]
-        $ panel_ def{icon = Just "terminal", collapsible = Just False} "System Prompt"
-        $ div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"]
-        $ toHtml systemPrompt
+    whenJust systemPromptM
+      $ div_ [class_ "mb-4"]
+      . panel_ def{icon = Just "terminal", collapsible = Just False} "System Prompt"
+      . div_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak max-h-96 overflow-y-auto"]
+      . toHtml
     -- Behind the scenes section (tool calls)
     whenJust toolCallsM \toolCalls ->
       unless (null toolCalls)
