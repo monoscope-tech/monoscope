@@ -48,7 +48,7 @@ queryLogs tr queryM = do
 -- | Helper to extract dataset from LogsResp
 expectLogsJson :: Log.LogsGet -> IO (V.Vector (V.Vector AE.Value))
 expectLogsJson = \case
-  Log.LogsGetJson dataset _ _ _ _ _ _ _ _ -> pure dataset
+  Log.LogsGetJson dataset _ _ _ _ _ _ _ _ _ -> pure dataset
   Log.LogPage _ -> fail "Got LogPage instead of LogsGetJson - json parameter not working?"
   Log.LogsGetError (PageCtx _ err) -> fail $ "Got LogsGetError: " <> toString err
   Log.LogsGetErrorSimple err -> fail $ "Got LogsGetErrorSimple: " <> toString err

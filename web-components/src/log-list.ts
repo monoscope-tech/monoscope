@@ -3,7 +3,7 @@ import '@lit-labs/virtualizer';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
-import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
+import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
 import { includes, startsWith, map, forEach, compact, pick, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
@@ -81,6 +81,7 @@ export class LogList extends LitElement {
   @query('#resizer-details_width-wrapper') private resizerWrapper?: HTMLElement;
   @query('#details_indicator') private detailsIndicator?: HTMLElement;
 
+  private cachedServerTraces: ServerTraceEntry[] = [];
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
   private colIdxMap: ColIdxMap = {};
@@ -148,9 +149,9 @@ export class LogList extends LitElement {
       (window as any).logDataPromise = null;
       const data = await earlyPromise;
       if (!data.error) {
-        const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount } = data;
-        const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, queryResultCount) : [];
-        return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount, hasMore: logsData?.length > 0 } };
+        const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces } = data;
+        const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
+        return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces: traces || [], hasMore: logsData?.length > 0 } };
       }
     }
     // Fallback to worker
@@ -667,9 +668,7 @@ export class LogList extends LitElement {
   }
 
   buildSpanListTree(logs: any[][]) {
-    const tree = groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection);
-    // Ensure tree maintains proper order
-    return tree;
+    return groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection, this.cachedServerTraces);
   }
 
   private updateVisibleItems() {
@@ -775,6 +774,13 @@ export class LogList extends LitElement {
       if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
       this.logsColumns = meta.cols;
       this.colIdxMap = meta.colIdxMap;
+      // Cache server traces for re-render (expand/collapse, flip direction)
+      // Cap at 5000 entries to prevent unbounded growth during pagination
+      if ((isLoadMore || isRecentFetch) && meta.traces?.length) {
+        this.cachedServerTraces = [...this.cachedServerTraces, ...meta.traces].slice(-5000);
+      } else if (meta.traces) {
+        this.cachedServerTraces = meta.traces;
+      }
 
       if (isRefresh) {
         this.spanListTree = tree;
@@ -1522,8 +1528,7 @@ export class LogList extends LitElement {
         }
         return rowData._latencyCache.content;
       case 'summary':
-        const isVirtualParent = type === 'virtual-parent';
-        if (!isVirtualParent && (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines)) {
+        if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
           const summaryArray = this.parseSummaryData(dataArr);
           rowData._summaryCache = { content: this.renderSummaryElements(summaryArray, this.wrapLines), wrapLines: this.wrapLines };
         }
@@ -1531,15 +1536,8 @@ export class LogList extends LitElement {
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
           ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : isVirtualParent
-          ? 'border border-dashed border-strokeWeak bg-fillWeaker text-textWeak fill-textWeak'
           : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
-        const summaryContent = isVirtualParent
-          ? html`<span class="text-textWeak text-xs italic flex items-center gap-1" title="Parent ID: ${rowData.missingParentId}">
-              ${faSprite('clock', 'regular', 'w-3 h-3')} Parent span pending
-              <span class="font-mono text-[10px]">(${rowData.missingParentId?.slice(0, 12)}...)</span>
-            </span>`
-          : rowData._summaryCache.content;
+        const summaryContent = rowData._summaryCache.content;
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
