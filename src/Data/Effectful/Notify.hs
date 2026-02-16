@@ -28,6 +28,7 @@ module Data.Effectful.Notify (
   pagerdutyNotification,
 ) where
 
+import Control.Exception (try)
 import Control.Lens ((.~))
 import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
@@ -46,11 +47,10 @@ import Network.Mail.Mime (Address (..), Mail (..), htmlPart)
 import Network.Mail.SMTP (sendMailWithLoginSTARTTLS', sendMailWithLoginTLS')
 import Network.Wreq (FormParam ((:=)), auth, basicAuth, defaults, header, postWith, responseStatus)
 import Pkg.DeriveUtils (WrappedEnumSC (..))
-import Control.Exception (try)
-import System.Timeout (timeout)
 import Relude hiding (Reader, State, ask, get, modify, put, runState)
 import System.Config qualified as Config
 import System.Logging qualified as Log
+import System.Timeout (timeout)
 
 
 -- Notification data types
@@ -169,21 +169,25 @@ runNotifyProduction = interpret $ \_ -> \case
       let cfg = appCtx.config
           via = if cfg.smtpHost == "" then "api" :: Text else "smtp"
       Log.logTrace "Sending email notification" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
-      result <- liftIO $ try @SomeException $ timeout 30_000_000 $ if cfg.smtpHost == ""
-        then do
-          let apiKey = encodeUtf8 cfg.postmarkToken
-              fromAddress = cfg.postmarkFromEmail
-              reqPayload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
-              opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
-          re <- postWith opts "https://api.postmarkapp.com/email" reqPayload
-          unless (statusIsSuccessful (re ^. responseStatus)) $ fail $ "Postmark returned " <> show (re ^. responseStatus)
-        else do
-          let from = Address Nothing cfg.smtpSender
-              to = Address Nothing receiver
-              mail = Mail from [to] [] [] [("Subject", subject)] [[htmlPart (toLazy htmlBody)]]
-              port = fromIntegral cfg.smtpPort
-              sendMail = if cfg.smtpTls then sendMailWithLoginTLS' else sendMailWithLoginSTARTTLS'
-          sendMail (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
+      result <-
+        liftIO
+          $ try @SomeException
+          $ timeout 30_000_000
+          $ if cfg.smtpHost == ""
+            then do
+              let apiKey = encodeUtf8 cfg.postmarkToken
+                  fromAddress = cfg.postmarkFromEmail
+                  reqPayload = [aesonQQ|{ "From": #{fromAddress}, "Subject": #{subject}, "To": #{receiver}, "HtmlBody": #{htmlBody}, "MessageStream": "outbound" }|]
+                  opts = defaults & header "Content-Type" .~ ["application/json"] & header "Accept" .~ ["application/json"] & header "X-Postmark-Server-Token" .~ [apiKey]
+              re <- postWith opts "https://api.postmarkapp.com/email" reqPayload
+              unless (statusIsSuccessful (re ^. responseStatus)) $ fail $ "Postmark returned " <> show (re ^. responseStatus)
+            else do
+              let from = Address Nothing cfg.smtpSender
+                  to = Address Nothing receiver
+                  mail = Mail from [to] [] [] [("Subject", subject)] [[htmlPart (toLazy htmlBody)]]
+                  port = fromIntegral cfg.smtpPort
+                  sendMail = if cfg.smtpTls then sendMailWithLoginTLS' else sendMailWithLoginSTARTTLS'
+              sendMail (toString cfg.smtpHost) port (toString cfg.smtpUsername) (toString cfg.smtpPassword) mail
       case result of
         Right (Just ()) -> Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver, "via" AE..= via])
         Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
