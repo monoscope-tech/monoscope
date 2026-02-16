@@ -31,7 +31,6 @@ import BackgroundJobs qualified as BackgroundJobs
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
-import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
@@ -64,11 +63,11 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import Models.Projects.Projects (User (id))
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))

@@ -30,8 +30,8 @@ import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
-import Models.Apis.Issues qualified as Issues
 import Models.Apis.Errors qualified as Errors
+import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude

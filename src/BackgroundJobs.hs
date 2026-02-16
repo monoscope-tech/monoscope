@@ -1785,7 +1785,6 @@ processNewError pid errorHash authCtx = do
               forM_ users \u ->
                 sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
             Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
-
         Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
 
 

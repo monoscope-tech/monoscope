@@ -48,13 +48,13 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields qualified as Fields (
   FieldCategoryEnum,
   FieldId,
   FieldTypes,
   FormatId,
  )
-import Models.Apis.Errors qualified as Errors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects

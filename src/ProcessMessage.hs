@@ -54,6 +54,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -69,7 +70,6 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
-import Models.Apis.Errors qualified as Errors
 import Utils (DBField (), b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
@@ -600,6 +600,7 @@ processErrors :: Projects.ProjectId -> Errors.ATError -> (Errors.ATError, Query,
 processErrors pid err = (err, q, params)
   where
     (q, params) = Errors.upsertErrorQueryAndParam pid err
+
 
 sortVector :: Ord a => V.Vector a -> V.Vector a
 sortVector vec = runST $ do

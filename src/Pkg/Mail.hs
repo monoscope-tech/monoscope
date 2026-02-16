@@ -19,9 +19,9 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
+import Models.Apis.Errors qualified as Errors
 import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Issues (IssueType (..))
-import Models.Apis.Errors qualified as Errors
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
@@ -380,7 +380,7 @@ sampleAlert = \case
           , Errors.rootErrorMessage = "Sample error"
           , Errors.stackTrace = "at sampleFunction (sample.js:42:15)"
           , Errors.hash = "test-hash-xyz"
-          , Errors.technology =  Just RequestDumps.JsExpress
+          , Errors.technology = Just RequestDumps.JsExpress
           , Errors.requestMethod = Just "GET"
           , Errors.requestPath = Just "/api/test"
           , Errors.spanId = Just "test-span-id"
@@ -389,7 +389,6 @@ sampleAlert = \case
           , Errors.runtime = Just "nodejs"
           }
   _ -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
-  
 
 
 sampleReport :: Text -> NotificationAlerts
