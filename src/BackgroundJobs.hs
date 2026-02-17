@@ -116,7 +116,7 @@ data BgJobs
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
-  | SaveMergedReplayEvents Projects.ProjectId UUID.UUID AE.Value
+  | MergeReplaySession Projects.ProjectId UUID.UUID
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -337,7 +337,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
-    SaveMergedReplayEvents pid sid events -> Replay.saveMergedReplayEvents pid sid events
+    MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
 
 
 -- | Run hourly scheduled tasks for all projects
