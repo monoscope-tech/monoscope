@@ -705,9 +705,8 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
       div_ [class_ "border-t border-strokeWeak pt-4"] do
         div_ [class_ "text-textStrong text-sm font-semibold mb-2"] "Upgrade plan"
         p_ [class_ "text-textWeak text-sm mb-4"] "Monoscope pricing, click on compare feature below to select the option that best suit your project."
-        pass
-
-  modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} (Just $ span_ [class_ "btn btn-primary btn-sm"] "Change plan") do
+        label_ [Lucid.for_ "pricing-modal"] $ span_ [class_ "btn btn-primary btn-sm"] "Change plan"
+  modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} Nothing do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "What's Included?"
       p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."

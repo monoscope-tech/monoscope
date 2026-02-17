@@ -1024,12 +1024,12 @@ aiSearchH pid requestBody = do
   now <- Time.currentTime
   let envCfg = authCtx.env
 
-  let inputTextM = AET.parseMaybe (AE.withObject "request" (AE..: "input")) requestBody
-  case inputTextM of
+  let parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
+  case parsed of
     Nothing -> do
       addErrorToast "Invalid AI search input" Nothing
       throwError Servant.err400{Servant.errBody = "Invalid input format"}
-    Just inputText ->
+    Just (inputText, timezoneM) ->
       if T.null (T.strip inputText)
         then do
           addErrorToast "Please enter a search query" Nothing
@@ -1038,7 +1038,7 @@ aiSearchH pid requestBody = do
           -- Fetch precomputed facets for context (last 24 hours)
           let dayAgo = addUTCTime (-86400) now
           facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-          let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM}
+          let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM}
           result <- AI.runAgenticQuery config inputText envCfg.openaiApiKey
 
           case result of
@@ -1051,6 +1051,7 @@ aiSearchH pid requestBody = do
                   [ "query" AE..= resp.query
                   , "visualization_type" AE..= resp.visualization
                   , "commentary" AE..= resp.explanation
+                  , "time_range" AE..= resp.timeRange
                   ]
 
 

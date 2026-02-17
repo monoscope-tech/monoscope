@@ -147,8 +147,7 @@ getSessionEvents conn pid bucket sessionId = do
   case res of
     Right events -> pure events
     Left _ -> do
-      legacyEvents <- getMinioFile conn bucket (fromString $ toString $ sessionId <> ".json")
-      pure legacyEvents
+      getMinioFile conn bucket (fromString $ toString $ sessionId <> ".json")
 
 
 -- | Merge multiple already-sorted event arrays by sorting arrays based on their first event's timestamp, then concatenating
