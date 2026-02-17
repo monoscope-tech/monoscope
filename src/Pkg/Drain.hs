@@ -8,7 +8,6 @@ module Pkg.Drain (
 ) where
 
 import Data.Char (isSpace)
-import Data.Ord (comparing)
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V

@@ -55,7 +55,6 @@ import Models.Telemetry.SummaryGenerator (generateSummary)
 import Models.Telemetry.Telemetry (SeverityLevel (..), insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Users
-import NeatInterpolation (text)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
@@ -512,40 +511,38 @@ logsPatternExtraction scheduledTime pid = do
 -- events: (id, content, traceId, serviceName, level)
 processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
-  let sourceField = if kind == "log" then "body" else kind
+  let sourceField = bool "body" kind (kind /= "log")
+      -- O(1) metadata lookup by event id (avoids O(n) V.find per pattern)
+      eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
   unless (V.null events) do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-    let known = V.fromList $ map ("",False,,Nothing,Nothing,Nothing) existingPatterns
-        -- Include level in content for pattern matching so different levels create different patterns
-        combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
+    let known = V.fromList $ map ("", False, ) existingPatterns
+        combined = known <> ((\(logId, content, _, _, _) -> (logId, True, content)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
-    Relude.when (V.length newPatterns > 0)
-      $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
+    unless (V.null newPatterns) $
+      Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
       unless (V.null ids) $ do
-        -- Update otel_logs_and_spans with pattern (using explicit field names to avoid SQL injection)
         let filteredIds = V.filter (/= "") ids
         case fieldName of
           "log_pattern" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, filteredIds)
           "summary_pattern" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, filteredIds)
           _ -> pass
-        Relude.when (not $ T.null patternTxt) $ do
-          let (serviceName, logLevel, logTraceId) = case ids V.!? 0 of
-                Just logId | logId /= "" ->
-                  case V.find (\(i, _, _, _, _) -> i == logId) events of
-                    Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
-                    Nothing -> (Nothing, Nothing, Nothing)
-                _ -> (Nothing, Nothing, Nothing)
+        unless (T.null patternTxt) do
+          let (serviceName, logLevel, logTraceId) = fromMaybe (Nothing, Nothing, Nothing) $ do
+                logId <- ids V.!? 0
+                guard (logId /= "")
+                HM.lookup logId eventMeta
               patternHash = toXXHash patternTxt
           void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg}
 
 
--- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain
-processBatch :: Bool -> V.Vector (Text, Bool, Text, Maybe Text, Maybe Text, Maybe Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+-- | Process a batch of (id, isNew, content) tuples through Drain
+processBatch :: Bool -> V.Vector (Text, Bool, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree (logId, isSampleLog, content, _, _, _) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
+  V.foldl' (\tree (logId, isSampleLog, content) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
 
 
 processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -1638,6 +1635,8 @@ calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
   now <- Time.currentTime
   patterns <- LogPatterns.getLogPatterns pid 1000 0
+  Relude.when (length patterns == 1000) $
+    Log.logWarn "Pattern limit reached — only processing first 1000 patterns" pid
   -- Batch query: get stats for all patterns in one DB round-trip (168 hours = 7 days)
   allStats <- LogPatterns.getBatchPatternStats pid 168
   let statsMap = HM.fromList $ map (\s -> (s.logPattern, s)) allStats
@@ -1655,6 +1654,8 @@ calculateLogPatternBaselines pid = do
 detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
+  -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
+  -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
   let anomalyData = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of

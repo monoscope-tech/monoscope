@@ -25,9 +25,7 @@ module Models.Apis.LogPatterns (
 where
 
 import Data.Aeson qualified as AE
-import Data.Text qualified as T
 import Data.Time
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -260,13 +258,18 @@ getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
           SELECT hc.log_pattern, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
           FROM hourly_counts hc JOIN median_calc mc ON hc.log_pattern = mc.log_pattern GROUP BY hc.log_pattern
         )
+        totals AS (
+          SELECT log_pattern, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::INT AS total_events
+          FROM hourly_counts GROUP BY log_pattern
+        )
         SELECT
           mc.log_pattern,
           COALESCE(mc.median_val, 0)::FLOAT AS hourly_median,
           COALESCE(mad.mad_val * 1.4826, 0)::FLOAT AS hourly_mad_scaled,
-          (SELECT COUNT(*)::INT FROM hourly_counts hc2 WHERE hc2.log_pattern = mc.log_pattern) AS total_hours,
-          (SELECT COALESCE(SUM(event_count), 0)::INT FROM hourly_counts hc3 WHERE hc3.log_pattern = mc.log_pattern) AS total_events
-        FROM median_calc mc JOIN mad_calc mad ON mc.log_pattern = mad.log_pattern
+          t.total_hours, t.total_events
+        FROM median_calc mc
+        JOIN mad_calc mad ON mc.log_pattern = mad.log_pattern
+        JOIN totals t ON mc.log_pattern = t.log_pattern
       |]
 
 
