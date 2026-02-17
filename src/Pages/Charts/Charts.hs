@@ -170,7 +170,11 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
       let cacheKey = QC.generateCacheKey pid source queryAST sqlQueryCfg
       cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
       case cacheResult of
-        QC.CacheHit entry -> pure $ QC.trimToRange entry.cachedData reqFrom reqTo
+        QC.CacheHit entry ->
+          let trimmed = QC.trimToRange entry.cachedData reqFrom reqTo
+           in if V.null trimmed.dataset && not (V.null entry.cachedData.dataset)
+                then executeQueryWith sqlQueryCfg queryAST -- cache range overstated; fall back to fresh query
+                else pure trimmed
         QC.PartialHit entry -> do
           let deltaFromTime = entry.cachedTo
           let deltaSqlCfg = sqlQueryCfg{dateRange = (Just deltaFromTime, Just reqTo)}
@@ -182,7 +186,10 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
           let slidingWindowStart = addUTCTime (negate windowSecs) reqTo
           let trimmed = QC.trimOldData slidingWindowStart merged
           QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
-          pure $ QC.trimToRange trimmed reqFrom reqTo
+          let result = QC.trimToRange trimmed reqFrom reqTo
+          if V.null result.dataset && not (V.null trimmed.dataset)
+            then executeQueryWith sqlQueryCfg queryAST
+            else pure result
         QC.CacheMiss -> do
           result <- executeQueryWith sqlQueryCfg queryAST
           QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
