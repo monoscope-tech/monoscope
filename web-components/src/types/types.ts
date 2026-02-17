@@ -37,6 +37,7 @@ declare global {
     getUTCOffset: () => string;
     createTagify: (selectorOrElement: string | Element, options?: any) => any;
     getTagValues: (selector: string) => string[];
+    updateTimePicker: (timeRange: { since?: string; from?: string; to?: string }, opts?: { targetPr?: string; label?: string }) => void;
   }
   function updateUrlState(key: string, value: string): void;
 }

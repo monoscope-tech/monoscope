@@ -167,11 +167,7 @@ timepicker_ submitForm currentRange targetIdM = do
                   (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|])
                   submitForm
               onClickHandler =
-                [text|on click set #$targetPr-custom_range_input's value to my @data-value
-                    then set #$targetPr-currentRange's innerText to my @data-title
-                    then call window.setParams({since:@data-value, from:'', to:''})
-                    then ${action}
-                    then call #$targetPr-timepicker-popover.hidePopover() |]
+                "on click call window.updateTimePicker({since: @data-value}, {targetPr: '" <> targetPr <> "', label: @data-title}) then " <> action <> " then call #" <> targetPr <> "-timepicker-popover.hidePopover()"
               timePickerLink val title =
                 li_ $ a_
                   [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
@@ -194,7 +190,7 @@ timepicker_ submitForm currentRange targetIdM = do
         let submitAction =
               maybe
                 "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();"
-                (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit"); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();|])
+                (\fm -> [text|htmx.trigger("#${fm}", "submit"); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();|])
                 submitForm
         script_
           [text|
@@ -231,14 +227,9 @@ timepicker_ submitForm currentRange targetIdM = do
             });
             
             picker.on('select', ({ detail: { start, end } }) => {
-              startMs = start.getTime();
-              endMs = end.getTime();
-              if (startMs >= endMs) {
-                end = new Date();
-                }
+              if (start.getTime() >= end.getTime()) end = new Date();
               const formatDate = (date) => date.toISOString();
-              document.getElementById(`$targetPr-custom_range_input`).value = `$${start}/$${end}`;
-              document.getElementById(`$targetPr-currentRange`).innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
+              window.updateTimePicker({from: formatDate(start), to: formatDate(end)}, {targetPr: "$targetPr"});
               ${submitAction}
             });
           },

@@ -174,6 +174,36 @@ window.setParams = (
   }
 )();
 
+window.updateTimePicker = function (
+  timeRange: { since?: string; from?: string; to?: string },
+  opts?: { targetPr?: string; label?: string }
+) {
+  const tp = opts?.targetPr || 'n';
+  const rangeEl = document.getElementById(tp + '-currentRange');
+  const inputEl = document.getElementById(tp + '-custom_range_input') as HTMLInputElement | null;
+  const formatLocal = (d: string) => new Date(d).toLocaleString();
+
+  if (timeRange.since) {
+    if (inputEl) inputEl.value = timeRange.since;
+    window.setParams({ since: timeRange.since, from: '', to: '' });
+    if (rangeEl) {
+      if (opts?.label) {
+        rangeEl.innerText = opts.label;
+      } else {
+        const units: Record<string, string> = { S: 'Second', M: 'Minute', H: 'Hour', D: 'Day' };
+        const m = timeRange.since.match(/^(\d+)\s*([SMHD])$/i);
+        rangeEl.innerText = m
+          ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${parseInt(m[1]) !== 1 ? 's' : ''}`
+          : 'Last ' + timeRange.since;
+      }
+    }
+  } else if (timeRange.from && timeRange.to) {
+    if (inputEl) inputEl.value = timeRange.from + '/' + timeRange.to;
+    window.setParams({ from: timeRange.from, to: timeRange.to, since: '' });
+    if (rangeEl) rangeEl.innerText = formatLocal(timeRange.from) + ' - ' + formatLocal(timeRange.to);
+  }
+};
+
 window.updateMarkAreas = function (chartId: string, warningVal: string, incidentVal: string) {
   const warning = parseInt(warningVal, 10),
     incident = parseInt(incidentVal, 10),
