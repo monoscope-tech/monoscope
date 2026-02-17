@@ -342,12 +342,10 @@ outputFormatInstructions =
   |]
 
 
-systemPrompt :: UTCTime -> Text
-systemPrompt now =
+systemPrompt :: Text
+systemPrompt =
   unlines
     [ "You are a helpful assistant that converts natural language queries to KQL (Kusto Query Language) filter expressions."
-    , ""
-    , "Use this to interpret relative time requests (e.g., 'last 2 hours' → {\"since\": \"2H\"})"
     , ""
     , Schema.generateSchemaForAI Schema.telemetrySchema
     , ""
@@ -598,7 +596,7 @@ allToolDefs =
 
 buildSystemPrompt :: AgenticConfig -> UTCTime -> Text
 buildSystemPrompt config now =
-  let basePrompt = fromMaybe (systemPrompt now) config.systemPromptOverride
+  let basePrompt = fromMaybe systemPrompt config.systemPromptOverride
       timezoneSection = "\nUSER TIMEZONE: " <> fromMaybe "UTC" config.timezone <> "\nCURRENT TIME (UTC): " <> show now <> "\n"
       facetSection = formatFacetContext config.facetContext
       customSection = fromMaybe "" config.customContext

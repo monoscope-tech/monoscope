@@ -201,6 +201,8 @@ window.updateTimePicker = function (
     if (inputEl) inputEl.value = timeRange.from + '/' + timeRange.to;
     window.setParams({ from: timeRange.from, to: timeRange.to, since: '' });
     if (rangeEl) rangeEl.innerText = opts?.label ?? (formatLocal(timeRange.from) + ' - ' + formatLocal(timeRange.to));
+  } else {
+    console.warn('updateTimePicker: malformed timeRange — expected "since" or "from"+"to"', timeRange);
   }
 };
 
