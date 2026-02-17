@@ -54,9 +54,9 @@ import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
-import Utils (replaceAllFormats)
 import System.Logging qualified as Log
 import System.Types (DB)
+import Utils (replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
 
@@ -594,26 +594,28 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
               OFFSET ? LIMIT 15
             |]
       PG.query (Query $ encodeUtf8 q) (pid, skip)
-    else if target `elem` tier1Targets
-      then do
-        let q = [text|select ${target}, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and ${target} is not null GROUP BY ${target} ORDER BY p_count desc offset ? limit 15;|]
-        PG.query (Query $ encodeUtf8 q) (Only skip)
-    else if target `elem` tier2Fields
-      then do
-        -- Tier 2 fields: query from apis.log_patterns using occurrence_count
-        PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
-    else do
-        -- On-demand: arbitrary field → SQL GROUP BY + replaceAllFormats re-grouping
-        rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
-              Just (Left colExpr) -> do
-                let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500"
-                PG.query_ (Query $ encodeUtf8 q)
-              Just (Right pathParts) ->
-                PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pathParts)
-              Nothing -> pure []
-        let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
-            sorted = take 15 $ sortOn (Down . snd) $ HashMap.toList normalized
-        pure $ drop skip sorted
+    else
+      if target `elem` tier1Targets
+        then do
+          let q = [text|select ${target}, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and ${target} is not null GROUP BY ${target} ORDER BY p_count desc offset ? limit 15;|]
+          PG.query (Query $ encodeUtf8 q) (Only skip)
+        else
+          if target `elem` tier2Fields
+            then do
+              -- Tier 2 fields: query from apis.log_patterns using occurrence_count
+              PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
+            else do
+              -- On-demand: arbitrary field → SQL GROUP BY + replaceAllFormats re-grouping
+              rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
+                Just (Left colExpr) -> do
+                  let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500"
+                  PG.query_ (Query $ encodeUtf8 q)
+                Just (Right pathParts) ->
+                  PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pathParts)
+                Nothing -> pure []
+              let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
+                  sorted = take 15 $ sortOn (Down . snd) $ HashMap.toList normalized
+              pure $ drop skip sorted
   where
     resolveFieldExpr :: Text -> Maybe (Either Text (V.Vector Text))
     resolveFieldExpr f

@@ -686,7 +686,7 @@ tryAcquireChatMigrationLock convId = do
 
 
 -- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: (UUIDEff :> es, Time :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> Eff es Issue
+createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> Eff es Issue
 createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
   now <- Time.currentTime
   let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
@@ -716,7 +716,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
 
 
 -- | Create an issue for a new log pattern
-createLogPatternIssue :: (UUIDEff :> es, Time :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Eff es Issue
+createLogPatternIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Eff es Issue
 createLogPatternIssue projectId lp = do
   let logPatternData =
         LogPatternData
@@ -776,7 +776,7 @@ data LogPatternRateChangeData = LogPatternRateChangeData
 
 
 -- | Helper to create an issue with common defaults
-mkIssue :: (AE.ToJSON a, UUIDEff :> es, Time :> es) => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> Eff es Issue
+mkIssue :: (AE.ToJSON a, Time :> es, UUIDEff :> es) => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> Eff es Issue
 mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
   issueId <- UUIDId <$> genUUID
   now <- Time.currentTime

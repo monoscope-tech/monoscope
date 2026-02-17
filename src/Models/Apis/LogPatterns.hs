@@ -97,10 +97,17 @@ data LogPattern = LogPattern
 
 
 data UpsertPattern = UpsertPattern
-  { projectId :: Projects.ProjectId, logPattern :: Text, hash :: Text
-  , sourceField :: Text, serviceName :: Maybe Text, logLevel :: Maybe Text
-  , traceId :: Maybe Text, sampleMessage :: Maybe Text
-  } deriving stock (Generic) deriving anyclass (ToRow)
+  { projectId :: Projects.ProjectId
+  , logPattern :: Text
+  , hash :: Text
+  , sourceField :: Text
+  , serviceName :: Maybe Text
+  , logLevel :: Maybe Text
+  , traceId :: Maybe Text
+  , sampleMessage :: Maybe Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (ToRow)
 
 
 -- | Get all log patterns for a project
@@ -132,8 +139,9 @@ acknowledgeLogPatterns uid patternHashes
 
 
 upsertLogPattern :: DB es => UpsertPattern -> Eff es Int64
-upsertLogPattern up = PG.execute
-  [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message)
+upsertLogPattern up =
+  PG.execute
+    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = NOW(),
@@ -141,7 +149,8 @@ upsertLogPattern up = PG.execute
           sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
-  |] up
+  |]
+    up
 
 
 -- | Update log pattern statistics (occurrence count, last seen)
@@ -222,8 +231,14 @@ getPatternStats pid pattern' hoursBack = listToMaybe <$> PG.query q (pid, patter
 
 -- | Batch version of getPatternStats: computes median + MAD for all patterns in one query
 data BatchPatternStats = BatchPatternStats
-  { logPattern :: Text, hourlyMedian :: Double, hourlyMADScaled :: Double, totalHours :: Int, totalEvents :: Int
-  } deriving stock (Generic, Show) deriving anyclass (FromRow)
+  { logPattern :: Text
+  , hourlyMedian :: Double
+  , hourlyMADScaled :: Double
+  , totalHours :: Int
+  , totalEvents :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow)
 
 
 getBatchPatternStats :: DB es => Projects.ProjectId -> Int -> Eff es [BatchPatternStats]
@@ -258,10 +273,12 @@ getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
 -- | Get current hour count for a pattern
 getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
 getCurrentHourPatternCount pid pattern' =
-  maybe 0 fromOnly . listToMaybe <$> PG.query
-    [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
+  maybe 0 fromOnly
+    . listToMaybe
+    <$> PG.query
+      [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
           WHERE project_id = ?::text AND log_pattern = ? AND timestamp >= date_trunc('hour', NOW()) |]
-    (pid, pattern')
+      (pid, pattern')
 
 
 -- | Log pattern with current rate (for batch spike detection)

@@ -128,10 +128,11 @@ updateOrCreateLevelOne :: V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text
 updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId isSampleLog logContent now config =
   maybe
     (V.cons (DrainLevelOne{tokenCount = targetCount, nodes = V.singleton (DrainLevelTwo{firstToken, logGroups = V.singleton newGroup})}) levelOnes, False)
-    (\index ->
-      let existing = levelOnes V.! index
-          (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existing) firstToken tokensVec logId isSampleLog logContent now config
-       in (levelOnes V.// [(index, existing{nodes = updatedChildren})], wasUpdated))
+    ( \index ->
+        let existing = levelOnes V.! index
+            (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existing) firstToken tokensVec logId isSampleLog logContent now config
+         in (levelOnes V.// [(index, existing{nodes = updatedChildren})], wasUpdated)
+    )
     (V.findIndex (\level -> tokenCount level == targetCount) levelOnes)
   where
     newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
@@ -141,10 +142,11 @@ updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Tex
 updateOrCreateLevelTwo levelTwos targetToken tokensVec logId isSampleLog logContent now config =
   maybe
     (V.cons (DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newGroup}) levelTwos, False)
-    (\index ->
-      let existing = levelTwos V.! index
-          (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existing) tokensVec logId isSampleLog logContent now config
-       in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], wasUpdated))
+    ( \index ->
+        let existing = levelTwos V.! index
+            (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existing) tokensVec logId isSampleLog logContent now config
+         in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], wasUpdated)
+    )
     (V.findIndex (\level -> firstToken level == targetToken) levelTwos)
   where
     newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
