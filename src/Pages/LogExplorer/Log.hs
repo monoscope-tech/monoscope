@@ -1024,13 +1024,12 @@ aiSearchH pid requestBody = do
   now <- Time.currentTime
   let envCfg = authCtx.env
 
-  let inputTextM = AET.parseMaybe (AE.withObject "request" (AE..: "input")) requestBody
-      timezoneM = AET.parseMaybe (AE.withObject "request" (AE..: "timezone")) requestBody
-  case inputTextM of
+  let parsed = AET.parseMaybe (AE.withObject "request" \o -> (,) <$> o AE..: "input" <*> o AE..:? "timezone") requestBody
+  case parsed of
     Nothing -> do
       addErrorToast "Invalid AI search input" Nothing
       throwError Servant.err400{Servant.errBody = "Invalid input format"}
-    Just inputText ->
+    Just (inputText, timezoneM) ->
       if T.null (T.strip inputText)
         then do
           addErrorToast "Please enter a search query" Nothing

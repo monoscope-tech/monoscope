@@ -290,10 +290,7 @@ kqlGuide =
   - "which services have the most errors?" -> query: level == "ERROR" | summarize count() by resource.service.name, visualization: distribution
 
   IMPORTANT: ONLY use field names from the schema. Do NOT invent or hallucinate field names like 'value', 'count', 'total', etc. If unsure about a field name, use get_schema or get_field_values tools to discover available fields.
-
-  IMPORTANT: Do NOT use timestamp filtering in the KQL query (e.g., `where timestamp >= datetime(...)` or `where timestamp between ...`).
-  Time filtering is handled by the time picker UI via the "time_range" field in your JSON response.
-  When the user mentions a time range (e.g., "last 2 hours", "from 6pm to 7pm"), set the "time_range" field instead of adding timestamp filters to the query.
+  IMPORTANT: Do NOT use timestamp filtering in the KQL query (e.g., `where timestamp >= datetime(...)` or `where timestamp between ...`). Time filtering is handled by the time picker UI via the "time_range" field in your JSON response. When the user mentions a time range (e.g., "last 2 hours", "from 6pm to 7pm"), set the "time_range" field instead of adding timestamp filters to the query.
   |]
 
 
@@ -604,9 +601,13 @@ allToolDefs =
 buildSystemPrompt :: AgenticConfig -> UTCTime -> Text
 buildSystemPrompt config now =
   let basePrompt = fromMaybe (systemPrompt now config.timezone) config.systemPromptOverride
+      timezoneSection = maybe "" (\tz -> "\nUSER TIMEZONE: " <> tz <> "\nCURRENT TIME (UTC): " <> show now <> "\n") config.timezone
       facetSection = formatFacetContext config.facetContext
       customSection = fromMaybe "" config.customContext
-   in basePrompt <> facetSection <> customSection
+   in basePrompt <> whenJust' config.systemPromptOverride timezoneSection <> facetSection <> customSection
+  where
+    whenJust' (Just _) x = x
+    whenJust' Nothing _ = ""
 
 
 -- | Strip markdown code blocks from LLM responses
