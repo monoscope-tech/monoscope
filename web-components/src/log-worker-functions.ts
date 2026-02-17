@@ -11,7 +11,7 @@ export function generateId() {
 }
 
 export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: Record<string, boolean>, flipDirection: boolean, serverTraces: ServerTraceEntry[]) {
-  const keys = ['trace_id', 'latency_breakdown', 'parent_span_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'kind', 'id'];
+  const keys = ['trace_id', 'latency_breakdown', 'parent_id', 'timestamp', 'duration', 'start_time_ns', 'errors', 'summary', 'kind', 'id'];
   const idx: ColIdxMap = {};
   keys.forEach((key) => {
     if (colIdxMap[key] !== undefined) idx[key] = colIdxMap[key];
@@ -28,7 +28,7 @@ export function groupSpans(data: any[][], colIdxMap: ColIdxMap, expandedTraces: 
       hasErrors: isLog ? false : span[idx.errors] || (span[idx.summary]?.some((el: string) => el.includes('ERROR')) ?? false),
       duration: isLog ? 0 : span[idx.duration],
       children: [] as APTEvent[],
-      parent: isLog ? span[idx.latency_breakdown] : span[idx.parent_span_id],
+      parent: span[idx.parent_id],
       data: span,
       type: isLog ? 'log' : 'span',
     };

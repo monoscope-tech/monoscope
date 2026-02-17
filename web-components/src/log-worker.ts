@@ -20,13 +20,13 @@ self.onmessage = async (e: MessageEvent) => {
       return;
     }
 
-    const { logsData, serviceColors, nextUrl, recentUrl, cols, count, traces } = data;
+    const { logsData, serviceColors, nextUrl, recentUrl, cols, count, traces, hasMore, queryResultCount } = data;
 
     if (!Array.isArray(logsData) || logsData.length === 0) {
       self.postMessage({
         type: 'success',
         tree: [],
-        meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, traces: traces || [], hasMore: logsData.length !== 0 },
+        meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, traces: traces || [], hasMore: hasMore ?? false, queryResultCount: 0 },
         id,
       });
       return;
@@ -42,7 +42,7 @@ self.onmessage = async (e: MessageEvent) => {
     self.postMessage({
       type: 'success',
       tree,
-      meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, traces: traces || [], hasMore: true },
+      meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap: data.colIdxMap, count, traces: traces || [], hasMore: hasMore ?? true, queryResultCount: queryResultCount ?? logsData.length },
       id,
     });
   } catch (error) {

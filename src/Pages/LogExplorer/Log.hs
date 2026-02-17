@@ -60,6 +60,7 @@ import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
 import BackgroundJobs qualified
+import Effectful.Ki qualified as Ki
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
@@ -92,7 +93,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> import Data.Vector qualified as V
 -- >>> import Data.Aeson qualified as AE
 -- >>> import Data.HashMap.Strict qualified as HM
--- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_span_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let row1 = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "lb1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let row2 = V.fromList [AE.String "s2", AE.String "t1", AE.String "lb1", AE.Number 200, AE.Number 500, AE.String "lb2", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
 -- >>> let vecs = V.fromList [row1, row2]
@@ -102,23 +103,21 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> fmap (.root) (viaNonEmpty head result)
 -- Just "lb1"
 --
--- Non-query-result spans (orphans) whose parent is not in result set are excluded:
+-- Non-query-result spans (orphans) whose parent is not in result set are attached to QR roots:
 --
--- >>> import Data.Map.Strict qualified as Map
--- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_span_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
--- >>> let root = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "root", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
--- >>> let child = V.fromList [AE.String "s2", AE.String "t1", AE.String "root", AE.Number 200, AE.Number 500, AE.String "child1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
--- >>> let orphan = V.fromList [AE.String "s3", AE.String "t1", AE.String "missing-parent", AE.Number 300, AE.Number 100, AE.String "orphan", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:02Z"]
--- >>> let r = buildTraceTree colIdx 1 (V.fromList [root, child, orphan])
--- >>> length r
+-- >>> let colIdx2 = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let qr = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "rt", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
+-- >>> let ch = V.fromList [AE.String "s2", AE.String "t1", AE.String "rt", AE.Number 200, AE.Number 500, AE.String "ch1", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
+-- >>> let orph = V.fromList [AE.String "s3", AE.String "t1", AE.String "missing", AE.Number 300, AE.Number 100, AE.String "orp", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:02Z"]
+-- >>> let r2 = buildTraceTree colIdx2 1 (V.fromList [qr, ch, orph])
+-- >>> length r2
 -- 1
--- >>> let rootEntry = find (\e -> e.root == "root") r
--- >>> Map.lookup "root" . (.children) =<< rootEntry
--- Just ["child1"]
+-- >>> fmap (.children) (viaNonEmpty head r2)
+-- Just (fromList [("rt",["orp","ch1"])])
 --
 -- Deeply nested spans (>5 levels) preserve full hierarchy:
 --
--- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_span_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let mkSpan lb par ns = V.fromList [AE.String lb, AE.String "t1", maybe AE.Null AE.String par, AE.Number ns, AE.Number 100, AE.String lb, AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let rows = V.fromList [mkSpan "L0" Nothing 100, mkSpan "L1" (Just "L0") 200, mkSpan "L2" (Just "L1") 300, mkSpan "L3" (Just "L2") 400, mkSpan "L4" (Just "L3") 500, mkSpan "L5" (Just "L4") 600, mkSpan "L6" (Just "L5") 700]
 -- >>> let r = buildTraceTree colIdx 1 rows
@@ -129,12 +128,12 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> Map.lookup "L4" . (.children) =<< viaNonEmpty head r
 -- Just ["L5"]
 --
--- Mixed logs (kind=log) and spans in same trace; log parents via latency_breakdown:
+-- Mixed logs (kind=log) and spans in same trace; all entries use parent_id:
 --
--- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_span_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
+-- >>> let colIdx = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let rootSpan = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "root-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
 -- >>> let childSpan = V.fromList [AE.String "s2", AE.String "t1", AE.String "root-span", AE.Number 200, AE.Number 500, AE.String "child-span", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:01Z"]
--- >>> let logEntry = V.fromList [AE.String "log1", AE.String "t1", AE.Null, AE.Number 250, AE.Number 0, AE.String "child-span", AE.String "log", AE.Null, AE.String "2025-01-01T00:00:02Z"]
+-- >>> let logEntry = V.fromList [AE.String "log1", AE.String "t1", AE.String "child-span", AE.Number 250, AE.Number 0, AE.String "child-span", AE.String "log", AE.Null, AE.String "2025-01-01T00:00:02Z"]
 -- >>> let r = buildTraceTree colIdx 1 (V.fromList [rootSpan, childSpan, logEntry])
 -- >>> length r
 -- 1
@@ -155,7 +154,7 @@ buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) 
           rawId = fromMaybe ("gen-" <> show idx) $ lookupIdx "id" >>= valText row
           rawLb = lookupIdx "latency_breakdown" >>= valText row
           sid = if isLog then rawId else fromMaybe rawId rawLb
-          pid = if isLog then rawLb else lookupIdx "parent_span_id" >>= valText row
+          pid = lookupIdx "parent_id" >>= valText row
           tid = fromMaybe ("gen-trace-" <> show idx) $ lookupIdx "trace_id" >>= valText row
           sns = fromMaybe 0 $ lookupIdx "start_time_ns" >>= valInt64 row
           d = if isLog then 0 else fromMaybe 0 (lookupIdx "duration" >>= valInt64 row)
@@ -165,7 +164,7 @@ buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) 
     spanInfos = V.imap mkSpanInfo rows
 
     grouped :: Map.Map Text [SpanInfo]
-    grouped = foldMap (\si -> Map.singleton si.traceIdVal [si]) spanInfos
+    grouped = Map.fromListWith (<>) [(si.traceIdVal, [si]) | si <- V.toList spanInfos]
 
     entries = concatMap buildTraceEntries (Map.elems grouped)
 
@@ -526,155 +525,165 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           then labeled @"timefusion" @PG.WithConnection $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
           else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
-  tableAsVecE <-
-    if shouldSkipLoad
-      then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0)
-      else fetchLogs
+  -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
+  let isJsonFastPath = jsonM == Just "true"
+        && not (hxRequestM == Just "true" && effectiveVizType == Just "patterns")
+        && layoutM /= Just "SaveQuery"
 
-  -- FIXME: we're silently ignoring parse errors and the likes.
-  let tableAsVecM = hush tableAsVecE
-
-  (queryLibRecent, queryLibSaved) <- bimap V.fromList V.fromList . L.partition (\x -> Projects.QLTHistory == x.queryType) <$> Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-
-  -- Get facet summary for the time range specified
-  facetSummary <- Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
-
-  -- Queue facet generation if no precomputed facets exist (new projects)
-  when (isNothing facetSummary)
-    $ liftIO
-    $ withResource authCtx.jobsPool \conn ->
-      void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
-
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
-
-  -- Fetch teams
-  teams <- V.fromList <$> ManageMembers.getTeams pid
-
-  patterns <- case effectiveVizType of
-    Just "patterns" -> do
-      patternsResult <- V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
-      return $ Just patternsResult
-    _ -> return Nothing
-
-  -- Build preload URL using the same function that builds the JSON URLs
-  let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
-      -- Also preload the chart data request
-      chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
-      headContent = Just $ do
-        script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
-        link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
-
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Explorer"
-          , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
-          , freeTierExceeded = freeTierExceeded
-          , config = authCtx.config
-          , headContent = headContent
-          , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-              label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
-                input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
-                span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
-              Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
-              Components.refreshButton_
-          , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-              a_
-                [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"]
-                "Events"
-              a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] "Metrics"
+  let buildLogResult (requestVecs, colNames, resultCount') = do
+        let colIdxMap = listToIndexHashMap colNames
+            reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+            reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
+            traceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+            alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
+            (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+        childSpansList <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
+        let finalVecs = requestVecs <> V.fromList childSpansList
+            curatedColNames = nubOrd $ curateCols summaryCols colNames
+            lastFM = reqLastCreatedAtM >>= textToUTC >>= Just . toText . iso8601Show . addUTCTime (-0.001)
+            nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+            resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+            recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+            colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+            queryResultCount = V.length requestVecs
+            traces = buildTraceTree colIdxMap queryResultCount finalVecs
+        pure LogResult
+          { finalVecs, curatedColNames, colIdxMap, cursor = reqLastCreatedAtM, nextLogsURL, resetLogsURL, recentLogsURL
+          , serviceColors = colors, queryResultCount, resultCount = resultCount', traces
           }
 
-  case tableAsVecM of
-    Just tableAsVec -> do
-      let (requestVecs, colNames, resultCount) = tableAsVec
-          curatedColNames = nubOrd $ curateCols summaryCols colNames
-          colIdxMap = listToIndexHashMap colNames
-          reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-          reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-          traceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-          alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
-          (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+  let fetchOrSkip = if shouldSkipLoad then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0) else fetchLogs
 
-      childSpansList <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
-      let
-        childSpans = V.fromList childSpansList
-        finalVecs = requestVecs <> childSpans
-        lastFM = reqLastCreatedAtM >>= textToUTC >>= Just . toText . iso8601Show . addUTCTime (-0.001)
-        nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-        resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-        recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+  if isJsonFastPath then do
+    tableAsVecE <- fetchOrSkip
+    case hush tableAsVecE of
+      Just tableResult -> buildLogResult tableResult >>= addRespHeaders . LogsGetJson
+      Nothing -> do
+        addErrorToast "Something went wrong" Nothing
+        addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
+  else do
+    -- Full HTML path: parallelize independent DB queries
+    (tableAsVecE, queryLib, facetSummary, freeTierExceeded, teams, patterns) <- Ki.scoped \scope -> do
+      let aw = Ki.atomically . Ki.await
+      t1 <- Ki.fork scope fetchOrSkip
+      t2 <- Ki.fork scope $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+      t3 <- Ki.fork scope $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+      t4 <- Ki.fork scope $ checkFreeTierExceeded pid project.paymentPlan
+      t5 <- Ki.fork scope $ V.fromList <$> ManageMembers.getTeams pid
+      t6 <- Ki.fork scope $ case effectiveVizType of
+        Just "patterns" -> Just . V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+        _ -> pure Nothing
+      (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
-        serviceNames = V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
-        colors = getServiceColors (V.catMaybes serviceNames)
-        patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
+    -- FIXME: we're silently ignoring parse errors and the likes.
+    let tableAsVecM = hush tableAsVecE
+        (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
 
-      -- Build widgets with PNG URLs
-      let baseChartWidget = logChartWidget pid effectiveVizType pTargetM
-          baseLatencyWidget = logLatencyWidget pid
-      chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
-      latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
-      let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
-          latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
+    -- Queue facet generation if no precomputed facets exist (new projects)
+    when (isNothing facetSummary)
+      $ liftIO
+      $ withResource authCtx.jobsPool \conn ->
+        void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
-      let page =
-            ApiLogsPageData
-              { pid
-              , resultCount
-              , requestVecs = finalVecs
-              , cols = curatedColNames
-              , colIdxMap
-              , nextLogsURL
-              , resetLogsURL
-              , recentLogsURL
-              , currentRange
-              , exceededFreeTier = freeTierExceeded
-              , query = queryM'
-              , cursor = reqLastCreatedAtM
-              , isTestLog = Nothing
-              , emptyStateUrl = Nothing
-              , source
-              , targetSpans = targetSpansM
-              , serviceColors = colors
-              , daysCountDown = Nothing
-              , queryLibRecent
-              , queryLibSaved
-              , fromD
-              , toD
-              , detailsWidth = detailWM
-              , targetEvent = targetEventM
-              , showTrace = showTraceM
-              , facets = facetSummary
-              , vizType = effectiveVizType
-              , alert = alertDM
-              , patterns = patterns
-              , patternsToSkip
-              , targetPattern = pTargetM
-              , project = project
-              , teams
-              , chartWidget
-              , latencyWidget
-              }
+    -- Build preload URL using the same function that builds the JSON URLs
+    let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
+        -- Also preload the chart data request
+        chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
+        headContent = Just $ do
+          script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
+          link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
 
-      let traces = buildTraceTree colIdxMap (V.length requestVecs) finalVecs
-          jsonResponse = LogsGetJson finalVecs colors nextLogsURL resetLogsURL recentLogsURL curatedColNames colIdxMap resultCount traces
-      addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
-        (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip pTargetM
-        (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
-        (Just "resultTable", Just "true", _, _) -> jsonResponse
-        (Just "all", Just "true", _, _) -> jsonResponse
-        (_, _, Just "true", _) -> jsonResponse
-        _ -> LogPage $ PageCtx bwconf page
-    Nothing -> do
-      case (layoutM, hxRequestM, hxBoostedM, jsonM) of
-        (_, _, _, Just "true") -> do
-          addErrorToast "Something went wrong" Nothing
-          addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
-        _ -> do
-          addErrorToast "Something went wrong" Nothing
-          addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+    let bwconf =
+          (def :: BWConfig)
+            { sessM = Just sess
+            , currProject = Just project
+            , pageTitle = "Explorer"
+            , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
+            , freeTierExceeded = freeTierExceeded
+            , config = authCtx.config
+            , headContent = headContent
+            , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
+                label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
+                  input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
+                  span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
+                  span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
+                Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
+                Components.refreshButton_
+            , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
+                a_
+                  [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"]
+                  "Events"
+                a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] "Metrics"
+            }
+
+    case tableAsVecM of
+      Just tableResult -> do
+        r <- buildLogResult tableResult
+        let patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
+
+        -- Build widgets with PNG URLs
+        let baseChartWidget = logChartWidget pid effectiveVizType pTargetM
+            baseLatencyWidget = logLatencyWidget pid
+        chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
+        latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
+        let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
+            latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
+
+        let page =
+              ApiLogsPageData
+                { pid
+                , resultCount = r.resultCount
+                , requestVecs = r.finalVecs
+                , cols = r.curatedColNames
+                , colIdxMap = r.colIdxMap
+                , nextLogsURL = r.nextLogsURL
+                , resetLogsURL = r.resetLogsURL
+                , recentLogsURL = r.recentLogsURL
+                , currentRange
+                , exceededFreeTier = freeTierExceeded
+                , query = queryM'
+                , cursor = r.cursor
+                , isTestLog = Nothing
+                , emptyStateUrl = Nothing
+                , source
+                , targetSpans = targetSpansM
+                , serviceColors = r.serviceColors
+                , daysCountDown = Nothing
+                , queryLibRecent
+                , queryLibSaved
+                , fromD
+                , toD
+                , detailsWidth = detailWM
+                , targetEvent = targetEventM
+                , showTrace = showTraceM
+                , facets = facetSummary
+                , vizType = effectiveVizType
+                , alert = alertDM
+                , patterns = patterns
+                , patternsToSkip
+                , targetPattern = pTargetM
+                , project = project
+                , teams
+                , chartWidget
+                , latencyWidget
+                , queryResultCount = r.queryResultCount
+                }
+
+        addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
+          (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip pTargetM
+          (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
+          (Just "resultTable", Just "true", _, _) -> LogsGetJson r
+          (Just "all", Just "true", _, _) -> LogsGetJson r
+          (_, _, Just "true", _) -> LogsGetJson r
+          _ -> LogPage $ PageCtx bwconf page
+      Nothing -> do
+        case (layoutM, hxRequestM, hxBoostedM, jsonM) of
+          (_, _, _, Just "true") -> do
+            addErrorToast "Something went wrong" Nothing
+            addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
+          _ -> do
+            addErrorToast "Something went wrong" Nothing
+            addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
 
 
 textToUTC :: Text -> Maybe UTCTime
@@ -728,7 +737,7 @@ data LogsGet
   = LogPage (PageCtx ApiLogsPageData)
   | LogsGetError (PageCtx Text)
   | LogsGetErrorSimple Text
-  | LogsGetJson (V.Vector (V.Vector AE.Value)) (HM.HashMap Text Text) Text Text Text [Text] (HM.HashMap Text Int) Int [TraceTreeEntry]
+  | LogsGetJson LogResult
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
   | LogsPatternList Projects.ProjectId (V.Vector (Text, Int)) Int (Maybe Text)
 
@@ -744,7 +753,7 @@ instance ToHtml LogsGet where
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson vecs colors nextLogsURL resetLogsURL recentLogsURL cols colIdxMap count traces) = AE.object ["logsData" AE..= vecs, "serviceColors" AE..= colors, "nextUrl" AE..= nextLogsURL, "resetLogsUrl" AE..= resetLogsURL, "recentUrl" AE..= recentLogsURL, "cols" AE..= cols, "colIdxMap" AE..= colIdxMap, "count" AE..= count, "traces" AE..= traces]
+  toJSON (LogsGetJson r) = AE.object ["logsData" AE..= r.finalVecs, "serviceColors" AE..= r.serviceColors, "nextUrl" AE..= r.nextLogsURL, "resetLogsUrl" AE..= r.resetLogsURL, "recentUrl" AE..= r.recentLogsURL, "cols" AE..= r.curatedColNames, "colIdxMap" AE..= r.colIdxMap, "count" AE..= r.resultCount, "traces" AE..= r.traces, "hasMore" AE..= (r.queryResultCount < r.resultCount), "queryResultCount" AE..= r.queryResultCount]
   toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
   toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
   toJSON _ = AE.object ["error" AE..= True]
@@ -788,6 +797,19 @@ data ApiLogsPageData = ApiLogsPageData
   , teams :: V.Vector ManageMembers.Team
   , chartWidget :: Widget.Widget
   , latencyWidget :: Widget.Widget
+  , queryResultCount :: Int
+  }
+
+
+data LogResult = LogResult
+  { finalVecs :: V.Vector (V.Vector AE.Value)
+  , curatedColNames :: [Text]
+  , colIdxMap :: HM.HashMap Text Int
+  , cursor :: Maybe Text
+  , nextLogsURL, resetLogsURL, recentLogsURL :: Text
+  , serviceColors :: HM.HashMap Text Text
+  , queryResultCount, resultCount :: Int
+  , traces :: [TraceTreeEntry]
   }
 
 
@@ -903,7 +925,9 @@ apiLogsPage page = do
               }, 300);
             |]
             span_ [class_ "text-strokeWeak "] "|"
-            div_ [class_ ""] $ span_ [class_ "text-textStrong", id_ "row-count-display"] (toHtml $ prettyPrintCount page.resultCount) >> span_ [class_ "text-textStrong"] (toHtml " rows")
+            div_ [class_ ""] do
+              span_ [class_ "text-textStrong", id_ "row-count-display"] $ toHtml $ prettyPrintCount page.queryResultCount
+              span_ [class_ "text-textStrong", id_ "row-count-suffix"] $ toHtml $ bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
 
           -- Visualization widget that shows when not in logs view
           div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden"] do
@@ -1021,7 +1045,7 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
     defaultSummaryPaths =
       [ "trace_id"
       , "severity_text"
-      , "parent_span_id"
+      , "parent_id"
       , "errors"
       , "http_attributes"
       , "db_attributes"

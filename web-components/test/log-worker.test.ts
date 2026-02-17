@@ -5,7 +5,7 @@ describe('Log Worker Functions', () => {
   const createSampleColIdxMap = () => ({
     trace_id: 0,
     latency_breakdown: 1,
-    parent_span_id: 2,
+    parent_id: 2,
     timestamp: 3,
     duration: 4,
     start_time_ns: 5,
@@ -18,7 +18,7 @@ describe('Log Worker Functions', () => {
     const defaults = {
       0: 'trace-123', // trace_id
       1: 'span-123', // latency_breakdown
-      2: null, // parent_span_id
+      2: null, // parent_id
       3: '2024-01-01T00:00:00Z', // timestamp
       4: 1000000, // duration (nanoseconds)
       5: 1000000000, // start_time_ns
