@@ -8,6 +8,7 @@ module Pkg.Drain (
 ) where
 
 import Data.Char (isSpace)
+import Data.Ord (comparing)
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
@@ -83,6 +84,10 @@ emptyDrainTree =
     }
 
 
+templateText :: V.Vector Text -> Text
+templateText = unwords . V.toList
+
+
 createLogGroup :: V.Vector Text -> Text -> Text -> UTCTime -> LogGroup
 createLogGroup templateTokens templateString logId now =
   LogGroup
@@ -121,51 +126,32 @@ updateTreeWithLog tree tokenCount firstToken tokensVec logId isSampleLog logCont
 
 updateOrCreateLevelOne :: V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelOne, Bool)
 updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId isSampleLog logContent now config =
-  case V.findIndex (\level -> tokenCount level == targetCount) levelOnes of
-    Just index ->
-      let existingLevel = levelOnes V.! index
-          (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existingLevel) firstToken tokensVec logId isSampleLog logContent now config
-          updatedLevel = existingLevel{nodes = updatedChildren}
-          updatedLevelOnes = levelOnes V.// [(index, updatedLevel)]
-       in (updatedLevelOnes, wasUpdated)
-    Nothing ->
-      let newLogGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
-          newLevelTwo = DrainLevelTwo{firstToken = firstToken, logGroups = V.singleton newLogGroup}
-          newLevelOne = DrainLevelOne{tokenCount = targetCount, nodes = V.singleton newLevelTwo}
-          updatedLevelOnes = V.cons newLevelOne levelOnes
-       in (updatedLevelOnes, False)
+  maybe
+    (V.cons (DrainLevelOne{tokenCount = targetCount, nodes = V.singleton (DrainLevelTwo{firstToken, logGroups = V.singleton newGroup})}) levelOnes, False)
+    (\index ->
+      let existing = levelOnes V.! index
+          (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existing) firstToken tokensVec logId isSampleLog logContent now config
+       in (levelOnes V.// [(index, existing{nodes = updatedChildren})], wasUpdated))
+    (V.findIndex (\level -> tokenCount level == targetCount) levelOnes)
+  where
+    newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
 
 
 updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelTwo, Bool)
 updateOrCreateLevelTwo levelTwos targetToken tokensVec logId isSampleLog logContent now config =
-  case V.findIndex (\level -> firstToken level == targetToken) levelTwos of
-    Just index ->
-      let existingLevel = levelTwos V.! index
-          (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existingLevel) tokensVec logId isSampleLog logContent now config
-          updatedLevel = existingLevel{logGroups = updatedLogGroups}
-          updatedLevelTwos = levelTwos V.// [(index, updatedLevel)]
-       in (updatedLevelTwos, wasUpdated)
-    Nothing ->
-      let newLogGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
-          newLevelTwo = DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newLogGroup}
-          updatedLevelTwos = V.cons newLevelTwo levelTwos
-       in (updatedLevelTwos, False)
+  maybe
+    (V.cons (DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newGroup}) levelTwos, False)
+    (\index ->
+      let existing = levelTwos V.! index
+          (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existing) tokensVec logId isSampleLog logContent now config
+       in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], wasUpdated))
+    (V.findIndex (\level -> firstToken level == targetToken) levelTwos)
+  where
+    newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
 
 
 leastRecentlyUsedIndex :: V.Vector LogGroup -> Int
-leastRecentlyUsedIndex logGroups =
-  V.ifoldl'
-    ( \acc i g ->
-        case acc of
-          Nothing -> Just (i, lastSeen g)
-          Just (j, t) ->
-            if lastSeen g < t
-              then Just (i, lastSeen g)
-              else Just (j, t)
-    )
-    Nothing
-    logGroups
-    & maybe 0 fst
+leastRecentlyUsedIndex = V.minIndexBy (comparing lastSeen)
 
 
 updateOrCreateLogGroup :: V.Vector LogGroup -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool)
@@ -183,11 +169,11 @@ updateOrCreateLogGroup logGroups tokensVec logId isSampleLog logContent now conf
       if V.length logGroups >= maxLogGroups config
         then
           let victimIdx = leastRecentlyUsedIndex logGroups
-              newGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
+              newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
               updatedGroups = logGroups V.// [(victimIdx, newGroup)]
            in (updatedGroups, False)
         else
-          let newGroup = createLogGroup tokensVec (unwords $ V.toList tokensVec) logId now
+          let newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
               updatedGroups = V.cons newGroup logGroups
            in (updatedGroups, False)
 
@@ -219,7 +205,7 @@ updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Bool -> Text 
 updateLogGroupWithTemplate group' newTemplate logId isSampleLog originalLog now =
   group'
     { template = newTemplate
-    , templateStr = unwords $ V.toList newTemplate
+    , templateStr = templateText newTemplate
     , exampleLog = if isSampleLog then originalLog else exampleLog group'
     , logIds = V.cons logId (logIds group')
     , frequency = frequency group' + 1

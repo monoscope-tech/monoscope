@@ -80,7 +80,7 @@ import Data.Hashable (hash)
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time (UTCTime)
-import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime)
+import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
@@ -222,8 +222,8 @@ data Issue = Issue
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
-  , sourceType :: Text
-  , targetHash :: Text
+  , sourceType :: Maybe Text
+  , targetHash :: Text -- Must stay non-null: used in ON CONFLICT unique index for dedup
   , endpointHash :: Text
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Users.UserId
@@ -254,7 +254,7 @@ instance Default Issue where
       , updatedAt = error "updatedAt must be set"
       , projectId = def
       , issueType = error "issueType must be set"
-      , sourceType = ""
+      , sourceType = Nothing
       , targetHash = ""
       , endpointHash = ""
       , acknowledgedAt = Nothing
@@ -474,7 +474,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , updatedAt = firstAnomaly.updatedAt
       , projectId = projectId
       , issueType = APIChange
-      , sourceType = ""
+      , sourceType = Nothing
       , targetHash = ""
       , endpointHash = endpointHash
       , acknowledgedAt = Nothing
@@ -520,7 +520,7 @@ createRuntimeExceptionIssue projectId atError = do
       , updatedAt = errorZonedTime
       , projectId = projectId
       , issueType = RuntimeException
-      , sourceType = ""
+      , sourceType = Nothing
       , targetHash = ""
       , endpointHash = fromMaybe "" atError.hash
       , acknowledgedAt = Nothing
@@ -566,7 +566,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , updatedAt = zonedNow
       , projectId = projectId
       , issueType = QueryAlert
-      , sourceType = ""
+      , sourceType = Nothing
       , targetHash = ""
       , endpointHash = ""
       , acknowledgedAt = Nothing
@@ -686,8 +686,9 @@ tryAcquireChatMigrationLock convId = do
 
 
 -- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> IO Issue
+createLogPatternRateChangeIssue :: (UUIDEff :> es, Time :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> Eff es Issue
 createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
+  now <- Time.currentTime
   let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
       changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
       rateChangeData =
@@ -697,13 +698,14 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
           , sampleMessage = lp.sampleMessage
           , logLevel = lp.logLevel
           , serviceName = lp.serviceName
+          , sourceField = Just lp.sourceField
           , currentRatePerHour = currentRate
           , baselineMean = baselineMean
           , baselineStddev = baselineStddev
           , zScore = zScoreVal
           , changePercent = changePercentVal
           , changeDirection = direction
-          , detectedAt = error "set by mkIssue"
+          , detectedAt = now
           }
       severity = case (direction, lp.logLevel) of
         ("spike", Just "error") -> "critical"
@@ -714,7 +716,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
 
 
 -- | Create an issue for a new log pattern
-createLogPatternIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> IO Issue
+createLogPatternIssue :: (UUIDEff :> es, Time :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Eff es Issue
 createLogPatternIssue projectId lp = do
   let logPatternData =
         LogPatternData
@@ -723,7 +725,8 @@ createLogPatternIssue projectId lp = do
           , sampleMessage = lp.sampleMessage
           , logLevel = lp.logLevel
           , serviceName = lp.serviceName
-          , firstSeenAt = error "set by mkIssue"
+          , sourceField = Just lp.sourceField
+          , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
           , occurrenceCount = fromIntegral lp.occurrenceCount
           }
       severity = case lp.logLevel of
@@ -740,6 +743,7 @@ data LogPatternData = LogPatternData
   , sampleMessage :: Maybe Text
   , logLevel :: Maybe Text
   , serviceName :: Maybe Text
+  , sourceField :: Maybe Text
   , firstSeenAt :: UTCTime
   , occurrenceCount :: Int
   }
@@ -756,6 +760,7 @@ data LogPatternRateChangeData = LogPatternRateChangeData
   , sampleMessage :: Maybe Text
   , logLevel :: Maybe Text
   , serviceName :: Maybe Text
+  , sourceField :: Maybe Text
   , currentRatePerHour :: Double
   , baselineMean :: Double
   , baselineStddev :: Double
@@ -771,11 +776,11 @@ data LogPatternRateChangeData = LogPatternRateChangeData
 
 
 -- | Helper to create an issue with common defaults
-mkIssue :: AE.ToJSON a => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> IO Issue
+mkIssue :: (AE.ToJSON a, UUIDEff :> es, Time :> es) => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> Eff es Issue
 mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
-  issueId <- UUIDId <$> UUID4.nextRandom
-  now <- getCurrentTime
-  zonedNow <- utcToLocalZonedTime now
+  issueId <- UUIDId <$> genUUID
+  now <- Time.currentTime
+  let zonedNow = utcToZonedTime utc now
   pure
     Issue
       { id = issueId
@@ -783,7 +788,7 @@ mkIssue projectId issueType targetHash endpointHash service critical severity ti
       , updatedAt = zonedNow
       , projectId = projectId
       , issueType = issueType
-      , sourceType = issueTypeToText issueType
+      , sourceType = Just $ issueTypeToText issueType
       , targetHash = targetHash
       , endpointHash = endpointHash
       , acknowledgedAt = Nothing

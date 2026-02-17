@@ -2,6 +2,7 @@ module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryE
 
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.Map qualified as Map
 import Data.Text qualified as T ()
 import Data.Vector qualified as V
 import Lucid
@@ -189,10 +190,47 @@ logQueryBox_ config = do
       div_ [class_ "flex items-between justify-between"] do
         div_ [class_ "flex items-center gap-2"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
-          div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:block"] do
-            select_ [class_ "select select-sm max-w-[100px]", value_ $ fromMaybe "" config.patternSelected, onchange_ "(function(event){window.setQueryParamAndReload('pattern_target', event.target.value)}(event))"] do
-              option_ (value_ "log_pattern" : [selected_ "" | config.patternSelected == Just "log_body" || isNothing config.patternSelected]) "Log body"
-              option_ (value_ "summary_pattern" : [selected_ "" | config.patternSelected == Just "summary_pattern"]) "Event summary"
+          div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
+            let precomputed = [("log_pattern", "Log body"), ("summary_pattern", "Event summary"), ("url_path", "URL path"), ("exception", "Exception message")] :: [(Text, Text)]
+                isCustom = maybe False (\s -> s `notElem` map fst precomputed) config.patternSelected
+            select_
+              [ class_ "select select-sm max-w-[140px]"
+              , id_ "pattern-target-select"
+              , value_ $ fromMaybe "" config.patternSelected
+              , [__|on change
+                    if my value is '__custom__'
+                      add .hidden to me
+                      remove .hidden from #pattern-target-input
+                      focus() the #pattern-target-input
+                    else
+                      call window.setQueryParamAndReload('pattern_target', my value)
+                    end|]
+              ]
+              do
+                forM_ precomputed \(v, label) ->
+                  option_ ([value_ v] <> [selected_ "" | config.patternSelected == Just v || (v == "log_pattern" && isNothing config.patternSelected)]) $ toHtml label
+                option_ ([value_ "__custom__"] <> [selected_ "" | isCustom]) "Other field..."
+            input_
+              [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
+              , id_ "pattern-target-input"
+              , list_ "pattern-field-list"
+              , placeholder_ "e.g. attributes.url.path"
+              , value_ $ if isCustom then fromMaybe "" config.patternSelected else ""
+              , [__|on keydown[key is 'Enter']
+                    call window.setQueryParamAndReload('pattern_target', my value)
+                  end
+                  on blur
+                    if my value is not ''
+                      call window.setQueryParamAndReload('pattern_target', my value)
+                    else
+                      add .hidden to me
+                      remove .hidden from #pattern-target-select
+                      set #pattern-target-select.value to 'log_pattern'
+                    end|]
+              ]
+            datalist_ [id_ "pattern-field-list"] $
+              forM_ (sort $ Map.keys Schema.telemetrySchema.fields) \f ->
+                option_ [value_ f] ""
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
 

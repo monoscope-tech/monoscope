@@ -353,7 +353,9 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 statBox_ (Just pid) Nothing "Occurrences" "" (show d.occurrenceCount) Nothing Nothing
                 timeStatBox_ "First Seen" $ prettyTimeAuto now d.firstSeenAt
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                  span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                  whenJust d.sourceField \sf -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sf
                 div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
               whenJust d.sampleMessage \msg ->
                 div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
@@ -368,10 +370,11 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 statBox_ (Just pid) Nothing "Current Rate" "" (show (round d.currentRatePerHour :: Int) <> "/hr") Nothing Nothing
                 statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineMean :: Int) <> "/hr") Nothing Nothing
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                  span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                  whenJust d.sourceField \sf -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sf
                 div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
             _ -> pass
-          _ -> pass
 
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
         div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
@@ -1361,3 +1364,12 @@ issueTypeBadge issueType critical = badge cls icon txt
         | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
         | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
     badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t
+
+
+sourceFieldLabel :: Text -> Text
+sourceFieldLabel = \case
+  "body" -> "Log body"
+  "summary" -> "Event summary"
+  "url_path" -> "URL path"
+  "exception" -> "Exception message"
+  other -> other

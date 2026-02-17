@@ -1,3 +1,7 @@
+-- ALTER TYPE ADD VALUE cannot run inside a transaction on PostgreSQL < 12
+ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern';
+ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern_rate_change';
+
 BEGIN;
 
 CREATE TABLE IF NOT EXISTS apis.log_patterns (
@@ -8,10 +12,12 @@ CREATE TABLE IF NOT EXISTS apis.log_patterns (
 
     log_pattern             TEXT NOT NULL,
     pattern_hash            TEXT NOT NULL,
+    source_field            TEXT NOT NULL DEFAULT 'body',
 
     service_name            TEXT,
     log_level               TEXT,
     sample_message          TEXT,
+    trace_id                TEXT,
     state                   TEXT NOT NULL DEFAULT 'new',  -- 'new', 'acknowledged', 'ignored'
     first_seen_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -27,7 +33,7 @@ CREATE TABLE IF NOT EXISTS apis.log_patterns (
     baseline_samples              INT NOT NULL DEFAULT 0,
     baseline_updated_at           TIMESTAMPTZ,
 
-    UNIQUE(project_id, pattern_hash)
+    UNIQUE(project_id, source_field, pattern_hash)
 );
 
 SELECT manage_updated_at('apis.log_patterns');
@@ -57,14 +63,17 @@ $$ LANGUAGE plpgsql;
 
 CREATE OR REPLACE TRIGGER log_pattern_created_notify AFTER INSERT ON apis.log_patterns FOR EACH ROW EXECUTE PROCEDURE apis.new_log_pattern_proc();
 
-ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern';
-ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern_rate_change';
-ALTER TABLE apis.log_patterns ADD COLUMN trace_id TEXT;
-
-ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS source_type TEXT NOT NULL DEFAULT '';
+ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS source_type TEXT;
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS target_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS environment TEXT;
 ALTER TABLE apis.issues ALTER COLUMN service DROP NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_logs_spans_log_pattern
+  ON otel_logs_and_spans(project_id, log_pattern, timestamp DESC)
+  WHERE log_pattern IS NOT NULL;
+
+CREATE INDEX IF NOT EXISTS idx_log_patterns_baseline_established
+  ON apis.log_patterns(project_id) WHERE baseline_state = 'established';
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_project_target_type_open
   ON apis.issues (project_id, target_hash, issue_type)
