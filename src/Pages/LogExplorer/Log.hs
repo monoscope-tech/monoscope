@@ -2,6 +2,7 @@ module Pages.LogExplorer.Log (
   apiLogH,
   aiSearchH,
   LogsGet (..),
+  LogResult (..),
   ApiLogsPageData (..),
   virtualTable,
   curateCols,
@@ -103,7 +104,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> fmap (.root) (viaNonEmpty head result)
 -- Just "lb1"
 --
--- Non-query-result spans (orphans) whose parent is not in result set are attached to QR roots:
+-- Non-query-result spans (orphans) whose parent is not in result set are discarded (not duplicated across roots):
 --
 -- >>> let colIdx2 = HM.fromList [("id",0),("trace_id",1),("parent_id",2),("start_time_ns",3),("duration",4),("latency_breakdown",5),("kind",6),("errors",7),("timestamp",8)]
 -- >>> let qr = V.fromList [AE.String "s1", AE.String "t1", AE.Null, AE.Number 100, AE.Number 1000, AE.String "rt", AE.String "span", AE.Null, AE.String "2025-01-01T00:00:00Z"]
@@ -113,7 +114,7 @@ data SpanInfo = SpanInfo {spanId :: Text, parentId :: Maybe Text, traceIdVal :: 
 -- >>> length r2
 -- 1
 -- >>> fmap (.children) (viaNonEmpty head r2)
--- Just (fromList [("rt",["orp","ch1"])])
+-- Just (fromList [("rt",["ch1"])])
 --
 -- Deeply nested spans (>5 levels) preserve full hierarchy:
 --
