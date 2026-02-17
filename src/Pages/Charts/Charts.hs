@@ -170,13 +170,10 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
       let cacheKey = QC.generateCacheKey pid source queryAST sqlQueryCfg
       cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
       case cacheResult of
-        QC.CacheHit entry ->
+        QC.CacheHit entry -> do
           let trimmed = QC.trimToRange entry.cachedData reqFrom reqTo
-           in if V.null trimmed.dataset
-                && not (V.null entry.cachedData.dataset)
-                && not (entry.cachedFrom <= reqFrom && entry.cachedTo >= reqTo)
-                then executeQueryWith sqlQueryCfg queryAST -- cache range overstated; fall back to fresh query
-                else pure trimmed
+              coversRange = entry.cachedFrom <= reqFrom && entry.cachedTo >= reqTo
+          fallbackIfEmpty coversRange entry.cachedData trimmed
         QC.PartialHit entry -> do
           let deltaFromTime = entry.cachedTo
           let deltaSqlCfg = sqlQueryCfg{dateRange = (Just deltaFromTime, Just reqTo)}
@@ -189,11 +186,7 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
           let trimmed = QC.trimOldData slidingWindowStart merged
           QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
           let result = QC.trimToRange trimmed reqFrom reqTo
-          if V.null result.dataset
-            && not (V.null trimmed.dataset)
-            && not (slidingWindowStart <= reqFrom)
-            then executeQueryWith sqlQueryCfg queryAST
-            else pure result
+          fallbackIfEmpty (slidingWindowStart <= reqFrom) trimmed result
         QC.CacheMiss -> do
           result <- executeQueryWith sqlQueryCfg queryAST
           QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
@@ -204,6 +197,9 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
       let (_, qc) = queryASTToComponents cfg ast
       let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
       liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
+    fallbackIfEmpty coversRange cached result =
+      bool (executeQueryWith sqlQueryCfg queryAST) (pure result) $
+        coversRange || not (V.null result.dataset) || V.null cached.dataset
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData

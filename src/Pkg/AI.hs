@@ -342,13 +342,11 @@ outputFormatInstructions =
   |]
 
 
-systemPrompt :: UTCTime -> Maybe Text -> Text
-systemPrompt now timezoneM =
+systemPrompt :: UTCTime -> Text
+systemPrompt now =
   unlines
     [ "You are a helpful assistant that converts natural language queries to KQL (Kusto Query Language) filter expressions."
     , ""
-    , "CURRENT TIME (UTC): " <> show now
-    , "USER TIMEZONE: " <> fromMaybe "UTC" timezoneM
     , "Use this to interpret relative time requests (e.g., 'last 2 hours' → {\"since\": \"2H\"})"
     , ""
     , Schema.generateSchemaForAI Schema.telemetrySchema
@@ -600,11 +598,11 @@ allToolDefs =
 
 buildSystemPrompt :: AgenticConfig -> UTCTime -> Text
 buildSystemPrompt config now =
-  let basePrompt = fromMaybe (systemPrompt now config.timezone) config.systemPromptOverride
-      timezoneSection = maybe "" (\tz -> "\nUSER TIMEZONE: " <> tz <> "\nCURRENT TIME (UTC): " <> show now <> "\n") config.timezone
+  let basePrompt = fromMaybe (systemPrompt now) config.systemPromptOverride
+      timezoneSection = "\nUSER TIMEZONE: " <> fromMaybe "UTC" config.timezone <> "\nCURRENT TIME (UTC): " <> show now <> "\n"
       facetSection = formatFacetContext config.facetContext
       customSection = fromMaybe "" config.customContext
-   in basePrompt <> maybe "" (const timezoneSection) config.systemPromptOverride <> facetSection <> customSection
+   in basePrompt <> timezoneSection <> facetSection <> customSection
 
 
 -- | Strip markdown code blocks from LLM responses

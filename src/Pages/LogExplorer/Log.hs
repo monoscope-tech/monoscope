@@ -1024,7 +1024,7 @@ aiSearchH pid requestBody = do
   now <- Time.currentTime
   let envCfg = authCtx.env
 
-  let parsed = AET.parseMaybe (AE.withObject "request" \o -> (,) <$> o AE..: "input" <*> o AE..:? "timezone") requestBody
+  let parsed = AET.parseMaybe (AE.withObject "request" \o -> liftA2 (,) (o AE..: "input") (o AE..:? "timezone")) requestBody
   case parsed of
     Nothing -> do
       addErrorToast "Invalid AI search input" Nothing

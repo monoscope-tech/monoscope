@@ -200,7 +200,7 @@ window.updateTimePicker = function (
   } else if (timeRange.from && timeRange.to) {
     if (inputEl) inputEl.value = timeRange.from + '/' + timeRange.to;
     window.setParams({ from: timeRange.from, to: timeRange.to, since: '' });
-    if (rangeEl) rangeEl.innerText = formatLocal(timeRange.from) + ' - ' + formatLocal(timeRange.to);
+    if (rangeEl) rangeEl.innerText = opts?.label ?? (formatLocal(timeRange.from) + ' - ' + formatLocal(timeRange.to));
   }
 };
 
