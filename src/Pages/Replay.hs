@@ -138,7 +138,7 @@ getSessionEvents conn pid bucket sessionId = do
       case AE.eitherDecode bs of
         Right (AE.Array arr) -> pure arr
         _ -> pure V.empty
-    let allEvents = sortEvents $ V.concat (mergedEvents : individualEvents)
+    let allEvents = mergeEventArrays (mergedEvents : individualEvents)
     when hasIndividual $ do
       let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON pid, AE.toJSON sessionId] :: [AE.Value])]
       liftIO $ withResource ctx.jobsPool \conn' ->
@@ -148,14 +148,15 @@ getSessionEvents conn pid bucket sessionId = do
     Right events -> pure events
     Left _ -> do
       legacyEvents <- getMinioFile conn bucket (fromString $ toString $ sessionId <> ".json")
-      pure $ sortEvents legacyEvents
+      pure legacyEvents
 
 
-sortEvents :: AE.Array -> AE.Array
-sortEvents events = V.fromList $ sortWith getEventTimestamp $ V.toList events
+-- | Merge multiple already-sorted event arrays by sorting arrays based on their first event's timestamp, then concatenating
+mergeEventArrays :: [AE.Array] -> AE.Array
+mergeEventArrays arrays = V.concat $ sortWith firstTimestamp $ filter (not . V.null) arrays
   where
-    getEventTimestamp :: AE.Value -> Double
-    getEventTimestamp val = fromMaybe 0 $ AET.parseMaybe (AE.withObject "event" (AE..: "timestamp")) val
+    firstTimestamp :: AE.Array -> Double
+    firstTimestamp arr = fromMaybe 0 $ (arr V.!? 0) >>= AET.parseMaybe (AE.withObject "event" (AE..: "timestamp"))
 
 
 mergeFileCountThreshold :: Int
@@ -310,7 +311,7 @@ mergeOneSession conn bucket sessionId = do
             Right (AE.Array arr) -> pure arr
             _ -> pure V.empty
 
-      let allEvents = sortEvents $ V.concat eventArrays
+      let allEvents = mergeEventArrays eventArrays
           compressed = GZip.compress $ AE.encode (AE.Array allEvents)
           compressedSize = BL.length compressed
 
