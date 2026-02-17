@@ -18,6 +18,10 @@ import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
+sortedSchemaFieldNames :: [Text]
+sortedSchemaFieldNames = sort $ Map.keys Schema.telemetrySchema.fields
+
+
 -- | Configuration record for the log query box component
 data LogQueryBoxConfig = LogQueryBoxConfig
   { pid :: Projects.ProjectId
@@ -228,8 +232,8 @@ logQueryBox_ config = do
                       set #pattern-target-select.value to 'log_pattern'
                     end|]
               ]
-            datalist_ [id_ "pattern-field-list"]
-              $ forM_ (sort $ Map.keys Schema.telemetrySchema.fields) \f ->
+            datalist_ [id_ "pattern-field-list"] $
+              forM_ sortedSchemaFieldNames \f ->
                 option_ [value_ f] ""
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)

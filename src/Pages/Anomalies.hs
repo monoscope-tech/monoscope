@@ -250,10 +250,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
       h3_ [class_ "text-textStrong text-2xl font-semibold"] $ toHtml issue.title
       p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
 
-    -- Metrics & Timeline Row (8-column grid: 4 stats + chart)
+    -- Metrics & Timeline Row
     div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-      forM_ [("Affected Requests" :: Text, "0" :: Text), ("Affected Clients" :: Text, "0" :: Text)] \(label, val) ->
-        statBox_ (Just pid) Nothing label "" val Nothing Nothing
       whenJust errM \err -> do
         timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
         timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
@@ -551,8 +549,6 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Type**: " <> show iss.issueType
           , Just $ "- **Severity**: " <> iss.severity
           , Just $ "- **Service**: " <> fromMaybe "unknown-service" iss.service
-          , Just $ "- **Affected Requests**: " <> "0"
-          , Just $ "- **Affected Clients**: " <> "0"
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
           , errM >>= \err ->

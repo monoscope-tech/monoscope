@@ -363,7 +363,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     q =
       [text|
       SELECT id, created_at, updated_at, project_id, issue_type::text, endpoint_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
-        CASE WHEN critical THEN 'critical' ELSE 'info' END, 0::int, 0::int, NULL::double precision,
+        CASE WHEN critical THEN 'critical' ELSE 'info' END, affected_requests, affected_clients, NULL::double precision,
         recommended_action, migration_complexity, issue_data, request_payloads, response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
       FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
     |]
