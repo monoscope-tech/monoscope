@@ -10,10 +10,10 @@ import Data.Conduit.Combinators qualified as CC
 import Data.HashMap.Strict qualified as HM
 import Data.List (partition)
 import Data.Pool (Pool, withResource)
-import Database.PostgreSQL.Simple (Connection)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..))
 import Effectful (Eff, IOE, type (:>))
@@ -191,7 +191,8 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
                     VALUES (?, ?, now(), 1)
                     ON CONFLICT (session_id) DO UPDATE SET last_event_at = now(), merged = FALSE, event_file_count = projects.replay_sessions.event_file_count + 1, updated_at = now()
                     RETURNING event_file_count
-                  |] (replayData.sessionId, replayData.projectId)
+                  |]
+                      (replayData.sessionId, replayData.projectId)
                   let fileCount = maybe 0 fromOnly (listToMaybe (countRows :: [Only Int]))
                   when (fileCount >= mergeFileCountThreshold) $ do
                     let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON replayData.projectId, AE.toJSON replayData.sessionId] :: [AE.Value])]
@@ -241,7 +242,7 @@ mergeReplaySession pid sessionId = do
       result <- liftIO $ tryAny $ mergeOneSession s3Conn bucket sessionId
       case result of
         Right _ -> do
-          _ <- PG.execute  [sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = now() WHERE session_id = ? AND project_id = ?|] (sessionId, pid)
+          _ <- PG.execute [sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = now() WHERE session_id = ? AND project_id = ?|] (sessionId, pid)
           Log.logInfo "Merged replay session (file count threshold)" ("session_id", UUID.toText sessionId)
         Left err ->
           Log.logAttention "Failed to merge replay session" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", pid.toText), ("error", toText $ show err)])
