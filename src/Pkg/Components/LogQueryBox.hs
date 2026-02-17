@@ -232,8 +232,8 @@ logQueryBox_ config = do
                       set #pattern-target-select.value to 'log_pattern'
                     end|]
               ]
-            datalist_ [id_ "pattern-field-list"] $
-              forM_ sortedSchemaFieldNames \f ->
+            datalist_ [id_ "pattern-field-list"]
+              $ forM_ sortedSchemaFieldNames \f ->
                 option_ [value_ f] ""
           span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)

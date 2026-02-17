@@ -516,12 +516,12 @@ processPatterns kind fieldName events pid scheduledTime since = do
       eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
   unless (V.null events) do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-    let known = V.fromList $ map ("", False, ) existingPatterns
+    let known = V.fromList $ map ("",False,) existingPatterns
         combined = known <> ((\(logId, content, _, _, _) -> (logId, True, content)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
-    unless (V.null newPatterns) $
-      Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
+    unless (V.null newPatterns)
+      $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
       unless (V.null ids) $ do
@@ -1635,8 +1635,8 @@ calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
   now <- Time.currentTime
   patterns <- LogPatterns.getLogPatterns pid 1000 0
-  Relude.when (length patterns == 1000) $
-    Log.logWarn "Pattern limit reached — only processing first 1000 patterns" pid
+  Relude.when (length patterns == 1000)
+    $ Log.logWarn "Pattern limit reached — only processing first 1000 patterns" pid
   -- Batch query: get stats for all patterns in one DB round-trip (168 hours = 7 days)
   allStats <- LogPatterns.getBatchPatternStats pid 168
   let statsMap = HM.fromList $ map (\s -> (s.logPattern, s)) allStats
