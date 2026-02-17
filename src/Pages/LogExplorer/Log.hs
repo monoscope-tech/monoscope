@@ -60,11 +60,11 @@ import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
 import BackgroundJobs qualified
-import Effectful.Ki qualified as Ki
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Deriving.Aeson qualified as DAE
+import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
 import Pages.Bots.Utils qualified as BotUtils
 
@@ -526,9 +526,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
-  let isJsonFastPath = jsonM == Just "true"
-        && not (hxRequestM == Just "true" && effectiveVizType == Just "patterns")
-        && layoutM /= Just "SaveQuery"
+  let isJsonFastPath =
+        jsonM
+          == Just "true"
+          && not (hxRequestM == Just "true" && effectiveVizType == Just "patterns")
+          && layoutM
+          /= Just "SaveQuery"
 
   let buildLogResult (requestVecs, colNames, resultCount') = do
         let colIdxMap = listToIndexHashMap colNames
@@ -547,143 +550,154 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
             queryResultCount = V.length requestVecs
             traces = buildTraceTree colIdxMap queryResultCount finalVecs
-        pure LogResult
-          { finalVecs, curatedColNames, colIdxMap, cursor = reqLastCreatedAtM, nextLogsURL, resetLogsURL, recentLogsURL
-          , serviceColors = colors, queryResultCount, resultCount = resultCount', traces
-          }
+        pure
+          LogResult
+            { finalVecs
+            , curatedColNames
+            , colIdxMap
+            , cursor = reqLastCreatedAtM
+            , nextLogsURL
+            , resetLogsURL
+            , recentLogsURL
+            , serviceColors = colors
+            , queryResultCount
+            , resultCount = resultCount'
+            , traces
+            }
 
   let fetchOrSkip = if shouldSkipLoad then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0) else fetchLogs
 
-  if isJsonFastPath then do
-    tableAsVecE <- fetchOrSkip
-    case hush tableAsVecE of
-      Just tableResult -> buildLogResult tableResult >>= addRespHeaders . LogsGetJson
-      Nothing -> do
-        addErrorToast "Something went wrong" Nothing
-        addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
-  else do
-    -- Full HTML path: parallelize independent DB queries
-    (tableAsVecE, queryLib, facetSummary, freeTierExceeded, teams, patterns) <- Ki.scoped \scope -> do
-      let aw = Ki.atomically . Ki.await
-      t1 <- Ki.fork scope fetchOrSkip
-      t2 <- Ki.fork scope $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-      t3 <- Ki.fork scope $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
-      t4 <- Ki.fork scope $ checkFreeTierExceeded pid project.paymentPlan
-      t5 <- Ki.fork scope $ V.fromList <$> ManageMembers.getTeams pid
-      t6 <- Ki.fork scope $ case effectiveVizType of
-        Just "patterns" -> Just . V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
-        _ -> pure Nothing
-      (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
+  if isJsonFastPath
+    then do
+      tableAsVecE <- fetchOrSkip
+      case hush tableAsVecE of
+        Just tableResult -> buildLogResult tableResult >>= addRespHeaders . LogsGetJson
+        Nothing -> do
+          addErrorToast "Something went wrong" Nothing
+          addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
+    else do
+      -- Full HTML path: parallelize independent DB queries
+      (tableAsVecE, queryLib, facetSummary, freeTierExceeded, teams, patterns) <- Ki.scoped \scope -> do
+        let aw = Ki.atomically . Ki.await
+        t1 <- Ki.fork scope fetchOrSkip
+        t2 <- Ki.fork scope $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+        t3 <- Ki.fork scope $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+        t4 <- Ki.fork scope $ checkFreeTierExceeded pid project.paymentPlan
+        t5 <- Ki.fork scope $ V.fromList <$> ManageMembers.getTeams pid
+        t6 <- Ki.fork scope $ case effectiveVizType of
+          Just "patterns" -> Just . V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+          _ -> pure Nothing
+        (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
-    -- FIXME: we're silently ignoring parse errors and the likes.
-    let tableAsVecM = hush tableAsVecE
-        (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
+      -- FIXME: we're silently ignoring parse errors and the likes.
+      let tableAsVecM = hush tableAsVecE
+          (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
 
-    -- Queue facet generation if no precomputed facets exist (new projects)
-    when (isNothing facetSummary)
-      $ liftIO
-      $ withResource authCtx.jobsPool \conn ->
-        void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
+      -- Queue facet generation if no precomputed facets exist (new projects)
+      when (isNothing facetSummary)
+        $ liftIO
+        $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
-    -- Build preload URL using the same function that builds the JSON URLs
-    let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
-        -- Also preload the chart data request
-        chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
-        headContent = Just $ do
-          script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
-          link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
+      -- Build preload URL using the same function that builds the JSON URLs
+      let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
+          -- Also preload the chart data request
+          chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
+          headContent = Just $ do
+            script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
+            link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
 
-    let bwconf =
-          (def :: BWConfig)
-            { sessM = Just sess
-            , currProject = Just project
-            , pageTitle = "Explorer"
-            , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
-            , freeTierExceeded = freeTierExceeded
-            , config = authCtx.config
-            , headContent = headContent
-            , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
-                label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
-                  input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                  span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
-                  span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
-                Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
-                Components.refreshButton_
-            , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-                a_
-                  [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"]
-                  "Events"
-                a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] "Metrics"
-            }
+      let bwconf =
+            (def :: BWConfig)
+              { sessM = Just sess
+              , currProject = Just project
+              , pageTitle = "Explorer"
+              , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
+              , freeTierExceeded = freeTierExceeded
+              , config = authCtx.config
+              , headContent = headContent
+              , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
+                  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
+                    input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
+                  Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
+                  Components.refreshButton_
+              , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
+                  a_
+                    [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"]
+                    "Events"
+                  a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] "Metrics"
+              }
 
-    case tableAsVecM of
-      Just tableResult -> do
-        r <- buildLogResult tableResult
-        let patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
+      case tableAsVecM of
+        Just tableResult -> do
+          r <- buildLogResult tableResult
+          let patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
 
-        -- Build widgets with PNG URLs
-        let baseChartWidget = logChartWidget pid effectiveVizType pTargetM
-            baseLatencyWidget = logLatencyWidget pid
-        chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
-        latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
-        let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
-            latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
+          -- Build widgets with PNG URLs
+          let baseChartWidget = logChartWidget pid effectiveVizType pTargetM
+              baseLatencyWidget = logLatencyWidget pid
+          chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
+          latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
+          let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
+              latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
 
-        let page =
-              ApiLogsPageData
-                { pid
-                , resultCount = r.resultCount
-                , requestVecs = r.finalVecs
-                , cols = r.curatedColNames
-                , colIdxMap = r.colIdxMap
-                , nextLogsURL = r.nextLogsURL
-                , resetLogsURL = r.resetLogsURL
-                , recentLogsURL = r.recentLogsURL
-                , currentRange
-                , exceededFreeTier = freeTierExceeded
-                , query = queryM'
-                , cursor = r.cursor
-                , isTestLog = Nothing
-                , emptyStateUrl = Nothing
-                , source
-                , targetSpans = targetSpansM
-                , serviceColors = r.serviceColors
-                , daysCountDown = Nothing
-                , queryLibRecent
-                , queryLibSaved
-                , fromD
-                , toD
-                , detailsWidth = detailWM
-                , targetEvent = targetEventM
-                , showTrace = showTraceM
-                , facets = facetSummary
-                , vizType = effectiveVizType
-                , alert = alertDM
-                , patterns = patterns
-                , patternsToSkip
-                , targetPattern = pTargetM
-                , project = project
-                , teams
-                , chartWidget
-                , latencyWidget
-                , queryResultCount = r.queryResultCount
-                }
+          let page =
+                ApiLogsPageData
+                  { pid
+                  , resultCount = r.resultCount
+                  , requestVecs = r.finalVecs
+                  , cols = r.curatedColNames
+                  , colIdxMap = r.colIdxMap
+                  , nextLogsURL = r.nextLogsURL
+                  , resetLogsURL = r.resetLogsURL
+                  , recentLogsURL = r.recentLogsURL
+                  , currentRange
+                  , exceededFreeTier = freeTierExceeded
+                  , query = queryM'
+                  , cursor = r.cursor
+                  , isTestLog = Nothing
+                  , emptyStateUrl = Nothing
+                  , source
+                  , targetSpans = targetSpansM
+                  , serviceColors = r.serviceColors
+                  , daysCountDown = Nothing
+                  , queryLibRecent
+                  , queryLibSaved
+                  , fromD
+                  , toD
+                  , detailsWidth = detailWM
+                  , targetEvent = targetEventM
+                  , showTrace = showTraceM
+                  , facets = facetSummary
+                  , vizType = effectiveVizType
+                  , alert = alertDM
+                  , patterns = patterns
+                  , patternsToSkip
+                  , targetPattern = pTargetM
+                  , project = project
+                  , teams
+                  , chartWidget
+                  , latencyWidget
+                  , queryResultCount = r.queryResultCount
+                  }
 
-        addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
-          (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip pTargetM
-          (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
-          (Just "resultTable", Just "true", _, _) -> LogsGetJson r
-          (Just "all", Just "true", _, _) -> LogsGetJson r
-          (_, _, Just "true", _) -> LogsGetJson r
-          _ -> LogPage $ PageCtx bwconf page
-      Nothing -> do
-        case (layoutM, hxRequestM, hxBoostedM, jsonM) of
-          (_, _, _, Just "true") -> do
-            addErrorToast "Something went wrong" Nothing
-            addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
-          _ -> do
-            addErrorToast "Something went wrong" Nothing
-            addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
+          addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
+            (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip pTargetM
+            (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
+            (Just "resultTable", Just "true", _, _) -> LogsGetJson r
+            (Just "all", Just "true", _, _) -> LogsGetJson r
+            (_, _, Just "true", _) -> LogsGetJson r
+            _ -> LogPage $ PageCtx bwconf page
+        Nothing -> do
+          case (layoutM, hxRequestM, hxBoostedM, jsonM) of
+            (_, _, _, Just "true") -> do
+              addErrorToast "Something went wrong" Nothing
+              addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
+            _ -> do
+              addErrorToast "Something went wrong" Nothing
+              addRespHeaders $ LogsGetError $ PageCtx bwconf "Something went wrong"
 
 
 textToUTC :: Text -> Maybe UTCTime
