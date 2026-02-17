@@ -173,6 +173,7 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
         QC.CacheHit entry ->
           let trimmed = QC.trimToRange entry.cachedData reqFrom reqTo
            in if V.null trimmed.dataset && not (V.null entry.cachedData.dataset)
+                && not (entry.cachedFrom <= reqFrom && entry.cachedTo >= reqTo)
                 then executeQueryWith sqlQueryCfg queryAST -- cache range overstated; fall back to fresh query
                 else pure trimmed
         QC.PartialHit entry -> do
@@ -188,6 +189,7 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
           QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
           let result = QC.trimToRange trimmed reqFrom reqTo
           if V.null result.dataset && not (V.null trimmed.dataset)
+            && not (slidingWindowStart <= reqFrom)
             then executeQueryWith sqlQueryCfg queryAST
             else pure result
         QC.CacheMiss -> do

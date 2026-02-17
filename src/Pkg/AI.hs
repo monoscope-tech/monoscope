@@ -604,10 +604,7 @@ buildSystemPrompt config now =
       timezoneSection = maybe "" (\tz -> "\nUSER TIMEZONE: " <> tz <> "\nCURRENT TIME (UTC): " <> show now <> "\n") config.timezone
       facetSection = formatFacetContext config.facetContext
       customSection = fromMaybe "" config.customContext
-   in basePrompt <> whenJust' config.systemPromptOverride timezoneSection <> facetSection <> customSection
-  where
-    whenJust' (Just _) x = x
-    whenJust' Nothing _ = ""
+   in basePrompt <> maybe "" (const timezoneSection) config.systemPromptOverride <> facetSection <> customSection
 
 
 -- | Strip markdown code blocks from LLM responses

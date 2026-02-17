@@ -193,7 +193,7 @@ window.updateTimePicker = function (
         const units: Record<string, string> = { S: 'Second', M: 'Minute', H: 'Hour', D: 'Day' };
         const m = timeRange.since.match(/^(\d+)\s*([SMHD])$/i);
         rangeEl.innerText = m
-          ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${parseInt(m[1]) !== 1 ? 's' : ''}`
+          ? `Last ${m[1]} ${units[m[2].toUpperCase()] || m[2]}${m[1] !== '1' ? 's' : ''}`
           : 'Last ' + timeRange.since;
       }
     }
