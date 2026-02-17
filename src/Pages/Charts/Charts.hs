@@ -198,8 +198,10 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
       let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
       liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
     fallbackIfEmpty coversRange cached result =
-      bool (executeQueryWith sqlQueryCfg queryAST) (pure result) $
-        coversRange || not (V.null result.dataset) || V.null cached.dataset
+      bool (executeQueryWith sqlQueryCfg queryAST) (pure result)
+        $ coversRange
+        || not (V.null result.dataset)
+        || V.null cached.dataset
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData
