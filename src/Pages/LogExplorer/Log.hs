@@ -431,6 +431,9 @@ renderFacets facetSummary = do
                           do
                             faSprite_ "group-by" "regular" "w-4 h-4 text-iconNeutral"
                             span_ [] "Group by"
+                      li_ $ a_ [class_ "flex gap-2 items-center", onclick_ $ "viewFieldPatterns('" <> T.replace "___" "." key <> "')"] do
+                        faSprite_ "chart-bar" "regular" "w-4 h-4 text-iconNeutral"
+                        span_ [] "View patterns"
 
                 -- Render facet values (uses group-has-checked to show/hide)
                 div_ [class_ "facet-values pl-7 pr-2 mb-1 space-y-1 max-h-0 overflow-hidden group-has-[:checked]/facet:max-h-[1000px] transition-[max-height] duration-200"] do
