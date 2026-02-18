@@ -76,16 +76,18 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple (Only (Only, fromOnly))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE)
 import Effectful qualified
 import Effectful.PostgreSQL (WithConnection)
+import Effectful.PostgreSQL qualified as PG
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.HTTP.Types (urlEncode)
@@ -487,7 +489,9 @@ freeTierLimitExceededBanner pid =
 checkFreeTierExceeded :: (IOE Effectful.:> es, WithConnection Effectful.:> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid paymentPlan =
   if paymentPlan == "Free"
-    then (> fromIntegral freeTierDailyMaxEvents) <$> RequestDumps.getLast24hTotalRequest pid
+    then do
+      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval '1 day'|] (Only pid)
+      pure $ count > fromInteger freeTierDailyMaxEvents
     else pure False
 
 
