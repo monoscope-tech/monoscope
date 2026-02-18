@@ -341,6 +341,14 @@ bodyWrapper bcfg child = do
         document.getElementById("filterElement").handleAddQuery(path + ' ' + operator + ' ' + value);
     }
 
+    function viewFieldPatterns(fieldPath) {
+        const url = new URL(window.location.href);
+        url.searchParams.set('viz_type', 'patterns');
+        url.searchParams.set('pattern_target', fieldPath);
+        url.searchParams.delete('pattern_skip');
+        window.location.href = url.toString();
+    }
+
     var toggleColumnToSummary = (e)=>{
       const cols = (params().cols||"").split(",").filter(x=>x!="");
       const subject = (e.target.closest('[data-field-path]')?.dataset.fieldPath || e.target.closest('[data-field]').dataset.field);

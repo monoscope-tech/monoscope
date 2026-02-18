@@ -376,6 +376,9 @@ jsonValueToHtmlTree val pathM = do
                 do
                   faSprite_ "copy" "regular" "w-4 h-4 text-iconNeutral"
                   span_ [] "Group by field"
+            li_ $ a_ [class_ "flex gap-2 items-center", onpointerdown_ "viewFieldPatterns(event.target.closest('[data-field-path]').dataset.fieldPath)"] do
+              faSprite_ "chart-bar" "regular" "w-4 h-4 text-iconNeutral"
+              span_ [] "View patterns"
 
     renderParentType :: Text -> Text -> Text -> Int -> Html () -> Html ()
     renderParentType opening closing key count child = div_ [class_ $ "log-item-with-children" <> if count == 0 then " collapsed" else ""] do
