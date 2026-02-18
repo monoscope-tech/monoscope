@@ -20,6 +20,7 @@ module Models.Apis.Errors (
   upsertErrorQueryAndParam,
   assignError,
   updateErrorSubscription,
+  updateErrorThreadIds,
   setErrorAssignee,
   -- Error Events (for baseline/spike detection)
   HourlyBucket (..),
@@ -159,6 +160,8 @@ data Error = Error
   , baselineUpdatedAt :: Maybe ZonedTime
   , isIgnored :: Bool
   , ignoredUntil :: Maybe ZonedTime
+  , slackThreadTs :: Maybe Text
+  , discordMessageId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -209,6 +212,8 @@ data ErrorL = ErrorL
   , baselineUpdatedAt :: Maybe ZonedTime
   , isIgnored :: Bool
   , ignoredUntil :: Maybe ZonedTime
+  , slackThreadTs :: Maybe Text
+  , discordMessageId :: Maybe Text
   , occurrences :: Int
   , affectedUsers :: Int
   , lastOccurredAt :: Maybe ZonedTime
@@ -304,7 +309,8 @@ getErrors pid mstate limit offset = PG.query q (pid, maybe "%" errorStateToText 
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
                baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until
+               is_ignored, ignored_until,
+               slack_thread_ts, discord_message_id
         FROM apis.errors
         WHERE project_id = ? AND state LIKE ?
         ORDER BY updated_at DESC
@@ -330,7 +336,8 @@ getErrorById eid = do
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
                baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until
+               is_ignored, ignored_until,
+               slack_thread_ts, discord_message_id
         FROM apis.errors
         WHERE id = ?
       |]
@@ -354,7 +361,8 @@ getErrorByHash pid hash = do
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
                baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until
+               is_ignored, ignored_until,
+               slack_thread_ts, discord_message_id
         FROM apis.errors
         WHERE project_id = ? AND hash = ?
       |]
@@ -378,6 +386,7 @@ getErrorLByHash pid hash = do
                baseline_state, baseline_samples,
                baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
                is_ignored, ignored_until,
+               slack_thread_ts, discord_message_id,
                (SELECT COUNT(*) FROM apis.error_events WHERE target_hash = e.hash) AS occurrences,
                (SELECT COUNT(DISTINCT user_id) FROM apis.error_events WHERE target_hash = e.hash) AS affected_users,
                (SELECT MAX(occurred_at) FROM apis.error_events WHERE target_hash = e.hash) AS last_occurred_at
@@ -402,7 +411,8 @@ getActiveErrors pid = PG.query q (Only pid)
                quiet_minutes, resolution_threshold_minutes,
                baseline_state, baseline_samples,
                baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until
+               is_ignored, ignored_until,
+               slack_thread_ts, discord_message_id
         FROM apis.errors
         WHERE project_id = ? AND state != 'resolved'
         ORDER BY updated_at DESC
@@ -485,6 +495,19 @@ updateErrorSubscription eid subscribed notifyEveryMinutes =
           notify_every_minutes = ?,
           last_notified_at = CASE WHEN ? THEN NULL ELSE last_notified_at END,
           updated_at = NOW()
+        WHERE id = ?
+      |]
+
+
+updateErrorThreadIds :: DB es => ErrorId -> Maybe Text -> Maybe Text -> Eff es Int64
+updateErrorThreadIds eid slackTs discordMsgId =
+  PG.execute q (slackTs, discordMsgId, eid)
+  where
+    q =
+      [sql|
+        UPDATE apis.errors SET
+          slack_thread_ts = COALESCE(?, slack_thread_ts),
+          discord_message_id = COALESCE(?, discord_message_id)
         WHERE id = ?
       |]
 

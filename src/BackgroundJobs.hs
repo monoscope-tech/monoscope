@@ -71,7 +71,7 @@ import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
-import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), sendDiscordAlert, sendDiscordAlertThreaded, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertThreaded, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (processErrors, processSpanToEntities)
@@ -675,6 +675,8 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , issueTitle :: Text
   , notifyEveryMinutes :: Int
   , lastNotifiedAt :: Maybe UTCTime
+  , slackThreadTs :: Maybe Text
+  , discordMessageId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -687,12 +689,14 @@ notifyErrorSubscriptions pid errorHashes = do
     ( PG.query
         [sql|
         SELECT e.id, e.error_data, i.id, i.title,
-               e.notify_every_minutes, e.last_notified_at
+               e.notify_every_minutes, e.last_notified_at,
+               e.slack_thread_ts, e.discord_message_id
         FROM apis.errors e
         JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
         WHERE e.project_id = ?
           AND e.hash = ANY(?::text[])
           AND e.subscribed = TRUE
+          AND e.state != 'resolved'
           AND i.issue_type = 'runtime_exception'
           AND (
             e.last_notified_at IS NULL
@@ -707,9 +711,17 @@ notifyErrorSubscriptions pid errorHashes = do
     whenJust projectM \project -> Relude.when project.errorAlerts do
       let runtimeAlert ed issueId = RuntimeErrorAlert{issueId = Issues.issueIdText issueId, errorData = ed}
       forM_ dueErrors \sub -> do
+        newSlackTs <- newIORef sub.slackThreadTs
+        newDiscordMsgId <- newIORef sub.discordMessageId
         forM_ project.notificationsChannel \case
-          Projects.NSlack -> sendSlackAlert (runtimeAlert sub.errorData sub.issueId) pid project.title Nothing
-          Projects.NDiscord -> sendDiscordAlert (runtimeAlert sub.errorData sub.issueId) pid project.title Nothing
+          Projects.NSlack -> do
+            tsM <- sendSlackAlertThreaded (runtimeAlert sub.errorData sub.issueId) pid project.title Nothing sub.slackThreadTs
+            Relude.when (isNothing sub.slackThreadTs) $
+              writeIORef newSlackTs tsM
+          Projects.NDiscord -> do
+            msgIdM <- sendDiscordAlertThreaded (runtimeAlert sub.errorData sub.issueId) pid project.title Nothing sub.discordMessageId
+            Relude.when (isNothing sub.discordMessageId) $
+              writeIORef newDiscordMsgId msgIdM
           Projects.NPhone -> sendWhatsAppAlert (runtimeAlert sub.errorData sub.issueId) pid project.title project.whatsappNumbers
           Projects.NEmail -> do
             users <- Projects.usersByProjectId pid
@@ -719,6 +731,11 @@ notifyErrorSubscriptions pid errorHashes = do
             forM_ users \u ->
               sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Projects.NPagerduty -> pass
+        -- Store thread IDs if this was the first notification
+        finalSlackTs <- readIORef newSlackTs
+        finalDiscordMsgId <- readIORef newDiscordMsgId
+        Relude.when (finalSlackTs /= sub.slackThreadTs || finalDiscordMsgId /= sub.discordMessageId) $
+          void $ Errors.updateErrorThreadIds sub.errorId finalSlackTs finalDiscordMsgId
     let errIds = V.fromList $ map (.errorId) dueErrors
     void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ANY(?::uuid[]) |] (Only errIds)
 

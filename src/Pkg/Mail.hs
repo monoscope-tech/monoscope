@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, NotificationAlerts (..), sendDiscordAlert, sendPagerdutyAlertToService, sampleAlert, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertThreaded, NotificationAlerts (..), sendDiscordAlert, sendDiscordAlertThreaded, sendPagerdutyAlertToService, sampleAlert, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -83,6 +83,22 @@ sendDiscordAlert alert pid pTitle channelIdM' = do
     traverse_ (Notify.sendNotification . Notify.discordNotification cid) (mkAlert alert)
 
 
+sendDiscordAlertThreaded :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlertThreaded alert pid pTitle channelIdM' replyToMsgIdM = do
+  appCtx <- ask @Config.AuthContext
+  channelIdM <- maybe (getDiscordDataByProjectId pid <&> (>>= (.notifsChannelId))) (pure . Just) channelIdM'
+  case channelIdM of
+    Nothing -> pure Nothing
+    Just cid -> do
+      let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+      case alert of
+        RuntimeErrorAlert{..} ->
+          Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid (discordErrorAlert errorData pTitle projectUrl) replyToMsgIdM
+        _ -> do
+          sendDiscordAlert alert pid pTitle channelIdM'
+          pure Nothing
+
+
 sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendSlackAlert alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
@@ -96,6 +112,22 @@ sendSlackAlert alert pid pTitle channelM = do
           MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
           ShapeAlert -> Nothing
     traverse_ (Notify.sendNotification . Notify.slackNotification cid) (mkAlert alert)
+
+
+sendSlackAlertThreaded :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlertThreaded alert pid pTitle channelM threadTsM = do
+  appCtx <- ask @Config.AuthContext
+  channelIdM <- maybe (getProjectSlackData pid <&> fmap (.channelId)) (pure . Just) channelM
+  case channelIdM of
+    Nothing -> pure Nothing
+    Just cid -> do
+      let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+      case alert of
+        RuntimeErrorAlert{..} ->
+          Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid (slackErrorAlert errorData pTitle cid projectUrl) threadTsM
+        _ -> do
+          sendSlackAlert alert pid pTitle channelM
+          pure Nothing
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
