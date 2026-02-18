@@ -799,15 +799,14 @@ createAndInsertIssue :: Monitors.QueryMonitorEvaled -> Text -> ATBackgroundCtx I
 createAndInsertIssue monitorE hostUrl = do
   let (thresholdType, threshold) = calculateThreshold monitorE
   issue <-
-    liftIO
-      $ Issues.createQueryAlertIssue
-        monitorE.projectId
-        (show monitorE.id)
-        monitorE.alertConfig.title
-        monitorE.logQuery
-        threshold
-        monitorE.evalResult
-        thresholdType
+    Issues.createQueryAlertIssue
+      monitorE.projectId
+      (show monitorE.id)
+      monitorE.alertConfig.title
+      monitorE.logQuery
+      threshold
+      monitorE.evalResult
+      thresholdType
   Issues.insertIssue issue
   pure issue
 
@@ -1087,7 +1086,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
 
       -- Create one issue per error
       forM_ errors \err -> do
-        issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
+        issue <- Issues.createRuntimeExceptionIssue pid err.errorData
         Issues.insertIssue issue
         -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
@@ -1158,7 +1157,7 @@ processAPIChangeAnomalies pid targetHashes = do
         Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
       Nothing -> do
         -- Create new issue
-        issue <- liftIO $ Issues.createAPIChangeIssue pid endpointHash anomalies
+        issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
         Issues.insertIssue issue
 
         -- Queue enhancement job
