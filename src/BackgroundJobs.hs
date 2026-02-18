@@ -599,7 +599,6 @@ processOneMinuteErrors scheduledTime pid = do
   Relude.when ctx.config.enableEventsTableUpdates $ do
     let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
-    notifyErrorSubscriptions pid
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
     processErrorsPaginated oneMinuteAgo skip = do
@@ -644,6 +643,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- (otel log and span, [errors])
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
       processProjectErrors pid allErrors
+      notifyErrorSubscriptions pid (V.fromList $ V.toList $ V.map (.hash) allErrors)
       -- Batch all error updates into a single query using unnest (avoids N+1 pattern)
       let mkErrorUpdate groupedErrors = do
             (firstError, _) <- V.uncons groupedErrors
@@ -680,8 +680,8 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   deriving anyclass (FromRow, NFData)
 
 
-notifyErrorSubscriptions :: Projects.ProjectId -> ATBackgroundCtx ()
-notifyErrorSubscriptions pid = do
+notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
+notifyErrorSubscriptions pid errorHashes = do
   ctx <- ask @Config.AuthContext
   dueErrors <-
     ( PG.query
@@ -691,16 +691,15 @@ notifyErrorSubscriptions pid = do
         FROM apis.errors e
         JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
         WHERE e.project_id = ?
+          AND e.hash = ANY(?::text[])
           AND e.subscribed = TRUE
-          AND e.state != 'resolved'
           AND i.issue_type = 'runtime_exception'
-          AND e.updated_at > COALESCE(e.last_notified_at, 'epoch'::timestamptz)
           AND (
             e.last_notified_at IS NULL
             OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
           )
       |]
-        (Only pid)
+        (pid, errorHashes)
         :: ATBackgroundCtx [ErrorSubscriptionDue]
     )
   unless (null dueErrors) do
@@ -715,8 +714,7 @@ notifyErrorSubscriptions pid = do
           Projects.NEmail -> do
             users <- Projects.usersByProjectId pid
             let e = sub.errorData
-
-                errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+                errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
                 (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl [e]
             forM_ users \u ->
               sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)

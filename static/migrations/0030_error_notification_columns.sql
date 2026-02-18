@@ -1,0 +1,8 @@
+BEGIN;
+
+ALTER TABLE apis.errors
+  ADD COLUMN subscribed BOOLEAN NOT NULL DEFAULT FALSE,
+  ADD COLUMN notify_every_minutes INT NOT NULL DEFAULT 30,
+  ADD COLUMN last_notified_at TIMESTAMPTZ;
+
+COMMIT;
