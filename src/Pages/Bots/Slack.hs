@@ -149,7 +149,7 @@ slackInteractionsH interaction = do
   Log.logTrace ("Slack interaction received" :: Text) $ AE.object ["command" AE..= interaction.command, "text" AE..= interaction.text, "team_id" AE..= interaction.team_id, "channel_id" AE..= interaction.channel_id]
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   case interaction.command of
-    "/here" -> do
+    "/monoscope-here" -> do
       _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
       slackDataM <- getSlackDataByTeamId interaction.team_id
       whenJust slackDataM \slackData -> do
@@ -486,7 +486,6 @@ getBotContentWithUrl question query query_url imageUrl =
           )
     , "response_type" AE..= ("in_channel" :: Text)
     , "replace_original" AE..= True
-    , "delete_original" AE..= True
     ]
 
 
