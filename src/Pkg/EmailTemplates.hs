@@ -9,6 +9,9 @@ module Pkg.EmailTemplates (
   projectCreatedEmail,
   projectDeletedEmail,
   runtimeErrorsEmail,
+  escalatingErrorsEmail,
+  regressedErrorsEmail,
+  errorSpikesEmail,
   anomalyEndpointEmail,
   issueAssignedEmail,
   weeklyReportEmail,
@@ -291,6 +294,44 @@ runtimeErrorsEmail projectName errorsUrl errors =
       h1_ "New Runtime Error(s)"
       p_ do
         "We've detected a new runtime error in your "
+        b_ $ toHtml projectName
+        " project. A copy of this email was sent to all members of the project."
+      emailDivider
+      forM_ errors errorCard
+      emailButton errorsUrl "View all errors"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl errorsUrl
+  )
+
+
+escalatingErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
+escalatingErrorsEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " projectName errorsUrl errors
+    "We've detected escalating runtime errors in your "
+
+
+regressedErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
+regressedErrorsEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " projectName errorsUrl errors
+    "We've detected regressed runtime errors in your "
+
+
+errorSpikesEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
+errorSpikesEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " projectName errorsUrl errors
+    "We've detected a runtime error spike in your "
+
+
+runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [Errors.ATError] -> Text -> (Text, Html ())
+runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intro =
+  ( subjectPrefix <> projectName
+  , emailBody do
+      h1_ $ toHtml heading
+      p_ do
+        toHtml intro
         b_ $ toHtml projectName
         " project. A copy of this email was sent to all members of the project."
       emailDivider
