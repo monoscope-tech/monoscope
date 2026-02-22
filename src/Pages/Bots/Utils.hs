@@ -463,5 +463,4 @@ formatTextResponse Slack txt =
     [ "blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= txt]]])
     , "response_type" AE..= "in_channel"
     , "replace_original" AE..= True
-    , "delete_original" AE..= True
     ]

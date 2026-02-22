@@ -536,7 +536,7 @@ renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_i
 renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> V.Vector Text -> Html ()
 renderSlackIntegration envCfg pid slackData channels existingChannels = do
   let stateParam = if T.null pid then "" else "&state=" <> pid
-      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
+      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
 
   case slackData of
     Just sd -> do
