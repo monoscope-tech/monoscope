@@ -1751,8 +1751,8 @@ processNewLogPattern pid patternHash authCtx = do
               Projects.NEmail -> do
                 sendSlackAlert alert pid project.title Nothing
                 sendDiscordAlert alert pid project.title Nothing
-                -- users <- Projects.usersByProjectId pid
-                -- forM_ users \u -> do
-                --   let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
-                --   sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+          -- users <- Projects.usersByProjectId pid
+          -- forM_ users \u -> do
+          --   let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
+          --   sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
