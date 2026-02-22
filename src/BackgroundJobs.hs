@@ -1719,7 +1719,7 @@ processNewLogPattern pid patternHash authCtx = do
   -- Skip in low-volume projects: <10k events/week means the project is still onboarding
   -- and nearly every pattern would be "new", generating noisy issues
   totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
-  if False -- totalEvents < (10000 :: Int)
+  if totalEvents < (10000 :: Int)
     then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
     else do
       patternM <- LogPatterns.getLogPatternByHash pid patternHash
