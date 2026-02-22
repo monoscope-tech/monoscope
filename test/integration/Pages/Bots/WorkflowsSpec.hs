@@ -68,7 +68,7 @@ spec = aroundAll withTestResources do
     describe "Platform-Specific Commands" do
       it "Slack: /here command workflow" \tr -> do
         setupSlackData tr testPid "T_HERE_WF"
-        let interaction = slackInteraction "/here" "" "T_HERE_WF"
+        let interaction = slackInteraction "/monoscope-here" "" "T_HERE_WF"
 
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
         result `shouldSatisfy` isValidJsonResponse
@@ -148,7 +148,7 @@ spec = aroundAll withTestResources do
     describe "Response Format Validation" do
       it "Slack responses have correct structure" \tr -> do
         setupSlackData tr testPid "T_FORMAT_SLACK"
-        let interaction = slackInteraction "/here" "" "T_FORMAT_SLACK"
+        let interaction = slackInteraction "/monoscope-here" "" "T_FORMAT_SLACK"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         extractResponseType result `shouldSatisfy` isJust
