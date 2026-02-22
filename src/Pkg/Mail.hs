@@ -67,6 +67,7 @@ data NotificationAlerts
       , monitorUrl :: Text
       }
 
+
 data RuntimeAlertType
   = NewRuntimeError
   | EscalatingErrors
@@ -99,11 +100,11 @@ sendDiscordAlertThreaded alert pid pTitle channelIdM' replyToMsgIdM = do
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
       case alert of
-          RuntimeErrorAlert{..} ->
-            Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid (discordErrorAlert runtimeAlertType errorData pTitle projectUrl) replyToMsgIdM
-          _ -> do
-            sendDiscordAlert alert pid pTitle channelIdM'
-            pure Nothing
+        RuntimeErrorAlert{..} ->
+          Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid (discordErrorAlert runtimeAlertType errorData pTitle projectUrl) replyToMsgIdM
+        _ -> do
+          sendDiscordAlert alert pid pTitle channelIdM'
+          pure Nothing
 
 
 sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
@@ -130,11 +131,11 @@ sendSlackAlertThreaded alert pid pTitle channelM threadTsM = do
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
       case alert of
-          RuntimeErrorAlert{..} ->
-            Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
-          _ -> do
-            sendSlackAlert alert pid pTitle channelM
-            pure Nothing
+        RuntimeErrorAlert{..} ->
+          Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
+        _ -> do
+          sendSlackAlert alert pid pTitle channelM
+          pure Nothing
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()

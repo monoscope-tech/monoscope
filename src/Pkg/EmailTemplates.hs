@@ -309,19 +309,34 @@ runtimeErrorsEmail projectName errorsUrl errors =
 
 escalatingErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
 escalatingErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " projectName errorsUrl errors
+  runtimeErrorVariantEmail
+    "Escalating Runtime Error(s)"
+    "[···] Escalating Runtime Error(s) Detected - "
+    projectName
+    errorsUrl
+    errors
     "We've detected escalating runtime errors in your "
 
 
 regressedErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
 regressedErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " projectName errorsUrl errors
+  runtimeErrorVariantEmail
+    "Regressed Runtime Error(s)"
+    "[···] Regressed Runtime Error(s) Detected - "
+    projectName
+    errorsUrl
+    errors
     "We've detected regressed runtime errors in your "
 
 
 errorSpikesEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
 errorSpikesEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " projectName errorsUrl errors
+  runtimeErrorVariantEmail
+    "Runtime Error Spike(s)"
+    "[···] Runtime Error Spike(s) Detected - "
+    projectName
+    errorsUrl
+    errors
     "We've detected a runtime error spike in your "
 
 

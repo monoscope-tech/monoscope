@@ -1795,8 +1795,9 @@ detectErrorSpikes pid authCtx = do
                 Projects.NPagerduty -> pass
               finalSlackTs <- readIORef newSlackTs
               finalDiscordMsgId <- readIORef newDiscordMsgId
-              Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId) $
-                void $ Errors.updateErrorThreadIds err.id finalSlackTs finalDiscordMsgId
+              Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId)
+                $ void
+                $ Errors.updateErrorThreadIds err.id finalSlackTs finalDiscordMsgId
 
             Log.logInfo "Created issue for error spike" (pid, err.id, issue.id)
       _ -> pass -- Skip errors without established baseline
