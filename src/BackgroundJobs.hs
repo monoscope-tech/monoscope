@@ -883,8 +883,6 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailActi
   for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
 
 
--- Send notifications
-
 -- way to get emails for company. for email all
 -- TODO: based on monitor send emails or slack
 
@@ -1683,6 +1681,32 @@ detectLogPatternSpikes pid authCtx = do
         Issues.insertIssue issue
         liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        -- Send notifications
+        let changePercentVal = if mean > 0 then abs ((currentRate / mean) - 1) * 100 else 0
+            issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issue.id.toText
+            alert =
+              LogPatternRateChangeAlert
+                { issueUrl = issueUrl
+                , patternText = lp.logPattern
+                , sampleMessage = lp.sampleMessage
+                , logLevel = lp.logLevel
+                , serviceName = lp.serviceName
+                , direction = direction
+                , currentRate = currentRate
+                , baselineMean = mean
+                , changePercent = changePercentVal
+                }
+        whenJustM (Projects.projectById pid) \project -> do
+          users <- Projects.usersByProjectId pid
+          forM_ project.notificationsChannel \case
+            Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+            Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
+            Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+            Projects.NPagerduty -> pass
+            Projects.NEmail -> do
+              forM_ users \u -> do
+                let (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName direction currentRate mean changePercentVal
+                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
         Log.logInfo ("Created issue for log pattern " <> direction) (pid, lp.id, issue.id)
       Nothing -> pass
   Log.logInfo "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalyData)
@@ -1705,4 +1729,27 @@ processNewLogPattern pid patternHash authCtx = do
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          -- Send notifications
+          let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issue.id.toText
+              alert =
+                LogPatternAlert
+                  { issueUrl = issueUrl
+                  , patternText = lp.logPattern
+                  , sampleMessage = lp.sampleMessage
+                  , logLevel = lp.logLevel
+                  , serviceName = lp.serviceName
+                  , sourceField = lp.sourceField
+                  , occurrenceCount = fromIntegral lp.occurrenceCount
+                  }
+          whenJustM (Projects.projectById pid) \project -> do
+            users <- Projects.usersByProjectId pid
+            forM_ project.notificationsChannel \case
+              Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+              Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
+              Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+              Projects.NPagerduty -> pass
+              Projects.NEmail -> do
+                forM_ users \u -> do
+                  let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
+                  sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)

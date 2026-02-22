@@ -12,6 +12,8 @@ module Pkg.EmailTemplates (
   anomalyEndpointEmail,
   weeklyReportEmail,
   WeeklyReportData (..),
+  logPatternEmail,
+  logPatternRateChangeEmail,
 
   -- * Sample data for previews
   sampleProjectInvite,
@@ -20,9 +22,12 @@ module Pkg.EmailTemplates (
   sampleRuntimeErrors,
   sampleAnomalyEndpoint,
   sampleWeeklyReport,
+  sampleLogPattern,
+  sampleLogPatternRateChange,
 ) where
 
 import Data.Default (def)
+import Data.Text qualified as T
 import Data.Time (formatTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
@@ -555,3 +560,135 @@ sampleWeeklyReport eventsChart errorsChart =
       , slowQueries = V.fromList [("SELECT * FROM users WHERE email = $1", 3400, 1250 :: Int)]
       , freeTierExceeded = False
       }
+
+
+sampleLogPattern :: (Text, Html ())
+sampleLogPattern =
+  logPatternEmail
+    "My API Project"
+    "https://app.monoscope.tech/p/sample-id/anomalies/sample-issue"
+    "Failed to connect to database: connection refused at <*>"
+    (Just "Failed to connect to database: connection refused at 10.0.0.1:5432")
+    (Just "error")
+    (Just "api-server")
+    "body"
+    42
+
+
+sampleLogPatternRateChange :: (Text, Html ())
+sampleLogPatternRateChange =
+  logPatternRateChangeEmail
+    "My API Project"
+    "https://app.monoscope.tech/p/sample-id/anomalies/sample-issue"
+    "Request timeout after <*> ms for endpoint <*>"
+    (Just "Request timeout after 30000 ms for endpoint /api/users")
+    (Just "warning")
+    (Just "api-gateway")
+    "spike"
+    150.0
+    12.0
+    1150.0
+
+
+-- =============================================================================
+-- Log Pattern Template
+-- =============================================================================
+
+logPatternEmail :: Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Int -> (Text, Html ())
+logPatternEmail projectName issueUrl patternText sampleMessageM logLevelM serviceNameM sourceField occurrenceCount =
+  ( "[···] New Log Pattern Detected - " <> projectName
+  , emailBody do
+      h1_ "New Log Pattern Detected"
+      p_ do
+        "A new log pattern has been detected in your "
+        b_ $ toHtml projectName
+        " project."
+      emailDivider
+      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+        tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
+          p_ [class_ "error-card-header", style_ "color: #377cfb;"] "Pattern"
+          div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 patternText
+        whenJust sampleMessageM \msg ->
+          tr_ $ td_ [style_ "padding: 10px 20px;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #57606a;"] "Sample Message"
+            div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 msg
+        tr_
+          $ td_ [style_ "padding: 10px 20px 15px 20px;"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+            tr_ do
+              metaCell "Level:" $ fromMaybe "—" logLevelM
+              metaCell "Service:" $ fromMaybe "—" serviceNameM
+            tr_ do
+              metaCell "Source:" sourceField
+              metaCell "Occurrences:" $ show occurrenceCount
+      emailButton issueUrl "View Log Pattern"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl issueUrl
+  )
+  where
+    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
+      $ span_ [class_ "error-card-meta"] do
+        b_ [class_ "error-card-label"] $ toHtml @Text label
+        " "
+        toHtml @Text val
+
+
+-- =============================================================================
+-- Log Pattern Rate Change Template
+-- =============================================================================
+
+logPatternRateChangeEmail :: Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> (Text, Html ())
+logPatternRateChangeEmail projectName issueUrl patternText sampleMessageM logLevelM serviceNameM direction currentRate baselineMean changePercent =
+  ( "[···] Log Pattern Volume " <> T.toTitle direction <> " - " <> projectName
+  , emailBody do
+      h1_ $ toHtml $ "Log Pattern Volume " <> T.toTitle direction
+      p_ do
+        "A log pattern volume "
+        b_ $ toHtml direction
+        " has been detected in your "
+        b_ $ toHtml projectName
+        " project."
+      emailDivider
+      -- Rate change stats
+      div_ [class_ "highlight-box"] do
+        table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ do
+          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Current Rate"
+            p_ [style_ "margin: 0; font-size: 22px; font-weight: 700;"] $ toHtml $ show (round currentRate :: Int) <> "/hr"
+          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0; border-left: 1px solid #dee2e7;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Baseline"
+            p_ [style_ "margin: 0; font-size: 22px; font-weight: 700;"] $ toHtml $ show (round baselineMean :: Int) <> "/hr"
+          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0; border-left: 1px solid #dee2e7;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Change"
+            p_ [style_ $ "margin: 0; font-size: 22px; font-weight: 700; color: " <> if direction == "spike" then "#cf222e" else "#1a7f37"] $ toHtml $ show (round changePercent :: Int) <> "%"
+      -- Pattern card
+      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+        tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
+          p_ [class_ "error-card-header", style_ $ "color: " <> if direction == "spike" then "#cf222e" else "#bf8700"] "Pattern"
+          div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 patternText
+        whenJust sampleMessageM \msg ->
+          tr_ $ td_ [style_ "padding: 10px 20px;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #57606a;"] "Sample Message"
+            div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 msg
+        tr_
+          $ td_ [style_ "padding: 10px 20px 15px 20px;"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+          $ tr_ do
+            metaCell "Level:" $ fromMaybe "—" logLevelM
+            metaCell "Service:" $ fromMaybe "—" serviceNameM
+      emailButton issueUrl "View Log Pattern"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl issueUrl
+  )
+  where
+    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
+      $ span_ [class_ "error-card-meta"] do
+        b_ [class_ "error-card-label"] $ toHtml @Text label
+        " "
+        toHtml @Text val
