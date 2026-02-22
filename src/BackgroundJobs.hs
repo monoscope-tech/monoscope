@@ -1742,17 +1742,14 @@ processNewLogPattern pid patternHash authCtx = do
                   , occurrenceCount = fromIntegral lp.occurrenceCount
                   }
           whenJustM (Projects.projectById pid) \project -> do
-            traceShowM project.notificationsChannel
             forM_ project.notificationsChannel \case
               Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
               Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
               Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
               Projects.NPagerduty -> pass
               Projects.NEmail -> do
-                sendSlackAlert alert pid project.title Nothing
-                sendDiscordAlert alert pid project.title Nothing
-          -- users <- Projects.usersByProjectId pid
-          -- forM_ users \u -> do
-          --   let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
-          --   sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                users <- Projects.usersByProjectId pid
+                forM_ users \u -> do
+                  let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
+                  sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
