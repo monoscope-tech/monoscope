@@ -30,7 +30,7 @@ spec = describe "Notify Effect" $ do
     it "captures multiple notifications" $ do
       (notifications, _) <- runTestNotify $ do
         sendNotification $ emailNotification "user1@example.com" "Subject 1" "<p>Body 1</p>"
-        sendNotification $ slackNotification "https://slack.webhook.url" (AE.object ["text" AE..= ("Test message" :: Text)])
+        sendNotification $ slackNotification "channel123" "https://slack.webhook.url" (AE.object ["text" AE..= ("Test message" :: Text)])
         sendNotification $ discordNotification "channel123" (AE.object ["content" AE..= ("Discord message" :: Text)])
         getNotifications
       
