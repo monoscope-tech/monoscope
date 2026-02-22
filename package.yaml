@@ -290,8 +290,6 @@ executables:
       - -fplugin AutoInstrument
       - -rtsopts
       - -with-rtsopts=-N
-      - -j4
-      - '+RTS -N -A128m -n2m -RTS'
       # - -O2
       # - -fPIC
     dependencies:

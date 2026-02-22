@@ -95,13 +95,13 @@ jobs:
         run: cabal update
 
       - name: Configure project
-        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 -j8"
+        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
 
       - name: Build dependencies
-        run: cabal build --only-dependencies all -j4
+        run: cabal build --only-dependencies all -j
 
       - name: Build project
-        run: cabal build all -j4
+        run: cabal build all -j
 
   test:
     name: Test ${{ matrix.test-suite }}
@@ -170,13 +170,13 @@ jobs:
         run: cabal update
 
       - name: Configure project
-        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 -j8"
+        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
 
       - name: Build dependencies
-        run: cabal build --only-dependencies all -j4
+        run: cabal build --only-dependencies all -j
 
       - name: Build ${{ matrix.test-suite }}
-        run: cabal build ${{ matrix.test-suite }} -j4
+        run: cabal build ${{ matrix.test-suite }} -j
 
       - name: Run ${{ matrix.test-suite }}
         env:
@@ -186,7 +186,7 @@ jobs:
           DISCORD_CLIENT_ID: "1328384474395967631"
         run: |
           echo "::group::Running ${{ matrix.test-suite }}"
-          cabal test ${{ matrix.test-suite }} --ghc-options="-O0 -j8" --test-show-details=direct
+          cabal test ${{ matrix.test-suite }} --ghc-options="-O0" --test-show-details=direct
           echo "::endgroup::"
 
   lint:
