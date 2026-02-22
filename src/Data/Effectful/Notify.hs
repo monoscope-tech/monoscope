@@ -193,12 +193,14 @@ runNotifyProduction = interpret $ \_ -> \case
         Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
         Left ex -> Log.logAttention "Email send failed" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via, "error" AE..= displayException ex])
     SlackNotification SlackData{..} -> do
+      traceShowM payload
       appCtx <- ask @Config.AuthContext
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
       case payload of
         AE.Object obj -> do
           let msg = AE.Object $ AEK.insert "channel" (AE.String channelId) obj
           re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" msg
+          traceShowM re
           unless (statusIsSuccessful (re ^. responseStatus))
             $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
           pass

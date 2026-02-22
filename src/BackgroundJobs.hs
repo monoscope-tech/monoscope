@@ -1719,7 +1719,7 @@ processNewLogPattern pid patternHash authCtx = do
   -- Skip in low-volume projects: <10k events/week means the project is still onboarding
   -- and nearly every pattern would be "new", generating noisy issues
   totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
-  if totalEvents < (10000 :: Int)
+  if False -- totalEvents < (10000 :: Int)
     then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
     else do
       patternM <- LogPatterns.getLogPatternByHash pid patternHash
@@ -1742,14 +1742,17 @@ processNewLogPattern pid patternHash authCtx = do
                   , occurrenceCount = fromIntegral lp.occurrenceCount
                   }
           whenJustM (Projects.projectById pid) \project -> do
-            users <- Projects.usersByProjectId pid
+            traceShowM project.notificationsChannel
             forM_ project.notificationsChannel \case
               Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
               Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
               Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
               Projects.NPagerduty -> pass
               Projects.NEmail -> do
-                forM_ users \u -> do
-                  let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
-                  sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                sendSlackAlert alert pid project.title Nothing
+                sendDiscordAlert alert pid project.title Nothing
+                -- users <- Projects.usersByProjectId pid
+                -- forM_ users \u -> do
+                --   let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
+                --   sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
