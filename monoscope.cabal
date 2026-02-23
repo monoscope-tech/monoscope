@@ -56,7 +56,6 @@ extra-source-files:
     static/migrations/0028_everyone_team.sql
     static/migrations/0029_replay_sessions.sql
     static/migrations/0030_replay_event_file_count.sql
-    static/migrations/0031_log_patterns.sql
 
 source-repository head
   type: git
