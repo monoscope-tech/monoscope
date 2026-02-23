@@ -258,9 +258,19 @@ generateDrainTokens content =
         else V.fromList $ words replaced
 
 
--- | Markup-aware tokenizer for summary fields that preserves `field;style⇒value` format.
+-- | Markup-aware tokenizer for summary fields that preserves @field;style⇒value@ format.
 -- Splits by words (avoids looksLikeJson false positives on markup tokens).
 -- For tokens containing ⇒: preserves the prefix, normalizes only the value after ⇒.
+--
+-- >>> import Data.Vector qualified as V
+-- >>> V.toList $ generateSummaryDrainTokens "status_code;badge-2xx⇒200"
+-- ["status_code;badge-2xx\8658{integer}"]
+--
+-- >>> V.toList $ generateSummaryDrainTokens "user logged in at 192.168.1.1"
+-- ["user","logged","in","at","{ipv4}"]
+--
+-- >>> V.toList $ generateSummaryDrainTokens "method;bold⇒GET path;code⇒/api/users/123 status_code;badge-2xx⇒200"
+-- ["method;bold\8658GET","path;code\8658/api/users/{integer}","status_code;badge-2xx\8658{integer}"]
 generateSummaryDrainTokens :: T.Text -> V.Vector T.Text
 generateSummaryDrainTokens content = V.fromList $ map normalizeMarkupToken $ words content
   where
