@@ -224,7 +224,7 @@ buildDescriptionPrompt issue =
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Current rate: {show (round d.currentRatePerHour :: Int)}/hr
             Baseline mean: {show (round d.baselineMean :: Int)}/hr
-            Baseline MAD: {show (round d.baselineStddev :: Int)}/hr
+            Baseline MAD: {show (round d.baselineMad :: Int)}/hr
             Z-score: {show (round d.zScore :: Int)} standard deviations
             Change: {show (round d.changePercent :: Int)}%
             Service: {fromMaybe "unknown-service" d.serviceName}

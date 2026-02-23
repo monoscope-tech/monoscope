@@ -13,7 +13,6 @@ module Models.Apis.LogPatterns (
   upsertHourlyStat,
   BatchPatternStats (..),
   getBatchPatternStats,
-  getCurrentHourPatternCount,
   -- Pattern with current rate for spike detection
   LogPatternWithRate (..),
   getPatternsWithCurrentRates,
@@ -217,17 +216,6 @@ getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
         JOIN mad_calc mad ON mc.pattern_hash = mad.pattern_hash
         JOIN totals t ON mc.pattern_hash = t.pattern_hash
       |]
-
-
--- | Get current hour count for a pattern from hourly stats table
-getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
-getCurrentHourPatternCount pid patHash =
-  maybe 0 fromOnly
-    . listToMaybe
-    <$> PG.query
-      [sql| SELECT COALESCE(event_count, 0)::INT FROM apis.log_pattern_hourly_stats
-          WHERE project_id = ? AND pattern_hash = ? AND hour_bucket = date_trunc('hour', NOW()) |]
-      (pid, patHash)
 
 
 -- | Log pattern with current rate (for batch spike detection)

@@ -17,7 +17,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
-import Data.Time.Clock (diffUTCTime)
+import Data.Time.Clock (diffUTCTime, nominalDay)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -1632,12 +1632,13 @@ calculateLogPatternBaselines pid = do
   allStats <- LogPatterns.getBatchPatternStats pid 168
   let statsMap = HM.fromList $ map (\s -> (s.patternHash, s)) allStats
       pageSize = 1000
+      isEstablished stats ageDays = stats.hourlyMedian > 100 || ageDays >= 14
       go offset totalProcessed totalEstablished = do
         patterns <- LogPatterns.getLogPatterns pid pageSize offset
-        let established = length $ filter (\lp -> maybe False (\s -> s.hourlyMedian > 100 || diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400 >= 14) (HM.lookup lp.patternHash statsMap)) patterns
+        let patternAge lp = diffUTCTime now (zonedTimeToUTC lp.firstSeenAt) / nominalDay
+            established = length $ filter (\lp -> maybe False (\s -> isEstablished s (patternAge lp)) (HM.lookup lp.patternHash statsMap)) patterns
         forM_ patterns \lp -> whenJust (HM.lookup lp.patternHash statsMap) \stats -> do
-          let patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400
-              newState = if stats.hourlyMedian > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning
+          let newState = bool BSLearning BSEstablished $ isEstablished stats (patternAge lp)
           void $ LogPatterns.updateBaseline pid lp.patternHash newState stats.hourlyMedian stats.hourlyMADScaled stats.totalHours
         let newTotal = totalProcessed + length patterns
             newEstablished = totalEstablished + established
@@ -1658,28 +1659,28 @@ detectLogPatternSpikes pid authCtx = do
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
   let anomalyData = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
-          (BSEstablished, Just mean, Just stddev)
-            | stddev > 0 ->
+          (BSEstablished, Just mean, Just mad)
+            | mad > 0 ->
                 let currentRate = fromIntegral lpRate.currentHourCount :: Double
-                    zScore = (currentRate - mean) / stddev
+                    zScore = (currentRate - mean) / mad
                     -- z-score >3 = 99.7% CI; absolute +10 avoids alerting on tiny volumes (e.g. 2→5/hr)
                     direction
                       | zScore > 3.0 && currentRate > mean + 10 = Just Issues.Spike
                       | zScore < -3.0 && currentRate < mean - 10 = Just Issues.Drop
                       | otherwise = Nothing
-                 in direction <&> (lpRate.patternId,lpRate.patternHash,currentRate,mean,stddev,)
+                 in direction <&> \dir -> (lpRate.patternId, lpRate.patternHash, currentRate, mean, mad, dir)
           _ -> Nothing
 
   let anomalyIds = V.fromList $ map (\(lpId, _, _, _, _, _) -> lpId) anomalyData
   anomalyPatterns <- LogPatterns.getLogPatternsByIds anomalyIds
   let patternMap = HM.fromList $ V.toList $ V.map (\lp -> (lp.patternHash, lp)) anomalyPatterns
 
-  forM_ anomalyData \(patternId, patternHash, currentRate, mean, stddev, direction) -> do
+  forM_ anomalyData \(patternId, patternHash, currentRate, mean, mad, direction) -> do
     case HM.lookup patternHash patternMap of
       Just lp -> do
         let dir = display direction
         Log.logInfo ("Log pattern " <> dir <> " detected") (patternId, lp.logPattern, currentRate, mean)
-        issue <- Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev direction
+        issue <- Issues.createLogPatternRateChangeIssue pid lp currentRate mean mad direction
         Issues.insertIssue issue
         liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)

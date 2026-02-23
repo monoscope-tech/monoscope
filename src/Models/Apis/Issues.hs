@@ -688,9 +688,9 @@ tryAcquireChatMigrationLock convId = do
 
 -- | Create an issue for a log pattern rate change
 createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> RateChangeDirection -> Eff es Issue
-createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
+createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMad direction = do
   now <- Time.currentTime
-  let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
+  let zScoreVal = if baselineMad > 0 then abs (currentRate - baselineMean) / baselineMad else 0
       changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
       rateChangeData =
         LogPatternRateChangeData
@@ -702,7 +702,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
           , sourceField = Just lp.sourceField
           , currentRatePerHour = currentRate
           , baselineMean = baselineMean
-          , baselineStddev = baselineStddev
+          , baselineMad = baselineMad
           , zScore = zScoreVal
           , changePercent = changePercentVal
           , changeDirection = direction
@@ -718,7 +718,6 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
       { projectId
       , issueType = LogPatternRateChange
       , targetHash = lp.patternHash
-      , endpointHash = lp.patternHash
       , service = lp.serviceName
       , critical = direction == Spike && lp.logLevel == Just "error"
       , severity
@@ -752,7 +751,6 @@ createLogPatternIssue projectId lp = do
       { projectId
       , issueType = LogPattern
       , targetHash = lp.patternHash
-      , endpointHash = lp.patternHash
       , service = lp.serviceName
       , critical = lp.logLevel == Just "error"
       , severity
@@ -797,7 +795,7 @@ data LogPatternRateChangeData = LogPatternRateChangeData
   , sourceField :: Maybe Text
   , currentRatePerHour :: Double
   , baselineMean :: Double
-  , baselineStddev :: Double
+  , baselineMad :: Double
   , zScore :: Double -- standard deviations from baseline
   , changePercent :: Double -- percentage change from baseline
   , changeDirection :: RateChangeDirection
@@ -813,7 +811,6 @@ data MkIssueOpts a = MkIssueOpts
   { projectId :: Projects.ProjectId
   , issueType :: IssueType
   , targetHash :: Text
-  , endpointHash :: Text
   , service :: Maybe Text
   , critical :: Bool
   , severity :: Text
@@ -838,7 +835,7 @@ mkIssue opts = do
       , issueType = opts.issueType
       , sourceType = Just $ issueTypeToText opts.issueType
       , targetHash = opts.targetHash
-      , endpointHash = opts.endpointHash
+      , endpointHash = opts.targetHash
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
