@@ -29,6 +29,7 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.LocalTime (zonedTimeToUTC)
@@ -363,7 +364,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
           Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (d :: Issues.LogPatternRateChangeData) -> do
               div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-                statBox_ (Just pid) Nothing "Direction" "" d.changeDirection Nothing Nothing
+                statBox_ (Just pid) Nothing "Direction" "" (display d.changeDirection) Nothing Nothing
                 statBox_ (Just pid) Nothing "Change" "" (show (round d.changePercent :: Int) <> "%") Nothing Nothing
                 statBox_ (Just pid) Nothing "Current Rate" "" (show (round d.currentRatePerHour :: Int) <> "/hr") Nothing Nothing
                 statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineMean :: Int) <> "/hr") Nothing Nothing
@@ -1091,7 +1092,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
         div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
           label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
             faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
-            toHtml $ "Rate " <> d.changeDirection <> " (" <> show (round d.changePercent :: Int) <> "%)"
+            toHtml $ "Rate " <> display d.changeDirection <> " (" <> show (round d.changePercent :: Int) <> "%)"
             input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
           div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
       _ -> pass

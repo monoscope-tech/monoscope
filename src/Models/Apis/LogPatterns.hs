@@ -8,7 +8,6 @@ module Models.Apis.LogPatterns (
   acknowledgeLogPatterns,
   UpsertPattern (..),
   upsertLogPattern,
-  updateLogPatternStats,
   updateBaseline,
   -- Hourly stats
   upsertHourlyStat,
@@ -81,7 +80,7 @@ data LogPattern = LogPattern
   , acknowledgedAt :: Maybe ZonedTime
   , baselineState :: BaselineState
   , baselineVolumeHourlyMean :: Maybe Double
-  , baselineVolumeHourlyStddev :: Maybe Double
+  , baselineVolumeHourlyMad :: Maybe Double
   , baselineSamples :: Int
   , baselineUpdatedAt :: Maybe ZonedTime
   }
@@ -104,6 +103,7 @@ data UpsertPattern = UpsertPattern
   , logLevel :: Maybe Text
   , traceId :: Maybe Text
   , sampleMessage :: Maybe Text
+  , eventCount :: Int64
   }
   deriving stock (Generic)
   deriving anyclass (ToRow)
@@ -140,11 +140,11 @@ acknowledgeLogPatterns pid uid patternHashes
 upsertLogPattern :: DB es => UpsertPattern -> Eff es Int64
 upsertLogPattern up =
   PG.execute
-    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = NOW(),
-          occurrence_count = apis.log_patterns.occurrence_count + 1,
+          occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
           sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
@@ -152,30 +152,16 @@ upsertLogPattern up =
     up
 
 
--- | Update log pattern statistics (occurrence count, last seen)
-updateLogPatternStats :: DB es => Projects.ProjectId -> Text -> Int64 -> Eff es Int64
-updateLogPatternStats pid patHash additionalCount =
-  PG.execute q (additionalCount, pid, patHash)
-  where
-    q =
-      [sql|
-        UPDATE apis.log_patterns
-        SET occurrence_count = occurrence_count + ?,
-            last_seen_at = NOW()
-        WHERE project_id = ? AND pattern_hash = ?
-      |]
-
-
 updateBaseline :: DB es => Projects.ProjectId -> Text -> BaselineState -> Double -> Double -> Int -> Eff es Int64
-updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
-  PG.execute q (bState, hourlyMean, hourlyStddev, samples, pid, patHash)
+updateBaseline pid patHash bState hourlyMean hourlyMad samples =
+  PG.execute q (bState, hourlyMean, hourlyMad, samples, pid, patHash)
   where
     q =
       [sql|
         UPDATE apis.log_patterns
         SET baseline_state = ?,
             baseline_volume_hourly_mean = ?,
-            baseline_volume_hourly_stddev = ?,
+            baseline_volume_hourly_mad = ?,
             baseline_samples = ?,
             baseline_updated_at = NOW()
         WHERE project_id = ? AND pattern_hash = ?
@@ -290,7 +276,7 @@ data LogPatternWithRate = LogPatternWithRate
   , sourceField :: Text
   , baselineState :: BaselineState
   , baselineMean :: Maybe Double
-  , baselineStddev :: Maybe Double
+  , baselineMad :: Maybe Double
   , currentHourCount :: Int
   }
   deriving stock (Generic, Show)
@@ -300,12 +286,12 @@ data LogPatternWithRate = LogPatternWithRate
 -- | Get all patterns with their current hour counts (all pattern types participate in spike detection)
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid =
-  PG.query q (pid, pid)
+  PG.query q (Only pid)
   where
     q =
       [sql|
         SELECT lp.id, lp.project_id, lp.log_pattern, lp.pattern_hash, lp.source_field,
-          lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_stddev,
+          lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
           COALESCE(hs.event_count, 0)::INT AS current_hour_count
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs

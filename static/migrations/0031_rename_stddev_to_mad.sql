@@ -1,0 +1,1 @@
+ALTER TABLE apis.log_patterns RENAME COLUMN baseline_volume_hourly_stddev TO baseline_volume_hourly_mad;

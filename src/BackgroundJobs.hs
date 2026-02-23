@@ -484,7 +484,7 @@ logsPatternExtraction scheduledTime pid = do
       otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       unless (null otelEvents) do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        processPatterns "summary" (V.fromList [(i, s, trId, serviceName, level) | (i, s, trId, serviceName, level) <- otelEvents]) pid scheduledTime startTime
+        processPatterns (V.fromList [(i, s, trId, serviceName, level) | (i, s, trId, serviceName, level) <- otelEvents]) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
@@ -492,22 +492,24 @@ logsPatternExtraction scheduledTime pid = do
     extractFieldPatterns :: UTCTime -> ATBackgroundCtx ()
     extractFieldPatterns startTime = do
       urlPaths :: [(Maybe Text, Maybe Text, Int64)] <- PG.query [sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|] (pid, startTime, scheduledTime)
+      Relude.when (length urlPaths == 1000) $ Log.logWarn "url_path pattern limit reached" pid
       forM_ urlPaths \(pathM, serviceName, cnt) -> whenJust pathM \path -> upsertNormalized "url_path" path serviceName Nothing cnt
       exceptions :: [(Maybe Text, Maybe Text, Maybe Text, Int64)] <- PG.query [sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|] (pid, startTime, scheduledTime)
+      Relude.when (length exceptions == 1000) $ Log.logWarn "exception pattern limit reached" pid
       forM_ exceptions \(msgM, serviceName, level, cnt) -> whenJust msgM \msg -> upsertNormalized "exception" msg serviceName level cnt
 
     upsertNormalized :: Text -> Text -> Maybe Text -> Maybe Text -> Int64 -> ATBackgroundCtx ()
     upsertNormalized sourceField raw serviceName logLevel cnt = do
       let normalized = replaceAllFormats raw
           patternHash = toXXHash normalized
-      void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField, serviceName, logLevel, traceId = Nothing, sampleMessage = Just raw}
+      void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField, serviceName, logLevel, traceId = Nothing, sampleMessage = Just raw, eventCount = cnt}
       void $ LogPatterns.upsertHourlyStat pid patternHash scheduledTime cnt
 
 
--- | Generic pattern extraction for logs or summaries
+-- | Summary pattern extraction via Drain tree clustering
 -- events: (id, content, traceId, serviceName, level)
-processPatterns :: Text -> V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
-processPatterns kind events pid scheduledTime since = do
+processPatterns :: V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
+processPatterns events pid scheduledTime since = do
   let sourceField = "summary" :: Text
       -- O(1) metadata lookup by event id (avoids O(n) V.find per pattern)
       eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
@@ -515,10 +517,10 @@ processPatterns kind events pid scheduledTime since = do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
     let known = V.fromList $ map ("",False,) existingPatterns
         combined = known <> ((\(logId, content, _, _, _) -> (logId, True, content)) <$> events)
-        drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
+        drainTree = processBatch True combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     unless (V.null newPatterns)
-      $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
+      $ Log.logInfo "Extracted summary patterns" ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
       unless (V.null ids) $ do
@@ -533,7 +535,7 @@ processPatterns kind events pid scheduledTime since = do
               hashTag = "pat:" <> patternHash
           -- Append pattern hash to hashes array on matched event rows
           void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
-          void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg}
+          void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg, eventCount}
           void $ LogPatterns.upsertHourlyStat pid patternHash scheduledTime eventCount
 
 
@@ -545,13 +547,10 @@ processBatch isSummary batch now inTree =
 
 processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processNewLog isSummary logId isSampleLog content now tree =
-  let tokens = if isSummary then Drain.generateSummaryDrainTokens content else Drain.generateDrainTokens content
+  let tokens = bool Drain.generateDrainTokens Drain.generateSummaryDrainTokens isSummary content
    in if V.null tokens
         then tree
-        else
-          let tokenCount = V.length tokens
-              firstToken = V.head tokens
-           in Drain.updateTreeWithLog tree tokenCount firstToken tokens logId isSampleLog content now
+        else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens logId isSampleLog content now
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
@@ -1657,15 +1656,15 @@ detectLogPatternSpikes pid authCtx = do
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
   let anomalyData = flip mapMaybe patternsWithRates \lpRate ->
-        case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
+        case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just stddev)
             | stddev > 0 ->
                 let currentRate = fromIntegral lpRate.currentHourCount :: Double
                     zScore = (currentRate - mean) / stddev
                     -- z-score >3 = 99.7% CI; absolute +10 avoids alerting on tiny volumes (e.g. 2→5/hr)
                     direction
-                      | zScore > 3.0 && currentRate > mean + 10 = Just "spike"
-                      | zScore < -3.0 && currentRate < mean - 10 = Just "drop"
+                      | zScore > 3.0 && currentRate > mean + 10 = Just Issues.Spike
+                      | zScore < -3.0 && currentRate < mean - 10 = Just Issues.Drop
                       | otherwise = Nothing
                  in direction <&> \dir -> (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev, dir)
           _ -> Nothing
@@ -1677,12 +1676,13 @@ detectLogPatternSpikes pid authCtx = do
   forM_ anomalyData \(patternId, patternHash, currentRate, mean, stddev, direction) -> do
     case HM.lookup patternHash patternMap of
       Just lp -> do
-        Log.logInfo ("Log pattern " <> direction <> " detected") (patternId, lp.logPattern, currentRate, mean)
+        let dir = display direction
+        Log.logInfo ("Log pattern " <> dir <> " detected") (patternId, lp.logPattern, currentRate, mean)
         issue <- Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev direction
         Issues.insertIssue issue
         liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        Log.logInfo ("Created issue for log pattern " <> direction) (pid, lp.id, issue.id)
+        Log.logInfo ("Created issue for log pattern " <> dir) (pid, lp.id, issue.id)
       Nothing -> pass
   Log.logInfo "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalyData)
 

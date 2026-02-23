@@ -10,6 +10,7 @@ module Models.Apis.Issues.Enhancement (
 import Data.Aeson qualified as AE
 import Data.Effectful.LLM qualified as ELLM
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful (Eff, (:>))
@@ -137,8 +138,9 @@ buildTitlePrompt issue =
           _ -> "Generate a concise title for this log pattern. Title: " <> issue.title
         Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.LogPatternRateChangeData) ->
-            [fmtTrim|
-            Generate a concise title for this log pattern volume {d.changeDirection}.
+            let dir = display d.changeDirection
+             in [fmtTrim|
+            Generate a concise title for this log pattern volume {dir}.
             Log pattern: {d.logPattern}
             Current rate: {show (round d.currentRatePerHour :: Int)}/hr
             Baseline: {show (round d.baselineMean :: Int)}/hr
@@ -215,13 +217,14 @@ buildDescriptionPrompt issue =
           _ -> "Describe this log pattern issue. Title: " <> issue.title
         Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
           AE.Success (d :: Issues.LogPatternRateChangeData) ->
-            [fmtTrim|
-            Describe this log pattern volume {d.changeDirection} and its implications.
+            let dir = display d.changeDirection
+             in [fmtTrim|
+            Describe this log pattern volume {dir} and its implications.
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Current rate: {show (round d.currentRatePerHour :: Int)}/hr
             Baseline mean: {show (round d.baselineMean :: Int)}/hr
-            Baseline stddev: {show (round d.baselineStddev :: Int)}/hr
+            Baseline MAD: {show (round d.baselineStddev :: Int)}/hr
             Z-score: {show (round d.zScore :: Int)} standard deviations
             Change: {show (round d.changePercent :: Int)}%
             Service: {fromMaybe "unknown-service" d.serviceName}

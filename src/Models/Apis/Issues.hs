@@ -25,6 +25,7 @@ module Models.Apis.Issues (
   QueryAlertData (..),
   LogPatternRateChangeData (..),
   LogPatternData (..),
+  RateChangeDirection (..),
 
   -- * Database Operations
   insertIssue,
@@ -78,7 +79,7 @@ import Data.Default (Default, def)
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Hashable (hash)
 import Data.Text qualified as T
-import Data.Text.Display (Display)
+import Data.Text.Display (Display, display)
 import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V5 qualified as UUID5
@@ -686,7 +687,7 @@ tryAcquireChatMigrationLock convId = do
 
 
 -- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> Eff es Issue
+createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> RateChangeDirection -> Eff es Issue
 createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
   now <- Time.currentTime
   let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
@@ -708,11 +709,11 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
           , detectedAt = now
           }
       severity = case (direction, lp.logLevel) of
-        ("spike", Just "error") -> "critical"
-        ("spike", _) -> "warning"
-        ("drop", _) -> "info"
-        _ -> "info"
-  mkIssue projectId LogPatternRateChange lp.patternHash lp.patternHash lp.serviceName (direction == "spike" && lp.logLevel == Just "error") severity ("Log Pattern " <> T.toTitle direction <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)") ("Log pattern volume " <> direction <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs).") "n/a" rateChangeData
+        (Spike, Just "error") -> "critical"
+        (Spike, _) -> "warning"
+        (Drop, _) -> "info"
+  let dir = display direction
+  mkIssue projectId LogPatternRateChange lp.patternHash lp.patternHash lp.serviceName (direction == Spike && lp.logLevel == Just "error") severity ("Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)") ("Log pattern volume " <> dir <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs).") "n/a" rateChangeData
 
 
 -- | Create an issue for a new log pattern
@@ -753,6 +754,13 @@ data LogPatternData = LogPatternData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternData
 
 
+data RateChangeDirection = Spike | Drop
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] RateChangeDirection
+  deriving (Display) via WrappedEnumSC "" RateChangeDirection
+
+
 -- | Log Pattern Rate Change issue data (volume spike/drop)
 data LogPatternRateChangeData = LogPatternRateChangeData
   { patternHash :: Text
@@ -766,7 +774,7 @@ data LogPatternRateChangeData = LogPatternRateChangeData
   , baselineStddev :: Double
   , zScore :: Double -- standard deviations from baseline
   , changePercent :: Double -- percentage change from baseline
-  , changeDirection :: Text -- "spike" or "drop"
+  , changeDirection :: RateChangeDirection
   , detectedAt :: UTCTime
   }
   deriving stock (Generic, Show)
