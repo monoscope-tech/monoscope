@@ -1680,8 +1680,11 @@ calculateLogPatternBaselines pid = do
 
 
 data SpikeResult = SpikeResult
-  { currentRate :: Double, mean :: Double, mad :: Double
-  , zScore :: Double, direction :: Issues.RateChangeDirection
+  { currentRate :: Double
+  , mean :: Double
+  , mad :: Double
+  , zScore :: Double
+  , direction :: Issues.RateChangeDirection
   }
   deriving stock (Eq, Show)
 

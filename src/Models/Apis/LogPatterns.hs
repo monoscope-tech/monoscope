@@ -29,6 +29,7 @@ module Models.Apis.LogPatterns (
 where
 
 import Data.Aeson qualified as AE
+import Data.List (lookup)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
@@ -44,7 +45,6 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (WrappedEnumSC (..))
-import Data.List (lookup)
 import Relude hiding (id)
 import System.Types (DB)
 
