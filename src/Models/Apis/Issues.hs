@@ -867,7 +867,7 @@ getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportTy
     q = [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]
 
 
-createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) =>  Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> Eff es Issue
+createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> Eff es Issue
 createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
   now <- Time.currentTime
   let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0

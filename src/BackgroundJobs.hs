@@ -82,7 +82,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField,replaceAllFormats, toXXHash)
+import Utils (DBField, replaceAllFormats, toXXHash)
 
 
 data BgJobs

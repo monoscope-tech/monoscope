@@ -155,13 +155,13 @@ sendSlackAlertThreaded alert pid pTitle channelM threadTsM = do
   let channelIdM = channelM <|> fmap (.channelId) slackData
       webhookUrlM = (.webhookUrl) <$> slackData
   for_ ((,) <$> channelIdM <*> webhookUrlM) \(cid, wurl) -> do
-      let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-      case alert of
-        RuntimeErrorAlert{..} ->
-          Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid wurl (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
-        _ -> do
-          sendSlackAlert alert pid pTitle channelM
-          pure Nothing
+    let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+    case alert of
+      RuntimeErrorAlert{..} ->
+        Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid wurl (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
+      _ -> do
+        sendSlackAlert alert pid pTitle channelM
+        pure Nothing
   pure Nothing
 
 
