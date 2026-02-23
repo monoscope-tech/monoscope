@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS apis.log_patterns (
     -- Baseline for volume spike detection
     baseline_state                TEXT NOT NULL DEFAULT 'learning',  -- 'learning', 'established'
     baseline_volume_hourly_mean   FLOAT,
-    baseline_volume_hourly_stddev FLOAT,
+    baseline_volume_hourly_mad    FLOAT,
     baseline_samples              INT NOT NULL DEFAULT 0,
     baseline_updated_at           TIMESTAMPTZ,
 
