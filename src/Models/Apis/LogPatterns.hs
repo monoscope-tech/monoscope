@@ -188,23 +188,24 @@ updateBaselineBatch pid rows
 
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table
-upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> UTCTime -> Int64 -> Eff es Int64
-upsertHourlyStat pid patHash hourBucket count =
+upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> Text -> UTCTime -> Int64 -> Eff es Int64
+upsertHourlyStat pid sourceField patHash hourBucket count =
   PG.execute
-    [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, pattern_hash, hour_bucket, event_count)
-        VALUES (?, ?, date_trunc('hour', ?::timestamptz), ?)
-        ON CONFLICT (project_id, pattern_hash, hour_bucket)
+    [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
+        VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
+        ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
         DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-    (pid, patHash, hourBucket, count)
+    (pid, sourceField, patHash, hourBucket, count)
 
 
 -- | Batch: computes median + MAD for all patterns in one query
 data BatchPatternStats = BatchPatternStats
-  { patternHash :: Text
+  { sourceField :: Text
+  , patternHash :: Text
   , hourlyMedian :: Double
   , hourlyMADScaled :: Double
   , totalHours :: Int
-  , totalEvents :: Int
+  , totalEvents :: Int64
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow)
@@ -216,26 +217,27 @@ getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
     q =
       [sql|
         WITH hourly_counts AS (
-          SELECT pattern_hash, hour_bucket, event_count FROM apis.log_pattern_hourly_stats
+          SELECT source_field, pattern_hash, hour_bucket, event_count FROM apis.log_pattern_hourly_stats
           WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ?
         ),
         median_calc AS (
-          SELECT pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
-          FROM hourly_counts GROUP BY pattern_hash
+          SELECT source_field, pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
+          FROM hourly_counts GROUP BY source_field, pattern_hash
         ),
         mad_calc AS (
-          SELECT hc.pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
-          FROM hourly_counts hc JOIN median_calc mc ON hc.pattern_hash = mc.pattern_hash GROUP BY hc.pattern_hash
+          SELECT hc.source_field, hc.pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
+          FROM hourly_counts hc JOIN median_calc mc ON hc.source_field = mc.source_field AND hc.pattern_hash = mc.pattern_hash
+          GROUP BY hc.source_field, hc.pattern_hash
         ),
         totals AS (
-          SELECT pattern_hash, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::INT AS total_events
-          FROM hourly_counts GROUP BY pattern_hash
+          SELECT source_field, pattern_hash, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::BIGINT AS total_events
+          FROM hourly_counts GROUP BY source_field, pattern_hash
         )
-        SELECT mc.pattern_hash, COALESCE(mc.median_val, 0)::FLOAT, COALESCE(mad.mad_val * 1.4826, 0)::FLOAT,
+        SELECT mc.source_field, mc.pattern_hash, COALESCE(mc.median_val, 0)::FLOAT, COALESCE(mad.mad_val * 1.4826, 0)::FLOAT,
           t.total_hours, t.total_events
         FROM median_calc mc
-        JOIN mad_calc mad ON mc.pattern_hash = mad.pattern_hash
-        JOIN totals t ON mc.pattern_hash = t.pattern_hash
+        JOIN mad_calc mad ON mc.source_field = mad.source_field AND mc.pattern_hash = mad.pattern_hash
+        JOIN totals t ON mc.source_field = t.source_field AND mc.pattern_hash = t.pattern_hash
       |]
 
 
@@ -271,8 +273,8 @@ getPatternsWithCurrentRates pid =
           COALESCE(hs.event_count, 0)::INT AS current_hour_count
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
-          ON hs.project_id = lp.project_id AND hs.pattern_hash = lp.pattern_hash
-          AND hs.hour_bucket = date_trunc('hour', NOW())
+          ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
+          AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', NOW())
         WHERE lp.project_id = ?
           AND lp.state != 'ignored' AND lp.baseline_state = 'established'
       |]

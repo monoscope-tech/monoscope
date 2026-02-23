@@ -88,13 +88,13 @@ templateText :: V.Vector Text -> Text
 templateText = unwords . V.toList
 
 
-createLogGroup :: V.Vector Text -> Text -> Text -> UTCTime -> LogGroup
-createLogGroup templateTokens templateString logId now =
+createLogGroup :: V.Vector Text -> Text -> Text -> Maybe Text -> UTCTime -> LogGroup
+createLogGroup templateTokens templateString logId sampleContent now =
   LogGroup
     { template = templateTokens
     , templateStr = templateString
     , logIds = V.singleton logId
-    , exampleLog = templateString
+    , exampleLog = fromMaybe templateString sampleContent
     , frequency = 1
     , firstSeen = now
     , lastSeen = now
@@ -135,7 +135,7 @@ updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId sampleCo
     )
     (V.findIndex (\level -> tokenCount level == targetCount) levelOnes)
   where
-    newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
+    newGroup = createLogGroup tokensVec (templateText tokensVec) logId sampleContent now
 
 
 updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelTwo, Bool)
@@ -149,7 +149,7 @@ updateOrCreateLevelTwo levelTwos targetToken tokensVec logId sampleContent now c
     )
     (V.findIndex (\level -> firstToken level == targetToken) levelTwos)
   where
-    newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
+    newGroup = createLogGroup tokensVec (templateText tokensVec) logId sampleContent now
 
 
 -- | Safe: only called when V.length logGroups >= maxLogGroups (> 0)
@@ -174,11 +174,11 @@ updateOrCreateLogGroup logGroups tokensVec logId sampleContent now config =
       if V.length logGroups >= maxLogGroups config
         then
           let victimIdx = leastRecentlyUsedIndex logGroups
-              newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
+              newGroup = createLogGroup tokensVec (templateText tokensVec) logId sampleContent now
               updatedGroups = logGroups V.// [(victimIdx, newGroup)]
            in (updatedGroups, False)
         else
-          let newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
+          let newGroup = createLogGroup tokensVec (templateText tokensVec) logId sampleContent now
               updatedGroups = V.cons newGroup logGroups
            in (updatedGroups, False)
 

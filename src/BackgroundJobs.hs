@@ -471,9 +471,9 @@ logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   Relude.when ctx.config.enableEventsTableUpdates $ do
-    tenMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
-    paginate 0 tenMinutesAgo
-    extractFieldPatterns tenMinutesAgo
+    fiveMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
+    paginate 0 fiveMinutesAgo
+    extractFieldPatterns fiveMinutesAgo
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
     limitVal = 250
@@ -502,7 +502,7 @@ logsPatternExtraction scheduledTime pid = do
       let normalized = replaceAllFormats raw
           patternHash = toXXHash normalized
       void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField, serviceName, logLevel, traceId = Nothing, sampleMessage = Just raw, eventCount = cnt}
-      void $ LogPatterns.upsertHourlyStat pid patternHash scheduledTime cnt
+      void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime cnt
 
 
 -- | Summary pattern extraction via Drain tree clustering
@@ -533,7 +533,7 @@ processPatterns events pid scheduledTime since = do
         -- Append pattern hash to hashes array on matched event rows
         void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
         void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg, eventCount}
-        void $ LogPatterns.upsertHourlyStat pid patternHash scheduledTime eventCount
+        void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
 
 
 -- | Process a batch of (id, sampleContent, content) tuples through Drain
@@ -1631,14 +1631,17 @@ calculateLogPatternBaselines pid = do
   now <- Time.currentTime
   -- Batch query: get stats for all patterns in one DB round-trip (168 hours = 7 days)
   allStats <- LogPatterns.getBatchPatternStats pid 168
-  let statsMap = HM.fromList $ map (\s -> (s.patternHash, s)) allStats
+  let statsMap = HM.fromList $ map (\s -> ((s.sourceField, s.patternHash), s)) allStats
       pageSize = 1000
-      isEstablished stats ageDays = stats.hourlyMedian > 100 || ageDays >= 14
+      -- A pattern is "established" if it's high-volume or old enough for reliable baselines
+      minMedianForEstablished = 100 -- events/hour
+      minAgeDaysForEstablished = 14 -- days
+      isEstablished stats ageDays = stats.hourlyMedian > minMedianForEstablished || ageDays >= minAgeDaysForEstablished
       go offset totalProcessed totalEstablished = do
         patterns <- LogPatterns.getLogPatterns pid pageSize offset
         let patternAge lp = diffUTCTime now (zonedTimeToUTC lp.firstSeenAt) / nominalDay
             updates = V.fromList $ flip mapMaybe patterns \lp ->
-              HM.lookup lp.patternHash statsMap <&> \stats ->
+              HM.lookup (lp.sourceField, lp.patternHash) statsMap <&> \stats ->
                 let est = isEstablished stats (patternAge lp)
                  in (lp.patternHash, bool BSLearning BSEstablished est, stats.hourlyMedian, stats.hourlyMADScaled, stats.totalHours)
             established = V.length $ V.filter (\(_, s, _, _, _) -> s == BSEstablished) updates
@@ -1690,8 +1693,8 @@ processNewLogPattern pid patternHash authCtx = do
   Log.logInfo "Processing new log pattern" (pid, patternHash)
   -- Skip in low-volume projects: <10k events/week means the project is still onboarding
   -- and nearly every pattern would be "new", generating noisy issues
-  totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
-  if totalEvents < (10000 :: Int)
+  totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '168 hours' |] (Only pid)
+  if totalEvents < (10000 :: Int64)
     then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
     else do
       patternM <- LogPatterns.getLogPatternByHash pid patternHash
