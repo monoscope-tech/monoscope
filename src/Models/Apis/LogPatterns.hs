@@ -6,12 +6,15 @@ module Models.Apis.LogPatterns (
   getLogPatternTexts,
   getLogPatternByHash,
   acknowledgeLogPatterns,
+  UpsertPattern (..),
   upsertLogPattern,
   updateLogPatternStats,
   updateBaseline,
   -- Pattern stats from otel_logs_and_spans
   PatternStats (..),
   getPatternStats,
+  BatchPatternStats (..),
+  getBatchPatternStats,
   getCurrentHourPatternCount,
   -- Pattern with current rate for spike detection
   LogPatternWithRate (..),
@@ -22,13 +25,12 @@ module Models.Apis.LogPatterns (
 where
 
 import Data.Aeson qualified as AE
-import Data.Text qualified as T
 import Data.Time
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_selectWhere)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Entity (_select, _selectWhere)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity.Types qualified as DAT
+import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -36,6 +38,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
+import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
@@ -65,6 +68,7 @@ data LogPattern = LogPattern
   , updatedAt :: ZonedTime
   , logPattern :: Text
   , patternHash :: Text
+  , sourceField :: Text
   , serviceName :: Maybe Text
   , logLevel :: Maybe Text
   , sampleMessage :: Maybe Text
@@ -72,7 +76,7 @@ data LogPattern = LogPattern
   , lastSeenAt :: ZonedTime
   , occurrenceCount :: Int64
   , state :: LogPatternState
-  , acknowledgedBy :: Maybe Projects.UserId
+  , acknowledgedBy :: Maybe Users.UserId
   , acknowledgedAt :: Maybe ZonedTime
   , baselineState :: BaselineState
   , baselineVolumeHourlyMean :: Maybe Double
@@ -90,50 +94,36 @@ data LogPattern = LogPattern
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPattern
 
 
+data UpsertPattern = UpsertPattern
+  { projectId :: Projects.ProjectId
+  , logPattern :: Text
+  , hash :: Text
+  , sourceField :: Text
+  , serviceName :: Maybe Text
+  , logLevel :: Maybe Text
+  , traceId :: Maybe Text
+  , sampleMessage :: Maybe Text
+  }
+  deriving stock (Generic)
+  deriving anyclass (ToRow)
+
+
 -- | Get all log patterns for a project
 getLogPatterns :: DB es => Projects.ProjectId -> Int -> Int -> Eff es [LogPattern]
-getLogPatterns pid limit offset = PG.query q (pid, limit, offset)
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at, log_pattern, pattern_hash,
-               service_name, log_level, sample_message, first_seen_at, last_seen_at,
-               occurrence_count, state, acknowledged_by, acknowledged_at,
-               baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
-               baseline_samples, baseline_updated_at
-        FROM apis.log_patterns
-        WHERE project_id = ?
-        ORDER BY last_seen_at DESC
-        LIMIT ? OFFSET ?
-      |]
+getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |]] <> " ORDER BY last_seen_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
 
 
-getLogPatternTexts :: DB es => Projects.ProjectId -> Eff es [Text]
-getLogPatternTexts pid = coerce @[Only Text] @[Text] <$> PG.query q (Only pid)
-  where
-    q = [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND state != 'ignored' |]
+getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
+getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ?|] (pid, sourceField)
 
 
 -- | Get log pattern by hash
 getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe LogPattern)
-getLogPatternByHash pid hash = do
-  results <- PG.query q (pid, hash)
-  return $ listToMaybe results
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at, log_pattern, pattern_hash,
-               service_name, log_level, sample_message, first_seen_at, last_seen_at,
-               occurrence_count, state, acknowledged_by, acknowledged_at,
-               baseline_state, baseline_volume_hourly_mean, baseline_volume_hourly_stddev,
-               baseline_samples, baseline_updated_at
-        FROM apis.log_patterns
-        WHERE project_id = ? AND pattern_hash = ?
-      |]
+getLogPatternByHash pid hash = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| pattern_hash |]]) (pid, hash)
 
 
 -- | Acknowledge log patterns
-acknowledgeLogPatterns :: DB es => Projects.UserId -> V.Vector Text -> Eff es Int64
+acknowledgeLogPatterns :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
 acknowledgeLogPatterns uid patternHashes
   | V.null patternHashes = pure 0
   | otherwise = PG.execute q (uid, patternHashes)
@@ -146,21 +136,19 @@ acknowledgeLogPatterns uid patternHashes
       |]
 
 
-upsertLogPattern :: DB es => Projects.ProjectId -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Int64
-upsertLogPattern pid pat patHash serviceName logLevel trId sampleMsg =
-  PG.execute q (pid, pat, patHash, serviceName, logLevel, trId, sampleMsg)
-  where
-    q =
-      [sql|
-        INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, service_name, log_level, trace_id, sample_message)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (project_id, pattern_hash) DO UPDATE SET
+upsertLogPattern :: DB es => UpsertPattern -> Eff es Int64
+upsertLogPattern up =
+  PG.execute
+    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = NOW(),
           occurrence_count = apis.log_patterns.occurrence_count + 1,
           sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
-      |]
+  |]
+    up
 
 
 -- | Update log pattern statistics (occurrence count, last seen)
@@ -208,9 +196,7 @@ data PatternStats = PatternStats
 -- | Get pattern stats from otel_logs_and_spans
 -- Returns median and MAD (Median Absolute Deviation) for robust baseline calculation
 getPatternStats :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe PatternStats)
-getPatternStats pid pattern' hoursBack = do
-  results <- PG.query q (pid, pattern', hoursBack)
-  return $ listToMaybe results
+getPatternStats pid pattern' hoursBack = listToMaybe <$> PG.query q (pid, pattern', hoursBack)
   where
     q =
       [sql|
@@ -241,22 +227,61 @@ getPatternStats pid pattern' hoursBack = do
       |]
 
 
--- | Get current hour count for a pattern
-getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
-getCurrentHourPatternCount pid pattern' = do
-  results <- PG.query q (pid, pattern')
-  case results of
-    [Only count] -> return count
-    _ -> return 0
+-- | Batch version of getPatternStats: computes median + MAD for all patterns in one query
+data BatchPatternStats = BatchPatternStats
+  { logPattern :: Text
+  , hourlyMedian :: Double
+  , hourlyMADScaled :: Double
+  , totalHours :: Int
+  , totalEvents :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow)
+
+
+getBatchPatternStats :: DB es => Projects.ProjectId -> Int -> Eff es [BatchPatternStats]
+getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
   where
     q =
       [sql|
-        SELECT COUNT(*)::INT
-        FROM otel_logs_and_spans
-        WHERE project_id = ?::text
-          AND log_pattern = ?
-          AND timestamp >= date_trunc('hour', NOW())
+        WITH hourly_counts AS (
+          SELECT log_pattern, date_trunc('hour', timestamp) AS hour_start, COUNT(*) AS event_count
+          FROM otel_logs_and_spans
+          WHERE project_id = ?::text AND log_pattern IS NOT NULL AND timestamp >= NOW() - INTERVAL '1 hour' * ?
+          GROUP BY log_pattern, date_trunc('hour', timestamp)
+        ),
+        median_calc AS (
+          SELECT log_pattern, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
+          FROM hourly_counts GROUP BY log_pattern
+        ),
+        mad_calc AS (
+          SELECT hc.log_pattern, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
+          FROM hourly_counts hc JOIN median_calc mc ON hc.log_pattern = mc.log_pattern GROUP BY hc.log_pattern
+        )
+        totals AS (
+          SELECT log_pattern, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::INT AS total_events
+          FROM hourly_counts GROUP BY log_pattern
+        )
+        SELECT
+          mc.log_pattern,
+          COALESCE(mc.median_val, 0)::FLOAT AS hourly_median,
+          COALESCE(mad.mad_val * 1.4826, 0)::FLOAT AS hourly_mad_scaled,
+          t.total_hours, t.total_events
+        FROM median_calc mc
+        JOIN mad_calc mad ON mc.log_pattern = mad.log_pattern
+        JOIN totals t ON mc.log_pattern = t.log_pattern
       |]
+
+
+-- | Get current hour count for a pattern
+getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
+getCurrentHourPatternCount pid pattern' =
+  maybe 0 fromOnly
+    . listToMaybe
+    <$> PG.query
+      [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
+          WHERE project_id = ?::text AND log_pattern = ? AND timestamp >= date_trunc('hour', NOW()) |]
+      (pid, pattern')
 
 
 -- | Log pattern with current rate (for batch spike detection)
@@ -265,6 +290,7 @@ data LogPatternWithRate = LogPatternWithRate
   , projectId :: Projects.ProjectId
   , logPattern :: Text
   , patternHash :: Text
+  , sourceField :: Text
   , baselineState :: BaselineState
   , baselineMean :: Maybe Double
   , baselineStddev :: Maybe Double
@@ -274,7 +300,7 @@ data LogPatternWithRate = LogPatternWithRate
   deriving anyclass (FromRow)
 
 
--- | Get all patterns with their current hour counts
+-- | Get all patterns with their current hour counts (only body patterns for now)
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid =
   PG.query q (pid, pid)
@@ -286,6 +312,7 @@ getPatternsWithCurrentRates pid =
           lp.project_id,
           lp.log_pattern,
           lp.pattern_hash,
+          lp.source_field,
           lp.baseline_state,
           lp.baseline_volume_hourly_mean,
           lp.baseline_volume_hourly_stddev,
@@ -301,16 +328,17 @@ getPatternsWithCurrentRates pid =
         ) counts ON counts.log_pattern = lp.log_pattern
         WHERE lp.project_id = ?
           AND lp.state != 'ignored' AND lp.baseline_state = 'established'
+          AND lp.source_field = 'body'
       |]
 
 
 -- | Get a pattern by ID
 getLogPatternById :: DB es => LogPatternId -> Eff es (Maybe LogPattern)
-getLogPatternById lpid = listToMaybe <$> PG.query (_selectWhere @LogPattern [[field| id |]]) (Only lpid)
+getLogPatternById lpid = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| id |]]) (Only lpid)
 
 
 -- | Get multiple patterns by IDs in a single query (avoids N+1)
 getLogPatternsByIds :: DB es => V.Vector LogPatternId -> Eff es (V.Vector LogPattern)
 getLogPatternsByIds ids
   | V.null ids = pure V.empty
-  | otherwise = V.fromList <$> PG.query [sql| SELECT * FROM apis.log_patterns WHERE id = ANY(?) |] (Only ids)
+  | otherwise = V.fromList <$> PG.query (_select @LogPattern <> " WHERE id = ANY(?)") (Only ids)

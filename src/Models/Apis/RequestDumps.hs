@@ -24,6 +24,8 @@ import Control.Exception.Annotated (checkpoint, try)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
+import Data.HashMap.Strict qualified as HashMap
+import Data.Set (member)
 import Data.Text qualified as T
 import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -50,10 +52,12 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (WrappedEnumShow (..))
 import Pkg.Parser
+import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
 import System.Logging qualified as Log
 import System.Types (DB)
+import Utils (replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
 
@@ -570,21 +574,49 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       pidTxt = pid.toText
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "log_pattern" targetM
-  if target == "log_pattern"
-    then do
-      activePatterns <- V.fromList <$> LogPatterns.getLogPatternTexts pid
-      let q =
-            [text|
-              SELECT log_pattern, count(*) as p_count
-              FROM otel_logs_and_spans
-              WHERE ${whereCondition} AND log_pattern = ANY(?)
-              GROUP BY log_pattern ORDER BY p_count DESC OFFSET ? LIMIT 15
-            |]
-      PG.query (Query $ encodeUtf8 q) (activePatterns, skip)
-    else do
-      -- For other targets (e.g., summary_pattern), use the original query
-      let q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
-      PG.query (Query $ encodeUtf8 q) (Only skip)
+  let
+    -- Tier 1: columns on otel_logs_and_spans (full Drain patterns written back to event rows)
+    tier1Targets = ["log_pattern", "summary_pattern"] :: [Text]
+    -- Tier 2: source_field values in apis.log_patterns (normalization-only, no event row column)
+    tier2Fields = ["url_path", "exception"] :: [Text]
+    -- log_pattern: join with log_patterns table to filter out ignored patterns
+    fetch
+      | target == "log_pattern" = do
+          let q =
+                [text|
+                      SELECT lp.log_pattern, count(*) as p_count FROM apis.log_patterns lp
+                      INNER JOIN otel_logs_and_spans ols ON lp.log_pattern = ols.log_pattern AND lp.project_id::text = ols.project_id
+                      WHERE lp.project_id = ? AND lp.state != 'ignored' AND ${whereCondition}
+                      GROUP BY lp.log_pattern ORDER BY p_count DESC OFFSET ? LIMIT 15
+                    |]
+          PG.query (Query $ encodeUtf8 q) (pid, skip)
+      -- Tier 1: direct column on otel_logs_and_spans
+      | target `elem` tier1Targets = do
+          let q = [text|select ${target}, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and ${target} is not null GROUP BY ${target} ORDER BY p_count desc offset ? limit 15;|]
+          PG.query (Query $ encodeUtf8 q) (Only skip)
+      -- Tier 2: stored patterns from apis.log_patterns by source_field
+      | target `elem` tier2Fields =
+          PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
+      -- Fallback: arbitrary field → SQL GROUP BY + replaceAllFormats re-grouping
+      | otherwise = do
+          rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
+            Just (Left colExpr) -> do
+              let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500"
+              PG.query_ (Query $ encodeUtf8 q)
+            Just (Right pathParts) ->
+              PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pathParts)
+            Nothing -> pure []
+          let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
+              sorted = take 15 $ sortOn (Down . snd) $ HashMap.toList normalized
+          pure $ drop skip sorted
+  fetch
+  where
+    resolveFieldExpr f
+      | f `member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
+      | f `elem` rootColumns = Just $ Left f
+      | "attributes." `T.isPrefixOf` f = Just $ Right $ V.fromList $ drop 1 $ T.splitOn "." f
+      | otherwise = Nothing
+    rootColumns = ["body", "summary", "level", "kind", "name", "status_code", "status_message"] :: [Text]
 
 
 getLast24hTotalRequest :: DB es => Projects.ProjectId -> Eff es Int

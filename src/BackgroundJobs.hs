@@ -56,7 +56,6 @@ import Models.Telemetry.SummaryGenerator (generateSummary)
 import Models.Telemetry.Telemetry (SeverityLevel (..), insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Users
-import NeatInterpolation (text)
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
@@ -125,6 +124,7 @@ data BgJobs
   | ErrorAssigned Projects.ProjectId Errors.ErrorId Users.UserId -- projectId, errorId, assigneeId
   | LogPatternBaselineCalculation Projects.ProjectId
   | LogPatternSpikeDetection Projects.ProjectId
+  | LogPatternHourlyProcessing Projects.ProjectId
   | NewLogPatternDetected Projects.ProjectId Text
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -371,6 +371,7 @@ processBackgroundJob authCtx bgJob =
     NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
     LogPatternBaselineCalculation pid -> calculateLogPatternBaselines pid
     LogPatternSpikeDetection pid -> detectLogPatternSpikes pid authCtx
+    LogPatternHourlyProcessing pid -> calculateLogPatternBaselines pid >> detectLogPatternSpikes pid authCtx
     NewLogPatternDetected pid patternHash -> processNewLogPattern pid patternHash authCtx
 
 
@@ -412,6 +413,10 @@ runHourlyJob scheduledTime hour = do
     forM_ activeProjects \pid -> do
       _ <- createJob conn "background_jobs" $ LogPatternBaselineCalculation pid
       createJob conn "background_jobs" $ LogPatternSpikeDetection pid
+  -- Baseline calculation then spike detection (sequential within single job to ensure correct ordering)
+  liftIO $ withResource ctx.jobsPool \conn ->
+    forM_ activeProjects \pid ->
+      createJob conn "background_jobs" $ LogPatternHourlyProcessing pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -511,6 +516,7 @@ logsPatternExtraction scheduledTime pid = do
   Relude.when ctx.config.enableEventsTableUpdates $ do
     tenMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
     paginate 0 tenMinutesAgo
+    extractTier2Patterns tenMinutesAgo
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
     limitVal = 250
@@ -525,44 +531,60 @@ logsPatternExtraction scheduledTime pid = do
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
+    -- Tier 2: Normalization-only pattern extraction for structured fields (URL path, exception message)
+    -- No Drain tree needed — just replaceAllFormats + hash
+    extractTier2Patterns :: UTCTime -> ATBackgroundCtx ()
+    extractTier2Patterns startTime = do
+      -- URL path patterns
+      urlPaths :: [(Maybe Text, Maybe Text)] <- PG.query [sql| SELECT DISTINCT attributes___url___path, resource___service___name FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___url___path IS NOT NULL LIMIT 1000|] (pid, startTime, scheduledTime)
+      forM_ urlPaths \(pathM, serviceName) -> whenJust pathM \path -> do
+        let normalized = replaceAllFormats path
+            patternHash = toXXHash normalized
+        void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField = "url_path", serviceName, logLevel = Nothing, traceId = Nothing, sampleMessage = Just path}
+      -- Exception message patterns
+      exceptions :: [(Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT DISTINCT attributes___exception___message, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___exception___message IS NOT NULL LIMIT 1000|] (pid, startTime, scheduledTime)
+      forM_ exceptions \(msgM, serviceName, level) -> whenJust msgM \msg -> do
+        let normalized = replaceAllFormats msg
+            patternHash = toXXHash normalized
+        void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField = "exception", serviceName, logLevel = level, traceId = Nothing, sampleMessage = Just msg}
+
 
 -- | Generic pattern extraction for logs or summaries
 -- events: (id, content, traceId, serviceName, level)
 processPatterns :: Text -> Text -> V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
 processPatterns kind fieldName events pid scheduledTime since = do
-  Relude.when (not $ V.null events) $ do
-    existingPatterns <- LogPatterns.getLogPatternTexts pid
-    let known = V.fromList $ map (\pat -> ("", False, pat, Nothing, Nothing, Nothing)) existingPatterns
-        -- Include level in content for pattern matching so different levels create different patterns
-        combined = known <> ((\(logId, content, trId, serviceName, level) -> (logId, True, content, trId, serviceName, level)) <$> events)
+  let sourceField = bool "body" kind (kind /= "log")
+      -- O(1) metadata lookup by event id (avoids O(n) V.find per pattern)
+      eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
+  unless (V.null events) do
+    existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
+    let known = V.fromList $ map ("",False,) existingPatterns
+        combined = known <> ((\(logId, content, _, _, _) -> (logId, True, content)) <$> events)
         drainTree = processBatch (kind == "summary") combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
-    -- Only log if patterns were extracted
-    Relude.when (V.length newPatterns > 0)
+    unless (V.null newPatterns)
       $ Log.logInfo ("Extracted " <> kind <> " patterns") ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
       unless (V.null ids) $ do
-        -- Update otel_logs_and_spans with pattern (using explicit field names to avoid SQL injection)
-        case kind of
-          "log" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
-          "summary" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, V.filter (/= "") ids)
-          _ -> pass -- Unknown kind, skip
-        Relude.when (kind == "log" && not (T.null patternTxt)) $ do
-          let (serviceName, logLevel, logTraceId) = case ids V.!? 0 of
-                Just logId | logId /= "" ->
-                  case V.find (\(i, _, _, _, _) -> i == logId) events of
-                    Just (_, _, trId, sName, lvl) -> (sName, lvl, trId)
-                    Nothing -> (Nothing, Nothing, Nothing)
-                _ -> (Nothing, Nothing, Nothing)
-          let patternHash = toXXHash patternTxt
-          void $ LogPatterns.upsertLogPattern pid patternTxt patternHash serviceName logLevel logTraceId (Just sampleMsg)
+        let filteredIds = V.filter (/= "") ids
+        case fieldName of
+          "log_pattern" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET log_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, filteredIds)
+          "summary_pattern" -> void $ PG.execute [sql|UPDATE otel_logs_and_spans SET summary_pattern = ? WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?)|] (patternTxt, pid, since, filteredIds)
+          _ -> pass
+        unless (T.null patternTxt) do
+          let (serviceName, logLevel, logTraceId) = fromMaybe (Nothing, Nothing, Nothing) $ do
+                logId <- ids V.!? 0
+                guard (logId /= "")
+                HM.lookup logId eventMeta
+              patternHash = toXXHash patternTxt
+          void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg}
 
 
--- | Process a batch of (id, isSampleLog, content, serviceName, level) tuples through Drain
-processBatch :: Bool -> V.Vector (Text, Bool, Text, Maybe Text, Maybe Text, Maybe Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+-- | Process a batch of (id, isNew, content) tuples through Drain
+processBatch :: Bool -> V.Vector (Text, Bool, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree (logId, isSampleLog, content, _, _, _) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
+  V.foldl' (\tree (logId, isSampleLog, content) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
 
 
 processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -979,8 +1001,6 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailActi
   for_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
   for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
 
-
--- Send notifications
 
 -- way to get emails for company. for email all
 -- TODO: based on monitor send emails or slack
@@ -1848,28 +1868,19 @@ calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
   now <- Time.currentTime
-  -- Get all non-ignored patterns
   patterns <- LogPatterns.getLogPatterns pid 1000 0
-  forM_ patterns \lp -> do
-    -- Get hourly stats from otel_logs_and_spans over last 7 days (168 hours)
-    statsM <- LogPatterns.getPatternStats pid lp.logPattern 168
-    case statsM of
-      Nothing -> pass
-      Just stats -> do
-        let newSamples = stats.totalHours
-            newMean = stats.hourlyMedian
-            newStddev = stats.hourlyMADScaled
-            patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / (24 * 60 * 60)
-            newState = case lp.baselineState of
-              BSEstablished -> BSEstablished
-              BSLearning ->
-                if newMean > 100 || patternAgeDays > 1
-                  then BSEstablished
-                  else BSLearning
-        _ <- LogPatterns.updateBaseline pid lp.patternHash newState newMean newStddev newSamples
-        pass
-
-  Log.logInfo "Finished calculating log pattern baselines" (pid, length patterns)
+  Relude.when (length patterns == 1000)
+    $ Log.logWarn "Pattern limit reached — only processing first 1000 patterns" pid
+  -- Batch query: get stats for all patterns in one DB round-trip (168 hours = 7 days)
+  allStats <- LogPatterns.getBatchPatternStats pid 168
+  let statsMap = HM.fromList $ map (\s -> (s.logPattern, s)) allStats
+  let established = sum [1 :: Int | lp <- patterns, Just s <- [HM.lookup lp.logPattern statsMap], s.hourlyMedian > 100 || diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400 >= 14]
+  forM_ patterns \lp -> whenJust (HM.lookup lp.logPattern statsMap) \stats -> do
+    let patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400
+        -- High-volume (>100/hr) baselines stabilize quickly; low-volume need >=14 days
+        newState = if stats.hourlyMedian > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning
+    void $ LogPatterns.updateBaseline pid lp.patternHash newState stats.hourlyMedian stats.hourlyMADScaled stats.totalHours
+  Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, length patterns, "established" :: Text, established)
 
 
 -- | Detect log pattern volume spikes and create issues
@@ -1877,51 +1888,104 @@ calculateLogPatternBaselines pid = do
 detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
+  -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
+  -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
-  let spikeData = flip mapMaybe patternsWithRates \lpRate ->
+  let anomalyData = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineStddev) of
           (BSEstablished, Just mean, Just stddev)
             | stddev > 0 ->
                 let currentRate = fromIntegral lpRate.currentHourCount :: Double
                     zScore = (currentRate - mean) / stddev
-                    isSpike = abs zScore > 3.0 && currentRate > mean
-                 in if isSpike then Just (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev) else Nothing
+                    -- z-score >3 = 99.7% CI; absolute +10 avoids alerting on tiny volumes (e.g. 2→5/hr)
+                    direction
+                      | zScore > 3.0 && currentRate > mean + 10 = Just "spike"
+                      | zScore < -3.0 && currentRate < mean - 10 = Just "drop"
+                      | otherwise = Nothing
+                 in direction <&> \dir -> (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev, dir)
           _ -> Nothing
 
-  let spikeIds = V.fromList $ map (\(pid', _, _, _, _) -> pid') spikeData
-  spikePatterns <- LogPatterns.getLogPatternsByIds spikeIds
-  let patternMap = HM.fromList $ V.toList $ V.map (\lp -> (lp.patternHash, lp)) spikePatterns
+  let anomalyIds = V.fromList $ map (\(pid', _, _, _, _, _) -> pid') anomalyData
+  anomalyPatterns <- LogPatterns.getLogPatternsByIds anomalyIds
+  let patternMap = HM.fromList $ V.toList $ V.map (\lp -> (lp.patternHash, lp)) anomalyPatterns
 
-  forM_ spikeData \(patternId, patternHash, currentRate, mean, stddev) -> do
+  forM_ anomalyData \(patternId, patternHash, currentRate, mean, stddev, direction) -> do
     case HM.lookup patternHash patternMap of
       Just lp -> do
-        Log.logInfo "Log pattern spike detected" (patternId, lp.logPattern, currentRate, mean)
-        issue <- liftIO $ Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev "spike"
+        Log.logInfo ("Log pattern " <> direction <> " detected") (patternId, lp.logPattern, currentRate, mean)
+        issue <- Issues.createLogPatternRateChangeIssue pid lp currentRate mean stddev direction
         Issues.insertIssue issue
         liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        Log.logInfo "Created issue for log pattern spike" (pid, lp.id, issue.id)
+        -- Send notifications
+        let changePercentVal = if mean > 0 then abs ((currentRate / mean) - 1) * 100 else 0
+            issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issue.id.toText
+            alert =
+              LogPatternRateChangeAlert
+                { issueUrl = issueUrl
+                , patternText = lp.logPattern
+                , sampleMessage = lp.sampleMessage
+                , logLevel = lp.logLevel
+                , serviceName = lp.serviceName
+                , direction = direction
+                , currentRate = currentRate
+                , baselineMean = mean
+                , changePercent = changePercentVal
+                }
+        whenJustM (Projects.projectById pid) \project -> do
+          users <- Projects.usersByProjectId pid
+          forM_ project.notificationsChannel \case
+            Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+            Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
+            Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+            Projects.NPagerduty -> pass
+            Projects.NEmail -> do
+              forM_ users \u -> do
+                let (subj, html) = ET.logPatternRateChangeEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName direction currentRate mean changePercentVal
+                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+        Log.logInfo ("Created issue for log pattern " <> direction) (pid, lp.id, issue.id)
       Nothing -> pass
-  Log.logInfo "Finished log pattern spike detection" pid
+  Log.logInfo "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalyData)
 
 
 -- | Process a new log pattern and create an issue
 processNewLogPattern :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewLogPattern pid patternHash authCtx = do
   Log.logInfo "Processing new log pattern" (pid, patternHash)
-  totalEvents <- do
-    res <- PG.query [sql| SELECT count(*) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
-    case res of
-      [Only cnt] -> return cnt
-      _ -> return 0
-  if totalEvents < 10000
+  -- Skip in low-volume projects: <10k events/week means the project is still onboarding
+  -- and nearly every pattern would be "new", generating noisy issues
+  totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*) from otel_logs_and_spans WHERE project_id = ? AND timestamp >= now() - interval '7 days' |] (Only pid)
+  if totalEvents < (10000 :: Int)
     then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
     else do
       patternM <- LogPatterns.getLogPatternByHash pid patternHash
       whenJust patternM \lp -> do
         Relude.when (lp.state == LogPatterns.LPSNew) $ do
-          issue <- liftIO $ Issues.createLogPatternIssue pid lp
+          issue <- Issues.createLogPatternIssue pid lp
           Issues.insertIssue issue
           liftIO $ withResource authCtx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          -- Send notifications
+          let issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issue.id.toText
+              alert =
+                LogPatternAlert
+                  { issueUrl = issueUrl
+                  , patternText = lp.logPattern
+                  , sampleMessage = lp.sampleMessage
+                  , logLevel = lp.logLevel
+                  , serviceName = lp.serviceName
+                  , sourceField = lp.sourceField
+                  , occurrenceCount = fromIntegral lp.occurrenceCount
+                  }
+          whenJustM (Projects.projectById pid) \project -> do
+            forM_ project.notificationsChannel \case
+              Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
+              Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
+              Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+              Projects.NPagerduty -> pass
+              Projects.NEmail -> do
+                users <- Projects.usersByProjectId pid
+                forM_ users \u -> do
+                  let (subj, html) = ET.logPatternEmail project.title issueUrl lp.logPattern lp.sampleMessage lp.logLevel lp.serviceName lp.sourceField (fromIntegral lp.occurrenceCount)
+                  sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)

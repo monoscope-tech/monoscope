@@ -103,7 +103,7 @@ buildTitlePrompt issue =
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
             Modified fields: {V.length d.modifiedFields}
-            Service: {issue.service}
+            Service: {fromMaybe "unknown-service" issue.service}
             |]
           _ -> "Generate a concise title for this API change."
         Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
@@ -112,7 +112,7 @@ buildTitlePrompt issue =
             Generate a concise title for this runtime exception.
             Error type: {d.errorType}
             Error message: {T.take 100 d.errorMessage}
-            Service: {issue.service}
+            Service: {fromMaybe "unknown-service" issue.service}
             |]
           _ -> "Generate a concise title for this runtime exception."
         Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
@@ -125,21 +125,17 @@ buildTitlePrompt issue =
             |]
           _ -> "Generate a concise title for this query alert."
         Issues.LogPattern ->
-          let title = issue.title
-              service = fromMaybe "unknown-service" issue.service
-           in [text|
-                Generate a concise title for this log pattern issue.
-                Title: $title
-                Service: $service
-                |]
+          [fmtTrim|
+          Generate a concise title for this log pattern issue.
+          Title: {issue.title}
+          Service: {fromMaybe "unknown-service" issue.service}
+          |]
         Issues.LogPatternRateChange ->
-          let title = issue.title
-              service = fromMaybe "unknown-service" issue.service
-           in [text|
-                Generate a concise title for this log pattern rate change.
-                Title: $title
-                Service: $service
-                |]
+          [fmtTrim|
+          Generate a concise title for this log pattern rate change.
+          Title: {issue.title}
+          Service: {fromMaybe "unknown-service" issue.service}
+          |]
 
       systemPrompt =
         [text|
@@ -169,7 +165,7 @@ buildDescriptionPrompt issue =
             Deleted fields: {show $ V.toList d.deletedFields}
             Modified fields: {show $ V.toList d.modifiedFields}
             Total anomalies grouped: {V.length d.anomalyHashes}
-            Service: {issue.service}
+            Service: {fromMaybe "unknown-service" issue.service}
             |]
           _ -> "Describe this API change and its implications."
         Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
@@ -194,24 +190,18 @@ buildDescriptionPrompt issue =
             Triggered at: {show d.triggeredAt}
             |]
           _ -> "Describe this query alert."
-
         Issues.LogPattern ->
-          let title = issue.title
-              service = fromMaybe "unknown-service" issue.service
-           in [text|
-                Describe this log pattern issue and its implications.
-                Title: $title
-                Service: $service
-                |]
+          [fmtTrim|
+          Describe this log pattern issue and its implications.
+          Title: {issue.title}
+          Service: {fromMaybe "unknown-service" issue.service}
+          |]
         Issues.LogPatternRateChange ->
-          let title = issue.title
-              service = fromMaybe "unknown-service" issue.service
-           in [text|
-                Describe this log pattern rate change and its implications.
-                Title: $title
-                Service: $service
-                |]
-
+          [fmtTrim|
+          Describe this log pattern rate change and its implications.
+          Title: {issue.title}
+          Service: {fromMaybe "unknown-service" issue.service}
+          |]
 
       systemPrompt =
         [text|
@@ -273,10 +263,8 @@ buildCriticalityPrompt issue =
           _ -> "API change: " <> issue.title
         Issues.RuntimeException -> "Runtime exception: " <> issue.title
         Issues.QueryAlert -> "Query alert: " <> issue.title
-        Issues.LogPattern ->
-          "Log pattern: " <> issue.title
-        Issues.LogPatternRateChange ->
-          "Log pattern rate change: " <> issue.title
+        Issues.LogPattern -> "Log pattern: " <> issue.title
+        Issues.LogPatternRateChange -> "Log pattern rate change: " <> issue.title
 
       systemPrompt =
         [text|
