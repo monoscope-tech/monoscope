@@ -483,7 +483,7 @@ logsPatternExtraction scheduledTime pid = do
       otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       unless (null otelEvents) do
         Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        processPatterns (V.fromList [(i, s, trId, serviceName, level) | (i, s, trId, serviceName, level) <- otelEvents]) pid scheduledTime startTime
+        processPatterns (V.fromList otelEvents) pid scheduledTime startTime
         Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
       Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
 
@@ -525,7 +525,7 @@ processPatterns events pid scheduledTime since = do
       let filteredIds = V.filter (/= "") ids
           eventCount = fromIntegral $ V.length filteredIds :: Int64
       unless (V.null filteredIds || T.null patternTxt) do
-        let (serviceName, logLevel, logTraceId) = fromMaybe (Nothing, Nothing, Nothing) $ do
+        let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) $ do
               logId <- filteredIds V.!? 0
               HM.lookup logId eventMeta
             patternHash = toXXHash patternTxt
@@ -1634,7 +1634,7 @@ calculateLogPatternBaselines pid = do
       pageSize = 1000
       go offset totalProcessed totalEstablished = do
         patterns <- LogPatterns.getLogPatterns pid pageSize offset
-        let established = sum [1 :: Int | lp <- patterns, Just s <- [HM.lookup lp.patternHash statsMap], s.hourlyMedian > 100 || diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400 >= 14]
+        let established = length $ filter (\lp -> maybe False (\s -> s.hourlyMedian > 100 || diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400 >= 14) (HM.lookup lp.patternHash statsMap)) patterns
         forM_ patterns \lp -> whenJust (HM.lookup lp.patternHash statsMap) \stats -> do
           let patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400
               newState = if stats.hourlyMedian > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning

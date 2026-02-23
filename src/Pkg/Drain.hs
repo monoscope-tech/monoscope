@@ -152,8 +152,11 @@ updateOrCreateLevelTwo levelTwos targetToken tokensVec logId isSampleLog logCont
     newGroup = createLogGroup tokensVec (templateText tokensVec) logId now
 
 
+-- | Safe: only called when V.length logGroups >= maxLogGroups (> 0)
 leastRecentlyUsedIndex :: V.Vector LogGroup -> Int
-leastRecentlyUsedIndex = V.minIndexBy (comparing lastSeen)
+leastRecentlyUsedIndex gs
+  | V.null gs = 0
+  | otherwise = V.minIndexBy (comparing lastSeen) gs
 
 
 updateOrCreateLogGroup :: V.Vector LogGroup -> V.Vector Text -> Text -> Bool -> Text -> UTCTime -> DrainConfig -> (V.Vector LogGroup, Bool)

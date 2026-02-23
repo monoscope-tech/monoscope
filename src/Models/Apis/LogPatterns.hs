@@ -11,8 +11,6 @@ module Models.Apis.LogPatterns (
   updateBaseline,
   -- Hourly stats
   upsertHourlyStat,
-  PatternStats (..),
-  getPatternStats,
   BatchPatternStats (..),
   getBatchPatternStats,
   getCurrentHourPatternCount,
@@ -147,6 +145,7 @@ upsertLogPattern up =
           occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
           sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
+          log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
   |]
     up
@@ -179,43 +178,7 @@ upsertHourlyStat pid patHash hourBucket count =
     (pid, patHash, hourBucket, count)
 
 
--- | Stats for a log pattern from hourly stats table
--- Using median + MAD instead of mean + stddev for robustness against outliers/spikes
-data PatternStats = PatternStats
-  { hourlyMedian :: Double
-  , hourlyMADScaled :: Double
-  , totalHours :: Int
-  , totalEvents :: Int
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
-
-
--- | Get pattern stats from hourly stats table
-getPatternStats :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe PatternStats)
-getPatternStats pid patHash hoursBack = listToMaybe <$> PG.query q (pid, patHash, hoursBack)
-  where
-    q =
-      [sql|
-        WITH hourly_counts AS (
-          SELECT hour_bucket, event_count FROM apis.log_pattern_hourly_stats
-          WHERE project_id = ? AND pattern_hash = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ?
-        ),
-        median_calc AS (
-          SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val FROM hourly_counts
-        ),
-        mad_calc AS (
-          SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
-          FROM hourly_counts hc, median_calc mc
-        )
-        SELECT
-          COALESCE(mc.median_val, 0)::FLOAT, COALESCE(mad.mad_val * 1.4826, 0)::FLOAT,
-          (SELECT COUNT(*)::INT FROM hourly_counts), (SELECT COALESCE(SUM(event_count), 0)::INT FROM hourly_counts)
-        FROM median_calc mc, mad_calc mad
-      |]
-
-
--- | Batch version: computes median + MAD for all patterns in one query
+-- | Batch: computes median + MAD for all patterns in one query
 data BatchPatternStats = BatchPatternStats
   { patternHash :: Text
   , hourlyMedian :: Double
