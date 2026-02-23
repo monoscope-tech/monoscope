@@ -66,7 +66,7 @@ countIssues :: TestResources -> Issues.IssueType -> IO Int
 countIssues tr issueType = withResource tr.trPool \conn -> do
   [PGS.Only n] <- PGS.query conn
     [sql| SELECT COUNT(*)::INT FROM apis.issues WHERE project_id = ? AND issue_type = ? |]
-    (pid, Issues.issueTypeToText issueType)
+    (pid, issueType)
   pure n
 
 

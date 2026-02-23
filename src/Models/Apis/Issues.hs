@@ -90,10 +90,10 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, ResultError (..), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
@@ -110,7 +110,7 @@ import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText)
 import Relude hiding (id)
-import Servant (ServerError, err500, errBody)
+import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Types (DB)
 import Utils (formatUTC)
 
@@ -129,27 +129,18 @@ data IssueType
   | QueryAlert
   | LogPattern
   | LogPatternRateChange
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] IssueType
+  deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "" IssueType
 
 
 issueTypeToText :: IssueType -> Text
-issueTypeToText APIChange = "api_change" -- Maps to anomaly_type 'shape' in DB
-issueTypeToText RuntimeException = "runtime_exception"
-issueTypeToText QueryAlert = "query_alert"
-issueTypeToText LogPattern = "log_pattern"
-issueTypeToText LogPatternRateChange = "log_pattern_rate_change"
+issueTypeToText = display
 
 
 parseIssueType :: Text -> Maybe IssueType
-parseIssueType "api_change" = Just APIChange
-parseIssueType "shape" = Just APIChange -- Handle DB anomaly_type
-parseIssueType "runtime_exception" = Just RuntimeException
-parseIssueType "query_alert" = Just QueryAlert
-parseIssueType "log_pattern" = Just LogPattern
-parseIssueType "log_pattern_rate_change" = Just LogPatternRateChange
-parseIssueType _ = Nothing
+parseIssueType = rightToMaybe . parseUrlPiece
 
 
 serviceLabel :: Maybe Text -> Text
@@ -164,16 +155,6 @@ showPct :: RealFrac a => a -> Text
 showPct x = show (round x :: Int) <> "%"
 
 
-instance ToField IssueType where
-  toField = Escape . encodeUtf8 . issueTypeToText
-
-
-instance FromField IssueType where
-  fromField f mdata = case mdata of
-    Nothing -> returnError UnexpectedNull f ""
-    Just bs -> case parseIssueType (decodeUtf8 bs) of
-      Just t -> pure t
-      Nothing -> returnError ConversionFailed f $ "Unknown issue type: " <> decodeUtf8 bs
 
 
 -- | API Change issue data
