@@ -713,13 +713,20 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
         (Spike, _) -> "warning"
         (Drop, _) -> "info"
   let dir = display direction
-  mkIssue MkIssueOpts
-    { projectId, issueType = LogPatternRateChange, targetHash = lp.patternHash, endpointHash = lp.patternHash
-    , service = lp.serviceName, critical = direction == Spike && lp.logLevel == Just "error", severity
-    , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)"
-    , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs)."
-    , migrationComplexity = "n/a", issueData = rateChangeData
-    }
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , issueType = LogPatternRateChange
+      , targetHash = lp.patternHash
+      , endpointHash = lp.patternHash
+      , service = lp.serviceName
+      , critical = direction == Spike && lp.logLevel == Just "error"
+      , severity
+      , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)"
+      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs)."
+      , migrationComplexity = "n/a"
+      , issueData = rateChangeData
+      }
 
 
 -- | Create an issue for a new log pattern
@@ -740,13 +747,20 @@ createLogPatternIssue projectId lp = do
         Just "error" -> "critical"
         Just "warning" -> "warning"
         _ -> "info"
-  mkIssue MkIssueOpts
-    { projectId, issueType = LogPattern, targetHash = lp.patternHash, endpointHash = lp.patternHash
-    , service = lp.serviceName, critical = lp.logLevel == Just "error", severity
-    , title = "New Log Pattern: " <> T.take 100 lp.logPattern
-    , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
-    , migrationComplexity = "n/a", issueData = logPatternData
-    }
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , issueType = LogPattern
+      , targetHash = lp.patternHash
+      , endpointHash = lp.patternHash
+      , service = lp.serviceName
+      , critical = lp.logLevel == Just "error"
+      , severity
+      , title = "New Log Pattern: " <> T.take 100 lp.logPattern
+      , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
+      , migrationComplexity = "n/a"
+      , issueData = logPatternData
+      }
 
 
 -- | Log Pattern issue data (new pattern detected)

@@ -1642,8 +1642,9 @@ calculateLogPatternBaselines pid = do
           void $ LogPatterns.updateBaseline pid lp.patternHash newState stats.hourlyMedian stats.hourlyMADScaled stats.totalHours
         let newTotal = totalProcessed + length patterns
             newEstablished = totalEstablished + established
-        if length patterns == pageSize then go (offset + pageSize) newTotal newEstablished
-        else pure (newTotal, newEstablished)
+        if length patterns == pageSize
+          then go (offset + pageSize) newTotal newEstablished
+          else pure (newTotal, newEstablished)
   (total, established) <- go 0 0 0
   Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
 
