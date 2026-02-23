@@ -119,7 +119,6 @@ data BgJobs
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
   | LogPatternHourlyProcessing Projects.ProjectId
-  | NewLogPatternDetected Projects.ProjectId Text Text -- project_id, source_field, pattern_hash
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -342,7 +341,6 @@ processBackgroundJob authCtx bgJob =
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     LogPatternHourlyProcessing pid -> calculateLogPatternBaselines pid >> detectLogPatternSpikes pid authCtx >> processNewLogPatterns pid authCtx
-    NewLogPatternDetected _ _ _ -> pass -- legacy: replaced by batch processing in LogPatternHourlyProcessing
 
 
 -- | Run hourly scheduled tasks for all projects

@@ -47,26 +47,6 @@ CREATE INDEX IF NOT EXISTS idx_log_patterns_service ON apis.log_patterns(project
 CREATE INDEX IF NOT EXISTS idx_log_patterns_project_hash
   ON apis.log_patterns(project_id, pattern_hash);
 
-CREATE OR REPLACE FUNCTION apis.new_log_pattern_proc() RETURNS trigger AS $$
-BEGIN
-  IF TG_WHEN <> 'AFTER' THEN
-    RAISE EXCEPTION 'apis.new_log_pattern_proc() may only run as an AFTER trigger';
-  END IF;
-  INSERT INTO background_jobs (run_at, status, payload)
-  VALUES (
-    NOW(),
-    'queued',
-    jsonb_build_object(
-      'tag', 'NewLogPatternDetected',
-      'contents', jsonb_build_array(NEW.project_id, NEW.source_field, NEW.pattern_hash)
-    )
-  );
-  RETURN NULL;
-END;
-$$ LANGUAGE plpgsql;
-
-CREATE OR REPLACE TRIGGER log_pattern_created_notify AFTER INSERT ON apis.log_patterns FOR EACH ROW EXECUTE PROCEDURE apis.new_log_pattern_proc();
-
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS source_type TEXT;
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS target_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS environment TEXT;
