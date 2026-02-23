@@ -1703,7 +1703,7 @@ processNewLogPattern pid patternHash authCtx = do
   whenJust patternM \lp -> Relude.when (lp.state == LogPatterns.LPSNew) $ do
     -- Skip in low-volume projects: <10k events/week means the project is still onboarding
     -- and nearly every pattern would be "new", generating noisy issues
-    totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '168 hours' |] (Only pid)
+    totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ? |] (pid, baselineWindowHours)
     if totalEvents < (10000 :: Int64)
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
       else do

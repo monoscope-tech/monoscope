@@ -121,6 +121,7 @@ getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field
 
 -- | All pattern templates for a source field, used to seed Drain trees.
 -- No LIMIT: loading all patterns prevents duplicate clusters from forming.
+-- Scale ceiling: ~5k patterns/source_field. Beyond that, consider pagination or pruning stale patterns.
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
 getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ?|] (pid, sourceField)
 
@@ -134,12 +135,12 @@ getLogPatternByHash pid hash = listToMaybe <$> PG.query (_selectWhere @LogPatter
 acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Users.UserId -> V.Vector Text -> Eff es Int64
 acknowledgeLogPatterns pid uid patternHashes
   | V.null patternHashes = pure 0
-  | otherwise = PG.execute q (uid, pid, patternHashes)
+  | otherwise = PG.execute q (LPSAcknowledged, uid, pid, patternHashes)
   where
     q =
       [sql|
         UPDATE apis.log_patterns
-        SET state = 'acknowledged', acknowledged_by = ?, acknowledged_at = NOW()
+        SET state = ?, acknowledged_by = ?, acknowledged_at = NOW()
         WHERE project_id = ? AND pattern_hash = ANY(?)
       |]
 
@@ -261,6 +262,7 @@ data LogPatternWithRate = LogPatternWithRate
 -- | Get all established patterns with their current hour counts for spike detection.
 -- Intentionally unbounded: the established filter is a natural cap and we need
 -- completeness to avoid missing spikes. A LIMIT would silently skip patterns.
+-- Scale ceiling: established patterns grow slowly (~weeks); expect <1k per project at steady state.
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid =
   PG.query q (Only pid)
