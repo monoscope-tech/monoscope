@@ -65,7 +65,8 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
+import Models.Apis.LogPatterns (BaselineState (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub

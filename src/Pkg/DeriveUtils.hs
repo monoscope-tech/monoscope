@@ -2,7 +2,6 @@
 
 module Pkg.DeriveUtils (
   AesonText (..),
-  BaselineState (..),
   DB,
   PGTextArray (..),
   UUIDId (..),
@@ -38,7 +37,6 @@ import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fr
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Deriving.Aeson qualified as DAE
 import Effectful (IOE, type (:>))
 import Effectful.PostgreSQL (WithConnection)
 import GHC.Records (HasField (getField))
@@ -210,18 +208,6 @@ connectPostgreSQL connstr = do
     _ -> do
       msg <- fromMaybe "connectPostgreSQL error" <$> PQ.errorMessage conn
       throwIO $ PGI.fatalError msg
-
-
--- | Baseline state for anomaly detection.
-data BaselineState = BSLearning | BSEstablished
-  deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "BS", DAE.CamelToSnake]] BaselineState
-  deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
-
-
-instance Default BaselineState where
-  def = BSLearning
 
 
 -- adds a version hash to file paths, to force cache invalidation when a new version appears

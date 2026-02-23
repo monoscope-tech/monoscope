@@ -1,4 +1,5 @@
 module Models.Apis.LogPatterns (
+  BaselineState (..),
   LogPattern (..),
   LogPatternId,
   LogPatternState (..),
@@ -36,9 +37,16 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
-import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
+
+
+data BaselineState = BSLearning | BSEstablished
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "BS", DAE.CamelToSnake]] BaselineState
+  deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
 
 
 newtype LogPatternId = LogPatternId {unLogPatternId :: Int64}

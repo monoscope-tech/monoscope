@@ -225,7 +225,7 @@ data Issue = Issue
   , issueType :: IssueType
   , sourceType :: Maybe Text
   , targetHash :: Text -- Must stay non-null: used in ON CONFLICT unique index for dedup
-  , endpointHash :: Text
+  , endpointHash :: Text -- Legacy: always set to targetHash by mkIssue
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Users.UserId
   , archivedAt :: Maybe ZonedTime
@@ -505,7 +505,7 @@ createRuntimeExceptionIssue projectId atError =
             , firstSeen = atError.when
             , lastSeen = atError.when
             }
-      , timestamp = Nothing
+      , timestamp = Just (utcToZonedTime utc atError.when)
       }
 
 
@@ -534,7 +534,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
             , thresholdType
             , triggeredAt = now
             }
-      , timestamp = Nothing
+      , timestamp = Just (utcToZonedTime utc now)
       }
 
 

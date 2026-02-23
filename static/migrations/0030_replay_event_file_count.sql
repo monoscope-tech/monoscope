@@ -91,6 +91,10 @@ CREATE INDEX IF NOT EXISTS idx_lp_hourly_stats_project_hour
 CREATE INDEX IF NOT EXISTS idx_log_patterns_baseline_established
   ON apis.log_patterns(project_id) WHERE baseline_state = 'established';
 
+-- Drop old unique indexes that conflict with the new ON CONFLICT clause
+DROP INDEX IF EXISTS idx_apis_issues_project_id_target_hash;
+DROP INDEX IF EXISTS unique_open_api_change_issue_per_endpoint;
+
 CREATE UNIQUE INDEX IF NOT EXISTS idx_issues_project_target_type_open
   ON apis.issues (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL;
