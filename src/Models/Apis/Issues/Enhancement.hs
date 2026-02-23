@@ -144,7 +144,7 @@ buildTitlePrompt issue =
             Log pattern: {d.logPattern}
             Current rate: {Issues.showRate d.currentRatePerHour}
             Baseline: {Issues.showRate d.baselineMean}
-            Change: {show (round d.changePercent :: Int)}%
+            Change: {Issues.showPct d.changePercent}
             Service: {Issues.serviceLabel d.serviceName}
             |]
           _ -> "Generate a concise title for this log pattern rate change. Title: " <> issue.title
@@ -226,7 +226,7 @@ buildDescriptionPrompt issue =
             Baseline mean: {Issues.showRate d.baselineMean}
             Baseline MAD: {Issues.showRate d.baselineMad}
             Z-score: {show (round d.zScore :: Int)} standard deviations
-            Change: {show (round d.changePercent :: Int)}%
+            Change: {Issues.showPct d.changePercent}
             Service: {Issues.serviceLabel d.serviceName}
             Log level: {fromMaybe "unknown" d.logLevel}
             |]

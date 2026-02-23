@@ -365,7 +365,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
             AE.Success (d :: Issues.LogPatternRateChangeData) -> do
               div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
                 statBox_ (Just pid) Nothing "Direction" "" (display d.changeDirection) Nothing Nothing
-                statBox_ (Just pid) Nothing "Change" "" (show (round d.changePercent :: Int) <> "%") Nothing Nothing
+                statBox_ (Just pid) Nothing "Change" "" (Issues.showPct d.changePercent) Nothing Nothing
                 statBox_ (Just pid) Nothing "Current Rate" "" (Issues.showRate d.currentRatePerHour) Nothing Nothing
                 statBox_ (Just pid) Nothing "Baseline" "" (Issues.showRate d.baselineMean) Nothing Nothing
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
@@ -1053,7 +1053,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       span_ [class_ "text-textWeak"] do
         strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
         " breaking"
-        when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs tabular-nums ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ show (round (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float) :: Int) <> "%"
+        when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs tabular-nums ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ Issues.showPct (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float)
       div_ [class_ "w-px h-4 bg-strokeWeak"] ""
       span_ [class_ "text-textWeak"] do
         strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
@@ -1094,7 +1094,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
         div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
           label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
             faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
-            toHtml $ "Rate " <> display d.changeDirection <> " (" <> show (round d.changePercent :: Int) <> "%)"
+            toHtml $ "Rate " <> display d.changeDirection <> " (" <> Issues.showPct d.changePercent <> ")"
             input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
           div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
       _ -> pass

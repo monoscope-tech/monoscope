@@ -6,6 +6,7 @@ module Models.Apis.LogPatterns (
   getLogPatterns,
   getLogPatternTexts,
   getLogPatternByHash,
+  getNewLogPatterns,
   acknowledgeLogPatterns,
   UpsertPattern (..),
   upsertLogPattern,
@@ -129,6 +130,11 @@ getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
 getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe LogPattern)
 getLogPatternByHash pid sourceField hash = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| source_field |], [DAT.field| pattern_hash |]]) (pid, sourceField, hash)
+
+
+-- | Get all new (unprocessed) log patterns for a project, for batch issue creation.
+getNewLogPatterns :: DB es => Projects.ProjectId -> Eff es [LogPattern]
+getNewLogPatterns pid = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]] <> " ORDER BY created_at") (pid, LPSNew)
 
 
 -- | Acknowledge log patterns

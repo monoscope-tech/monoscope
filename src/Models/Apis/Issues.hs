@@ -51,6 +51,7 @@ module Models.Apis.Issues (
   issueTypeToText,
   serviceLabel,
   showRate,
+  showPct,
 
   -- * AI Conversations
   AIConversation (..),
@@ -157,6 +158,9 @@ serviceLabel = fromMaybe "unknown-service"
 
 showRate :: Double -> Text
 showRate x = show (round x :: Int) <> "/hr"
+
+showPct :: (RealFrac a) => a -> Text
+showPct x = show (round x :: Int) <> "%"
 
 
 instance ToField IssueType where
@@ -654,7 +658,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
       , service = lp.serviceName
       , critical = direction == Spike && lp.logLevel == Just "error"
       , severity
-      , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)"
+      , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> showPct changePercentVal <> ")"
       , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> " (" <> show (round zScoreVal :: Int) <> " std devs)."
       , migrationComplexity = "n/a"
       , issueData = rateChangeData

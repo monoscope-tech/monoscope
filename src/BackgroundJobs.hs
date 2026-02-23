@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta) where
 
 import Control.Lens (view, (.~), _2)
 import Data.Aeson qualified as AE
@@ -341,8 +341,8 @@ processBackgroundJob authCtx bgJob =
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
-    LogPatternHourlyProcessing pid -> calculateLogPatternBaselines pid >> detectLogPatternSpikes pid authCtx
-    NewLogPatternDetected pid sourceField patternHash -> processNewLogPattern pid sourceField patternHash authCtx
+    LogPatternHourlyProcessing pid -> calculateLogPatternBaselines pid >> detectLogPatternSpikes pid authCtx >> processNewLogPatterns pid authCtx
+    NewLogPatternDetected _ _ _ -> pass -- legacy: replaced by batch processing in LogPatternHourlyProcessing
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -515,8 +515,10 @@ processPatterns events pid scheduledTime since = do
       eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
   unless (V.null events) do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-    let known = V.fromList $ map (DrainInput "" Nothing) existingPatterns
-        combined = known <> ((\(logId, content, _, _, _) -> DrainInput logId (Just content) content) <$> events)
+    Relude.when (length existingPatterns > 5000) $
+      Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
+    let known = V.fromList $ map (DrainInput "" False) existingPatterns
+        combined = known <> ((\(logId, content, _, _, _) -> DrainInput logId True content) <$> events)
         drainTree = processBatch True combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     unless (V.null newPatterns)
@@ -537,13 +539,13 @@ processPatterns events pid scheduledTime since = do
         void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
 
 
--- | Input for Drain tree processing. sampleContent: Just for real events, Nothing for seeds.
-data DrainInput = DrainInput {logId :: Text, sampleContent :: Maybe Text, content :: Text}
+-- | Input for Drain tree processing. isNewEvent: True for real events, False for seeds (existing patterns).
+data DrainInput = DrainInput {logId :: Text, isNewEvent :: Bool, content :: Text}
 
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree DrainInput{..} -> processNewLog isSummary logId sampleContent content now tree) inTree batch
+  V.foldl' (\tree DrainInput{..} -> processNewLog isSummary logId (content <$ guard isNewEvent) content now tree) inTree batch
 
 
 processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -1704,19 +1706,21 @@ detectLogPatternSpikes pid authCtx = do
 
 
 -- | Process a new log pattern and create an issue
-processNewLogPattern :: Projects.ProjectId -> Text -> Text -> Config.AuthContext -> ATBackgroundCtx ()
-processNewLogPattern pid sourceField patternHash authCtx = do
-  Log.logInfo "Processing new log pattern" (pid, sourceField, patternHash)
-  patternM <- LogPatterns.getLogPatternByHash pid sourceField patternHash
-  whenJust patternM \lp -> Relude.when (lp.state == LogPatterns.LPSNew) $ do
+-- | Batch-process all state='new' log patterns for a project.
+-- Runs as part of the hourly pipeline instead of per-insert trigger.
+processNewLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+processNewLogPatterns pid authCtx = do
+  newPatterns <- LogPatterns.getNewLogPatterns pid
+  unless (null newPatterns) do
     -- Skip in low-volume projects: <10k events/week means the project is still onboarding
-    -- and nearly every pattern would be "new", generating noisy issues
     totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ? |] (pid, baselineWindowHours)
     if totalEvents < (10000 :: Int64)
-      then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
+      then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
-        issue <- Issues.createLogPatternIssue pid lp
-        Issues.insertIssue issue
+        issueIds <- forM newPatterns \lp -> do
+          issue <- Issues.createLogPatternIssue pid lp
+          Issues.insertIssue issue
+          Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+          pure issue.id
         liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
