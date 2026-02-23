@@ -1,6 +1,6 @@
 ALTER TABLE projects.replay_sessions ADD COLUMN IF NOT EXISTS event_file_count INTEGER NOT NULL DEFAULT 0;
 
--- ALTER TYPE ADD VALUE cannot run inside a transaction on PostgreSQL < 12
+-- ALTER TYPE ADD VALUE must run outside a transaction (PG 12+ allows IF NOT EXISTS in txn)
 ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern';
 ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern_rate_change';
 
@@ -44,6 +44,9 @@ CREATE INDEX IF NOT EXISTS idx_log_patterns_project_state ON apis.log_patterns(p
 CREATE INDEX IF NOT EXISTS idx_log_patterns_last_seen ON apis.log_patterns(project_id, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_log_patterns_service ON apis.log_patterns(project_id, service_name);
 
+CREATE INDEX IF NOT EXISTS idx_log_patterns_project_hash
+  ON apis.log_patterns(project_id, pattern_hash);
+
 CREATE OR REPLACE FUNCTION apis.new_log_pattern_proc() RETURNS trigger AS $$
 BEGIN
   IF TG_WHEN <> 'AFTER' THEN
@@ -55,7 +58,7 @@ BEGIN
     'queued',
     jsonb_build_object(
       'tag', 'NewLogPatternDetected',
-      'contents', jsonb_build_array(NEW.project_id, NEW.pattern_hash)
+      'contents', jsonb_build_array(NEW.project_id, NEW.source_field, NEW.pattern_hash)
     )
   );
   RETURN NULL;

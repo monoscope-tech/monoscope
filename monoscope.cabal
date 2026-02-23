@@ -567,6 +567,7 @@ test-suite unit-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      BackgroundJobs.SpikeDetectionSpec
       Data.Effectful.NotifySpec
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec

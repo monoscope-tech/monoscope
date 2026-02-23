@@ -104,7 +104,7 @@ buildTitlePrompt issue =
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
             Modified fields: {V.length d.modifiedFields}
-            Service: {fromMaybe "unknown-service" issue.service}
+            Service: {Issues.serviceLabel issue.service}
             |]
           _ -> "Generate a concise title for this API change."
         Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
@@ -113,7 +113,7 @@ buildTitlePrompt issue =
             Generate a concise title for this runtime exception.
             Error type: {d.errorType}
             Error message: {T.take 100 d.errorMessage}
-            Service: {fromMaybe "unknown-service" issue.service}
+            Service: {Issues.serviceLabel issue.service}
             |]
           _ -> "Generate a concise title for this runtime exception."
         Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
@@ -132,7 +132,7 @@ buildTitlePrompt issue =
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Log level: {fromMaybe "unknown" d.logLevel}
-            Service: {fromMaybe "unknown-service" d.serviceName}
+            Service: {Issues.serviceLabel d.serviceName}
             Occurrences: {d.occurrenceCount}
             |]
           _ -> "Generate a concise title for this log pattern. Title: " <> issue.title
@@ -142,10 +142,10 @@ buildTitlePrompt issue =
              in [fmtTrim|
             Generate a concise title for this log pattern volume {dir}.
             Log pattern: {d.logPattern}
-            Current rate: {show (round d.currentRatePerHour :: Int)}/hr
-            Baseline: {show (round d.baselineMean :: Int)}/hr
+            Current rate: {Issues.showRate d.currentRatePerHour}
+            Baseline: {Issues.showRate d.baselineMean}
             Change: {show (round d.changePercent :: Int)}%
-            Service: {fromMaybe "unknown-service" d.serviceName}
+            Service: {Issues.serviceLabel d.serviceName}
             |]
           _ -> "Generate a concise title for this log pattern rate change. Title: " <> issue.title
 
@@ -177,7 +177,7 @@ buildDescriptionPrompt issue =
             Deleted fields: {show $ V.toList d.deletedFields}
             Modified fields: {show $ V.toList d.modifiedFields}
             Total anomalies grouped: {V.length d.anomalyHashes}
-            Service: {fromMaybe "unknown-service" issue.service}
+            Service: {Issues.serviceLabel issue.service}
             |]
           _ -> "Describe this API change and its implications."
         Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
@@ -209,7 +209,7 @@ buildDescriptionPrompt issue =
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Log level: {fromMaybe "unknown" d.logLevel}
-            Service: {fromMaybe "unknown-service" d.serviceName}
+            Service: {Issues.serviceLabel d.serviceName}
             Source: {d.sourceField}
             Occurrences: {d.occurrenceCount}
             First seen: {show d.firstSeenAt}
@@ -222,12 +222,12 @@ buildDescriptionPrompt issue =
             Describe this log pattern volume {dir} and its implications.
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
-            Current rate: {show (round d.currentRatePerHour :: Int)}/hr
-            Baseline mean: {show (round d.baselineMean :: Int)}/hr
-            Baseline MAD: {show (round d.baselineMad :: Int)}/hr
+            Current rate: {Issues.showRate d.currentRatePerHour}
+            Baseline mean: {Issues.showRate d.baselineMean}
+            Baseline MAD: {Issues.showRate d.baselineMad}
             Z-score: {show (round d.zScore :: Int)} standard deviations
             Change: {show (round d.changePercent :: Int)}%
-            Service: {fromMaybe "unknown-service" d.serviceName}
+            Service: {Issues.serviceLabel d.serviceName}
             Log level: {fromMaybe "unknown" d.logLevel}
             |]
           _ -> "Describe this log pattern rate change. Title: " <> issue.title

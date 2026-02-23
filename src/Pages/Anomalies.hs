@@ -366,8 +366,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
                 statBox_ (Just pid) Nothing "Direction" "" (display d.changeDirection) Nothing Nothing
                 statBox_ (Just pid) Nothing "Change" "" (show (round d.changePercent :: Int) <> "%") Nothing Nothing
-                statBox_ (Just pid) Nothing "Current Rate" "" (show (round d.currentRatePerHour :: Int) <> "/hr") Nothing Nothing
-                statBox_ (Just pid) Nothing "Baseline" "" (show (round d.baselineMean :: Int) <> "/hr") Nothing Nothing
+                statBox_ (Just pid) Nothing "Current Rate" "" (Issues.showRate d.currentRatePerHour) Nothing Nothing
+                statBox_ (Just pid) Nothing "Baseline" "" (Issues.showRate d.baselineMean) Nothing Nothing
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
                 div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                   span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
@@ -549,7 +549,7 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Title**: " <> iss.title
           , Just $ "- **Type**: " <> show iss.issueType
           , Just $ "- **Severity**: " <> iss.severity
-          , Just $ "- **Service**: " <> fromMaybe "unknown-service" iss.service
+          , Just $ "- **Service**: " <> Issues.serviceLabel iss.service
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
           , errM >>= \err ->
@@ -1033,7 +1033,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
       div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-      span_ [class_ "text-textStrong"] $ toHtml $ fromMaybe "unknown-service" issue.service
+      span_ [class_ "text-textStrong"] $ toHtml $ Issues.serviceLabel issue.service
     -- Time since
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 

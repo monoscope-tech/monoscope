@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop) where
 
 import Control.Lens (view, (.~), _2)
 import Data.Aeson qualified as AE
@@ -1665,8 +1665,20 @@ calculateLogPatternBaselines pid = do
   Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
 
 
+-- | Pure spike/drop detection for a single pattern.
+-- Returns (currentRate, mean, mad, direction) if anomalous, Nothing otherwise.
+detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int -> Maybe (Double, Double, Double, Issues.RateChangeDirection)
+detectSpikeOrDrop zThreshold minDelta mean mad currentCount
+  | mad <= 0 = Nothing
+  | zScore > zThreshold && rate > mean + minDelta = Just (rate, mean, mad, Issues.Spike)
+  | zScore < negate zThreshold && rate < mean - minDelta = Just (rate, mean, mad, Issues.Drop)
+  | otherwise = Nothing
+  where
+    rate = fromIntegral currentCount
+    zScore = (rate - mean) / mad
+
+
 -- | Detect log pattern volume spikes and create issues
--- Uses otel_logs_and_spans table for current rate calculation
 detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
@@ -1675,15 +1687,9 @@ detectLogPatternSpikes pid authCtx = do
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
   let anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
-          (BSEstablished, Just mean, Just mad)
-            | mad > 0 ->
-                let currentRate = fromIntegral lpRate.currentHourCount :: Double
-                    zScore = (currentRate - mean) / mad
-                    direction
-                      | zScore > spikeZScoreThreshold && currentRate > mean + spikeMinAbsoluteDelta = Just Issues.Spike
-                      | zScore < negate spikeZScoreThreshold && currentRate < mean - spikeMinAbsoluteDelta = Just Issues.Drop
-                      | otherwise = Nothing
-                 in direction <&> \dir -> (lpRate, currentRate, mean, mad, dir)
+          (BSEstablished, Just mean, Just mad) ->
+            detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad lpRate.currentHourCount
+              <&> \(currentRate, m, md, dir) -> (lpRate, currentRate, m, md, dir)
           _ -> Nothing
 
   forM_ anomalies \(lpRate, currentRate, mean, mad, direction) -> do

@@ -49,6 +49,8 @@ module Models.Apis.Issues (
   issueIdText,
   parseIssueType,
   issueTypeToText,
+  serviceLabel,
+  showRate,
 
   -- * AI Conversations
   AIConversation (..),
@@ -147,6 +149,14 @@ parseIssueType "query_alert" = Just QueryAlert
 parseIssueType "log_pattern" = Just LogPattern
 parseIssueType "log_pattern_rate_change" = Just LogPatternRateChange
 parseIssueType _ = Nothing
+
+
+serviceLabel :: Maybe Text -> Text
+serviceLabel = fromMaybe "unknown-service"
+
+
+showRate :: Double -> Text
+showRate x = show (round x :: Int) <> "/hr"
 
 
 instance ToField IssueType where
@@ -645,7 +655,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
       , critical = direction == Spike && lp.logLevel == Just "error"
       , severity
       , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)"
-      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs)."
+      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> " (" <> show (round zScoreVal :: Int) <> " std devs)."
       , migrationComplexity = "n/a"
       , issueData = rateChangeData
       , timestamp = Nothing
@@ -664,7 +674,7 @@ createLogPatternIssue projectId lp = do
           , serviceName = lp.serviceName
           , sourceField = lp.sourceField
           , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
-          , occurrenceCount = fromIntegral lp.occurrenceCount
+          , occurrenceCount = lp.occurrenceCount
           }
       severity = case lp.logLevel of
         Just "error" -> "critical"
@@ -695,7 +705,7 @@ data LogPatternData = LogPatternData
   , serviceName :: Maybe Text
   , sourceField :: Text
   , firstSeenAt :: UTCTime
-  , occurrenceCount :: Int
+  , occurrenceCount :: Int64
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
