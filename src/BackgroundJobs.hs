@@ -1644,15 +1644,14 @@ calculateLogPatternBaselines pid = do
   now <- Time.currentTime
   allStats <- LogPatterns.getBatchPatternStats pid baselineWindowHours
   let statsMap = HM.fromList $ map (\s -> ((s.sourceField, s.patternHash), s)) allStats
-      isEstablished stats ageDays = stats.hourlyMedian > minMedianForEstablished || ageDays >= minAgeDaysForEstablished
       go offset totalProcessed totalEstablished = do
         patterns <- LogPatterns.getLogPatterns pid baselinePageSize offset
-        let patternAgeDays lp = realToFrac (diffUTCTime now (zonedTimeToUTC lp.firstSeenAt)) / 86400 :: Double
+        let ageDays lp = realToFrac (diffUTCTime now (zonedTimeToUTC lp.firstSeenAt)) / 86400 :: Double
             updates = V.fromList $ flip mapMaybe patterns \lp ->
               HM.lookup (lp.sourceField, lp.patternHash) statsMap <&> \stats ->
-                let est = isEstablished stats (patternAgeDays lp)
+                let est = stats.hourlyMedian > minMedianForEstablished || ageDays lp >= minAgeDaysForEstablished
                  in (lp.patternHash, bool BSLearning BSEstablished est, stats.hourlyMedian, stats.hourlyMADScaled, stats.totalHours)
-            established = V.length $ V.filter (\(_, s, _, _, _) -> s == BSEstablished) updates
+            established = V.length $ V.filter ((== BSEstablished) . (\(_, s, _, _, _) -> s)) updates
         void $ LogPatterns.updateBaselineBatch pid updates
         let newTotal = totalProcessed + length patterns
             newEstablished = totalEstablished + established

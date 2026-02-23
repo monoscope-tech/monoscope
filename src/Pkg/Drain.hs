@@ -289,5 +289,5 @@ generateSummaryDrainTokens content = V.fromList $ map normalizeMarkupToken $ wor
   where
     normalizeMarkupToken tok = case T.breakOn "⇒" tok of
       (prefix, rest)
-        | not (T.null rest) -> prefix <> "⇒" <> replaceAllFormats (T.drop 1 rest)
+        | Just val <- T.stripPrefix "⇒" rest -> prefix <> "⇒" <> replaceAllFormats val
         | otherwise -> replaceAllFormats tok

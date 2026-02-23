@@ -111,8 +111,10 @@ getLogPatterns :: DB es => Projects.ProjectId -> Int -> Int -> Eff es [LogPatter
 getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |]] <> " ORDER BY last_seen_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
 
 
+-- | All pattern templates for a source field, used to seed Drain trees.
+-- No LIMIT: loading all patterns prevents duplicate clusters from forming.
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
-getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ? ORDER BY occurrence_count DESC LIMIT 500|] (pid, sourceField)
+getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ?|] (pid, sourceField)
 
 
 -- | Get log pattern by hash
@@ -173,6 +175,8 @@ updateBaselineBatch pid rows
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
 -- Note: += semantics means job retries within the same hour can over-count.
 -- Accepted tradeoff: baselines use median+MAD which is robust to occasional outliers.
+-- Caveat: processNewLogPattern's 10k-events gate also reads these counts, so
+-- inflated values from retries could trigger issue creation earlier for new projects.
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid sourceField patHash hourBucket count =
   PG.execute
@@ -246,7 +250,9 @@ data LogPatternWithRate = LogPatternWithRate
   deriving anyclass (FromRow)
 
 
--- | Get all patterns with their current hour counts (all pattern types participate in spike detection)
+-- | Get all established patterns with their current hour counts for spike detection.
+-- Intentionally unbounded: the established filter is a natural cap and we need
+-- completeness to avoid missing spikes. A LIMIT would silently skip patterns.
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid =
   PG.query q (Only pid)
