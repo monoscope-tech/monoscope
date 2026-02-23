@@ -155,8 +155,6 @@ showPct :: RealFrac a => a -> Text
 showPct x = show (round x :: Int) <> "%"
 
 
-
-
 -- | API Change issue data
 data APIChangeData = APIChangeData
   { endpointMethod :: Text
