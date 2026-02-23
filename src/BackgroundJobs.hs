@@ -1628,6 +1628,7 @@ baselineWindowHours, baselinePageSize :: Int
 baselineWindowHours = 168 -- 7 days
 baselinePageSize = 1000
 
+
 minMedianForEstablished, minAgeDaysForEstablished, spikeZScoreThreshold, spikeMinAbsoluteDelta :: Double
 minMedianForEstablished = 100 -- events/hour required for immediate "established"
 minAgeDaysForEstablished = 14 -- days old enough for reliable baselines
