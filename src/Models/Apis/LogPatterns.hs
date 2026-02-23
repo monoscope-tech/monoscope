@@ -44,6 +44,7 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Data.List (lookup)
 import Relude hiding (id)
 import System.Types (DB)
 
@@ -137,9 +138,9 @@ getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Ma
 getLogPatternByHash pid sourceField hash = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| source_field |], [DAT.field| pattern_hash |]]) (pid, sourceField, hash)
 
 
--- | Get all new (unprocessed) log patterns for a project, for batch issue creation.
-getNewLogPatterns :: DB es => Projects.ProjectId -> Eff es [LogPattern]
-getNewLogPatterns pid = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]] <> " ORDER BY created_at ASC LIMIT 500") (pid, LPSNew)
+-- | Get new (unprocessed) log patterns for a project, for batch issue creation.
+getNewLogPatterns :: DB es => Projects.ProjectId -> Int -> Eff es [LogPattern]
+getNewLogPatterns pid limit = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]] <> " ORDER BY created_at ASC LIMIT ?") (pid, LPSNew, limit)
 
 
 -- | Acknowledge log patterns
@@ -240,6 +241,7 @@ getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
           SELECT source_field, pattern_hash, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::BIGINT AS total_events
           FROM hourly_counts GROUP BY source_field, pattern_hash
         )
+        -- 1.4826 = consistency factor (1/Φ⁻¹(3/4)) to convert MAD to std-dev equivalent under normality
         SELECT mc.source_field, mc.pattern_hash, COALESCE(mc.median_val, 0)::FLOAT, COALESCE(mad.mad_val * 1.4826, 0)::FLOAT,
           t.total_hours, t.total_events
         FROM median_calc mc
@@ -317,7 +319,7 @@ knownPatternFields = [("body", "Log body"), ("summary", "Event summary"), ("url_
 -- >>> sourceFieldLabel "unknown_field"
 -- "unknown_field"
 sourceFieldLabel :: Text -> Text
-sourceFieldLabel f = maybe f snd $ find ((== f) . fst) knownPatternFields
+sourceFieldLabel f = fromMaybe f $ lookup f knownPatternFields
 
 
 -- | Total event count across all patterns for a project within a time window.

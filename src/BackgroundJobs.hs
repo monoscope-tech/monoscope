@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, SpikeResult (..), detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta) where
 
 import Control.Lens (view, (.~), _2)
 import Data.Aeson qualified as AE
@@ -340,7 +340,14 @@ processBackgroundJob authCtx bgJob =
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
-    LogPatternHourlyProcessing pid -> calculateLogPatternBaselines pid >> detectLogPatternSpikes pid authCtx >> processNewLogPatterns pid authCtx
+    LogPatternHourlyProcessing pid -> do
+      tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
+      tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid authCtx
+      tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
+
+
+tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
+tryLog label action = try action >>= either (\(e :: SomeException) -> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e)) pure
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -532,7 +539,7 @@ processPatterns events pid scheduledTime since = do
             patternHash = toXXHash dp.templateStr
             hashTag = "pat:" <> patternHash
         -- Append pattern hash to hashes array on matched event rows
-        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
+        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
         void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}
         void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
 
@@ -543,7 +550,13 @@ data DrainInput = SeedPattern Text | NewEvent {logId :: Text, content :: Text}
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree -> \case SeedPattern c -> processNewLog isSummary "" Nothing c now tree; NewEvent{..} -> processNewLog isSummary logId (Just content) content now tree) inTree batch
+  V.foldl'
+    ( \tree -> \case
+        SeedPattern c -> processNewLog isSummary "" Nothing c now tree
+        NewEvent{..} -> processNewLog isSummary logId (Just content) content now tree
+    )
+    inTree
+    batch
 
 
 processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -1627,9 +1640,10 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
 -- ============================================================================
 
 -- Tuning knobs for log pattern baseline and spike detection
-baselineWindowHours, baselinePageSize :: Int
+baselineWindowHours, baselinePageSize, maxNewPatternsPerRun :: Int
 baselineWindowHours = 48 -- 2 days
 baselinePageSize = 1000
+maxNewPatternsPerRun = 500
 
 
 minMedianForEstablished, minAgeDaysForEstablished, spikeZScoreThreshold, spikeMinAbsoluteDelta :: Double
@@ -1665,17 +1679,23 @@ calculateLogPatternBaselines pid = do
   Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
 
 
+data SpikeResult = SpikeResult
+  { currentRate :: Double, mean :: Double, mad :: Double
+  , zScore :: Double, direction :: Issues.RateChangeDirection
+  }
+  deriving stock (Eq, Show)
+
+
 -- | Pure spike/drop detection for a single pattern.
--- Returns (currentRate, mean, mad, zScore, direction) if anomalous, Nothing otherwise.
-detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int64 -> Maybe (Double, Double, Double, Double, Issues.RateChangeDirection)
+detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int64 -> Maybe SpikeResult
 detectSpikeOrDrop zThreshold minDelta mean mad currentCount
   | mad <= 0 = Nothing
-  | zScore > zThreshold && rate > mean + minDelta = Just (rate, mean, mad, zScore, Issues.Spike)
-  | zScore < negate zThreshold && rate < mean - minDelta = Just (rate, mean, mad, zScore, Issues.Drop)
+  | z > zThreshold && rate > mean + minDelta = Just $ SpikeResult rate mean mad z Issues.Spike
+  | z < negate zThreshold && rate < mean - minDelta = Just $ SpikeResult rate mean mad z Issues.Drop
   | otherwise = Nothing
   where
     rate = fromIntegral currentCount
-    zScore = (rate - mean) / mad
+    z = (rate - mean) / mad
 
 
 -- | Detect log pattern volume spikes and create issues
@@ -1688,14 +1708,13 @@ detectLogPatternSpikes pid authCtx = do
   let anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad) ->
-            detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad lpRate.currentHourCount
-              <&> \(currentRate, m, md, z, dir) -> (lpRate, currentRate, m, md, z, dir)
+            detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad lpRate.currentHourCount <&> (lpRate,)
           _ -> Nothing
 
-  forM_ anomalies \(lpRate, currentRate, mean, mad, zScore, direction) -> do
-    let dir = display direction
-    Log.logInfo ("Log pattern " <> dir <> " detected") (lpRate.patternId, lpRate.logPattern, currentRate, mean)
-    issue <- Issues.createLogPatternRateChangeIssue pid lpRate currentRate mean mad zScore direction
+  forM_ anomalies \(lpRate, sr) -> do
+    let dir = display sr.direction
+    Log.logInfo ("Log pattern " <> dir <> " detected") (lpRate.patternId, lpRate.logPattern, sr.currentRate, sr.mean)
+    issue <- Issues.createLogPatternRateChangeIssue pid lpRate sr.currentRate sr.mean sr.mad sr.zScore sr.direction
     Issues.insertIssue issue
     liftIO $ withResource authCtx.jobsPool \conn ->
       void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1708,8 +1727,8 @@ detectLogPatternSpikes pid authCtx = do
 -- Runs as part of the hourly pipeline instead of per-insert trigger.
 processNewLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 processNewLogPatterns pid authCtx = do
-  newPatterns <- LogPatterns.getNewLogPatterns pid
-  Relude.when (length newPatterns >= 500) $ Log.logWarn "getNewLogPatterns hit 500 limit, some patterns deferred" (pid, length newPatterns)
+  newPatterns <- LogPatterns.getNewLogPatterns pid maxNewPatternsPerRun
+  Relude.when (length newPatterns >= maxNewPatternsPerRun) $ Log.logWarn "getNewLogPatterns hit limit, some patterns deferred" (pid, length newPatterns)
   unless (null newPatterns) do
     -- Skip in low-volume projects: <2k events in 48h means the project is still onboarding
     totalEvents <- LogPatterns.getTotalEventCount pid baselineWindowHours

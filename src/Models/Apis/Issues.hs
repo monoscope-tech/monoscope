@@ -293,8 +293,8 @@ data IssueL = IssueL
 
 
 -- | Insert a single issue
--- Note: ON CONFLICT only applies to api_change issues that are open (not acknowledged/archived)
--- Other issue types will fail on duplicate inserts as intended
+-- ON CONFLICT dedup applies to all issue types on (project_id, target_hash, issue_type)
+-- but only for open issues (not acknowledged/archived). Preserves occurrence_count and first_seen.
 insertIssue :: DB es => Issue -> Eff es ()
 insertIssue issue = void $ PG.execute q issue
   where
@@ -331,7 +331,7 @@ selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id 
 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectIssueByHash pid endpointHash = listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| endpoint_hash |]]) (pid, endpointHash)
+selectIssueByHash pid targetHash = listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| target_hash |]]) (pid, targetHash)
 
 
 -- | Select issues with filters, returns issues and total count for pagination
@@ -630,6 +630,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
   now <- Time.currentTime
   let changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
       dir = display direction
+      zonedNow = utcToZonedTime utc now
       severity = case (direction, lp.logLevel) of
         (Spike, Just "error") -> "critical"
         (Spike, _) -> "warning"
@@ -661,7 +662,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
             , changeDirection = direction
             , detectedAt = now
             }
-      , timestamp = Nothing
+      , timestamp = Just zonedNow
       }
 
 
