@@ -687,7 +687,7 @@ tryAcquireChatMigrationLock convId = do
 
 
 -- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> RateChangeDirection -> Eff es Issue
+createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPatternWithRate -> Double -> Double -> Double -> RateChangeDirection -> Eff es Issue
 createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMad direction = do
   now <- Time.currentTime
   let zScoreVal = if baselineMad > 0 then abs (currentRate - baselineMean) / baselineMad else 0

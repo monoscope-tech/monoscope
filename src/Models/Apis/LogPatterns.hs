@@ -9,6 +9,7 @@ module Models.Apis.LogPatterns (
   UpsertPattern (..),
   upsertLogPattern,
   updateBaseline,
+  updateBaselineBatch,
   -- Hourly stats
   upsertHourlyStat,
   BatchPatternStats (..),
@@ -166,6 +167,25 @@ updateBaseline pid patHash bState hourlyMean hourlyMad samples =
       |]
 
 
+-- | Bulk update baselines for multiple patterns in a single query
+updateBaselineBatch :: DB es => Projects.ProjectId -> V.Vector (Text, BaselineState, Double, Double, Int) -> Eff es Int64
+updateBaselineBatch pid rows
+  | V.null rows = pure 0
+  | otherwise =
+      let (hashes, states, means, mads, samples) = V.unzip5 rows
+       in PG.execute
+            [sql|
+              UPDATE apis.log_patterns lp
+              SET baseline_state = v.state,
+                  baseline_volume_hourly_mean = v.mean,
+                  baseline_volume_hourly_mad = v.mad,
+                  baseline_samples = v.samples,
+                  baseline_updated_at = NOW()
+              FROM (SELECT unnest(?::text[]) AS hash, unnest(?::text[]) AS state, unnest(?::float8[]) AS mean, unnest(?::float8[]) AS mad, unnest(?::int[]) AS samples) v
+              WHERE lp.project_id = ? AND lp.pattern_hash = v.hash
+            |]
+            (hashes, states, means, mads, samples, pid)
+
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid patHash hourBucket count =
@@ -225,6 +245,9 @@ data LogPatternWithRate = LogPatternWithRate
   , logPattern :: Text
   , patternHash :: Text
   , sourceField :: Text
+  , serviceName :: Maybe Text
+  , logLevel :: Maybe Text
+  , sampleMessage :: Maybe Text
   , baselineState :: BaselineState
   , baselineMean :: Maybe Double
   , baselineMad :: Maybe Double
@@ -242,6 +265,7 @@ getPatternsWithCurrentRates pid =
     q =
       [sql|
         SELECT lp.id, lp.project_id, lp.log_pattern, lp.pattern_hash, lp.source_field,
+          lp.service_name, lp.log_level, lp.sample_message,
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
           COALESCE(hs.event_count, 0)::INT AS current_hour_count
         FROM apis.log_patterns lp

@@ -514,8 +514,8 @@ processPatterns events pid scheduledTime since = do
       eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
   unless (V.null events) do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-    let known = V.fromList $ map ("",False,) existingPatterns
-        combined = known <> ((\(logId, content, _, _, _) -> (logId, True, content)) <$> events)
+    let known = V.fromList $ map ("",Nothing,) existingPatterns
+        combined = known <> ((\(logId, content, _, _, _) -> (logId, Just content, content)) <$> events)
         drainTree = processBatch True combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     unless (V.null newPatterns)
@@ -536,18 +536,19 @@ processPatterns events pid scheduledTime since = do
         void $ LogPatterns.upsertHourlyStat pid patternHash scheduledTime eventCount
 
 
--- | Process a batch of (id, isNew, content) tuples through Drain
-processBatch :: Bool -> V.Vector (Text, Bool, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+-- | Process a batch of (id, sampleContent, content) tuples through Drain
+-- sampleContent: Just content for real events (updates exampleLog), Nothing for seeds
+processBatch :: Bool -> V.Vector (Text, Maybe Text, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree (logId, isSampleLog, content) -> processNewLog isSummary logId isSampleLog content now tree) inTree batch
+  V.foldl' (\tree (logId, sampleContent, content) -> processNewLog isSummary logId sampleContent content now tree) inTree batch
 
 
-processNewLog :: Bool -> Text -> Bool -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-processNewLog isSummary logId isSampleLog content now tree =
+processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+processNewLog isSummary logId sampleContent content now tree =
   let tokens = bool Drain.generateDrainTokens Drain.generateSummaryDrainTokens isSummary content
    in if V.null tokens
         then tree
-        else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens logId isSampleLog content now
+        else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens logId sampleContent now
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
@@ -1636,10 +1637,12 @@ calculateLogPatternBaselines pid = do
       go offset totalProcessed totalEstablished = do
         patterns <- LogPatterns.getLogPatterns pid pageSize offset
         let patternAge lp = diffUTCTime now (zonedTimeToUTC lp.firstSeenAt) / nominalDay
-            established = length $ filter (\lp -> maybe False (\s -> isEstablished s (patternAge lp)) (HM.lookup lp.patternHash statsMap)) patterns
-        forM_ patterns \lp -> whenJust (HM.lookup lp.patternHash statsMap) \stats -> do
-          let newState = bool BSLearning BSEstablished $ isEstablished stats (patternAge lp)
-          void $ LogPatterns.updateBaseline pid lp.patternHash newState stats.hourlyMedian stats.hourlyMADScaled stats.totalHours
+            updates = V.fromList $ flip mapMaybe patterns \lp ->
+              HM.lookup lp.patternHash statsMap <&> \stats ->
+                let est = isEstablished stats (patternAge lp)
+                 in (lp.patternHash, bool BSLearning BSEstablished est, stats.hourlyMedian, stats.hourlyMADScaled, stats.totalHours)
+            established = V.length $ V.filter (\(_, s, _, _, _) -> s == BSEstablished) updates
+        void $ LogPatterns.updateBaselineBatch pid updates
         let newTotal = totalProcessed + length patterns
             newEstablished = totalEstablished + established
         if length patterns == pageSize
@@ -1657,36 +1660,28 @@ detectLogPatternSpikes pid authCtx = do
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
-  let anomalyData = flip mapMaybe patternsWithRates \lpRate ->
+  let anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad)
             | mad > 0 ->
                 let currentRate = fromIntegral lpRate.currentHourCount :: Double
                     zScore = (currentRate - mean) / mad
-                    -- z-score >3 = 99.7% CI; absolute +10 avoids alerting on tiny volumes (e.g. 2→5/hr)
                     direction
                       | zScore > 3.0 && currentRate > mean + 10 = Just Issues.Spike
                       | zScore < -3.0 && currentRate < mean - 10 = Just Issues.Drop
                       | otherwise = Nothing
-                 in direction <&> \dir -> (lpRate.patternId, lpRate.patternHash, currentRate, mean, mad, dir)
+                 in direction <&> \dir -> (lpRate, currentRate, mean, mad, dir)
           _ -> Nothing
 
-  let anomalyIds = V.fromList $ map (\(lpId, _, _, _, _, _) -> lpId) anomalyData
-  anomalyPatterns <- LogPatterns.getLogPatternsByIds anomalyIds
-  let patternMap = HM.fromList $ V.toList $ V.map (\lp -> (lp.patternHash, lp)) anomalyPatterns
-
-  forM_ anomalyData \(patternId, patternHash, currentRate, mean, mad, direction) -> do
-    case HM.lookup patternHash patternMap of
-      Just lp -> do
-        let dir = display direction
-        Log.logInfo ("Log pattern " <> dir <> " detected") (patternId, lp.logPattern, currentRate, mean)
-        issue <- Issues.createLogPatternRateChangeIssue pid lp currentRate mean mad direction
-        Issues.insertIssue issue
-        liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        Log.logInfo ("Created issue for log pattern " <> dir) (pid, lp.id, issue.id)
-      Nothing -> pass
-  Log.logInfo "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalyData)
+  forM_ anomalies \(lpRate, currentRate, mean, mad, direction) -> do
+    let dir = display direction
+    Log.logInfo ("Log pattern " <> dir <> " detected") (lpRate.patternId, lpRate.logPattern, currentRate, mean)
+    issue <- Issues.createLogPatternRateChangeIssue pid lpRate currentRate mean mad direction
+    Issues.insertIssue issue
+    liftIO $ withResource authCtx.jobsPool \conn ->
+      void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+    Log.logInfo ("Created issue for log pattern " <> dir) (pid, lpRate.patternId, issue.id)
+  Log.logInfo "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalies)
 
 
 -- | Process a new log pattern and create an issue
