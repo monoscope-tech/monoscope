@@ -273,7 +273,8 @@ getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
 -- | Get current hour count for a pattern from hourly stats table
 getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
 getCurrentHourPatternCount pid patHash =
-  maybe 0 fromOnly . listToMaybe
+  maybe 0 fromOnly
+    . listToMaybe
     <$> PG.query
       [sql| SELECT COALESCE(event_count, 0)::INT FROM apis.log_pattern_hourly_stats
           WHERE project_id = ? AND pattern_hash = ? AND hour_bucket = date_trunc('hour', NOW()) |]
