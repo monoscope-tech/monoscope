@@ -625,32 +625,15 @@ tryAcquireChatMigrationLock convId = do
 
 
 -- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPatternWithRate -> Double -> Double -> Double -> RateChangeDirection -> Eff es Issue
-createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMad direction = do
+createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPatternWithRate -> Double -> Double -> Double -> Double -> RateChangeDirection -> Eff es Issue
+createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMad zScoreVal direction = do
   now <- Time.currentTime
-  let zScoreVal = if baselineMad > 0 then abs (currentRate - baselineMean) / baselineMad else 0
-      changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
-      rateChangeData =
-        LogPatternRateChangeData
-          { patternHash = lp.patternHash
-          , logPattern = lp.logPattern
-          , sampleMessage = lp.sampleMessage
-          , logLevel = lp.logLevel
-          , serviceName = lp.serviceName
-          , sourceField = lp.sourceField
-          , currentRatePerHour = currentRate
-          , baselineMean = baselineMean
-          , baselineMad = baselineMad
-          , zScore = zScoreVal
-          , changePercent = changePercentVal
-          , changeDirection = direction
-          , detectedAt = now
-          }
+  let changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
+      dir = display direction
       severity = case (direction, lp.logLevel) of
         (Spike, Just "error") -> "critical"
         (Spike, _) -> "warning"
         (Drop, _) -> "info"
-  let dir = display direction
   mkIssue
     MkIssueOpts
       { projectId
@@ -660,9 +643,14 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
       , critical = direction == Spike && lp.logLevel == Just "error"
       , severity
       , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> showPct changePercentVal <> ")"
-      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> " (" <> show (round zScoreVal :: Int) <> " std devs)."
+      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> " (" <> show (round (abs zScoreVal) :: Int) <> " std devs)."
       , migrationComplexity = "n/a"
-      , issueData = rateChangeData
+      , issueData = LogPatternRateChangeData
+          { patternHash = lp.patternHash, logPattern = lp.logPattern, sampleMessage = lp.sampleMessage
+          , logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField
+          , currentRatePerHour = currentRate, baselineMean, baselineMad
+          , zScore = abs zScoreVal, changePercent = changePercentVal, changeDirection = direction, detectedAt = now
+          }
       , timestamp = Nothing
       }
 
@@ -773,7 +761,7 @@ mkIssue opts = do
       , updatedAt = zonedNow
       , projectId = opts.projectId
       , issueType = opts.issueType
-      , sourceType = Just $ issueTypeToText opts.issueType
+      , sourceType = Just $ issueTypeToText opts.issueType -- Redundant with issueType; kept for legacy queries
       , targetHash = opts.targetHash
       , endpointHash = opts.targetHash
       , acknowledgedAt = Nothing

@@ -20,11 +20,16 @@ module Models.Apis.LogPatterns (
   getPatternsWithCurrentRates,
   getLogPatternById,
   getLogPatternsByIds,
+  -- Field labels
+  knownPatternFields,
+  sourceFieldLabel,
+  -- Volume check
+  getTotalEventCount,
 )
 where
 
 import Data.Aeson qualified as AE
-import Data.Time
+import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -134,7 +139,7 @@ getLogPatternByHash pid sourceField hash = listToMaybe <$> PG.query (_selectWher
 
 -- | Get all new (unprocessed) log patterns for a project, for batch issue creation.
 getNewLogPatterns :: DB es => Projects.ProjectId -> Eff es [LogPattern]
-getNewLogPatterns pid = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]] <> " ORDER BY created_at") (pid, LPSNew)
+getNewLogPatterns pid = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]] <> " ORDER BY created_at ASC LIMIT 500") (pid, LPSNew)
 
 
 -- | Acknowledge log patterns
@@ -188,17 +193,14 @@ updateBaselineBatch pid rows
 
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
--- Note: += semantics means job retries within the same hour can over-count.
--- Accepted tradeoff: baselines use median+MAD which is robust to occasional outliers.
--- Caveat: processNewLogPattern's 10k-events gate also reads these counts, so
--- inflated values from retries could trigger issue creation earlier for new projects.
+-- Uses GREATEST to stay idempotent on job retries within the same hour.
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid sourceField patHash hourBucket count =
   PG.execute
     [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
         VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
+        DO UPDATE SET event_count = GREATEST(apis.log_pattern_hourly_stats.event_count, EXCLUDED.event_count) |]
     (pid, sourceField, patHash, hourBucket, count)
 
 
@@ -259,7 +261,7 @@ data LogPatternWithRate = LogPatternWithRate
   , baselineState :: BaselineState
   , baselineMean :: Maybe Double
   , baselineMad :: Maybe Double
-  , currentHourCount :: Int
+  , currentHourCount :: Int64
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow)
@@ -278,7 +280,7 @@ getPatternsWithCurrentRates pid =
         SELECT lp.id, lp.project_id, lp.log_pattern, lp.pattern_hash, lp.source_field,
           lp.service_name, lp.log_level, lp.sample_message,
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
-          COALESCE(hs.event_count, 0)::INT AS current_hour_count
+          COALESCE(hs.event_count, 0)::BIGINT AS current_hour_count
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
@@ -298,3 +300,26 @@ getLogPatternsByIds :: DB es => V.Vector LogPatternId -> Eff es (V.Vector LogPat
 getLogPatternsByIds ids
   | V.null ids = pure V.empty
   | otherwise = V.fromList <$> PG.query (_select @LogPattern <> " WHERE id = ANY(?)") (Only ids)
+
+
+-- | Canonical mapping of source field identifiers to human-readable labels.
+--
+-- >>> map fst knownPatternFields
+-- ["body","summary","url_path","exception"]
+knownPatternFields :: [(Text, Text)]
+knownPatternFields = [("body", "Log body"), ("summary", "Event summary"), ("url_path", "URL path"), ("exception", "Exception message")]
+
+-- | Human-readable label for a source field, falling back to the raw field name.
+--
+-- >>> sourceFieldLabel "summary"
+-- "Event summary"
+-- >>> sourceFieldLabel "unknown_field"
+-- "unknown_field"
+sourceFieldLabel :: Text -> Text
+sourceFieldLabel f = maybe f snd $ find ((== f) . fst) knownPatternFields
+
+
+-- | Total event count across all patterns for a project within a time window.
+getTotalEventCount :: DB es => Projects.ProjectId -> Int -> Eff es Int64
+getTotalEventCount pid hoursBack =
+  maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ? |] (pid, hoursBack)

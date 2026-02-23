@@ -47,6 +47,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
 import Models.Apis.Fields ()
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (WrappedEnumShow (..))
@@ -573,9 +574,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       pidTxt = pid.toText
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "summary" targetM
-      -- Known pattern fields stored in apis.log_patterns
-      knownPatternFields = ["summary", "url_path", "exception"] :: [Text]
-  if target `elem` knownPatternFields
+  if target `elem` map fst LogPatterns.knownPatternFields
     then PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
     else do
       rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
@@ -585,6 +584,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
         Just (Right pathParts) ->
           PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id=? AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pid, pathParts)
         Nothing -> pure []
+      -- In-memory pagination: capped at 500 rows from DB, normalize then paginate. Acceptable since 500 is small.
       let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
       pure $ take 15 $ drop skip $ sortOn (Down . snd) $ HashMap.toList normalized
   where

@@ -10,6 +10,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.LogPatterns (knownPatternFields)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
@@ -195,8 +196,7 @@ logQueryBox_ config = do
         div_ [class_ "flex items-center gap-2"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
-            let precomputed = [("summary", "Event summary"), ("url_path", "URL path"), ("exception", "Exception message")] :: [(Text, Text)]
-                isCustom = maybe False (\s -> s `notElem` map fst precomputed) config.patternSelected
+            let isCustom = maybe False (\s -> s `notElem` map fst knownPatternFields) config.patternSelected
             select_
               [ class_ "select select-sm max-w-[140px]"
               , id_ "pattern-target-select"
@@ -211,7 +211,7 @@ logQueryBox_ config = do
                     end|]
               ]
               do
-                forM_ precomputed \(v, label) ->
+                forM_ knownPatternFields \(v, label) ->
                   option_ ([value_ v] <> [selected_ "" | config.patternSelected == Just v || (v == "summary" && isNothing config.patternSelected)]) $ toHtml label
                 option_ ([value_ "__custom__"] <> [selected_ "" | isCustom]) "Other field..."
             input_

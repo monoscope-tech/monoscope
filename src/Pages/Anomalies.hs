@@ -51,6 +51,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.Projects qualified as Projects
@@ -1365,10 +1366,3 @@ issueTypeBadge issueType critical = badge cls icon txt
     badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t
 
 
-sourceFieldLabel :: Text -> Text
-sourceFieldLabel = \case
-  "body" -> "Log body"
-  "summary" -> "Event summary"
-  "url_path" -> "URL path"
-  "exception" -> "Exception message"
-  other -> other

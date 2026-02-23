@@ -515,8 +515,8 @@ processPatterns events pid scheduledTime since = do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
     Relude.when (length existingPatterns > 5000)
       $ Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
-    let known = V.fromList $ map (DrainInput "" False) existingPatterns
-        combined = known <> ((\(logId, content, _, _, _) -> DrainInput logId True content) <$> events)
+    let known = V.fromList $ map SeedPattern existingPatterns
+        combined = known <> ((\(logId, content, _, _, _) -> NewEvent logId content) <$> events)
         drainTree = processBatch True combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     unless (V.null newPatterns)
@@ -537,13 +537,13 @@ processPatterns events pid scheduledTime since = do
         void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
 
 
--- | Input for Drain tree processing. isNewEvent: True for real events, False for seeds (existing patterns).
-data DrainInput = DrainInput {logId :: Text, isNewEvent :: Bool, content :: Text}
+-- | Input for Drain tree processing.
+data DrainInput = SeedPattern Text | NewEvent {logId :: Text, content :: Text}
 
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree DrainInput{..} -> processNewLog isSummary logId (content <$ guard isNewEvent) content now tree) inTree batch
+  V.foldl' (\tree -> \case SeedPattern c -> processNewLog isSummary "" Nothing c now tree; NewEvent{..} -> processNewLog isSummary logId (Just content) content now tree) inTree batch
 
 
 processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -1666,12 +1666,12 @@ calculateLogPatternBaselines pid = do
 
 
 -- | Pure spike/drop detection for a single pattern.
--- Returns (currentRate, mean, mad, direction) if anomalous, Nothing otherwise.
-detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int -> Maybe (Double, Double, Double, Issues.RateChangeDirection)
+-- Returns (currentRate, mean, mad, zScore, direction) if anomalous, Nothing otherwise.
+detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int64 -> Maybe (Double, Double, Double, Double, Issues.RateChangeDirection)
 detectSpikeOrDrop zThreshold minDelta mean mad currentCount
   | mad <= 0 = Nothing
-  | zScore > zThreshold && rate > mean + minDelta = Just (rate, mean, mad, Issues.Spike)
-  | zScore < negate zThreshold && rate < mean - minDelta = Just (rate, mean, mad, Issues.Drop)
+  | zScore > zThreshold && rate > mean + minDelta = Just (rate, mean, mad, zScore, Issues.Spike)
+  | zScore < negate zThreshold && rate < mean - minDelta = Just (rate, mean, mad, zScore, Issues.Drop)
   | otherwise = Nothing
   where
     rate = fromIntegral currentCount
@@ -1689,13 +1689,13 @@ detectLogPatternSpikes pid authCtx = do
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad) ->
             detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad lpRate.currentHourCount
-              <&> \(currentRate, m, md, dir) -> (lpRate, currentRate, m, md, dir)
+              <&> \(currentRate, m, md, z, dir) -> (lpRate, currentRate, m, md, z, dir)
           _ -> Nothing
 
-  forM_ anomalies \(lpRate, currentRate, mean, mad, direction) -> do
+  forM_ anomalies \(lpRate, currentRate, mean, mad, zScore, direction) -> do
     let dir = display direction
     Log.logInfo ("Log pattern " <> dir <> " detected") (lpRate.patternId, lpRate.logPattern, currentRate, mean)
-    issue <- Issues.createLogPatternRateChangeIssue pid lpRate currentRate mean mad direction
+    issue <- Issues.createLogPatternRateChangeIssue pid lpRate currentRate mean mad zScore direction
     Issues.insertIssue issue
     liftIO $ withResource authCtx.jobsPool \conn ->
       void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1709,9 +1709,10 @@ detectLogPatternSpikes pid authCtx = do
 processNewLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 processNewLogPatterns pid authCtx = do
   newPatterns <- LogPatterns.getNewLogPatterns pid
+  Relude.when (length newPatterns >= 500) $ Log.logWarn "getNewLogPatterns hit 500 limit, some patterns deferred" (pid, length newPatterns)
   unless (null newPatterns) do
     -- Skip in low-volume projects: <2k events in 48h means the project is still onboarding
-    totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ? |] (pid, baselineWindowHours)
+    totalEvents <- LogPatterns.getTotalEventCount pid baselineWindowHours
     if totalEvents < (2000 :: Int64)
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
