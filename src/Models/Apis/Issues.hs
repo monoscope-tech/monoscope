@@ -81,8 +81,9 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Hashable (hash)
 import Data.Text qualified as T
 import Data.Text.Display (Display)
-import Data.Time (UTCTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
+import Data.UUID.V4 qualified as UUID4
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
@@ -480,9 +481,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , projectId = projectId
       , issueType = APIChange
       , sourceType = Nothing
-      , targetHash = ""
       , endpointHash = endpointHash
-      , sourceType = ""
       , targetHash = ""
       , environment = Nothing
       , acknowledgedAt = Nothing
@@ -490,7 +489,6 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , archivedAt = Nothing
       , title = "API structure has changed"
       , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
-      , environment = Nothing
       , critical = isCritical
       , severity = if isCritical then "critical" else "warning"
       , recommendedAction = "Review the API changes and update your integration accordingly."
@@ -531,7 +529,6 @@ createRuntimeExceptionIssue projectId atError = do
       , sourceType = Nothing
       , targetHash = ""
       , endpointHash = atError.hash
-      , environment = Nothing
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
@@ -576,9 +573,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , projectId = projectId
       , issueType = QueryAlert
       , sourceType = Nothing
-      , targetHash = ""
       , endpointHash = ""
-      , sourceType = ""
       , targetHash = ""
       , environment = Nothing
       , acknowledgedAt = Nothing
@@ -586,7 +581,6 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , archivedAt = Nothing
       , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
       , service = Just "Monitoring"
-      , environment = Nothing
       , critical = True
       , severity = "warning"
       , recommendedAction = "Review the query results and take appropriate action."
@@ -873,130 +867,9 @@ getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportTy
     q = [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]
 
 
--- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> Double -> Double -> Double -> Text -> IO Issue
-createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineStddev direction = do
-  now <- getCurrentTime
-  let zScoreVal = if baselineStddev > 0 then abs (currentRate - baselineMean) / baselineStddev else 0
-      changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
-      rateChangeData =
-        LogPatternRateChangeData
-          { patternHash = lp.patternHash
-          , logPattern = lp.logPattern
-          , sampleMessage = lp.sampleMessage
-          , logLevel = lp.logLevel
-          , serviceName = lp.serviceName
-          , currentRatePerHour = currentRate
-          , baselineMean = baselineMean
-          , baselineStddev = baselineStddev
-          , zScore = zScoreVal
-          , changePercent = changePercentVal
-          , changeDirection = direction
-          , detectedAt = now
-          }
-      severity =
-        if
-          | direction == "spike" && lp.logLevel == Just "error" -> "critical"
-          | direction == "spike" -> "warning"
-          | otherwise -> "info"
-  mkIssue projectId LogPatternRateChange lp.patternHash lp.patternHash lp.serviceName (direction == "spike" && lp.logLevel == Just "error") severity ("Log Pattern " <> T.toTitle direction <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)") ("Log pattern volume " <> direction <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs).") "n/a" rateChangeData
-
-
--- | Create an issue for a new log pattern
-createLogPatternIssue :: Projects.ProjectId -> LogPatterns.LogPattern -> IO Issue
-createLogPatternIssue projectId lp = do
-  now <- getCurrentTime
-  let logPatternData =
-        LogPatternData
-          { patternHash = lp.patternHash
-          , logPattern = lp.logPattern
-          , sampleMessage = lp.sampleMessage
-          , logLevel = lp.logLevel
-          , serviceName = lp.serviceName
-          , firstSeenAt = now
-          , occurrenceCount = fromIntegral lp.occurrenceCount
-          }
-      severity = case lp.logLevel of
-        Just "error" -> "critical"
-        Just "warning" -> "warning"
-        _ -> "info"
-  mkIssue projectId LogPattern lp.patternHash lp.patternHash lp.serviceName (lp.logLevel == Just "error") severity ("New Log Pattern: " <> T.take 100 lp.logPattern) "A new log pattern has been detected. Review to ensure it's expected behavior." "n/a" logPatternData
-
-
--- | Log Pattern issue data (new pattern detected)
-data LogPatternData = LogPatternData
-  { patternHash :: Text
-  , logPattern :: Text
-  , sampleMessage :: Maybe Text
-  , logLevel :: Maybe Text
-  , serviceName :: Maybe Text
-  , firstSeenAt :: UTCTime
-  , occurrenceCount :: Int
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (FromField, ToField) via Aeson LogPatternData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternData
-
-
--- | Log Pattern Rate Change issue data (volume spike/drop)
-data LogPatternRateChangeData = LogPatternRateChangeData
-  { patternHash :: Text
-  , logPattern :: Text
-  , sampleMessage :: Maybe Text
-  , logLevel :: Maybe Text
-  , serviceName :: Maybe Text
-  , currentRatePerHour :: Double
-  , baselineMean :: Double
-  , baselineStddev :: Double
-  , zScore :: Double -- standard deviations from baseline
-  , changePercent :: Double -- percentage change from baseline
-  , changeDirection :: Text -- "spike" or "drop"
-  , detectedAt :: UTCTime
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (NFData)
-  deriving (FromField, ToField) via Aeson LogPatternRateChangeData
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternRateChangeData
-
-
--- | Helper to create an issue with common defaults
-mkIssue :: AE.ToJSON a => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> IO Issue
-mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
-  issueId <- UUIDId <$> UUID4.nextRandom
-  now <- getCurrentTime
-  zonedNow <- utcToLocalZonedTime now
-  pure
-    Issue
-      { id = issueId
-      , createdAt = zonedNow
-      , updatedAt = zonedNow
-      , projectId = projectId
-      , issueType = issueType
-      , sourceType = issueTypeToText issueType
-      , targetHash = targetHash
-      , endpointHash = endpointHash
-      , acknowledgedAt = Nothing
-      , acknowledgedBy = Nothing
-      , archivedAt = Nothing
-      , title = title
-      , service = service
-      , environment = Nothing
-      , critical = critical
-      , severity = severity
-      , recommendedAction = recommendedAction
-      , migrationComplexity = migrationComplexity
-      , issueData = Aeson $ AE.toJSON issueData
-      , requestPayloads = Aeson []
-      , responsePayloads = Aeson []
-      , llmEnhancedAt = Nothing
-      , llmEnhancementVersion = Nothing
-      }
-
-
-createErrorSpikeIssue :: Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> IO Issue
+createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) =>  Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> Eff es Issue
 createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
-  now <- getCurrentTime
+  now <- Time.currentTime
   let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
       increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
       exceptionData =
@@ -1025,9 +898,9 @@ createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
 
 
 -- | Create issue for a new error
-createNewErrorIssue :: Projects.ProjectId -> Errors.Error -> IO Issue
+createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.Error -> Eff es Issue
 createNewErrorIssue projectId err = do
-  now <- getCurrentTime
+  now <- Time.currentTime
   let exceptionData =
         RuntimeExceptionData
           { errorType = err.errorType

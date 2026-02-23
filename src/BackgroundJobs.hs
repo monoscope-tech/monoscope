@@ -82,7 +82,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (DBField, toXXHash)
+import Utils (DBField,replaceAllFormats, toXXHash)
 
 
 data BgJobs
@@ -1787,7 +1787,7 @@ detectErrorSpikes pid authCtx = do
           errorM <- Errors.getErrorById errRate.errorId
           whenJust errorM \err -> do
             _ <- Errors.updateErrorState err.id Errors.ESEscalating
-            issue <- liftIO $ Issues.createErrorSpikeIssue pid err currentRate mean stddev
+            issue <- Issues.createErrorSpikeIssue pid err currentRate mean stddev
             Issues.insertIssue issue
             liftIO $ withResource authCtx.jobsPool \conn ->
               void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1834,7 +1834,7 @@ processNewError pid errorHash authCtx = do
       -- Only create issue for truly new errors (state = 'new')
       Relude.when (err.state == Errors.ESNew) $ do
         -- Create a runtime exception issue
-        issue <- liftIO $ Issues.createNewErrorIssue pid err
+        issue <- Issues.createNewErrorIssue pid err
         Issues.insertIssue issue
         -- Queue LLM enhancement
         liftIO $ withResource authCtx.jobsPool \conn ->

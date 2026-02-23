@@ -96,14 +96,6 @@ data RuntimeAlertType
   deriving stock (Eq, Generic, Show)
 
 
-data RuntimeAlertType
-  = NewRuntimeError
-  | EscalatingErrors
-  | RegressedErrors
-  | ErrorSpike
-  deriving stock (Eq, Generic, Show)
-
-
 sendDiscordAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendDiscordAlert alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
@@ -159,17 +151,18 @@ sendSlackAlert alert pid pTitle channelM = do
 sendSlackAlertThreaded :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlertThreaded alert pid pTitle channelM threadTsM = do
   appCtx <- ask @Config.AuthContext
-  channelIdM <- maybe (getProjectSlackData pid <&> fmap (.channelId)) (pure . Just) channelM
-  case channelIdM of
-    Nothing -> pure Nothing
-    Just cid -> do
+  slackData <- getProjectSlackData pid
+  let channelIdM = channelM <|> fmap (.channelId) slackData
+      webhookUrlM = (.webhookUrl) <$> slackData
+  for_ ((,) <$> channelIdM <*> webhookUrlM) \(cid, wurl) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
       case alert of
         RuntimeErrorAlert{..} ->
-          Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
+          Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid wurl (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
         _ -> do
           sendSlackAlert alert pid pTitle channelM
           pure Nothing
+  pure Nothing
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()

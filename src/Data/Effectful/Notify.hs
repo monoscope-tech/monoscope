@@ -37,6 +37,7 @@ import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
 import Control.Retry (exponentialBackoff, limitRetries, retrying)
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Data.Text.Display (Display, display)
 import Effectful
@@ -151,8 +152,8 @@ slackNotification channelId webhookUrl payload =
   let threadTs = Nothing in SlackNotification SlackData{..}
 
 
-slackThreadedNotification :: Text -> AE.Value -> Maybe Text -> Notification
-slackThreadedNotification channelId payload threadTs =
+slackThreadedNotification :: Text -> Text -> AE.Value -> Maybe Text -> Notification
+slackThreadedNotification channelId webhookUrl payload threadTs =
   SlackNotification SlackData{..}
 
 
