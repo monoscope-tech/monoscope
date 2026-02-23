@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, SpikeResult (..), detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, SpikeResult (..), detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns) where
 
 import Control.Lens (view, (.~), _2)
 import Data.Aeson qualified as AE
@@ -347,7 +347,7 @@ processBackgroundJob authCtx bgJob =
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-tryLog label action = try action >>= either (\(e :: SomeException) -> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e)) pure
+tryLog label = (`catch` \(e :: SomeException) -> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e))
 
 
 -- | Run hourly scheduled tasks for all projects

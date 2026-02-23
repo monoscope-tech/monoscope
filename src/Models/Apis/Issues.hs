@@ -313,13 +313,13 @@ ON CONFLICT (project_id, target_hash, issue_type)
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
   issue_data = EXCLUDED.issue_data
-    || CASE WHEN apis.issues.issue_data ? 'occurrence_count'
+    || CASE WHEN apis.issues.issue_data ?? 'occurrence_count'
        THEN jsonb_build_object('occurrence_count', (apis.issues.issue_data->>'occurrence_count')::int + COALESCE((EXCLUDED.issue_data->>'occurrence_count')::int, 1))
        ELSE '{}'::jsonb END
-    || CASE WHEN apis.issues.issue_data ? 'first_seen'
+    || CASE WHEN apis.issues.issue_data ?? 'first_seen'
        THEN jsonb_build_object('first_seen', apis.issues.issue_data->'first_seen')
        ELSE '{}'::jsonb END
-    || CASE WHEN apis.issues.issue_data ? 'first_seen_at'
+    || CASE WHEN apis.issues.issue_data ?? 'first_seen_at'
        THEN jsonb_build_object('first_seen_at', apis.issues.issue_data->'first_seen_at')
        ELSE '{}'::jsonb END
     |]

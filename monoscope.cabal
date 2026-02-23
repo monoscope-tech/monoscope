@@ -468,6 +468,7 @@ test-suite integration-tests
       Pages.Endpoints.ApiCatalogSpec
       Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
+      Pages.LogPatternsSpec
       Pages.MonitorsSpec
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
