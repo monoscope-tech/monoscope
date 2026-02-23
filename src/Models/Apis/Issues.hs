@@ -476,7 +476,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , projectId = projectId
       , issueType = APIChange
       , sourceType = Nothing
-      , targetHash = ""
+      , targetHash = endpointHash
       , endpointHash = endpointHash
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
@@ -522,7 +522,7 @@ createRuntimeExceptionIssue projectId atError = do
       , projectId = projectId
       , issueType = RuntimeException
       , sourceType = Nothing
-      , targetHash = ""
+      , targetHash = fromMaybe "" atError.hash
       , endpointHash = fromMaybe "" atError.hash
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
@@ -568,7 +568,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       , projectId = projectId
       , issueType = QueryAlert
       , sourceType = Nothing
-      , targetHash = ""
+      , targetHash = queryId
       , endpointHash = ""
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
@@ -713,7 +713,13 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineSt
         (Spike, _) -> "warning"
         (Drop, _) -> "info"
   let dir = display direction
-  mkIssue projectId LogPatternRateChange lp.patternHash lp.patternHash lp.serviceName (direction == Spike && lp.logLevel == Just "error") severity ("Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)") ("Log pattern volume " <> dir <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs).") "n/a" rateChangeData
+  mkIssue MkIssueOpts
+    { projectId, issueType = LogPatternRateChange, targetHash = lp.patternHash, endpointHash = lp.patternHash
+    , service = lp.serviceName, critical = direction == Spike && lp.logLevel == Just "error", severity
+    , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> show (round changePercentVal :: Int) <> "%)"
+    , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs)."
+    , migrationComplexity = "n/a", issueData = rateChangeData
+    }
 
 
 -- | Create an issue for a new log pattern
@@ -734,7 +740,13 @@ createLogPatternIssue projectId lp = do
         Just "error" -> "critical"
         Just "warning" -> "warning"
         _ -> "info"
-  mkIssue projectId LogPattern lp.patternHash lp.patternHash lp.serviceName (lp.logLevel == Just "error") severity ("New Log Pattern: " <> T.take 100 lp.logPattern) "A new log pattern has been detected. Review to ensure it's expected behavior." "n/a" logPatternData
+  mkIssue MkIssueOpts
+    { projectId, issueType = LogPattern, targetHash = lp.patternHash, endpointHash = lp.patternHash
+    , service = lp.serviceName, critical = lp.logLevel == Just "error", severity
+    , title = "New Log Pattern: " <> T.take 100 lp.logPattern
+    , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
+    , migrationComplexity = "n/a", issueData = logPatternData
+    }
 
 
 -- | Log Pattern issue data (new pattern detected)
@@ -783,9 +795,23 @@ data LogPatternRateChangeData = LogPatternRateChangeData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternRateChangeData
 
 
--- | Helper to create an issue with common defaults
-mkIssue :: (AE.ToJSON a, Time :> es, UUIDEff :> es) => Projects.ProjectId -> IssueType -> Text -> Text -> Maybe Text -> Bool -> Text -> Text -> Text -> Text -> a -> Eff es Issue
-mkIssue projectId issueType targetHash endpointHash service critical severity title recommendedAction migrationComplexity issueData = do
+data MkIssueOpts a = MkIssueOpts
+  { projectId :: Projects.ProjectId
+  , issueType :: IssueType
+  , targetHash :: Text
+  , endpointHash :: Text
+  , service :: Maybe Text
+  , critical :: Bool
+  , severity :: Text
+  , title :: Text
+  , recommendedAction :: Text
+  , migrationComplexity :: Text
+  , issueData :: a
+  }
+
+
+mkIssue :: (AE.ToJSON a, Time :> es, UUIDEff :> es) => MkIssueOpts a -> Eff es Issue
+mkIssue opts = do
   issueId <- UUIDId <$> genUUID
   now <- Time.currentTime
   let zonedNow = utcToZonedTime utc now
@@ -794,22 +820,22 @@ mkIssue projectId issueType targetHash endpointHash service critical severity ti
       { id = issueId
       , createdAt = zonedNow
       , updatedAt = zonedNow
-      , projectId = projectId
-      , issueType = issueType
-      , sourceType = Just $ issueTypeToText issueType
-      , targetHash = targetHash
-      , endpointHash = endpointHash
+      , projectId = opts.projectId
+      , issueType = opts.issueType
+      , sourceType = Just $ issueTypeToText opts.issueType
+      , targetHash = opts.targetHash
+      , endpointHash = opts.endpointHash
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
       , archivedAt = Nothing
-      , title = title
-      , service = service
+      , title = opts.title
+      , service = opts.service
       , environment = Nothing
-      , critical = critical
-      , severity = severity
-      , recommendedAction = recommendedAction
-      , migrationComplexity = migrationComplexity
-      , issueData = Aeson $ AE.toJSON issueData
+      , critical = opts.critical
+      , severity = opts.severity
+      , recommendedAction = opts.recommendedAction
+      , migrationComplexity = opts.migrationComplexity
+      , issueData = Aeson $ AE.toJSON opts.issueData
       , requestPayloads = Aeson []
       , responsePayloads = Aeson []
       , llmEnhancedAt = Nothing

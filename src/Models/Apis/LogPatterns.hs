@@ -57,7 +57,7 @@ data LogPatternState
   deriving anyclass (NFData)
   deriving
     (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LogPatternState
+    via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "LPS", DAE.CamelToSnake]] LogPatternState
   deriving (FromField, ToField) via WrappedEnumSC "LPS" LogPatternState
 
 

@@ -523,20 +523,18 @@ processPatterns events pid scheduledTime since = do
       $ Log.logInfo "Extracted summary patterns" ("count", AE.toJSON $ V.length newPatterns)
 
     forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
-      unless (V.null ids) $ do
-        let filteredIds = V.filter (/= "") ids
-            eventCount = fromIntegral $ V.length filteredIds :: Int64
-        unless (T.null patternTxt) do
-          let (serviceName, logLevel, logTraceId) = fromMaybe (Nothing, Nothing, Nothing) $ do
-                logId <- ids V.!? 0
-                guard (logId /= "")
-                HM.lookup logId eventMeta
-              patternHash = toXXHash patternTxt
-              hashTag = "pat:" <> patternHash
-          -- Append pattern hash to hashes array on matched event rows
-          void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
-          void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg, eventCount}
-          void $ LogPatterns.upsertHourlyStat pid patternHash scheduledTime eventCount
+      let filteredIds = V.filter (/= "") ids
+          eventCount = fromIntegral $ V.length filteredIds :: Int64
+      unless (V.null filteredIds || T.null patternTxt) do
+        let (serviceName, logLevel, logTraceId) = fromMaybe (Nothing, Nothing, Nothing) $ do
+              logId <- filteredIds V.!? 0
+              HM.lookup logId eventMeta
+            patternHash = toXXHash patternTxt
+            hashTag = "pat:" <> patternHash
+        -- Append pattern hash to hashes array on matched event rows
+        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
+        void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg, eventCount}
+        void $ LogPatterns.upsertHourlyStat pid patternHash scheduledTime eventCount
 
 
 -- | Process a batch of (id, isNew, content) tuples through Drain
@@ -1631,20 +1629,23 @@ calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
   now <- Time.currentTime
-  let patternLimit = 1000
-  patterns <- LogPatterns.getLogPatterns pid patternLimit 0
-  Relude.when (length patterns == patternLimit)
-    $ Log.logWarn "Pattern limit reached — only processing first batch of patterns" pid
   -- Batch query: get stats for all patterns in one DB round-trip (168 hours = 7 days)
   allStats <- LogPatterns.getBatchPatternStats pid 168
   let statsMap = HM.fromList $ map (\s -> (s.patternHash, s)) allStats
-  let established = sum [1 :: Int | lp <- patterns, Just s <- [HM.lookup lp.patternHash statsMap], s.hourlyMedian > 100 || diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400 >= 14]
-  forM_ patterns \lp -> whenJust (HM.lookup lp.patternHash statsMap) \stats -> do
-    let patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400
-        -- High-volume (>100/hr) baselines stabilize quickly; low-volume need >=14 days
-        newState = if stats.hourlyMedian > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning
-    void $ LogPatterns.updateBaseline pid lp.patternHash newState stats.hourlyMedian stats.hourlyMADScaled stats.totalHours
-  Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, length patterns, "established" :: Text, established)
+      pageSize = 1000
+      go offset totalProcessed totalEstablished = do
+        patterns <- LogPatterns.getLogPatterns pid pageSize offset
+        let established = sum [1 :: Int | lp <- patterns, Just s <- [HM.lookup lp.patternHash statsMap], s.hourlyMedian > 100 || diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400 >= 14]
+        forM_ patterns \lp -> whenJust (HM.lookup lp.patternHash statsMap) \stats -> do
+          let patternAgeDays = diffUTCTime now (zonedTimeToUTC lp.createdAt) / 86400
+              newState = if stats.hourlyMedian > 100 || patternAgeDays >= 14 then BSEstablished else BSLearning
+          void $ LogPatterns.updateBaseline pid lp.patternHash newState stats.hourlyMedian stats.hourlyMADScaled stats.totalHours
+        let newTotal = totalProcessed + length patterns
+            newEstablished = totalEstablished + established
+        if length patterns == pageSize then go (offset + pageSize) newTotal newEstablished
+        else pure (newTotal, newEstablished)
+  (total, established) <- go 0 0 0
+  Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
 
 
 -- | Detect log pattern volume spikes and create issues
