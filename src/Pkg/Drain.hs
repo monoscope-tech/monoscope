@@ -127,28 +127,24 @@ updateTreeWithLog tree tokenCount firstToken tokensVec logId sampleContent now =
 
 updateOrCreateLevelOne :: V.Vector DrainLevelOne -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelOne, Bool)
 updateOrCreateLevelOne levelOnes targetCount firstToken tokensVec logId sampleContent now config =
-  maybe
-    (V.cons (DrainLevelOne{tokenCount = targetCount, nodes = V.singleton (DrainLevelTwo{firstToken, logGroups = V.singleton newGroup})}) levelOnes, False)
-    ( \index ->
-        let existing = levelOnes V.! index
-            (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existing) firstToken tokensVec logId sampleContent now config
-         in (levelOnes V.// [(index, existing{nodes = updatedChildren})], wasUpdated)
-    )
-    (V.findIndex (\level -> tokenCount level == targetCount) levelOnes)
+  case V.findIndex (\level -> tokenCount level == targetCount) levelOnes of
+    Just index ->
+      let existing = levelOnes V.! index
+          (updatedChildren, wasUpdated) = updateOrCreateLevelTwo (nodes existing) firstToken tokensVec logId sampleContent now config
+       in (levelOnes V.// [(index, existing{nodes = updatedChildren})], wasUpdated)
+    Nothing -> (V.cons (DrainLevelOne{tokenCount = targetCount, nodes = V.singleton (DrainLevelTwo{firstToken, logGroups = V.singleton newGroup})}) levelOnes, False)
   where
     newGroup = createLogGroup tokensVec (templateText tokensVec) logId sampleContent now
 
 
 updateOrCreateLevelTwo :: V.Vector DrainLevelTwo -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainConfig -> (V.Vector DrainLevelTwo, Bool)
 updateOrCreateLevelTwo levelTwos targetToken tokensVec logId sampleContent now config =
-  maybe
-    (V.cons (DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newGroup}) levelTwos, False)
-    ( \index ->
-        let existing = levelTwos V.! index
-            (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existing) tokensVec logId sampleContent now config
-         in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], wasUpdated)
-    )
-    (V.findIndex (\level -> firstToken level == targetToken) levelTwos)
+  case V.findIndex (\level -> firstToken level == targetToken) levelTwos of
+    Just index ->
+      let existing = levelTwos V.! index
+          (updatedLogGroups, wasUpdated) = updateOrCreateLogGroup (logGroups existing) tokensVec logId sampleContent now config
+       in (levelTwos V.// [(index, existing{logGroups = updatedLogGroups})], wasUpdated)
+    Nothing -> (V.cons (DrainLevelTwo{firstToken = targetToken, logGroups = V.singleton newGroup}) levelTwos, False)
   where
     newGroup = createLogGroup tokensVec (templateText tokensVec) logId sampleContent now
 

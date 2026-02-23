@@ -1,6 +1,6 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus) where
 
-import Control.Lens ((.~))
+import Control.Lens (view, (.~), _2)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
@@ -119,7 +119,7 @@ data BgJobs
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
   | LogPatternHourlyProcessing Projects.ProjectId
-  | NewLogPatternDetected Projects.ProjectId Text
+  | NewLogPatternDetected Projects.ProjectId Text Text -- project_id, source_field, pattern_hash
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -342,7 +342,7 @@ processBackgroundJob authCtx bgJob =
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     LogPatternHourlyProcessing pid -> calculateLogPatternBaselines pid >> detectLogPatternSpikes pid authCtx
-    NewLogPatternDetected pid patternHash -> processNewLogPattern pid patternHash authCtx
+    NewLogPatternDetected pid sourceField patternHash -> processNewLogPattern pid sourceField patternHash authCtx
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -515,8 +515,8 @@ processPatterns events pid scheduledTime since = do
       eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
   unless (V.null events) do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-    let known = V.fromList $ map ("",Nothing,) existingPatterns
-        combined = known <> ((\(logId, content, _, _, _) -> (logId, Just content, content)) <$> events)
+    let known = V.fromList $ map (DrainInput "" Nothing) existingPatterns
+        combined = known <> ((\(logId, content, _, _, _) -> DrainInput logId (Just content) content) <$> events)
         drainTree = processBatch True combined scheduledTime Drain.emptyDrainTree
         newPatterns = Drain.getAllLogGroups drainTree
     unless (V.null newPatterns)
@@ -537,11 +537,13 @@ processPatterns events pid scheduledTime since = do
         void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
 
 
--- | Process a batch of (id, sampleContent, content) tuples through Drain
--- sampleContent: Just content for real events (updates exampleLog), Nothing for seeds
-processBatch :: Bool -> V.Vector (Text, Maybe Text, Text) -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
+-- | Input for Drain tree processing. sampleContent: Just for real events, Nothing for seeds.
+data DrainInput = DrainInput { logId :: Text, sampleContent :: Maybe Text, content :: Text }
+
+
+processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (\tree (logId, sampleContent, content) -> processNewLog isSummary logId sampleContent content now tree) inTree batch
+  V.foldl' (\tree DrainInput{..} -> processNewLog isSummary logId sampleContent content now tree) inTree batch
 
 
 processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
@@ -1652,7 +1654,7 @@ calculateLogPatternBaselines pid = do
               HM.lookup (lp.sourceField, lp.patternHash) statsMap <&> \stats ->
                 let est = stats.hourlyMedian > minMedianForEstablished || ageDays lp >= minAgeDaysForEstablished
                  in (lp.patternHash, bool BSLearning BSEstablished est, stats.hourlyMedian, stats.hourlyMADScaled, stats.totalHours)
-            established = V.length $ V.filter ((== BSEstablished) . (\(_, s, _, _, _) -> s)) updates
+            established = V.length $ V.filter ((== BSEstablished) . view _2) updates
         void $ LogPatterns.updateBaselineBatch pid updates
         let newTotal = totalProcessed + length patterns
             newEstablished = totalEstablished + established
@@ -1696,10 +1698,10 @@ detectLogPatternSpikes pid authCtx = do
 
 
 -- | Process a new log pattern and create an issue
-processNewLogPattern :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
-processNewLogPattern pid patternHash authCtx = do
-  Log.logInfo "Processing new log pattern" (pid, patternHash)
-  patternM <- LogPatterns.getLogPatternByHash pid patternHash
+processNewLogPattern :: Projects.ProjectId -> Text -> Text -> Config.AuthContext -> ATBackgroundCtx ()
+processNewLogPattern pid sourceField patternHash authCtx = do
+  Log.logInfo "Processing new log pattern" (pid, sourceField, patternHash)
+  patternM <- LogPatterns.getLogPatternByHash pid sourceField patternHash
   whenJust patternM \lp -> Relude.when (lp.state == LogPatterns.LPSNew) $ do
     -- Skip in low-volume projects: <10k events/week means the project is still onboarding
     -- and nearly every pattern would be "new", generating noisy issues

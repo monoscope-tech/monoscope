@@ -210,7 +210,7 @@ buildDescriptionPrompt issue =
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Log level: {fromMaybe "unknown" d.logLevel}
             Service: {fromMaybe "unknown-service" d.serviceName}
-            Source: {fromMaybe "body" d.sourceField}
+            Source: {d.sourceField}
             Occurrences: {d.occurrenceCount}
             First seen: {show d.firstSeenAt}
             |]

@@ -75,7 +75,7 @@ module Models.Apis.Issues (
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
-import Data.Default (Default, def)
+import Data.Default (Default)
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Hashable (hash)
 import Data.Text qualified as T
@@ -127,7 +127,7 @@ data IssueType
   | LogPattern
   | LogPatternRateChange
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (Default, NFData)
+  deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] IssueType
 
 
@@ -241,35 +241,6 @@ data Issue = Issue
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
-
-
-instance Default Issue where
-  def =
-    Issue
-      { id = def
-      , createdAt = error "createdAt must be set"
-      , updatedAt = error "updatedAt must be set"
-      , projectId = def
-      , issueType = error "issueType must be set"
-      , sourceType = Nothing
-      , targetHash = ""
-      , endpointHash = ""
-      , acknowledgedAt = Nothing
-      , acknowledgedBy = Nothing
-      , archivedAt = Nothing
-      , title = ""
-      , service = Nothing
-      , environment = Nothing
-      , critical = False
-      , severity = "info"
-      , recommendedAction = ""
-      , migrationComplexity = "low"
-      , issueData = Aeson AE.Null
-      , requestPayloads = Aeson []
-      , responsePayloads = Aeson []
-      , llmEnhancedAt = Nothing
-      , llmEnhancementVersion = Nothing
-      }
 
 
 -- | Issue with aggregated event data (for list views)
@@ -546,7 +517,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 -- | Conversation type for AI chats
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
   deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (Default)
+  deriving anyclass (Default) -- required by Default AIConversation; first constructor = CTAnomaly
   deriving (Display, FromField, ToField) via WrappedEnumSC "CT" ConversationType
 
 
@@ -651,7 +622,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
           , sampleMessage = lp.sampleMessage
           , logLevel = lp.logLevel
           , serviceName = lp.serviceName
-          , sourceField = Just lp.sourceField
+          , sourceField = lp.sourceField
           , currentRatePerHour = currentRate
           , baselineMean = baselineMean
           , baselineMad = baselineMad
@@ -691,7 +662,7 @@ createLogPatternIssue projectId lp = do
           , sampleMessage = lp.sampleMessage
           , logLevel = lp.logLevel
           , serviceName = lp.serviceName
-          , sourceField = Just lp.sourceField
+          , sourceField = lp.sourceField
           , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
           , occurrenceCount = fromIntegral lp.occurrenceCount
           }
@@ -722,7 +693,7 @@ data LogPatternData = LogPatternData
   , sampleMessage :: Maybe Text
   , logLevel :: Maybe Text
   , serviceName :: Maybe Text
-  , sourceField :: Maybe Text
+  , sourceField :: Text
   , firstSeenAt :: UTCTime
   , occurrenceCount :: Int
   }
@@ -746,7 +717,7 @@ data LogPatternRateChangeData = LogPatternRateChangeData
   , sampleMessage :: Maybe Text
   , logLevel :: Maybe Text
   , serviceName :: Maybe Text
-  , sourceField :: Maybe Text
+  , sourceField :: Text
   , currentRatePerHour :: Double
   , baselineMean :: Double
   , baselineMad :: Double

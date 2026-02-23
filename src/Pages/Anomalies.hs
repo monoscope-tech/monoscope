@@ -354,7 +354,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
                 div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                   span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                  whenJust d.sourceField $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . sourceFieldLabel
+                  span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
                 div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
               whenJust d.sampleMessage \msg ->
                 div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
@@ -371,7 +371,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
                 div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                   span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                  whenJust d.sourceField $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . sourceFieldLabel
+                  span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
                 div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
             _ -> pass
 
@@ -1082,10 +1082,12 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
       _ -> pass
     Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.LogPatternData) ->
-        div_ [class_ "border border-strokeWeak rounded-lg mb-4"] do
+        div_ [class_ "border border-strokeWeak rounded-lg group/lp mb-4"] do
           label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
+            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lp-input:checked]/lp:rotate-90"
             toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
-          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
+            input_ [class_ "lp-input w-0 h-0 opacity-0", type_ "checkbox"]
+          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
       _ -> pass
     Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
       AE.Success (d :: Issues.LogPatternRateChangeData) ->

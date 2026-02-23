@@ -126,9 +126,9 @@ getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
 getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ?|] (pid, sourceField)
 
 
--- | Get log pattern by hash
-getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe LogPattern)
-getLogPatternByHash pid hash = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| pattern_hash |]]) (pid, hash)
+-- | Get log pattern by unique key (project_id, source_field, pattern_hash)
+getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe LogPattern)
+getLogPatternByHash pid sourceField hash = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| source_field |], [DAT.field| pattern_hash |]]) (pid, sourceField, hash)
 
 
 -- | Acknowledge log patterns
