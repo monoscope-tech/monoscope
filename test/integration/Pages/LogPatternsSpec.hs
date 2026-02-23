@@ -2,7 +2,7 @@ module Pages.LogPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Pool (withResource)
-import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -75,9 +75,6 @@ spec = aroundAll withTestResources do
   describe "Log Pattern Pipeline" do
 
     it "1. Extract patterns from ingested logs" \tr -> do
-      -- logsPatternExtraction uses liftIO Time.currentTime (real wall clock) for the query window,
-      -- so we must insert logs at real time and pass a matching scheduledTime.
-      now <- getCurrentTime
       let msgs = [ "User login succeeded for user_id=123 from ip=10.0.0.1"
                  , "User login succeeded for user_id=456 from ip=10.0.0.2"
                  , "User login succeeded for user_id=789 from ip=10.0.0.3"
@@ -88,10 +85,10 @@ spec = aroundAll withTestResources do
                  , "Database connection timeout after 30s host=db-replica"
                  ]
       forM_ (zip [0 ..] msgs) \(i, body) ->
-        insertTestLog tr body "test-service" (addUTCTime (fromIntegral (i :: Int) - 60) now)
+        insertTestLog tr body "test-service" (addUTCTime (fromIntegral (i :: Int) - 60) frozenTime)
 
-      -- scheduledTime = now so the window [now-5min, now] covers our inserts
-      runTestBg tr $ BackgroundJobs.logsPatternExtraction now pid
+      -- Window is [frozenTime-5min, frozenTime], derived from scheduledTime
+      runTestBg tr $ BackgroundJobs.logsPatternExtraction frozenTime pid
 
       -- Verify patterns were created
       patternCount <- countPatterns tr

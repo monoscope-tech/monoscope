@@ -579,14 +579,14 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
     else do
       rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
         Just (Left colExpr) -> do
-          let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id=? AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500"
+          let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id=? AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 2000"
           PG.query (Query $ encodeUtf8 q) (Only pid)
         Just (Right pathParts) ->
-          PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id=? AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pid, pathParts)
+          PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id=? AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 2000") (pathParts, pid, pathParts)
         Nothing -> pure []
-      -- In-memory pagination: capped at 500 rows from DB, normalize then paginate. Acceptable since 500 is small.
+      -- In-memory pagination: capped at 2000 rows from DB, normalize then paginate.
       let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
-      pure $ take 15 $ drop skip $ sortOn (Down . snd) $ HashMap.toList normalized
+      pure $ take 15 $ drop skip $ sortWith (Down . snd) $ HashMap.toList normalized
   where
     resolveFieldExpr f
       | f `member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f

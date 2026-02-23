@@ -477,7 +477,7 @@ logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   Relude.when ctx.config.enableEventsTableUpdates $ do
-    fiveMinutesAgo <- liftIO $ addUTCTime (-300) <$> Time.currentTime
+    let fiveMinutesAgo = addUTCTime (-300) scheduledTime
     paginate 0 fiveMinutesAgo
     extractFieldPatterns fiveMinutesAgo
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)

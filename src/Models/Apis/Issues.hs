@@ -675,7 +675,7 @@ createLogPatternIssue projectId lp = do
       , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
       , migrationComplexity = "n/a"
       , issueData = logPatternData
-      , timestamp = Nothing
+      , timestamp = Just lp.firstSeenAt
       }
 
 

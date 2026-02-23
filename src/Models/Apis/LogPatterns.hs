@@ -84,6 +84,7 @@ data LogPattern = LogPattern
   , serviceName :: Maybe Text
   , logLevel :: Maybe Text
   , sampleMessage :: Maybe Text
+  , traceId :: Maybe Text
   , firstSeenAt :: ZonedTime
   , lastSeenAt :: ZonedTime
   , occurrenceCount :: Int64
