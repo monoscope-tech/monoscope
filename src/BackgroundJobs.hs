@@ -538,7 +538,7 @@ processPatterns events pid scheduledTime since = do
 
 
 -- | Input for Drain tree processing. sampleContent: Just for real events, Nothing for seeds.
-data DrainInput = DrainInput { logId :: Text, sampleContent :: Maybe Text, content :: Text }
+data DrainInput = DrainInput {logId :: Text, sampleContent :: Maybe Text, content :: Text}
 
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
