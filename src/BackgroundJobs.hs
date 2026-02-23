@@ -373,8 +373,7 @@ runHourlyJob scheduledTime hour = do
 
   -- Baseline calculation then spike detection (sequential within single job to ensure correct ordering)
   liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ activeProjects \pid ->
-      createJob conn "background_jobs" $ LogPatternHourlyProcessing pid
+    forM_ activeProjects $ createJob conn "background_jobs" . LogPatternHourlyProcessing
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -1668,7 +1667,7 @@ detectLogPatternSpikes pid authCtx = do
                       | zScore > 3.0 && currentRate > mean + 10 = Just Issues.Spike
                       | zScore < -3.0 && currentRate < mean - 10 = Just Issues.Drop
                       | otherwise = Nothing
-                 in direction <&> \dir -> (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev, dir)
+                 in direction <&> (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev,)
           _ -> Nothing
 
   let anomalyIds = V.fromList $ map (\(lpId, _, _, _, _, _) -> lpId) anomalyData

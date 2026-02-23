@@ -354,7 +354,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
                 div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                   span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                  whenJust d.sourceField \sf -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sf
+                  whenJust d.sourceField $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . sourceFieldLabel
                 div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
               whenJust d.sampleMessage \msg ->
                 div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
@@ -371,7 +371,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
                 div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                   span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                  whenJust d.sourceField \sf -> span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sf
+                  whenJust d.sourceField $ span_ [class_ "badge badge-sm badge-ghost"] . toHtml . sourceFieldLabel
                 div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
             _ -> pass
 

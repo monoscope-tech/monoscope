@@ -589,7 +589,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
               PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pathParts)
             Nothing -> pure []
           let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
-              sorted = take 15 $ sortOn (Down . snd) $ HashMap.toList normalized
+              sorted = take 15 $ sortWith (Down . snd) $ HashMap.toList normalized
           pure $ drop skip sorted
   fetch
   where
