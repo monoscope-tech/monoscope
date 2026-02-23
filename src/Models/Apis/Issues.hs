@@ -645,12 +645,22 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
       , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> showPct changePercentVal <> ")"
       , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> " (" <> show (round (abs zScoreVal) :: Int) <> " std devs)."
       , migrationComplexity = "n/a"
-      , issueData = LogPatternRateChangeData
-          { patternHash = lp.patternHash, logPattern = lp.logPattern, sampleMessage = lp.sampleMessage
-          , logLevel = lp.logLevel, serviceName = lp.serviceName, sourceField = lp.sourceField
-          , currentRatePerHour = currentRate, baselineMean, baselineMad
-          , zScore = abs zScoreVal, changePercent = changePercentVal, changeDirection = direction, detectedAt = now
-          }
+      , issueData =
+          LogPatternRateChangeData
+            { patternHash = lp.patternHash
+            , logPattern = lp.logPattern
+            , sampleMessage = lp.sampleMessage
+            , logLevel = lp.logLevel
+            , serviceName = lp.serviceName
+            , sourceField = lp.sourceField
+            , currentRatePerHour = currentRate
+            , baselineMean
+            , baselineMad
+            , zScore = abs zScoreVal
+            , changePercent = changePercentVal
+            , changeDirection = direction
+            , detectedAt = now
+            }
       , timestamp = Nothing
       }
 

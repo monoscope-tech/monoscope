@@ -309,6 +309,7 @@ getLogPatternsByIds ids
 knownPatternFields :: [(Text, Text)]
 knownPatternFields = [("body", "Log body"), ("summary", "Event summary"), ("url_path", "URL path"), ("exception", "Exception message")]
 
+
 -- | Human-readable label for a source field, falling back to the raw field name.
 --
 -- >>> sourceFieldLabel "summary"
