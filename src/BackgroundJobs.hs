@@ -515,8 +515,8 @@ processPatterns events pid scheduledTime since = do
       eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
   unless (V.null events) do
     existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-    Relude.when (length existingPatterns > 5000) $
-      Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
+    Relude.when (length existingPatterns > 5000)
+      $ Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
     let known = V.fromList $ map (DrainInput "" False) existingPatterns
         combined = known <> ((\(logId, content, _, _, _) -> DrainInput logId True content) <$> events)
         drainTree = processBatch True combined scheduledTime Drain.emptyDrainTree

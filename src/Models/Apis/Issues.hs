@@ -159,7 +159,8 @@ serviceLabel = fromMaybe "unknown-service"
 showRate :: Double -> Text
 showRate x = show (round x :: Int) <> "/hr"
 
-showPct :: (RealFrac a) => a -> Text
+
+showPct :: RealFrac a => a -> Text
 showPct x = show (round x :: Int) <> "%"
 
 
