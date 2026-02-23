@@ -186,6 +186,7 @@ updateBaselineBatch pid rows
             |]
             (hashes, states, means, mads, samples, pid)
 
+
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid patHash hourBucket count =
