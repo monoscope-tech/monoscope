@@ -261,7 +261,7 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
   pagerdutyInfo <- getPagerdutyByProjectId pid
-  channels <- maybe (pure []) (\d -> fromMaybe [] . fmap (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId) slackInfo
+  channels <- maybe (pure []) (\d -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId) slackInfo
   everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
   let existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
 
@@ -317,7 +317,7 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
         whenJust projectM \project ->
           forM_ addedChannels \channelId -> do
             result <- try @SomeException $ SlackP.sendSlackWelcomeMessage appCtx.env.slackBotToken channelId project.title
-            either (SlackP.logWelcomeMessageFailure channelId) (const pass) result
+            whenLeft_ result (SlackP.logWelcomeMessageFailure channelId)
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
 
@@ -536,14 +536,14 @@ renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_i
 renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> V.Vector Text -> Html ()
 renderSlackIntegration envCfg pid slackData channels existingChannels = do
   let stateParam = if T.null pid then "" else "&state=" <> pid
-      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
+      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
 
   case slackData of
     Just sd -> do
       div_ [class_ "rounded-lg border border-strokeBrand-weak bg-fillBrand-weak p-4 mb-4"] do
         div_ [class_ "flex items-center gap-2 mb-2"] do
           faSprite_ "circle-check" "solid" "w-5 h-5 text-textSuccess"
-          span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected to Slack (Team ID: " <> sd.teamId <> ")") (\name -> "Connected to Slack workspace: " <> name) sd.teamName
+          span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected to Slack (Team ID: " <> sd.teamId <> ")") ("Connected to Slack workspace: " <>) sd.teamName
 
         when (isNothing sd.teamName) do
           p_ [class_ "text-xs text-textWeak ml-7"] "Reconnect to see workspace name"
@@ -782,7 +782,7 @@ manageTeamsGetH pid layoutM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> fromMaybe [] . fmap (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId
+  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId
   discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
   let bwconf =
@@ -865,7 +865,7 @@ teamGetH pid handle layoutM = do
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> fromMaybe [] . fmap (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId
+  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId
   discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   case teamVm of
     Just team -> do
@@ -939,7 +939,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
             div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "Handle" >> span_ [class_ "text-textStrong"] (toHtml $ "@" <> team.handle)
             unless (T.null team.description) $ div_ [class_ "flex gap-2"] $ span_ [class_ "text-textWeak w-16"] "About" >> span_ [class_ "text-textStrong"] (toHtml team.description)
         let memberRow_ avatar name email = div_ [class_ "flex items-center gap-3 py-2.5"] $ img_ [src_ avatar, class_ "w-8 h-8 rounded-full border border-strokeWeak", term "loading" "lazy", term "decoding" "async"] >> div_ [] (div_ [class_ "text-sm font-medium text-textStrong"] (toHtml name) >> div_ [class_ "text-xs text-textWeak"] (toHtml email))
-            members = if isEveryone then (\m -> (("/api/avatar/" <> m.userId.toText), m.first_name <> " " <> m.last_name, original m.email)) <$> projMembers else (\m -> (m.memberAvatar, m.memberName, m.memberEmail)) <$> team.members
+            members = if isEveryone then (\m -> ("/api/avatar/" <> m.userId.toText, m.first_name <> " " <> m.last_name, original m.email)) <$> projMembers else (\m -> (m.memberAvatar, m.memberName, m.memberEmail)) <$> team.members
         panel_ def{raised = True, icon = Just "users", subtitle = Just $ " (" <> show (V.length members) <> ")"} "Members" do
           div_ [class_ "divide-y divide-strokeWeak -mx-4"] $ forM_ members \(avatar, name, email) -> div_ [class_ "px-4"] $ memberRow_ avatar name email
         panel_ def{raised = True, icon = Just "bell"} "Notifications" $ div_ [class_ "divide-y divide-strokeWeak -mx-4"] do

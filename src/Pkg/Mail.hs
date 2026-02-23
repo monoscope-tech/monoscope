@@ -43,7 +43,7 @@ sendSlackMessage pid message = do
   case slackData of
     Just s -> do
       let payload = [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |]
-      Notify.sendNotification $ Notify.slackNotification s.webhookUrl payload
+      Notify.sendNotification $ Notify.slackNotification s.channelId s.webhookUrl payload
     Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
 
 
@@ -110,8 +110,10 @@ sendDiscordAlertThreaded alert pid pTitle channelIdM' replyToMsgIdM = do
 sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
 sendSlackAlert alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
-  channelIdM <- maybe (getProjectSlackData pid <&> fmap (.channelId)) (pure . Just) channelM
-  for_ channelIdM \cid -> do
+  slackData <- getProjectSlackData pid
+  let channelIdM = channelM <|> fmap (.channelId) slackData
+      webhookUrlM = (.webhookUrl) <$> slackData
+  for_ ((,) <$> channelIdM <*> webhookUrlM) \(cid, wurl) -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
         mkAlert = \case
           RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl
@@ -119,7 +121,7 @@ sendSlackAlert alert pid pTitle channelM = do
           ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
           MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
           ShapeAlert -> Nothing
-    traverse_ (Notify.sendNotification . Notify.slackNotification cid) (mkAlert alert)
+    traverse_ (Notify.sendNotification . Notify.slackNotification cid wurl) (mkAlert alert)
 
 
 sendSlackAlertThreaded :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)

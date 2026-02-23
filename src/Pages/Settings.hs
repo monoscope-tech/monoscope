@@ -489,16 +489,16 @@ notificationsTestPostH pid TestForm{..} = do
     ("all", Just tid) ->
       getTeam tid >>= traverse_ \t -> do
         resolveEmails t >>= mapM_ sendTestEmail
-        forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
-        forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
-        when (not $ V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
+        forM_ t.slack_channels $ sendSlackAlert alert pid project.title . Just
+        forM_ t.discord_channels $ sendDiscordAlert alert pid project.title . Just
+        unless (V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
         forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
-    ("email", Just tid) -> getTeam tid >>= traverse_ \t -> resolveEmails t >>= mapM_ sendTestEmail
+    ("email", Just tid) -> getTeam tid >>= traverse_ (resolveEmails >=> mapM_ sendTestEmail)
     ("email", Nothing) -> forM_ project.notifyEmails sendTestEmail
-    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels \c -> sendSlackAlert alert pid project.title (Just c)
+    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels $ sendSlackAlert alert pid project.title . Just
     ("slack", Nothing) -> getProjectSlackData pid >>= traverse_ \s -> sendSlackAlert alert pid project.title (Just s.channelId)
-    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels \c -> sendDiscordAlert alert pid project.title (Just c)
-    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId \c -> sendDiscordAlert alert pid project.title (Just c)
+    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels $ sendDiscordAlert alert pid project.title . Just
+    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId $ sendDiscordAlert alert pid project.title . Just
     ("whatsapp", _) -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
     ("pagerduty", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
     ("pagerduty", Nothing) -> getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title projectUrl
@@ -707,9 +707,8 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
       div_ [class_ "border-t border-strokeWeak pt-4"] do
         div_ [class_ "text-textStrong text-sm font-semibold mb-2"] "Upgrade plan"
         p_ [class_ "text-textWeak text-sm mb-4"] "Monoscope pricing, click on compare feature below to select the option that best suit your project."
-        pass
-
-  modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} (Just $ span_ [class_ "btn btn-primary btn-sm"] "Change plan") do
+        label_ [Lucid.for_ "pricing-modal"] $ span_ [class_ "btn btn-primary btn-sm"] "Change plan"
+  modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} Nothing do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "What's Included?"
       p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."

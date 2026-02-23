@@ -20,7 +20,7 @@ spec = aroundAll withTestResources do
     describe "/here command" do
       it "sets notification channel and saves golden response" \tr -> do
         setupSlackData tr testPid "T01HEREA9X"
-        let interaction = slackInteraction "/here" "" "T01HEREA9X"
+        let interaction = slackInteraction "/monoscope-here" "" "T01HEREA9X"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         assertJsonGolden "slack/here_response.json" result
@@ -34,7 +34,7 @@ spec = aroundAll withTestResources do
 
       it "returns correct block structure" \tr -> do
         setupSlackData tr testPid "T02BLOCKB8Y"
-        let interaction = slackInteraction "/here" "" "T02BLOCKB8Y"
+        let interaction = slackInteraction "/monoscope-here" "" "T02BLOCKB8Y"
         result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         case extractSlackBlocks result of
@@ -90,7 +90,7 @@ spec = aroundAll withTestResources do
     describe "Channel Management" do
       it "/here command adds channel to @everyone team" \tr -> do
         setupSlackData tr testPid "T07HERETEAM"
-        let interaction = slackInteraction "/here" "" "T07HERETEAM"
+        let interaction = slackInteraction "/monoscope-here" "" "T07HERETEAM"
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T07HERETEAM"
@@ -104,7 +104,7 @@ spec = aroundAll withTestResources do
 
       it "/here command does not duplicate channels in @everyone team" \tr -> do
         setupSlackData tr testPid "T08HEREDUP"
-        let interaction = slackInteraction "/here" "" "T08HEREDUP"
+        let interaction = slackInteraction "/monoscope-here" "" "T08HEREDUP"
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
@@ -121,7 +121,7 @@ spec = aroundAll withTestResources do
 
       it "/here updates both default channel_id and @everyone team" \tr -> do
         setupSlackData tr testPid "T09HEREBOTH"
-        let interaction = slackInteraction "/here" "" "T09HEREBOTH"
+        let interaction = slackInteraction "/monoscope-here" "" "T09HEREBOTH"
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T09HEREBOTH"
@@ -136,7 +136,7 @@ spec = aroundAll withTestResources do
 
       it "/here sends welcome message when channel is newly added" \tr -> do
         setupSlackData tr testPid "T10HEREWELC"
-        let interaction = slackInteraction "/here" "" "T10HEREWELC"
+        let interaction = slackInteraction "/monoscope-here" "" "T10HEREWELC"
         -- First call should add channel and attempt to send welcome message
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
@@ -151,7 +151,7 @@ spec = aroundAll withTestResources do
 
       it "/here does not send welcome message when channel already exists" \tr -> do
         setupSlackData tr testPid "T11HERENODUP"
-        let interaction = slackInteraction "/here" "" "T11HERENODUP"
+        let interaction = slackInteraction "/monoscope-here" "" "T11HERENODUP"
         -- First call adds channel
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
         -- Second call should not send welcome message (channel already exists)

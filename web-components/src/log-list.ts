@@ -3,7 +3,7 @@ import '@lit-labs/virtualizer';
 import { LitElement, html, css, TemplateResult, nothing } from 'lit';
 import { customElement, state, query, property } from 'lit/decorators.js';
 import { ref, createRef } from 'lit/directives/ref.js';
-import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, Trace, TraceDataMap } from './types/types';
+import { APTEvent, ChildrenForLatency, ColIdxMap, EventLine, ServerTraceEntry, Trace, TraceDataMap } from './types/types';
 import debounce from 'lodash/debounce';
 import { includes, startsWith, map, forEach, compact, pick, chunk, chain, lt } from 'lodash';
 // Import worker as URL instead of worker instance
@@ -65,6 +65,8 @@ export class LogList extends LitElement {
   @state() private wrapLines: boolean = false;
   @state() private hasMore: boolean = true;
   @state() private expandTimeRange: boolean = true;
+  @state() private loadedCount: number = 0;
+  @state() private totalCount: number = 0;
   @state() private isLiveStreaming: boolean = false;
   @state() private isLoading: boolean = false;
   @state() private isFetchingRecent: boolean = false;
@@ -81,6 +83,7 @@ export class LogList extends LitElement {
   @query('#resizer-details_width-wrapper') private resizerWrapper?: HTMLElement;
   @query('#details_indicator') private detailsIndicator?: HTMLElement;
 
+  private cachedServerTraces: ServerTraceEntry[] = [];
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
   private colIdxMap: ColIdxMap = {};
@@ -148,9 +151,9 @@ export class LogList extends LitElement {
       (window as any).logDataPromise = null;
       const data = await earlyPromise;
       if (!data.error) {
-        const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount } = data;
-        const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, queryResultCount) : [];
-        return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, queryResultCount, hasMore: logsData?.length > 0 } };
+        const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces } = data;
+        const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
+        return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces: traces || [], hasMore: data.hasMore ?? (logsData?.length > 0), queryResultCount: data.queryResultCount ?? logsData?.length ?? 0 } };
       }
     }
     // Fallback to worker
@@ -518,11 +521,13 @@ export class LogList extends LitElement {
     };
   }
 
-  private updateRowCountDisplay(count: number) {
-    // Find the row count element in the parent page and update it
+  private updateRowCountDisplay() {
     const countElement = document.getElementById('row-count-display');
-    if (countElement) {
-      countElement.textContent = this.formatCount(count);
+    if (!countElement) return;
+    countElement.textContent = this.formatCount(this.loadedCount);
+    const suffixEl = document.getElementById('row-count-suffix');
+    if (suffixEl) {
+      suffixEl.textContent = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
     }
   }
 
@@ -667,9 +672,7 @@ export class LogList extends LitElement {
   }
 
   buildSpanListTree(logs: any[][]) {
-    const tree = groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection);
-    // Ensure tree maintains proper order
-    return tree;
+    return groupSpans(logs, this.colIdxMap, this.expandedTraces, this.flipDirection, this.cachedServerTraces);
   }
 
   private updateVisibleItems() {
@@ -768,13 +771,25 @@ export class LogList extends LitElement {
       this.hasMore = meta.hasMore !== false;
       if (isLoadMore || isRefresh || !this.spanListTree.length) this.nextFetchUrl = meta.nextUrl;
       if (isRecentFetch || !this.spanListTree.length) this.recentFetchUrl = meta.recentUrl;
+      if (isLoadMore) {
+        this.loadedCount += meta.queryResultCount ?? 0;
+      } else {
+        this.loadedCount = meta.queryResultCount ?? 0;
+      }
       if (meta.count !== undefined) {
         this.totalCount = meta.count;
-        this.updateRowCountDisplay(meta.count);
       }
+      this.updateRowCountDisplay();
       if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
       this.logsColumns = meta.cols;
       this.colIdxMap = meta.colIdxMap;
+      // Cache server traces for re-render (expand/collapse, flip direction)
+      // Cap at 5000 entries to prevent unbounded growth during pagination
+      if ((isLoadMore || isRecentFetch) && meta.traces?.length) {
+        this.cachedServerTraces = [...this.cachedServerTraces, ...meta.traces].slice(-5000);
+      } else if (meta.traces) {
+        this.cachedServerTraces = meta.traces;
+      }
 
       if (isRefresh) {
         this.spanListTree = tree;
@@ -1141,10 +1156,10 @@ export class LogList extends LitElement {
           min-width: var(--col-severity_text-width);
           max-width: var(--col-severity_text-width);
         }
-        .col-parent_span_id {
-          width: var(--col-parent_span_id-width);
-          min-width: var(--col-parent_span_id-width);
-          max-width: var(--col-parent_span_id-width);
+        .col-parent_id {
+          width: var(--col-parent_id-width);
+          min-width: var(--col-parent_id-width);
+          max-width: var(--col-parent_id-width);
         }
         .col-errors {
           width: var(--col-errors-width);
@@ -1522,8 +1537,7 @@ export class LogList extends LitElement {
         }
         return rowData._latencyCache.content;
       case 'summary':
-        const isVirtualParent = type === 'virtual-parent';
-        if (!isVirtualParent && (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines)) {
+        if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
           const summaryArray = this.parseSummaryData(dataArr);
           rowData._summaryCache = { content: this.renderSummaryElements(summaryArray, this.wrapLines), wrapLines: this.wrapLines };
         }
@@ -1531,15 +1545,8 @@ export class LogList extends LitElement {
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
           : childErrors
           ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
-          : isVirtualParent
-          ? 'border border-dashed border-strokeWeak bg-fillWeaker text-textWeak fill-textWeak'
           : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
-        const summaryContent = isVirtualParent
-          ? html`<span class="text-textWeak text-xs italic flex items-center gap-1" title="Parent ID: ${rowData.missingParentId}">
-              ${faSprite('clock', 'regular', 'w-3 h-3')} Parent span pending
-              <span class="font-mono text-[10px]">(${rowData.missingParentId?.slice(0, 12)}...)</span>
-            </span>`
-          : rowData._summaryCache.content;
+        const summaryContent = rowData._summaryCache.content;
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree'
             ? html`
@@ -1957,7 +1964,7 @@ class ColumnsSettings extends LitElement {
   private defaultColumns = [
     'trace_id',
     'severity_text',
-    'parent_span_id',
+    'parent_id',
     'errors',
     'kind',
     'span_name',

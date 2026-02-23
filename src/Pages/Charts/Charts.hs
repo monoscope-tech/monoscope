@@ -170,7 +170,10 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
       let cacheKey = QC.generateCacheKey pid source queryAST sqlQueryCfg
       cacheResult <- QC.lookupCache cacheKey (reqFrom, reqTo)
       case cacheResult of
-        QC.CacheHit entry -> pure $ QC.trimToRange entry.cachedData reqFrom reqTo
+        QC.CacheHit entry -> do
+          let trimmed = QC.trimToRange entry.cachedData reqFrom reqTo
+              coversRange = entry.cachedFrom <= reqFrom && entry.cachedTo >= reqTo
+          refetchUnlessAdequate coversRange entry.cachedData trimmed
         QC.PartialHit entry -> do
           let deltaFromTime = entry.cachedTo
           let deltaSqlCfg = sqlQueryCfg{dateRange = (Just deltaFromTime, Just reqTo)}
@@ -182,7 +185,8 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
           let slidingWindowStart = addUTCTime (negate windowSecs) reqTo
           let trimmed = QC.trimOldData slidingWindowStart merged
           QC.updateCache cacheKey (slidingWindowStart, reqTo) trimmed originalQuery
-          pure $ QC.trimToRange trimmed reqFrom reqTo
+          let result = QC.trimToRange trimmed reqFrom reqTo
+          refetchUnlessAdequate (slidingWindowStart <= reqFrom) trimmed result
         QC.CacheMiss -> do
           result <- executeQueryWith sqlQueryCfg queryAST
           QC.updateCache cacheKey (reqFrom, reqTo) result originalQuery
@@ -193,6 +197,9 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
       let (_, qc) = queryASTToComponents cfg ast
       let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
       liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
+    refetchUnlessAdequate coversRange cached result
+      | coversRange || not (V.null result.dataset) || V.null cached.dataset = pure result
+      | otherwise = executeQueryWith sqlQueryCfg queryAST
 
 
 fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData

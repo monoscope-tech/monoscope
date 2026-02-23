@@ -231,7 +231,7 @@ getOrCreateGoldenResponse goldenDir fileName action = do
             Right resp -> return resp
             Left (HttpExceptionRequest _ (StatusCodeException resp body)) ->
               -- Convert 4xx/5xx responses to normal responses for golden files
-              return resp{responseBody = LBS.fromStrict body}
+              return resp{responseBody = fromStrict body}
             Left (ex :: HttpException) -> throwIO ex -- Re-throw other exceptions
           writeFileLBS filePath (AE.encode $ fromWreqResponse response)
           return response

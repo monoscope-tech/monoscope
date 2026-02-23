@@ -118,7 +118,7 @@ data BgJobs
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
-  | SaveMergedReplayEvents Projects.ProjectId UUID.UUID AE.Value
+  | MergeReplaySession Projects.ProjectId UUID.UUID
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
@@ -365,7 +365,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
-    SaveMergedReplayEvents pid sid events -> Replay.saveMergedReplayEvents pid sid events
+    MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
     NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
@@ -934,15 +934,14 @@ createAndInsertIssue :: Monitors.QueryMonitorEvaled -> Text -> ATBackgroundCtx I
 createAndInsertIssue monitorE hostUrl = do
   let (thresholdType, threshold) = calculateThreshold monitorE
   issue <-
-    liftIO
-      $ Issues.createQueryAlertIssue
-        monitorE.projectId
-        (show monitorE.id)
-        monitorE.alertConfig.title
-        monitorE.logQuery
-        threshold
-        monitorE.evalResult
-        thresholdType
+    Issues.createQueryAlertIssue
+      monitorE.projectId
+      (show monitorE.id)
+      monitorE.alertConfig.title
+      monitorE.logQuery
+      threshold
+      monitorE.evalResult
+      thresholdType
   Issues.insertIssue issue
   pure issue
 
@@ -1222,7 +1221,7 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
 
       -- Create one issue per error
       forM_ errors \err -> do
-        issue <- liftIO $ Issues.createRuntimeExceptionIssue pid err.errorData
+        issue <- Issues.createRuntimeExceptionIssue pid err.errorData
         Issues.insertIssue issue
         -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
@@ -1293,7 +1292,7 @@ processAPIChangeAnomalies pid targetHashes = do
         Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
       Nothing -> do
         -- Create new issue
-        issue <- liftIO $ Issues.createAPIChangeIssue pid endpointHash anomalies
+        issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
         Issues.insertIssue issue
 
         -- Queue enhancement job

@@ -108,6 +108,7 @@ logQueryBox_ config = do
               , hxTrigger_ "input[this.value.trim().length > 0] changed delay:1s"
               , hxSwap_ "none"
               , hxExt_ "json-enc"
+              , hxVals_ "js:{timezone: Intl.DateTimeFormat().resolvedOptions().timeZone}"
               , term "hx-validate" "false"
               , hxIndicator_ "#ai-search-loader"
               , term "data-container-id" (fromMaybe "visualization-widget-container" config.targetWidgetPreview)
@@ -116,11 +117,13 @@ logQueryBox_ config = do
                      if my.value.trim().length > 0 
                        then halt then trigger htmx:trigger 
                      end
-                   on htmx:afterRequest 
-                     if event.detail.successful 
-                       then 
+                   on htmx:afterRequest
+                     if event.detail.successful
+                       then
                          call JSON.parse(event.detail.xhr.responseText) set :result to it
-                         if :result.query then call #filterElement.handleAddQuery(:result.query, true) end
+                         if :result.time_range then call window.updateTimePicker(:result.time_range) end
+                         if :result.query then call #filterElement.handleAddQuery(:result.query, true)
+                         else if :result.time_range then trigger submit on #log_explorer_form end
                          if :result.visualization_type
                            then
                              set vizType to :result.visualization_type
@@ -161,7 +164,7 @@ logQueryBox_ config = do
               div_ [class_ "gap-[2px] flex items-center"] do
                 span_ [class_ "text-textWeak"] "in"
                 select_
-                  [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-transparent border-strokeStrong"
+                  [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-bgBase border-strokeStrong"
                   , name_ "target-spans"
                   , id_ "spans-toggle"
                   , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"

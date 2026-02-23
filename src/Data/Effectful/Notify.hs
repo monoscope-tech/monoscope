@@ -37,7 +37,6 @@ import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
 import Control.Retry (exponentialBackoff, limitRetries, retrying)
 import Data.Aeson qualified as AE
-import Data.Aeson.KeyMap qualified as AEK
 import Data.Aeson.QQ (aesonQQ)
 import Data.Text.Display (Display, display)
 import Effectful
@@ -68,6 +67,7 @@ data EmailData = EmailData
 
 data SlackData = SlackData
   { channelId :: Text
+  , webhookUrl :: Text
   , payload :: AE.Value
   , threadTs :: Maybe Text
   }
@@ -146,8 +146,8 @@ emailNotification :: Text -> Text -> Text -> Notification
 emailNotification receiver subject htmlBody = EmailNotification EmailData{..}
 
 
-slackNotification :: Text -> AE.Value -> Notification
-slackNotification channelId payload =
+slackNotification :: Text -> Text -> AE.Value -> Notification
+slackNotification channelId webhookUrl payload =
   let threadTs = Nothing in SlackNotification SlackData{..}
 
 
@@ -208,8 +208,20 @@ runNotifyProduction = interpret $ \_ -> \case
         Right (Just ()) -> Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver, "via" AE..= via])
         Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
         Left ex -> Log.logAttention "Email send failed" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via, "error" AE..= displayException ex])
-    SlackNotification slackData -> void $ sendSlack slackData
-    DiscordNotification discordData -> void $ sendDiscord discordData
+    SlackNotification SlackData{..} -> do
+      let opts = defaults & header "Content-Type" .~ ["application/json"]
+      re <- liftIO $ postWith opts (toString webhookUrl) payload
+      unless (statusIsSuccessful (re ^. responseStatus))
+        $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
+      pass
+    DiscordNotification DiscordData{..} -> do
+      appCtx <- ask @Config.AuthContext
+      let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
+      re <- liftIO $ postWith opts url payload
+      unless (statusIsSuccessful (re ^. responseStatus))
+        $ Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
+      pass
     WhatsAppNotification WhatsAppData{template, to, contentVariables} -> do
       appCtx <- ask @Config.AuthContext
       let from = appCtx.config.whatsappFromNumber

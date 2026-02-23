@@ -484,11 +484,12 @@ defaultSelectSqlQuery (Just SSpans) =
   , "name as span_name"
   , "duration"
   , "resource___service___name as service"
-  , "parent_id as parent_span_id"
+  , "parent_id"
   , "CAST(EXTRACT(EPOCH FROM (start_time)) * 1000000000 AS BIGINT) as start_time_ns"
   , "errors is not null as errors"
   , "summary"
   , "context___span_id as latency_breakdown"
+  , "kind"
   ]
 
 

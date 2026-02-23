@@ -141,7 +141,7 @@ timepicker_ submitForm currentRange targetIdM = do
       , term "style" $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
       , term "popovertargetaction" "toggle"
       , term "onclick" "event.stopPropagation()"
-      , class_ "flex items-center gap-2 relative pt-0 p-2 text-textWeak cursor-pointer"
+      , class_ "flex items-center gap-2 relative p-2 text-textWeak cursor-pointer"
       ]
       do
         faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral "
@@ -166,12 +166,9 @@ timepicker_ submitForm currentRange targetIdM = do
                   "window.setQueryParamAndReload('since', my @data-value)"
                   (\fm -> [fmt|htmx.trigger("#{fm}", "submit")|])
                   submitForm
+              popoverId = "#" <> targetPr <> "-timepicker-popover"
               onClickHandler =
-                [text|on click set #$targetPr-custom_range_input's value to my @data-value
-                    then set #$targetPr-currentRange's innerText to my @data-title
-                    then call window.setParams({since:@data-value, from:'', to:''})
-                    then ${action}
-                    then call #$targetPr-timepicker-popover.hidePopover() |]
+                [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-title}) then $action then call $popoverId.hidePopover()|]
               timePickerLink val title =
                 li_ $ a_
                   [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
@@ -193,8 +190,9 @@ timepicker_ submitForm currentRange targetIdM = do
         -- Custom date range picker (hidden by default)
         let submitAction =
               maybe
-                "window.setParams({from: formatDate(start), to: formatDate(end), since: ''}, true); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();"
-                (\fm -> [text|window.setParams({from: formatDate(start), to: formatDate(end), since: ''}); htmx.trigger("#${fm}", "submit"); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();|])
+                -- updateTimePicker already set params; reload page for non-form case
+                "window.setParams({}, true); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();"
+                (\fm -> [text|htmx.trigger("#${fm}", "submit"); document.getElementById(`$targetPr-timepicker-popover`).hidePopover();|])
                 submitForm
         script_
           [text|
@@ -231,14 +229,8 @@ timepicker_ submitForm currentRange targetIdM = do
             });
             
             picker.on('select', ({ detail: { start, end } }) => {
-              startMs = start.getTime();
-              endMs = end.getTime();
-              if (startMs >= endMs) {
-                end = new Date();
-                }
-              const formatDate = (date) => date.toISOString();
-              document.getElementById(`$targetPr-custom_range_input`).value = `$${start}/$${end}`;
-              document.getElementById(`$targetPr-currentRange`).innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`;
+              if (start.getTime() >= end.getTime()) end = new Date();
+              window.updateTimePicker({from: start.toISOString(), to: end.toISOString()}, {targetPr: "$targetPr"});
               ${submitAction}
             });
           },

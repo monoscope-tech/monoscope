@@ -7,7 +7,6 @@ on:
 env:
   LANG: C.UTF-8
   LD_LIBRARY_PATH: '/usr/local/lib:$LD_LIBRARY_PATH'
-  CABAL_JOBS: 2
   GHC_VERSION: 9.12.2
 
 jobs:
@@ -127,13 +126,13 @@ jobs:
         run: cabal update
 
       - name: Configure project
-        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 -j8"
+        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
 
       - name: Build dependencies
-        run: cabal build --only-dependencies all -j4
+        run: cabal build --only-dependencies all -j
 
       - name: Build ${{ matrix.test }}
-        run: cabal build ${{ matrix.test }} -j4
+        run: cabal build ${{ matrix.test }} -j
 
       - name: Run ${{ matrix.test }}
         env:
@@ -143,7 +142,7 @@ jobs:
           DISCORD_CLIENT_ID: "1328384474395967631"
         run: |
           echo "::group::Running ${{ matrix.test }}"
-          cabal test ${{ matrix.test }} --ghc-options="-O0 -j8" --test-show-details=direct
+          cabal test ${{ matrix.test }} --ghc-options="-O0" --test-show-details=direct
           echo "::endgroup::"
 
   build-and-deploy:

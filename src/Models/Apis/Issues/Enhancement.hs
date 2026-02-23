@@ -11,11 +11,12 @@ import Data.Aeson qualified as AE
 import Data.Effectful.LLM qualified as ELLM
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
+import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful (Eff, (:>))
 import Models.Apis.Issues qualified as Issues
 import NeatInterpolation (text)
 import Pkg.AI qualified as AI
+import PyF (fmtTrim)
 import Relude hiding (id)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (DB)
@@ -94,53 +95,35 @@ generateEnhancedDescription authCtx issue = do
 buildTitlePrompt :: Issues.Issue -> Text
 buildTitlePrompt issue =
   let baseContext = case issue.issueType of
-        Issues.APIChange ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  let endpoint = apiData.endpointMethod <> " " <> apiData.endpointPath
-                      newFields = toText (show $ V.length apiData.newFields)
-                      deletedFields = toText (show $ V.length apiData.deletedFields)
-                      modifiedFields = toText (show $ V.length apiData.modifiedFields)
-                      service = fromMaybe "unknown-service" issue.service
-                   in [text|
-                        Generate a concise, descriptive title for this API change.
-                        Endpoint: $endpoint
-                        New fields: $newFields
-                        Deleted fields: $deletedFields
-                        Modified fields: $modifiedFields
-                        Service: $service
-                        |]
-                _ -> "Generate a concise title for this API change."
-        Issues.RuntimeException ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-                  let errorType = errorData.errorType
-                      errorMessage = T.take 100 errorData.errorMessage
-                      service = fromMaybe "unknown-service" issue.service
-                   in [text|
-                        Generate a concise title for this runtime exception.
-                        Error type: $errorType
-                        Error message: $errorMessage
-                        Service: $service
-                        |]
-                _ -> "Generate a concise title for this runtime exception."
-        Issues.QueryAlert ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (alertData :: Issues.QueryAlertData) ->
-                  let queryName = alertData.queryName
-                      thresholdValue = toText (show alertData.thresholdValue)
-                      thresholdType = alertData.thresholdType
-                      actualValue = toText (show alertData.actualValue)
-                   in [text|
-                        Generate a concise title for this query alert.
-                        Query: $queryName
-                        Threshold: $thresholdValue ($thresholdType)
-                        Actual value: $actualValue
-                        |]
-                _ -> "Generate a concise title for this query alert."
+        Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.APIChangeData) ->
+            [fmtTrim|
+            Generate a concise, descriptive title for this API change.
+            Endpoint: {d.endpointMethod} {d.endpointPath}
+            New fields: {V.length d.newFields}
+            Deleted fields: {V.length d.deletedFields}
+            Modified fields: {V.length d.modifiedFields}
+            Service: {issue.service}
+            |]
+          _ -> "Generate a concise title for this API change."
+        Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.RuntimeExceptionData) ->
+            [fmtTrim|
+            Generate a concise title for this runtime exception.
+            Error type: {d.errorType}
+            Error message: {T.take 100 d.errorMessage}
+            Service: {issue.service}
+            |]
+          _ -> "Generate a concise title for this runtime exception."
+        Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.QueryAlertData) ->
+            [fmtTrim|
+            Generate a concise title for this query alert.
+            Query: {d.queryName}
+            Threshold: {d.thresholdValue} ({d.thresholdType})
+            Actual value: {d.actualValue}
+            |]
+          _ -> "Generate a concise title for this query alert."
         Issues.LogPattern ->
           let title = issue.title
               service = fromMaybe "unknown-service" issue.service
@@ -177,62 +160,41 @@ buildTitlePrompt issue =
 buildDescriptionPrompt :: Issues.Issue -> Text
 buildDescriptionPrompt issue =
   let baseContext = case issue.issueType of
-        Issues.APIChange ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  let endpoint = apiData.endpointMethod <> " " <> apiData.endpointPath
-                      newFields = toText (show $ V.toList apiData.newFields)
-                      deletedFields = toText (show $ V.toList apiData.deletedFields)
-                      modifiedFields = toText (show $ V.toList apiData.modifiedFields)
-                      totalAnomalies = toText (show $ V.length apiData.anomalyHashes)
-                      service = fromMaybe "unknown-service" issue.service
-                   in [text|
-                        Describe this API change and its impact.
-                        Endpoint: $endpoint
-                        New fields: $newFields
-                        Deleted fields: $deletedFields
-                        Modified fields: $modifiedFields
-                        Total anomalies grouped: $totalAnomalies
-                        Service: $service
-                        |]
-                _ -> "Describe this API change and its implications."
-        Issues.RuntimeException ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (errorData :: Issues.RuntimeExceptionData) ->
-                  let errorType = errorData.errorType
-                      errorMessage = errorData.errorMessage
-                      stackTrace = T.take 500 errorData.stackTrace
-                      requestContext = fromMaybe "Unknown" errorData.requestMethod <> " " <> fromMaybe "Unknown" errorData.requestPath
-                      occurrences = toText (show errorData.occurrenceCount)
-                   in [text|
-                        Analyze this runtime exception and provide debugging guidance.
-                        Error type: $errorType
-                        Error message: $errorMessage
-                        Stack trace: $stackTrace
-                        Request context: $requestContext
-                        Occurrences: $occurrences
-                        |]
-                _ -> "Analyze this runtime exception."
-        Issues.QueryAlert ->
-          case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (alertData :: Issues.QueryAlertData) ->
-              let queryName = alertData.queryName
-                  queryExpression = alertData.queryExpression
-                  thresholdValue = toText (show alertData.thresholdValue)
-                  thresholdType = alertData.thresholdType
-                  actualValue = toText (show alertData.actualValue)
-                  triggeredAt = toText (show alertData.triggeredAt)
-               in [text|
-                    Describe this query alert and recommended actions.
-                    Query: $queryName
-                    Expression: $queryExpression
-                    Threshold: $thresholdValue ($thresholdType)
-                    Actual value: $actualValue
-                    Triggered at: $triggeredAt
-                    |]
-            _ -> "Describe this query alert."
+        Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.APIChangeData) ->
+            [fmtTrim|
+            Describe this API change and its impact.
+            Endpoint: {d.endpointMethod} {d.endpointPath}
+            New fields: {show $ V.toList d.newFields}
+            Deleted fields: {show $ V.toList d.deletedFields}
+            Modified fields: {show $ V.toList d.modifiedFields}
+            Total anomalies grouped: {V.length d.anomalyHashes}
+            Service: {issue.service}
+            |]
+          _ -> "Describe this API change and its implications."
+        Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.RuntimeExceptionData) ->
+            [fmtTrim|
+            Analyze this runtime exception and provide debugging guidance.
+            Error type: {d.errorType}
+            Error message: {d.errorMessage}
+            Stack trace: {T.take 500 d.stackTrace}
+            Request context: {fromMaybe "Unknown" d.requestMethod} {fromMaybe "Unknown" d.requestPath}
+            Occurrences: {d.occurrenceCount}
+            |]
+          _ -> "Analyze this runtime exception."
+        Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.QueryAlertData) ->
+            [fmtTrim|
+            Describe this query alert and recommended actions.
+            Query: {d.queryName}
+            Expression: {d.queryExpression}
+            Threshold: {d.thresholdValue} ({d.thresholdType})
+            Actual value: {d.actualValue}
+            Triggered at: {show d.triggeredAt}
+            |]
+          _ -> "Describe this query alert."
+
         Issues.LogPattern ->
           let title = issue.title
               service = fromMaybe "unknown-service" issue.service
@@ -249,6 +211,7 @@ buildDescriptionPrompt issue =
                 Title: $title
                 Service: $service
                 |]
+
 
       systemPrompt =
         [text|
@@ -298,22 +261,18 @@ classifyIssueCriticality authCtx issue = do
 buildCriticalityPrompt :: Issues.Issue -> Text
 buildCriticalityPrompt issue =
   let context = case issue.issueType of
-        Issues.APIChange ->
-          let Aeson issueDataValue = issue.issueData
-           in case AE.fromJSON issueDataValue of
-                AE.Success (apiData :: Issues.APIChangeData) ->
-                  unlines
-                    [ "API change detected"
-                    , "Endpoint: " <> apiData.endpointMethod <> " " <> apiData.endpointPath
-                    , "New fields: " <> toText (show $ V.length apiData.newFields)
-                    , "Deleted fields: " <> toText (show $ V.length apiData.deletedFields)
-                    , "Modified fields: " <> toText (show $ V.length apiData.modifiedFields)
-                    ]
-                _ -> "API change: " <> issue.title
-        Issues.RuntimeException ->
-          "Runtime exception: " <> issue.title
-        Issues.QueryAlert ->
-          "Query alert: " <> issue.title
+        Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.APIChangeData) ->
+            [fmtTrim|
+            API change detected
+            Endpoint: {d.endpointMethod} {d.endpointPath}
+            New fields: {V.length d.newFields}
+            Deleted fields: {V.length d.deletedFields}
+            Modified fields: {V.length d.modifiedFields}
+            |]
+          _ -> "API change: " <> issue.title
+        Issues.RuntimeException -> "Runtime exception: " <> issue.title
+        Issues.QueryAlert -> "Query alert: " <> issue.title
         Issues.LogPattern ->
           "Log pattern: " <> issue.title
         Issues.LogPatternRateChange ->

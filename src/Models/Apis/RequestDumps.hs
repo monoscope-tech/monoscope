@@ -550,7 +550,7 @@ selectChildSpansAndLogs pid projectedColsByUser traceIds dateRange excludedSpanI
         _ -> ""
       q =
         [text|SELECT json_build_array($r) FROM otel_logs_and_spans
-             WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) and parent_id IS NOT NULL AND id::text != ALL(?)
+             WHERE project_id= ?  $dateRangeStr and  context___trace_id=Any(?) AND parent_id IS NOT NULL AND id::text != ALL(?)
              ORDER BY timestamp DESC LIMIT 2000;
            |]
   results <- PG.query (Query $ encodeUtf8 q) (pid, traceIds, excludedSpanIds)

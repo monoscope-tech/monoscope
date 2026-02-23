@@ -37,7 +37,7 @@ COPY .git .git
 COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
 
 # Build Haskell dependencies (fast - already cached in deps image)
-RUN cabal update && cabal build --only-dependencies exe:monoscope -j$(nproc)
+RUN cabal update && cabal build --only-dependencies exe:monoscope -j --semaphore
 
 # Copy source code
 COPY src ./src
@@ -54,7 +54,7 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
   cd .. && workbox generateSW config/workbox-config.js
 
 # Build Haskell executable (dist-newstyle cached via Docker layer cache)
-RUN cabal build exe:monoscope -j$(nproc) && \
+RUN cabal build exe:monoscope -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
   mkdir -p /build/dist && \
   find dist-newstyle -name monoscope -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
 
