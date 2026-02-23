@@ -195,7 +195,7 @@ logQueryBox_ config = do
         div_ [class_ "flex items-center gap-2"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
-            let precomputed = [("log_pattern", "Log body"), ("summary_pattern", "Event summary"), ("url_path", "URL path"), ("exception", "Exception message")] :: [(Text, Text)]
+            let precomputed = [("summary", "Event summary"), ("url_path", "URL path"), ("exception", "Exception message")] :: [(Text, Text)]
                 isCustom = maybe False (\s -> s `notElem` map fst precomputed) config.patternSelected
             select_
               [ class_ "select select-sm max-w-[140px]"
@@ -212,7 +212,7 @@ logQueryBox_ config = do
               ]
               do
                 forM_ precomputed \(v, label) ->
-                  option_ ([value_ v] <> [selected_ "" | config.patternSelected == Just v || (v == "log_pattern" && isNothing config.patternSelected)]) $ toHtml label
+                  option_ ([value_ v] <> [selected_ "" | config.patternSelected == Just v || (v == "summary" && isNothing config.patternSelected)]) $ toHtml label
                 option_ ([value_ "__custom__"] <> [selected_ "" | isCustom]) "Other field..."
             input_
               [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
@@ -229,7 +229,7 @@ logQueryBox_ config = do
                     else
                       add .hidden to me
                       remove .hidden from #pattern-target-select
-                      set #pattern-target-select.value to 'log_pattern'
+                      set #pattern-target-select.value to 'summary'
                     end|]
               ]
             datalist_ [id_ "pattern-field-list"]

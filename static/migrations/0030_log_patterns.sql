@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS apis.log_patterns (
 
     log_pattern             TEXT NOT NULL,
     pattern_hash            TEXT NOT NULL,
-    source_field            TEXT NOT NULL DEFAULT 'body',
+    source_field            TEXT NOT NULL DEFAULT 'summary',
 
     service_name            TEXT,
     log_level               TEXT,
@@ -38,7 +38,6 @@ CREATE TABLE IF NOT EXISTS apis.log_patterns (
 
 SELECT manage_updated_at('apis.log_patterns');
 
-CREATE INDEX IF NOT EXISTS idx_log_patterns_project ON apis.log_patterns(project_id);
 CREATE INDEX IF NOT EXISTS idx_log_patterns_project_state ON apis.log_patterns(project_id, state);
 CREATE INDEX IF NOT EXISTS idx_log_patterns_last_seen ON apis.log_patterns(project_id, last_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_log_patterns_service ON apis.log_patterns(project_id, service_name);
@@ -68,9 +67,20 @@ ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS target_hash TEXT NOT NULL DEFAU
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS environment TEXT;
 ALTER TABLE apis.issues ALTER COLUMN service DROP NOT NULL;
 
-CREATE INDEX IF NOT EXISTS idx_logs_spans_log_pattern
-  ON otel_logs_and_spans(project_id, log_pattern, timestamp DESC)
-  WHERE log_pattern IS NOT NULL;
+ALTER TABLE otel_logs_and_spans DROP COLUMN IF EXISTS log_pattern;
+ALTER TABLE otel_logs_and_spans DROP COLUMN IF EXISTS summary_pattern;
+DROP INDEX IF EXISTS idx_logs_spans_log_pattern;
+DROP INDEX IF EXISTS idx_logs_spans_summary_pattern;
+
+CREATE TABLE IF NOT EXISTS apis.log_pattern_hourly_stats (
+    project_id    UUID NOT NULL REFERENCES projects.projects(id) ON DELETE CASCADE,
+    pattern_hash  TEXT NOT NULL,
+    hour_bucket   TIMESTAMPTZ NOT NULL,
+    event_count   BIGINT NOT NULL DEFAULT 0,
+    PRIMARY KEY (project_id, pattern_hash, hour_bucket)
+);
+CREATE INDEX IF NOT EXISTS idx_lp_hourly_stats_project_hour
+  ON apis.log_pattern_hourly_stats(project_id, hour_bucket DESC);
 
 CREATE INDEX IF NOT EXISTS idx_log_patterns_baseline_established
   ON apis.log_patterns(project_id) WHERE baseline_state = 'established';

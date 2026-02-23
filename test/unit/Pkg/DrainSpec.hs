@@ -17,6 +17,9 @@ testTimeOffset seconds = addUTCTime (fromIntegral seconds) testTime
 
 
 
+groupTemplate :: (a, b, c) -> b
+groupTemplate (_, t, _) = t
+
 processNewLog :: Text -> Text -> UTCTime -> DrainTree -> DrainTree
 processNewLog logId logContent now tree = do
   let tokensVec = V.fromList $ words $ Utils.replaceAllFormats logContent
@@ -37,21 +40,21 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           updatedTree = processBatch (V.fromList basicHttpLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
       length logGroups `shouldBe` 3
-      let patterns = V.map (\(_, template, _) -> template) logGroups
+      let patterns = V.map groupTemplate logGroups
       V.toList patterns `shouldMatchList`
         [ "DELETE /api/users/{integer} HTTP/{float} {integer}"
         , "POST /api/users HTTP/{float} {integer}"
         , "GET <*> HTTP/{float} {integer}"
         ]
-      let log1 = V.find (\(_, tmp, _) -> tmp ==  "GET <*> HTTP/{float} {integer}") logGroups
+      let log1 = V.find (\g -> groupTemplate g ==  "GET <*> HTTP/{float} {integer}") logGroups
       case log1 of
         Just (_, _, lg) -> lg `shouldBe` V.fromList ["log5", "log3", "log2", "log1"]
         Nothing -> error "log1 pattern not found"
-      let log2 = V.find (\(_, tmp, _) -> tmp ==  "POST /api/users HTTP/{float} {integer}") logGroups
+      let log2 = V.find (\g -> groupTemplate g ==  "POST /api/users HTTP/{float} {integer}") logGroups
       case log2 of
         Just (_, _, lg) -> lg `shouldBe` V.fromList ["log4"]
         Nothing -> error "log2 pattern not found"
-      let log3 = V.find (\(_, tmp, _) -> tmp ==  "DELETE /api/users/{integer} HTTP/{float} {integer}") logGroups
+      let log3 = V.find (\g -> groupTemplate g ==  "DELETE /api/users/{integer} HTTP/{float} {integer}") logGroups
       case log3 of
         Just (_, _, lg) -> lg `shouldBe` V.fromList ["log6"]
         Nothing -> error "log3 pattern not found"
@@ -61,21 +64,21 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       let initialTree = emptyDrainTree
           updatedTree = processBatch (V.fromList databaseLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
-      let patterns = V.map (\(_, template, _) -> template) logGroups
+      let patterns = V.map groupTemplate logGroups
       V.toList patterns `shouldMatchList`
         [ "Connected to database <*>"
         , "Database query executed in {integer}ms"
         , "Connection pool exhausted max={integer} active={integer}"
         ]
-      let log1 = V.find (\(_, tmp, _) -> tmp == "Connected to database <*>") logGroups
+      let log1 = V.find (\g -> groupTemplate g == "Connected to database <*>") logGroups
       case log1 of
         Just (_, _, lg) -> lg `shouldBe` V.fromList ["db3", "db2", "db1"]
         Nothing -> error "db1 pattern not found"
-      let log2 = V.find (\(_, tmp, _) -> tmp == "Database query executed in {integer}ms") logGroups
+      let log2 = V.find (\g -> groupTemplate g == "Database query executed in {integer}ms") logGroups
       case log2 of
         Just (_, _, lg) -> lg `shouldBe` V.fromList ["db6", "db5", "db4"]
         Nothing -> error "db2 pattern not found"
-      let log3 = V.find (\(_, tmp, _) -> tmp == "Connection pool exhausted max={integer} active={integer}") logGroups
+      let log3 = V.find (\g -> groupTemplate g == "Connection pool exhausted max={integer} active={integer}") logGroups
       case log3 of
           Just (_, _, lg) -> lg `shouldBe` V.fromList ["db8", "db7"]
           Nothing -> error "db3 pattern not found"
@@ -86,26 +89,26 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           updatedTree = processBatch (V.fromList startupLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
       length logGroups `shouldBe` 4
-      let patterns = V.map (\(_, template, _) -> template) logGroups
+      let patterns = V.map groupTemplate logGroups
       V.toList patterns `shouldMatchList`
         [ "Initializing Redis connection <*>"
         , "Application ready to serve requests"
         , "Loading configuration from <*>"
         , "Starting application on port {integer}"
         ]
-      let log1 = V.find (\(_, tmp, _) -> tmp == "Starting application on port {integer}") logGroups
+      let log1 = V.find (\g -> groupTemplate g == "Starting application on port {integer}") logGroups
       case log1 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["start3", "start2", "start1"]
         Nothing -> error "start1 pattern not found"
-      let log2 = V.find (\(_, tmp, _) -> tmp == "Loading configuration from <*>") logGroups
+      let log2 = V.find (\g -> groupTemplate g == "Loading configuration from <*>") logGroups
       case log2 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList`  ["start4", "start5"]
         Nothing -> error "start4 pattern not found"
-      let log3 = V.find (\(_, tmp, _) -> tmp == "Initializing Redis connection <*>") logGroups
+      let log3 = V.find (\g -> groupTemplate g == "Initializing Redis connection <*>") logGroups
       case log3 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["start6", "start7"]
         Nothing -> error "start6 pattern not found"
-      let log4 = V.find (\(_, tmp, _) -> tmp == "Application ready to serve requests") logGroups
+      let log4 = V.find (\g -> groupTemplate g == "Application ready to serve requests") logGroups
       case log4 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["start9", "start8"]
         Nothing -> error "start8 pattern not found"
@@ -116,26 +119,26 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           updatedTree = processBatch (V.fromList errorLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
       length logGroups `shouldBe` 4
-      let patterns = V.map (\(_, template, _) -> template) logGroups
+      let patterns = V.map groupTemplate logGroups
       V.toList patterns `shouldMatchList`
         [ "ERROR Failed to authenticate user {email}"
         , "ERROR Database connection timeout after {integer}ms"
         , "WARN Retrying failed request attempt {integer} of {integer}"
         , "FATAL Out of memory heap size {integer}MB exceeded"
         ]
-      let log1 = V.find (\(_, tmp, _) -> tmp == "WARN Retrying failed request attempt {integer} of {integer}") logGroups
+      let log1 = V.find (\g -> groupTemplate g == "WARN Retrying failed request attempt {integer} of {integer}") logGroups
       case log1 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["err7", "err6", "err5"]
         Nothing -> error "err1 pattern not found"
-      let log2 = V.find (\(_, tmp, _) -> tmp == "ERROR Failed to authenticate user {email}") logGroups
+      let log2 = V.find (\g -> groupTemplate g == "ERROR Failed to authenticate user {email}") logGroups
       case log2 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["err2", "err1"]
         Nothing -> error "err2 pattern not found"
-      let log3 = V.find (\(_, tmp, _) -> tmp == "ERROR Database connection timeout after {integer}ms") logGroups
+      let log3 = V.find (\g -> groupTemplate g == "ERROR Database connection timeout after {integer}ms") logGroups
       case log3 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["err4", "err3"]
         Nothing -> error "err3 pattern not found"
-      let log4 = V.find (\(_, tmp, _) -> tmp == "FATAL Out of memory heap size {integer}MB exceeded") logGroups
+      let log4 = V.find (\g -> groupTemplate g == "FATAL Out of memory heap size {integer}MB exceeded") logGroups
       case log4 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["err9", "err8"]
         Nothing -> error "pattern not found"
@@ -145,23 +148,23 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       let initialTree = emptyDrainTree
           updatedTree = processBatch (V.fromList timestampedLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
-      let patterns = V.map (\(_, template, _) -> template) logGroups
+      let patterns = V.map groupTemplate logGroups
       V.toList patterns `shouldMatchList`
         [  "{YYYY-MM-DDThh:mm:ss.sTZD} INFO User <*> <*> <*>"
         , "{YYYY-MM-DDThh:mm:ss.sTZD} ERROR Invalid token provided <*>"
         , "{YYYY-MM-DDThh:mm:ss.sTZD} WARN Rate limit exceeded client={ipv4}"
         ]
-      let log1 = V.find (\(_, tmp, _) -> tmp == "{YYYY-MM-DDThh:mm:ss.sTZD} INFO User <*> <*> <*>") logGroups
+      let log1 = V.find (\g -> groupTemplate g == "{YYYY-MM-DDThh:mm:ss.sTZD} INFO User <*> <*> <*>") logGroups
       case log1 of
         Just (_, _, lg) -> do
           "ts1" `V.elem` lg `shouldBe` True
           "ts2" `V.elem` lg `shouldBe` True
         Nothing -> error "ts1 pattern not found"
-      let log3 = V.find (\(_, tmp, _) -> tmp == "{YYYY-MM-DDThh:mm:ss.sTZD} ERROR Invalid token provided <*>") logGroups
+      let log3 = V.find (\g -> groupTemplate g == "{YYYY-MM-DDThh:mm:ss.sTZD} ERROR Invalid token provided <*>") logGroups
       case log3 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["ts5", "ts6"]
         Nothing -> error "ts5 pattern not found"
-      let log4 = V.find (\(_, tmp, _) -> tmp == "{YYYY-MM-DDThh:mm:ss.sTZD} WARN Rate limit exceeded client={ipv4}") logGroups
+      let log4 = V.find (\g -> groupTemplate g == "{YYYY-MM-DDThh:mm:ss.sTZD} WARN Rate limit exceeded client={ipv4}") logGroups
       case log4 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["ts7", "ts8"]
         Nothing -> error "ts7 pattern not found"
@@ -170,25 +173,53 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       let initialTree = emptyDrainTree
           updatedTree = processBatch (V.fromList microserviceLogs) (testTimeOffset 0) initialTree
           logGroups = getAllLogGroups updatedTree
-      let patterns = V.map (\(_, template, _) -> template) logGroups
+      let patterns = V.map groupTemplate logGroups
       V.toList patterns `shouldMatchList`
         [ "payment-service processing payment amount={float} <*>"
         , "auth-service JWT validation successful for user <*>"
         , "user-service database query SELECT * FROM users WHERE id={integer} took {integer}ms"
         , "user-service received request <*> <*> <*>"
         ]
-      let log1 = V.find (\(_, tmp, _) -> tmp == "user-service received request <*> <*> <*>" ) logGroups
+      let log1 = V.find (\g -> groupTemplate g == "user-service received request <*> <*> <*>" ) logGroups
       case log1 of
         Just (_, _, lg) ->  V.toList lg `shouldMatchList` ["svc2", "svc1"]
         Nothing -> error "svc1 pattern not found"
-      let log3 = V.find (\(_, tmp, _) -> tmp == "user-service database query SELECT * FROM users WHERE id={integer} took {integer}ms") logGroups
+      let log3 = V.find (\g -> groupTemplate g == "user-service database query SELECT * FROM users WHERE id={integer} took {integer}ms") logGroups
       case log3 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["svc4", "svc5"]
         Nothing -> error "svc4 pattern not found"
-      let log4 = V.find (\(_, tmp, _) -> tmp == "auth-service JWT validation successful for user <*>") logGroups
+      let log4 = V.find (\g -> groupTemplate g == "auth-service JWT validation successful for user <*>") logGroups
       case log4 of
         Just (_, _, lg) -> V.toList lg `shouldMatchList` ["svc7", "svc8"]
         Nothing -> error "svc7 pattern not found"
+
+  describe "generateSummaryDrainTokens" $ do
+    it "should preserve markup prefix and normalize value after ⇒" $ do
+      let tokens = V.toList $ generateSummaryDrainTokens "status_code;badge-2xx⇒200"
+      tokens `shouldBe` ["status_code;badge-2xx⇒{integer}"]
+
+    it "should normalize plain tokens normally" $ do
+      let tokens = V.toList $ generateSummaryDrainTokens "user logged in at 192.168.1.1"
+      tokens `shouldBe` ["user", "logged", "in", "at", "{ipv4}"]
+
+    it "should handle mixed markup and plain tokens" $ do
+      let tokens = V.toList $ generateSummaryDrainTokens "method;bold⇒GET path;code⇒/api/users/123 status_code;badge-2xx⇒200"
+      tokens `shouldBe` ["method;bold⇒GET", "path;code⇒/api/users/{integer}", "status_code;badge-2xx⇒{integer}"]
+
+    it "should cluster summaries with same structure" $ do
+      let tree0 = emptyDrainTree
+          processSum logId content now tree =
+            let tokens = generateSummaryDrainTokens content
+                tokenCount = V.length tokens
+                firstToken = if V.null tokens then "" else V.head tokens
+             in if tokenCount == 0 then tree else updateTreeWithLog tree tokenCount firstToken tokens logId True content now
+          tree1 = processSum "s1" "method;bold⇒GET path;code⇒/api/users/123 status_code;badge-2xx⇒200" testTime tree0
+          tree2 = processSum "s2" "method;bold⇒GET path;code⇒/api/users/456 status_code;badge-2xx⇒201" testTime tree1
+          tree3 = processSum "s3" "method;bold⇒GET path;code⇒/api/orders/789 status_code;badge-2xx⇒200" testTime tree2
+          logGroups = getAllLogGroups tree3
+          patterns = V.toList $ V.map groupTemplate logGroups
+      length logGroups `shouldBe` 1
+      patterns `shouldMatchList` ["method;bold⇒GET <*> status_code;badge-2xx⇒{integer}"]
 
 basicHttpLogs :: [(Text, Text)]
 basicHttpLogs = 

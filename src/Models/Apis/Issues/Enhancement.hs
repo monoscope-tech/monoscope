@@ -124,18 +124,28 @@ buildTitlePrompt issue =
             Actual value: {d.actualValue}
             |]
           _ -> "Generate a concise title for this query alert."
-        Issues.LogPattern ->
-          [fmtTrim|
-          Generate a concise title for this log pattern issue.
-          Title: {issue.title}
-          Service: {fromMaybe "unknown-service" issue.service}
-          |]
-        Issues.LogPatternRateChange ->
-          [fmtTrim|
-          Generate a concise title for this log pattern rate change.
-          Title: {issue.title}
-          Service: {fromMaybe "unknown-service" issue.service}
-          |]
+        Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternData) ->
+            [fmtTrim|
+            Generate a concise title for this new log pattern detection.
+            Log pattern: {d.logPattern}
+            Sample message: {fromMaybe "N/A" d.sampleMessage}
+            Log level: {fromMaybe "unknown" d.logLevel}
+            Service: {fromMaybe "unknown-service" d.serviceName}
+            Occurrences: {d.occurrenceCount}
+            |]
+          _ -> "Generate a concise title for this log pattern. Title: " <> issue.title
+        Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternRateChangeData) ->
+            [fmtTrim|
+            Generate a concise title for this log pattern volume {d.changeDirection}.
+            Log pattern: {d.logPattern}
+            Current rate: {show (round d.currentRatePerHour :: Int)}/hr
+            Baseline: {show (round d.baselineMean :: Int)}/hr
+            Change: {show (round d.changePercent :: Int)}%
+            Service: {fromMaybe "unknown-service" d.serviceName}
+            |]
+          _ -> "Generate a concise title for this log pattern rate change. Title: " <> issue.title
 
       systemPrompt =
         unlines
@@ -190,18 +200,34 @@ buildDescriptionPrompt issue =
             Triggered at: {show d.triggeredAt}
             |]
           _ -> "Describe this query alert."
-        Issues.LogPattern ->
-          [fmtTrim|
-          Describe this log pattern issue and its implications.
-          Title: {issue.title}
-          Service: {fromMaybe "unknown-service" issue.service}
-          |]
-        Issues.LogPatternRateChange ->
-          [fmtTrim|
-          Describe this log pattern rate change and its implications.
-          Title: {issue.title}
-          Service: {fromMaybe "unknown-service" issue.service}
-          |]
+        Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternData) ->
+            [fmtTrim|
+            Describe this new log pattern and its implications.
+            Log pattern: {d.logPattern}
+            Sample message: {fromMaybe "N/A" d.sampleMessage}
+            Log level: {fromMaybe "unknown" d.logLevel}
+            Service: {fromMaybe "unknown-service" d.serviceName}
+            Source: {fromMaybe "body" d.sourceField}
+            Occurrences: {d.occurrenceCount}
+            First seen: {show d.firstSeenAt}
+            |]
+          _ -> "Describe this log pattern issue. Title: " <> issue.title
+        Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
+          AE.Success (d :: Issues.LogPatternRateChangeData) ->
+            [fmtTrim|
+            Describe this log pattern volume {d.changeDirection} and its implications.
+            Log pattern: {d.logPattern}
+            Sample message: {fromMaybe "N/A" d.sampleMessage}
+            Current rate: {show (round d.currentRatePerHour :: Int)}/hr
+            Baseline mean: {show (round d.baselineMean :: Int)}/hr
+            Baseline stddev: {show (round d.baselineStddev :: Int)}/hr
+            Z-score: {show (round d.zScore :: Int)} standard deviations
+            Change: {show (round d.changePercent :: Int)}%
+            Service: {fromMaybe "unknown-service" d.serviceName}
+            Log level: {fromMaybe "unknown" d.logLevel}
+            |]
+          _ -> "Describe this log pattern rate change. Title: " <> issue.title
 
       systemPrompt =
         [text|

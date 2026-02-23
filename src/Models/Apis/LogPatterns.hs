@@ -10,7 +10,8 @@ module Models.Apis.LogPatterns (
   upsertLogPattern,
   updateLogPatternStats,
   updateBaseline,
-  -- Pattern stats from otel_logs_and_spans
+  -- Hourly stats
+  upsertHourlyStat,
   PatternStats (..),
   getPatternStats,
   BatchPatternStats (..),
@@ -123,16 +124,16 @@ getLogPatternByHash pid hash = listToMaybe <$> PG.query (_selectWhere @LogPatter
 
 
 -- | Acknowledge log patterns
-acknowledgeLogPatterns :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
-acknowledgeLogPatterns uid patternHashes
+acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Users.UserId -> V.Vector Text -> Eff es Int64
+acknowledgeLogPatterns pid uid patternHashes
   | V.null patternHashes = pure 0
-  | otherwise = PG.execute q (uid, patternHashes)
+  | otherwise = PG.execute q (uid, pid, patternHashes)
   where
     q =
       [sql|
         UPDATE apis.log_patterns
         SET state = 'acknowledged', acknowledged_by = ?, acknowledged_at = NOW()
-        WHERE pattern_hash = ANY(?)
+        WHERE project_id = ? AND pattern_hash = ANY(?)
       |]
 
 
@@ -181,11 +182,22 @@ updateBaseline pid patHash bState hourlyMean hourlyStddev samples =
       |]
 
 
--- | Stats for a log pattern from otel_logs_and_spans
+-- | Upsert hourly event count for a pattern into the pre-aggregated stats table
+upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> UTCTime -> Int64 -> Eff es Int64
+upsertHourlyStat pid patHash hourBucket count =
+  PG.execute
+    [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, pattern_hash, hour_bucket, event_count)
+        VALUES (?, ?, date_trunc('hour', ?::timestamptz), ?)
+        ON CONFLICT (project_id, pattern_hash, hour_bucket)
+        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
+    (pid, patHash, hourBucket, count)
+
+
+-- | Stats for a log pattern from hourly stats table
 -- Using median + MAD instead of mean + stddev for robustness against outliers/spikes
 data PatternStats = PatternStats
-  { hourlyMedian :: Double -- Actually stores median for robustness
-  , hourlyMADScaled :: Double -- Actually stores MAD * 1.4826 (scaled to be comparable to stddev)
+  { hourlyMedian :: Double
+  , hourlyMADScaled :: Double
   , totalHours :: Int
   , totalEvents :: Int
   }
@@ -193,43 +205,33 @@ data PatternStats = PatternStats
   deriving anyclass (FromRow)
 
 
--- | Get pattern stats from otel_logs_and_spans
--- Returns median and MAD (Median Absolute Deviation) for robust baseline calculation
+-- | Get pattern stats from hourly stats table
 getPatternStats :: DB es => Projects.ProjectId -> Text -> Int -> Eff es (Maybe PatternStats)
-getPatternStats pid pattern' hoursBack = listToMaybe <$> PG.query q (pid, pattern', hoursBack)
+getPatternStats pid patHash hoursBack = listToMaybe <$> PG.query q (pid, patHash, hoursBack)
   where
     q =
       [sql|
         WITH hourly_counts AS (
-          SELECT
-            date_trunc('hour', timestamp) AS hour_start,
-            COUNT(*) AS event_count
-          FROM otel_logs_and_spans
-          WHERE project_id = ?::text
-            AND log_pattern = ?
-            AND timestamp >= NOW() - INTERVAL '1 hour' * ?
-          GROUP BY date_trunc('hour', timestamp)
+          SELECT hour_bucket, event_count FROM apis.log_pattern_hourly_stats
+          WHERE project_id = ? AND pattern_hash = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ?
         ),
         median_calc AS (
-          SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
-          FROM hourly_counts
+          SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val FROM hourly_counts
         ),
         mad_calc AS (
           SELECT PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
           FROM hourly_counts hc, median_calc mc
         )
         SELECT
-          COALESCE(mc.median_val, 0)::FLOAT AS hourly_median,
-          COALESCE(mad.mad_val * 1.4826, 0)::FLOAT AS hourly_mad_scaled,
-          (SELECT COUNT(*)::INT FROM hourly_counts) AS total_hours,
-          (SELECT COALESCE(SUM(event_count), 0)::INT FROM hourly_counts) AS total_events
+          COALESCE(mc.median_val, 0)::FLOAT, COALESCE(mad.mad_val * 1.4826, 0)::FLOAT,
+          (SELECT COUNT(*)::INT FROM hourly_counts), (SELECT COALESCE(SUM(event_count), 0)::INT FROM hourly_counts)
         FROM median_calc mc, mad_calc mad
       |]
 
 
--- | Batch version of getPatternStats: computes median + MAD for all patterns in one query
+-- | Batch version: computes median + MAD for all patterns in one query
 data BatchPatternStats = BatchPatternStats
-  { logPattern :: Text
+  { patternHash :: Text
   , hourlyMedian :: Double
   , hourlyMADScaled :: Double
   , totalHours :: Int
@@ -245,43 +247,37 @@ getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
     q =
       [sql|
         WITH hourly_counts AS (
-          SELECT log_pattern, date_trunc('hour', timestamp) AS hour_start, COUNT(*) AS event_count
-          FROM otel_logs_and_spans
-          WHERE project_id = ?::text AND log_pattern IS NOT NULL AND timestamp >= NOW() - INTERVAL '1 hour' * ?
-          GROUP BY log_pattern, date_trunc('hour', timestamp)
+          SELECT pattern_hash, hour_bucket, event_count FROM apis.log_pattern_hourly_stats
+          WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ?
         ),
         median_calc AS (
-          SELECT log_pattern, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
-          FROM hourly_counts GROUP BY log_pattern
+          SELECT pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
+          FROM hourly_counts GROUP BY pattern_hash
         ),
         mad_calc AS (
-          SELECT hc.log_pattern, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
-          FROM hourly_counts hc JOIN median_calc mc ON hc.log_pattern = mc.log_pattern GROUP BY hc.log_pattern
-        )
+          SELECT hc.pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - mc.median_val)) AS mad_val
+          FROM hourly_counts hc JOIN median_calc mc ON hc.pattern_hash = mc.pattern_hash GROUP BY hc.pattern_hash
+        ),
         totals AS (
-          SELECT log_pattern, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::INT AS total_events
-          FROM hourly_counts GROUP BY log_pattern
+          SELECT pattern_hash, COUNT(*)::INT AS total_hours, COALESCE(SUM(event_count), 0)::INT AS total_events
+          FROM hourly_counts GROUP BY pattern_hash
         )
-        SELECT
-          mc.log_pattern,
-          COALESCE(mc.median_val, 0)::FLOAT AS hourly_median,
-          COALESCE(mad.mad_val * 1.4826, 0)::FLOAT AS hourly_mad_scaled,
+        SELECT mc.pattern_hash, COALESCE(mc.median_val, 0)::FLOAT, COALESCE(mad.mad_val * 1.4826, 0)::FLOAT,
           t.total_hours, t.total_events
         FROM median_calc mc
-        JOIN mad_calc mad ON mc.log_pattern = mad.log_pattern
-        JOIN totals t ON mc.log_pattern = t.log_pattern
+        JOIN mad_calc mad ON mc.pattern_hash = mad.pattern_hash
+        JOIN totals t ON mc.pattern_hash = t.pattern_hash
       |]
 
 
--- | Get current hour count for a pattern
+-- | Get current hour count for a pattern from hourly stats table
 getCurrentHourPatternCount :: DB es => Projects.ProjectId -> Text -> Eff es Int
-getCurrentHourPatternCount pid pattern' =
-  maybe 0 fromOnly
-    . listToMaybe
+getCurrentHourPatternCount pid patHash =
+  maybe 0 fromOnly . listToMaybe
     <$> PG.query
-      [sql| SELECT COUNT(*)::INT FROM otel_logs_and_spans
-          WHERE project_id = ?::text AND log_pattern = ? AND timestamp >= date_trunc('hour', NOW()) |]
-      (pid, pattern')
+      [sql| SELECT COALESCE(event_count, 0)::INT FROM apis.log_pattern_hourly_stats
+          WHERE project_id = ? AND pattern_hash = ? AND hour_bucket = date_trunc('hour', NOW()) |]
+      (pid, patHash)
 
 
 -- | Log pattern with current rate (for batch spike detection)
@@ -300,35 +296,22 @@ data LogPatternWithRate = LogPatternWithRate
   deriving anyclass (FromRow)
 
 
--- | Get all patterns with their current hour counts (only body patterns for now)
+-- | Get all patterns with their current hour counts (all pattern types participate in spike detection)
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid =
   PG.query q (pid, pid)
   where
     q =
       [sql|
-        SELECT
-          lp.id,
-          lp.project_id,
-          lp.log_pattern,
-          lp.pattern_hash,
-          lp.source_field,
-          lp.baseline_state,
-          lp.baseline_volume_hourly_mean,
-          lp.baseline_volume_hourly_stddev,
-          COALESCE(counts.current_count, 0)::INT AS current_hour_count
+        SELECT lp.id, lp.project_id, lp.log_pattern, lp.pattern_hash, lp.source_field,
+          lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_stddev,
+          COALESCE(hs.event_count, 0)::INT AS current_hour_count
         FROM apis.log_patterns lp
-        LEFT JOIN (
-          SELECT log_pattern, COUNT(*) AS current_count
-          FROM otel_logs_and_spans
-          WHERE project_id = ?
-            AND timestamp >= date_trunc('hour', NOW())
-            AND log_pattern IS NOT NULL
-          GROUP BY log_pattern
-        ) counts ON counts.log_pattern = lp.log_pattern
+        LEFT JOIN apis.log_pattern_hourly_stats hs
+          ON hs.project_id = lp.project_id AND hs.pattern_hash = lp.pattern_hash
+          AND hs.hour_bucket = date_trunc('hour', NOW())
         WHERE lp.project_id = ?
           AND lp.state != 'ignored' AND lp.baseline_state = 'established'
-          AND lp.source_field = 'body'
       |]
 
 

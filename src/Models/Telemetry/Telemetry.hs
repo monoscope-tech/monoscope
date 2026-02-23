@@ -947,7 +947,7 @@ instance FromRow OtelLogsAndSpans where
   fromRow = do
     -- Order from SELECT queries in this file:
     -- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-    -- hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date, log_pattern, summary_pattern
+    -- hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
     project_id' <- field
     id' <- field
     timestamp' <- field

@@ -4,6 +4,7 @@ module Pkg.Drain (
   emptyDrainTree,
   updateTreeWithLog,
   generateDrainTokens,
+  generateSummaryDrainTokens,
   getAllLogGroups,
 ) where
 
@@ -255,3 +256,15 @@ generateDrainTokens content =
    in if looksLikeJson replaced
         then V.fromList (tokenizeJsonLike replaced)
         else V.fromList $ words replaced
+
+
+-- | Markup-aware tokenizer for summary fields that preserves `field;style⇒value` format.
+-- Splits by words (avoids looksLikeJson false positives on markup tokens).
+-- For tokens containing ⇒: preserves the prefix, normalizes only the value after ⇒.
+generateSummaryDrainTokens :: T.Text -> V.Vector T.Text
+generateSummaryDrainTokens content = V.fromList $ map normalizeMarkupToken $ words content
+  where
+    normalizeMarkupToken tok = case T.breakOn "⇒" tok of
+      (prefix, rest)
+        | not (T.null rest) -> prefix <> "⇒" <> replaceAllFormats (T.drop 1 rest)
+        | otherwise -> replaceAllFormats tok

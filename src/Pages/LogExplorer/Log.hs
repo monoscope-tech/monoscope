@@ -726,7 +726,7 @@ logChartWidget pid vizType targetPattern =
     , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     }
   where
-    patternTarget = fromMaybe "log_pattern" targetPattern
+    patternTarget = fromMaybe "summary" targetPattern
     nm = fromMaybe "Log" $ viaNonEmpty head $ T.splitOn "_" patternTarget
     (tp, query, title) = case vizType of
       Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
@@ -1164,7 +1164,7 @@ alertConfigurationForm_ project alertM teams = do
 patternList :: V.Vector (Text, Int) -> Projects.ProjectId -> Int -> Bool -> Maybe Text -> Html ()
 patternList patterns pid skip onlyRows targetPattern = do
   let total = V.foldl' (\acc (_, c) -> acc + c) 0 patterns
-      url = "/p/" <> pid.toText <> "/log_explorer?viz_type=patterns&pattern_skip=" <> show skip <> "&pattern_target=" <> fromMaybe "log_pattern" targetPattern
+      url = "/p/" <> pid.toText <> "/log_explorer?viz_type=patterns&pattern_skip=" <> show skip <> "&pattern_target=" <> fromMaybe "summary" targetPattern
   if onlyRows
     then do
       forM_ patterns $ \p -> renderPattern p total pid
