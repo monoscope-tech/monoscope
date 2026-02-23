@@ -8,7 +8,6 @@ module Models.Apis.LogPatterns (
   acknowledgeLogPatterns,
   UpsertPattern (..),
   upsertLogPattern,
-  updateBaseline,
   updateBaselineBatch,
   -- Hourly stats
   upsertHourlyStat,
@@ -151,22 +150,6 @@ upsertLogPattern up =
     up
 
 
-updateBaseline :: DB es => Projects.ProjectId -> Text -> BaselineState -> Double -> Double -> Int -> Eff es Int64
-updateBaseline pid patHash bState hourlyMean hourlyMad samples =
-  PG.execute q (bState, hourlyMean, hourlyMad, samples, pid, patHash)
-  where
-    q =
-      [sql|
-        UPDATE apis.log_patterns
-        SET baseline_state = ?,
-            baseline_volume_hourly_mean = ?,
-            baseline_volume_hourly_mad = ?,
-            baseline_samples = ?,
-            baseline_updated_at = NOW()
-        WHERE project_id = ? AND pattern_hash = ?
-      |]
-
-
 -- | Bulk update baselines for multiple patterns in a single query
 updateBaselineBatch :: DB es => Projects.ProjectId -> V.Vector (Text, BaselineState, Double, Double, Int) -> Eff es Int64
 updateBaselineBatch pid rows
@@ -198,7 +181,8 @@ upsertHourlyStat pid sourceField patHash hourBucket count =
     (pid, sourceField, patHash, hourBucket, count)
 
 
--- | Batch: computes median + MAD for all patterns in one query
+-- | Batch: computes median + MAD for all patterns in one query.
+-- Joins on (source_field, pattern_hash) — pattern_hash alone is NOT unique across source fields.
 data BatchPatternStats = BatchPatternStats
   { sourceField :: Text
   , patternHash :: Text

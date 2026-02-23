@@ -1,5 +1,6 @@
 module Pkg.Drain (
   DrainTree (..),
+  DrainResult (..),
   defaultDrainConfig,
   emptyDrainTree,
   updateTreeWithLog,
@@ -208,22 +209,31 @@ mergeTemplates template1 template2 wildcardToken =
 -- Update log group with new template and log information
 updateLogGroupWithTemplate :: LogGroup -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> LogGroup
 updateLogGroupWithTemplate group' newTemplate logId sampleContent now =
-  group'
+  LogGroup
     { template = newTemplate
     , templateStr = templateText newTemplate
-    , exampleLog = fromMaybe (exampleLog group') sampleContent
-    , logIds = V.cons logId (logIds group')
-    , frequency = frequency group' + 1
+    , exampleLog = fromMaybe group'.exampleLog sampleContent
+    , logIds = V.cons logId group'.logIds
+    , frequency = group'.frequency + 1
+    , firstSeen = group'.firstSeen
     , lastSeen = now
     }
 
 
-getAllLogGroups :: DrainTree -> V.Vector (Text, Text, V.Vector Text)
+data DrainResult = DrainResult
+  { exampleLog :: Text
+  , templateStr :: Text
+  , logIds :: V.Vector Text
+  }
+  deriving (Generic, Show)
+
+
+getAllLogGroups :: DrainTree -> V.Vector DrainResult
 getAllLogGroups tree =
   let levelOnes = children tree
       levelTwos = V.concatMap nodes levelOnes
       allLogGroups = V.concatMap logGroups levelTwos
-   in V.map (\grp -> (grp.exampleLog, templateStr grp, logIds grp)) allLogGroups
+   in V.map (\grp -> DrainResult{exampleLog = grp.exampleLog, templateStr = grp.templateStr, logIds = grp.logIds}) allLogGroups
 
 
 looksLikeJson :: T.Text -> Bool

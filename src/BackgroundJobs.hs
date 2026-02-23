@@ -17,7 +17,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
-import Data.Time.Clock (diffUTCTime, nominalDay)
+import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -521,18 +521,18 @@ processPatterns events pid scheduledTime since = do
     unless (V.null newPatterns)
       $ Log.logInfo "Extracted summary patterns" ("count", AE.toJSON $ V.length newPatterns)
 
-    forM_ newPatterns \(sampleMsg, patternTxt, ids) -> do
-      let filteredIds = V.filter (/= "") ids
+    forM_ newPatterns \dp -> do
+      let filteredIds = V.filter (/= "") dp.logIds
           eventCount = fromIntegral $ V.length filteredIds :: Int64
-      unless (V.null filteredIds || T.null patternTxt) do
+      unless (V.null filteredIds || T.null dp.templateStr) do
         let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) $ do
               logId <- filteredIds V.!? 0
               HM.lookup logId eventMeta
-            patternHash = toXXHash patternTxt
+            patternHash = toXXHash dp.templateStr
             hashTag = "pat:" <> patternHash
         -- Append pattern hash to hashes array on matched event rows
         void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp > ? AND id::text = ANY(?) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
-        void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = patternTxt, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just sampleMsg, eventCount}
+        void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}
         void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
 
 
@@ -1634,15 +1634,15 @@ calculateLogPatternBaselines pid = do
   let statsMap = HM.fromList $ map (\s -> ((s.sourceField, s.patternHash), s)) allStats
       pageSize = 1000
       -- A pattern is "established" if it's high-volume or old enough for reliable baselines
-      minMedianForEstablished = 100 -- events/hour
-      minAgeDaysForEstablished = 14 -- days
+      minMedianForEstablished = 100 :: Double -- events/hour
+      minAgeDaysForEstablished = 14 :: Double -- days
       isEstablished stats ageDays = stats.hourlyMedian > minMedianForEstablished || ageDays >= minAgeDaysForEstablished
       go offset totalProcessed totalEstablished = do
         patterns <- LogPatterns.getLogPatterns pid pageSize offset
-        let patternAge lp = diffUTCTime now (zonedTimeToUTC lp.firstSeenAt) / nominalDay
+        let patternAgeDays lp = realToFrac (diffUTCTime now (zonedTimeToUTC lp.firstSeenAt)) / 86400 :: Double
             updates = V.fromList $ flip mapMaybe patterns \lp ->
               HM.lookup (lp.sourceField, lp.patternHash) statsMap <&> \stats ->
-                let est = isEstablished stats (patternAge lp)
+                let est = isEstablished stats (patternAgeDays lp)
                  in (lp.patternHash, bool BSLearning BSEstablished est, stats.hourlyMedian, stats.hourlyMADScaled, stats.totalHours)
             established = V.length $ V.filter (\(_, s, _, _, _) -> s == BSEstablished) updates
         void $ LogPatterns.updateBaselineBatch pid updates
@@ -1663,15 +1663,17 @@ detectLogPatternSpikes pid authCtx = do
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
-  let anomalies = flip mapMaybe patternsWithRates \lpRate ->
+  let zScoreThreshold = 3.0 -- 99.7% confidence interval
+      minAbsoluteDelta = 10 :: Double -- avoids alerting on tiny volumes (e.g. 2→5/hr)
+      anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad)
             | mad > 0 ->
                 let currentRate = fromIntegral lpRate.currentHourCount :: Double
                     zScore = (currentRate - mean) / mad
                     direction
-                      | zScore > 3.0 && currentRate > mean + 10 = Just Issues.Spike
-                      | zScore < -3.0 && currentRate < mean - 10 = Just Issues.Drop
+                      | zScore > zScoreThreshold && currentRate > mean + minAbsoluteDelta = Just Issues.Spike
+                      | zScore < negate zScoreThreshold && currentRate < mean - minAbsoluteDelta = Just Issues.Drop
                       | otherwise = Nothing
                  in direction <&> \dir -> (lpRate, currentRate, mean, mad, dir)
           _ -> Nothing
@@ -1691,17 +1693,16 @@ detectLogPatternSpikes pid authCtx = do
 processNewLogPattern :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
 processNewLogPattern pid patternHash authCtx = do
   Log.logInfo "Processing new log pattern" (pid, patternHash)
-  -- Skip in low-volume projects: <10k events/week means the project is still onboarding
-  -- and nearly every pattern would be "new", generating noisy issues
-  totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '168 hours' |] (Only pid)
-  if totalEvents < (10000 :: Int64)
-    then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
-    else do
-      patternM <- LogPatterns.getLogPatternByHash pid patternHash
-      whenJust patternM \lp -> do
-        Relude.when (lp.state == LogPatterns.LPSNew) $ do
-          issue <- Issues.createLogPatternIssue pid lp
-          Issues.insertIssue issue
-          liftIO $ withResource authCtx.jobsPool \conn ->
-            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-          Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
+  patternM <- LogPatterns.getLogPatternByHash pid patternHash
+  whenJust patternM \lp -> Relude.when (lp.state == LogPatterns.LPSNew) $ do
+    -- Skip in low-volume projects: <10k events/week means the project is still onboarding
+    -- and nearly every pattern would be "new", generating noisy issues
+    totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '168 hours' |] (Only pid)
+    if totalEvents < (10000 :: Int64)
+      then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, patternHash, totalEvents)
+      else do
+        issue <- Issues.createLogPatternIssue pid lp
+        Issues.insertIssue issue
+        liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+        Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)

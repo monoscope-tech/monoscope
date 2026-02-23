@@ -447,10 +447,8 @@ acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
 
 
 -- | Create API Change issue from anomalies
-createAPIChangeIssue :: UUIDEff :> es => Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> Eff es Issue
+createAPIChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> V.Vector Anomalies.AnomalyVM -> Eff es Issue
 createAPIChangeIssue projectId endpointHash anomalies = do
-  issueId <- UUIDId <$> genUUID
-
   let firstAnomaly = V.head anomalies
       apiChangeData =
         APIChangeData
@@ -458,134 +456,67 @@ createAPIChangeIssue projectId endpointHash anomalies = do
           , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
           , endpointHost = "Unknown"
           , anomalyHashes = V.map (.targetHash) anomalies
-          , shapeChanges = V.empty -- Simplified for now
-          , formatChanges = V.empty -- Simplified for now
+          , shapeChanges = V.empty
+          , formatChanges = V.empty
           , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
           , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
           , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
           }
-
       breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
       isCritical = breakingChanges > 0
-
-  pure
-    Issue
-      { id = issueId
-      , createdAt = firstAnomaly.createdAt
-      , updatedAt = firstAnomaly.updatedAt
-      , projectId = projectId
-      , issueType = APIChange
-      , sourceType = Nothing
-      , targetHash = endpointHash
-      , endpointHash = endpointHash
-      , acknowledgedAt = Nothing
-      , acknowledgedBy = Nothing
-      , archivedAt = Nothing
-      , title = "API structure has changed"
-      , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
-      , environment = Nothing
-      , critical = isCritical
-      , severity = if isCritical then "critical" else "warning"
-      , recommendedAction = "Review the API changes and update your integration accordingly."
-      , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
-      , issueData = Aeson $ AE.toJSON apiChangeData
-      , requestPayloads = Aeson [] -- Will be populated during enhancement
-      , responsePayloads = Aeson [] -- Will be populated during enhancement
-      , llmEnhancedAt = Nothing
-      , llmEnhancementVersion = Nothing
-      }
+  mkIssue MkIssueOpts
+    { projectId, issueType = APIChange, targetHash = endpointHash
+    , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
+    , critical = isCritical
+    , severity = if isCritical then "critical" else "warning"
+    , title = "API structure has changed"
+    , recommendedAction = "Review the API changes and update your integration accordingly."
+    , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
+    , issueData = apiChangeData
+    }
 
 
 -- | Create Runtime Exception issue
-createRuntimeExceptionIssue :: UUIDEff :> es => Projects.ProjectId -> RequestDumps.ATError -> Eff es Issue
-createRuntimeExceptionIssue projectId atError = do
-  issueId <- UUIDId <$> genUUID
-  let errorZonedTime = utcToZonedTime utc atError.when
-
-  let exceptionData =
-        RuntimeExceptionData
-          { errorType = atError.errorType
-          , errorMessage = atError.message
-          , stackTrace = atError.stackTrace
-          , requestPath = atError.requestPath
-          , requestMethod = atError.requestMethod
-          , occurrenceCount = 1
-          , firstSeen = atError.when
-          , lastSeen = atError.when
-          }
-
-  pure
-    Issue
-      { id = issueId
-      , createdAt = errorZonedTime
-      , updatedAt = errorZonedTime
-      , projectId = projectId
-      , issueType = RuntimeException
-      , sourceType = Nothing
-      , targetHash = fromMaybe "" atError.hash
-      , endpointHash = fromMaybe "" atError.hash
-      , acknowledgedAt = Nothing
-      , acknowledgedBy = Nothing
-      , archivedAt = Nothing
-      , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
-      , service = atError.serviceName
-      , environment = Nothing
-      , critical = True
-      , severity = "critical"
-      , recommendedAction = "Investigate the error and implement a fix."
-      , migrationComplexity = "n/a"
-      , issueData = Aeson $ AE.toJSON exceptionData
-      , requestPayloads = Aeson []
-      , responsePayloads = Aeson []
-      , llmEnhancedAt = Nothing
-      , llmEnhancementVersion = Nothing
-      }
+createRuntimeExceptionIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> RequestDumps.ATError -> Eff es Issue
+createRuntimeExceptionIssue projectId atError =
+  mkIssue MkIssueOpts
+    { projectId, issueType = RuntimeException
+    , targetHash = fromMaybe "" atError.hash
+    , service = atError.serviceName
+    , critical = True, severity = "critical"
+    , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
+    , recommendedAction = "Investigate the error and implement a fix."
+    , migrationComplexity = "n/a"
+    , issueData = RuntimeExceptionData
+        { errorType = atError.errorType
+        , errorMessage = atError.message
+        , stackTrace = atError.stackTrace
+        , requestPath = atError.requestPath
+        , requestMethod = atError.requestMethod
+        , occurrenceCount = 1
+        , firstSeen = atError.when
+        , lastSeen = atError.when
+        }
+    }
 
 
 -- | Create Query Alert issue
 createQueryAlertIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> Eff es Issue
 createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thresholdType = do
-  issueId <- UUIDId <$> genUUID
   now <- Time.currentTime
-  let zonedNow = utcToZonedTime utc now
-
-  let alertData =
-        QueryAlertData
-          { queryId = queryId
-          , queryName = queryName
-          , queryExpression = queryExpr
-          , thresholdValue = threshold
-          , actualValue = actual
-          , thresholdType = thresholdType
-          , triggeredAt = now
-          }
-
-  pure
-    Issue
-      { id = issueId
-      , createdAt = zonedNow
-      , updatedAt = zonedNow
-      , projectId = projectId
-      , issueType = QueryAlert
-      , sourceType = Nothing
-      , targetHash = queryId
-      , endpointHash = ""
-      , acknowledgedAt = Nothing
-      , acknowledgedBy = Nothing
-      , archivedAt = Nothing
-      , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
-      , service = Just "Monitoring"
-      , environment = Nothing
-      , critical = True
-      , severity = "warning"
-      , recommendedAction = "Review the query results and take appropriate action."
-      , migrationComplexity = "n/a"
-      , issueData = Aeson $ AE.toJSON alertData
-      , requestPayloads = Aeson []
-      , responsePayloads = Aeson []
-      , llmEnhancedAt = Nothing
-      , llmEnhancementVersion = Nothing
-      }
+  mkIssue MkIssueOpts
+    { projectId, issueType = QueryAlert, targetHash = queryId
+    , service = Just "Monitoring"
+    , critical = True, severity = "warning"
+    , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
+    , recommendedAction = "Review the query results and take appropriate action."
+    , migrationComplexity = "n/a"
+    , issueData = QueryAlertData
+        { queryId, queryName, queryExpression = queryExpr
+        , thresholdValue = threshold, actualValue = actual
+        , thresholdType, triggeredAt = now
+        }
+    }
 
 
 -- | Conversation type for AI chats
