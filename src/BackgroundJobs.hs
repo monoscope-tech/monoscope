@@ -1623,22 +1623,29 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
 -- Log Pattern Processing Jobs
 -- ============================================================================
 
+-- Tuning knobs for log pattern baseline and spike detection
+baselineWindowHours, baselinePageSize :: Int
+baselineWindowHours = 168 -- 7 days
+baselinePageSize = 1000
+
+minMedianForEstablished, minAgeDaysForEstablished, spikeZScoreThreshold, spikeMinAbsoluteDelta :: Double
+minMedianForEstablished = 100 -- events/hour required for immediate "established"
+minAgeDaysForEstablished = 14 -- days old enough for reliable baselines
+spikeZScoreThreshold = 3.0 -- 99.7% confidence interval
+spikeMinAbsoluteDelta = 10 -- avoids alerting on tiny volumes (e.g. 2→5/hr)
+
+
 -- | Calculate baselines for log patterns
 -- Uses hourly counts from otel_logs_and_spans over the last 7 days
 calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
   now <- Time.currentTime
-  -- Batch query: get stats for all patterns in one DB round-trip (168 hours = 7 days)
-  allStats <- LogPatterns.getBatchPatternStats pid 168
+  allStats <- LogPatterns.getBatchPatternStats pid baselineWindowHours
   let statsMap = HM.fromList $ map (\s -> ((s.sourceField, s.patternHash), s)) allStats
-      pageSize = 1000
-      -- A pattern is "established" if it's high-volume or old enough for reliable baselines
-      minMedianForEstablished = 100 :: Double -- events/hour
-      minAgeDaysForEstablished = 14 :: Double -- days
       isEstablished stats ageDays = stats.hourlyMedian > minMedianForEstablished || ageDays >= minAgeDaysForEstablished
       go offset totalProcessed totalEstablished = do
-        patterns <- LogPatterns.getLogPatterns pid pageSize offset
+        patterns <- LogPatterns.getLogPatterns pid baselinePageSize offset
         let patternAgeDays lp = realToFrac (diffUTCTime now (zonedTimeToUTC lp.firstSeenAt)) / 86400 :: Double
             updates = V.fromList $ flip mapMaybe patterns \lp ->
               HM.lookup (lp.sourceField, lp.patternHash) statsMap <&> \stats ->
@@ -1648,8 +1655,8 @@ calculateLogPatternBaselines pid = do
         void $ LogPatterns.updateBaselineBatch pid updates
         let newTotal = totalProcessed + length patterns
             newEstablished = totalEstablished + established
-        if length patterns == pageSize
-          then go (offset + pageSize) newTotal newEstablished
+        if length patterns == baselinePageSize
+          then go (offset + baselinePageSize) newTotal newEstablished
           else pure (newTotal, newEstablished)
   (total, established) <- go 0 0 0
   Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
@@ -1663,17 +1670,15 @@ detectLogPatternSpikes pid authCtx = do
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
-  let zScoreThreshold = 3.0 -- 99.7% confidence interval
-      minAbsoluteDelta = 10 :: Double -- avoids alerting on tiny volumes (e.g. 2→5/hr)
-      anomalies = flip mapMaybe patternsWithRates \lpRate ->
+  let anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad)
             | mad > 0 ->
                 let currentRate = fromIntegral lpRate.currentHourCount :: Double
                     zScore = (currentRate - mean) / mad
                     direction
-                      | zScore > zScoreThreshold && currentRate > mean + minAbsoluteDelta = Just Issues.Spike
-                      | zScore < negate zScoreThreshold && currentRate < mean - minAbsoluteDelta = Just Issues.Drop
+                      | zScore > spikeZScoreThreshold && currentRate > mean + spikeMinAbsoluteDelta = Just Issues.Spike
+                      | zScore < negate spikeZScoreThreshold && currentRate < mean - spikeMinAbsoluteDelta = Just Issues.Drop
                       | otherwise = Nothing
                  in direction <&> \dir -> (lpRate, currentRate, mean, mad, dir)
           _ -> Nothing

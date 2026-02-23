@@ -476,6 +476,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , recommendedAction = "Review the API changes and update your integration accordingly."
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
       , issueData = apiChangeData
+      , timestamp = Just firstAnomaly.createdAt
       }
 
 
@@ -504,6 +505,7 @@ createRuntimeExceptionIssue projectId atError =
             , firstSeen = atError.when
             , lastSeen = atError.when
             }
+      , timestamp = Nothing
       }
 
 
@@ -532,6 +534,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
             , thresholdType
             , triggeredAt = now
             }
+      , timestamp = Nothing
       }
 
 
@@ -672,6 +675,7 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
       , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr (" <> show (round zScoreVal :: Int) <> " std devs)."
       , migrationComplexity = "n/a"
       , issueData = rateChangeData
+      , timestamp = Nothing
       }
 
 
@@ -705,6 +709,7 @@ createLogPatternIssue projectId lp = do
       , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
       , migrationComplexity = "n/a"
       , issueData = logPatternData
+      , timestamp = Nothing
       }
 
 
@@ -765,14 +770,14 @@ data MkIssueOpts a = MkIssueOpts
   , recommendedAction :: Text
   , migrationComplexity :: Text
   , issueData :: a
+  , timestamp :: Maybe ZonedTime
   }
 
 
 mkIssue :: (AE.ToJSON a, Time :> es, UUIDEff :> es) => MkIssueOpts a -> Eff es Issue
 mkIssue opts = do
   issueId <- UUIDId <$> genUUID
-  now <- Time.currentTime
-  let zonedNow = utcToZonedTime utc now
+  zonedNow <- maybe (utcToZonedTime utc <$> Time.currentTime) pure opts.timestamp
   pure
     Issue
       { id = issueId

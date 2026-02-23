@@ -112,7 +112,7 @@ getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field
 
 
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
-getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ?|] (pid, sourceField)
+getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ? ORDER BY occurrence_count DESC LIMIT 500|] (pid, sourceField)
 
 
 -- | Get log pattern by hash
@@ -170,7 +170,9 @@ updateBaselineBatch pid rows
             (hashes, states, means, mads, samples, pid)
 
 
--- | Upsert hourly event count for a pattern into the pre-aggregated stats table
+-- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
+-- Note: += semantics means job retries within the same hour can over-count.
+-- Accepted tradeoff: baselines use median+MAD which is robust to occasional outliers.
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid sourceField patHash hourBucket count =
   PG.execute

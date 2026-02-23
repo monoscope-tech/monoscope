@@ -575,22 +575,18 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       target = fromMaybe "summary" targetM
       -- Known pattern fields stored in apis.log_patterns
       knownPatternFields = ["summary", "url_path", "exception"] :: [Text]
-  let
-    fetch
-      | target `elem` knownPatternFields =
-          PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
-      -- Fallback: arbitrary field → SQL GROUP BY + replaceAllFormats re-grouping
-      | otherwise = do
-          rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
-            Just (Left colExpr) -> do
-              let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500"
-              PG.query_ (Query $ encodeUtf8 q)
-            Just (Right pathParts) ->
-              PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pathParts)
-            Nothing -> pure []
-          let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
-          pure $ take 15 $ drop skip $ sortWith (Down . snd) $ HashMap.toList normalized
-  fetch
+  if target `elem` knownPatternFields
+    then PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
+    else do
+      rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
+        Just (Left colExpr) -> do
+          let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500"
+          PG.query_ (Query $ encodeUtf8 q)
+        Just (Right pathParts) ->
+          PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, count(*) as cnt FROM otel_logs_and_spans WHERE project_id='" <> pidTxt <> "' AND " <> whereCondition <> " AND attributes #>> ? IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 500") (pathParts, pathParts)
+        Nothing -> pure []
+      let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
+      pure $ take 15 $ drop skip $ sortWith (Down . snd) $ HashMap.toList normalized
   where
     resolveFieldExpr f
       | f `member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f

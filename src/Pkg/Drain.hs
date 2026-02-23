@@ -233,7 +233,7 @@ getAllLogGroups tree =
   let levelOnes = children tree
       levelTwos = V.concatMap nodes levelOnes
       allLogGroups = V.concatMap logGroups levelTwos
-   in V.map (\grp -> DrainResult{exampleLog = grp.exampleLog, templateStr = grp.templateStr, logIds = grp.logIds}) allLogGroups
+   in V.map (\LogGroup{exampleLog, templateStr, logIds} -> DrainResult{..}) allLogGroups
 
 
 looksLikeJson :: T.Text -> Bool
