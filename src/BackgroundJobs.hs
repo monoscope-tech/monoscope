@@ -1667,7 +1667,7 @@ detectLogPatternSpikes pid authCtx = do
                       | zScore > 3.0 && currentRate > mean + 10 = Just Issues.Spike
                       | zScore < -3.0 && currentRate < mean - 10 = Just Issues.Drop
                       | otherwise = Nothing
-                 in direction <&> (lpRate.patternId, lpRate.patternHash, currentRate, mean, stddev,)
+                 in direction <&> (lpRate.patternId,lpRate.patternHash,currentRate,mean,stddev,)
           _ -> Nothing
 
   let anomalyIds = V.fromList $ map (\(lpId, _, _, _, _, _) -> lpId) anomalyData
