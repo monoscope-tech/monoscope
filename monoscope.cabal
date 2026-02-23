@@ -87,7 +87,6 @@ library
       Models.Apis.Monitors
       Models.Apis.RequestDumps
       Models.Apis.Shapes
-      Models.Apis.LogPatterns
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
