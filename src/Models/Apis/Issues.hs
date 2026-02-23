@@ -464,59 +464,75 @@ createAPIChangeIssue projectId endpointHash anomalies = do
           }
       breakingChanges = V.length apiChangeData.deletedFields + V.length apiChangeData.modifiedFields
       isCritical = breakingChanges > 0
-  mkIssue MkIssueOpts
-    { projectId, issueType = APIChange, targetHash = endpointHash
-    , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
-    , critical = isCritical
-    , severity = if isCritical then "critical" else "warning"
-    , title = "API structure has changed"
-    , recommendedAction = "Review the API changes and update your integration accordingly."
-    , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
-    , issueData = apiChangeData
-    }
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , issueType = APIChange
+      , targetHash = endpointHash
+      , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
+      , critical = isCritical
+      , severity = if isCritical then "critical" else "warning"
+      , title = "API structure has changed"
+      , recommendedAction = "Review the API changes and update your integration accordingly."
+      , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
+      , issueData = apiChangeData
+      }
 
 
 -- | Create Runtime Exception issue
 createRuntimeExceptionIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> RequestDumps.ATError -> Eff es Issue
 createRuntimeExceptionIssue projectId atError =
-  mkIssue MkIssueOpts
-    { projectId, issueType = RuntimeException
-    , targetHash = fromMaybe "" atError.hash
-    , service = atError.serviceName
-    , critical = True, severity = "critical"
-    , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
-    , recommendedAction = "Investigate the error and implement a fix."
-    , migrationComplexity = "n/a"
-    , issueData = RuntimeExceptionData
-        { errorType = atError.errorType
-        , errorMessage = atError.message
-        , stackTrace = atError.stackTrace
-        , requestPath = atError.requestPath
-        , requestMethod = atError.requestMethod
-        , occurrenceCount = 1
-        , firstSeen = atError.when
-        , lastSeen = atError.when
-        }
-    }
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , issueType = RuntimeException
+      , targetHash = fromMaybe "" atError.hash
+      , service = atError.serviceName
+      , critical = True
+      , severity = "critical"
+      , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
+      , recommendedAction = "Investigate the error and implement a fix."
+      , migrationComplexity = "n/a"
+      , issueData =
+          RuntimeExceptionData
+            { errorType = atError.errorType
+            , errorMessage = atError.message
+            , stackTrace = atError.stackTrace
+            , requestPath = atError.requestPath
+            , requestMethod = atError.requestMethod
+            , occurrenceCount = 1
+            , firstSeen = atError.when
+            , lastSeen = atError.when
+            }
+      }
 
 
 -- | Create Query Alert issue
 createQueryAlertIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Text -> Text -> Double -> Double -> Text -> Eff es Issue
 createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thresholdType = do
   now <- Time.currentTime
-  mkIssue MkIssueOpts
-    { projectId, issueType = QueryAlert, targetHash = queryId
-    , service = Just "Monitoring"
-    , critical = True, severity = "warning"
-    , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
-    , recommendedAction = "Review the query results and take appropriate action."
-    , migrationComplexity = "n/a"
-    , issueData = QueryAlertData
-        { queryId, queryName, queryExpression = queryExpr
-        , thresholdValue = threshold, actualValue = actual
-        , thresholdType, triggeredAt = now
-        }
-    }
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , issueType = QueryAlert
+      , targetHash = queryId
+      , service = Just "Monitoring"
+      , critical = True
+      , severity = "warning"
+      , title = queryName <> " threshold " <> thresholdType <> " " <> show threshold
+      , recommendedAction = "Review the query results and take appropriate action."
+      , migrationComplexity = "n/a"
+      , issueData =
+          QueryAlertData
+            { queryId
+            , queryName
+            , queryExpression = queryExpr
+            , thresholdValue = threshold
+            , actualValue = actual
+            , thresholdType
+            , triggeredAt = now
+            }
+      }
 
 
 -- | Conversation type for AI chats
