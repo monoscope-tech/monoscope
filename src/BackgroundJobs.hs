@@ -1628,13 +1628,13 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
 
 -- Tuning knobs for log pattern baseline and spike detection
 baselineWindowHours, baselinePageSize :: Int
-baselineWindowHours = 168 -- 7 days
+baselineWindowHours = 48 -- 2 days
 baselinePageSize = 1000
 
 
 minMedianForEstablished, minAgeDaysForEstablished, spikeZScoreThreshold, spikeMinAbsoluteDelta :: Double
 minMedianForEstablished = 100 -- events/hour required for immediate "established"
-minAgeDaysForEstablished = 14 -- days old enough for reliable baselines
+minAgeDaysForEstablished = 3 -- days old enough for reliable baselines
 spikeZScoreThreshold = 3.0 -- 99.7% confidence interval
 spikeMinAbsoluteDelta = 10 -- avoids alerting on tiny volumes (e.g. 2→5/hr)
 
@@ -1710,9 +1710,9 @@ processNewLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroun
 processNewLogPatterns pid authCtx = do
   newPatterns <- LogPatterns.getNewLogPatterns pid
   unless (null newPatterns) do
-    -- Skip in low-volume projects: <10k events/week means the project is still onboarding
+    -- Skip in low-volume projects: <2k events in 48h means the project is still onboarding
     totalEvents <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ? |] (pid, baselineWindowHours)
-    if totalEvents < (10000 :: Int64)
+    if totalEvents < (2000 :: Int64)
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
         issueIds <- forM newPatterns \lp -> do
