@@ -26,9 +26,9 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, IOE, subsume, (:>))
 import Effectful.Ki qualified as Ki
-import Effectful.Labeled (Labeled)
+import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log, object)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
@@ -501,8 +501,12 @@ logsPatternExtraction scheduledTime pid = do
       (finalTree, eventMeta) <- paginateTree seedTree HM.empty 0 startTime
       persistSummaryPatterns finalTree eventMeta startTime
 
+    otelQ q = do
+      c <- ask @Config.AuthContext
+      if c.config.enableTimefusionReads then labeled @"timefusion" @WithConnection q else subsume q
+
     paginateTree tree meta offset startTime = do
-      otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- otelQ $ PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       if null otelEvents
         then pure (tree, meta)
         else do
@@ -525,16 +529,16 @@ logsPatternExtraction scheduledTime pid = do
                 HM.lookup logId eventMeta
               patternHash = toXXHash dp.templateStr
               hashTag = "pat:" <> patternHash
-          void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
+          void $ otelQ $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
           void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}
           void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
 
     extractFieldPatterns :: UTCTime -> ATBackgroundCtx ()
     extractFieldPatterns startTime = do
-      urlPaths :: [(Maybe Text, Maybe Text, Int64)] <- PG.query [sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|] (pid, startTime, scheduledTime)
+      urlPaths :: [(Maybe Text, Maybe Text, Int64)] <- otelQ $ PG.query [sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|] (pid, startTime, scheduledTime)
       Relude.when (length urlPaths == 1000) $ Log.logWarn "url_path pattern limit reached" pid
       forM_ urlPaths \(pathM, serviceName, cnt) -> whenJust pathM \path -> upsertNormalized "url_path" path serviceName Nothing cnt
-      exceptions :: [(Maybe Text, Maybe Text, Maybe Text, Int64)] <- PG.query [sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|] (pid, startTime, scheduledTime)
+      exceptions :: [(Maybe Text, Maybe Text, Maybe Text, Int64)] <- otelQ $ PG.query [sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|] (pid, startTime, scheduledTime)
       Relude.when (length exceptions == 1000) $ Log.logWarn "exception pattern limit reached" pid
       forM_ exceptions \(msgM, serviceName, level, cnt) -> whenJust msgM \msg -> upsertNormalized "exception" msg serviceName level cnt
 

@@ -43,9 +43,13 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful
+import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import System.Config qualified as Config
 import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
@@ -567,7 +571,7 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-fetchLogPatterns :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
+fetchLogPatterns :: (DB es, Labeled "timefusion" WithConnection :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
@@ -577,7 +581,9 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   if target `elem` map fst LogPatterns.knownPatternFields
     then PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
     else do
-      rawResults :: [(Text, Int)] <- case resolveFieldExpr target of
+      authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+      let otelQ q = if authCtx.env.enableTimefusionReads then labeled @"timefusion" @WithConnection q else subsume q
+      rawResults :: [(Text, Int)] <- otelQ $ case resolveFieldExpr target of
         Just (Left colExpr) -> do
           let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id=? AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 2000"
           PG.query (Query $ encodeUtf8 q) (Only pid)
