@@ -16,10 +16,10 @@ import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
-import Data.Time (DayOfWeek (Monday), UTCTime (utctDay), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
+import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (LocalTime (localDay), TimeOfDay (todMin), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, timeToTimeOfDay, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -118,7 +118,7 @@ data BgJobs
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
-  | LogPatternHourlyProcessing Projects.ProjectId
+  | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -286,10 +286,15 @@ processBackgroundJob authCtx bgJob =
               liftIO $ withResource authCtx.jobsPool \conn -> do
                 -- Report usage to lemon squeezy
                 _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-                -- Schedule 5-minute log pattern extraction
+                -- Schedule 5-minute log pattern extraction (288 per day)
                 forM_ [0 .. 287] \interval -> do
                   let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
                   _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteLogPatternExtraction scheduledTime p) scheduledTime
+                  pass
+                -- Schedule 15-minute pattern processing: baselines + spike detection (96 per day)
+                forM_ [0 .. 95] \interval -> do
+                  let scheduledTime = addUTCTime (fromIntegral $ interval * 900) currentTime
+                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.LogPatternPeriodicProcessing scheduledTime p) scheduledTime
                   pass
                 -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
                 forM_ [0 .. 287] \interval -> do
@@ -340,10 +345,13 @@ processBackgroundJob authCtx bgJob =
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
-    LogPatternHourlyProcessing pid -> do
-      tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
+    LogPatternPeriodicProcessing scheduledTime pid -> do
+      let isHourlyRun = todMin (timeToTimeOfDay $ utctDayTime scheduledTime) == 0
+      Relude.when isHourlyRun do
+        tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
+        tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
+        tryLog "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
       tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid authCtx
-      tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
@@ -376,10 +384,6 @@ runHourlyJob scheduledTime hour = do
     forM_ projectBatches \batch -> do
       let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
       createJob conn "background_jobs" batchJob
-
-  -- Baseline calculation then spike detection (sequential within single job to ensure correct ordering)
-  liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ activeProjects $ createJob conn "background_jobs" . LogPatternHourlyProcessing
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -477,23 +481,53 @@ logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 logsPatternExtraction scheduledTime pid = do
   ctx <- ask @Config.AuthContext
   Relude.when ctx.config.enableEventsTableUpdates $ do
-    let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-    paginate 0 fiveMinutesAgo
-    extractFieldPatterns fiveMinutesAgo
+    let startTime = addUTCTime (-300) scheduledTime
+    -- Summary patterns: build Drain tree once across all pages, then persist
+    extractSummaryPatterns startTime
+    -- Structured field patterns: simple normalization (no Drain tree)
+    extractFieldPatterns startTime
   Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
     limitVal = 250
-    -- Summary patterns: Drain tree clustering over free-text log bodies
-    paginate :: Int -> UTCTime -> ATBackgroundCtx ()
-    paginate offset startTime = do
-      otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
-      unless (null otelEvents) do
-        Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        processPatterns (V.fromList otelEvents) pid scheduledTime startTime
-        Log.logInfo "Completed events pattern extraction for page" ("offset", AE.toJSON offset)
-      Relude.when (length otelEvents == limitVal) $ paginate (offset + limitVal) startTime
+    sourceField = "summary" :: Text
 
-    -- Structured field patterns: simple replaceAllFormats normalization (no Drain tree needed)
+    -- | Build Drain tree incrementally across pages, persist results once at end
+    extractSummaryPatterns :: UTCTime -> ATBackgroundCtx ()
+    extractSummaryPatterns startTime = do
+      existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
+      Relude.when (length existingPatterns > 5000)
+        $ Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
+      let seedTree = processBatch True (V.fromList $ map SeedPattern existingPatterns) scheduledTime Drain.emptyDrainTree
+      (finalTree, eventMeta) <- paginateTree seedTree HM.empty 0 startTime
+      persistSummaryPatterns finalTree eventMeta startTime
+
+    paginateTree tree meta offset startTime = do
+      otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      if null otelEvents then pure (tree, meta)
+      else do
+        Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
+        let newMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- otelEvents, i /= ""]
+            batch = V.fromList [NewEvent logId content | (logId, content, _, _, _) <- otelEvents]
+            tree' = processBatch True batch scheduledTime tree
+        if length otelEvents == limitVal
+          then paginateTree tree' (meta <> newMeta) (offset + limitVal) startTime
+          else pure (tree', meta <> newMeta)
+
+    persistSummaryPatterns tree eventMeta since = do
+      let allPatterns = Drain.getAllLogGroups tree
+      forM_ allPatterns \dp -> do
+        let filteredIds = V.filter (/= "") dp.logIds
+            eventCount = fromIntegral $ V.length filteredIds :: Int64
+        unless (V.null filteredIds || T.null dp.templateStr) do
+          let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) $ do
+                logId <- filteredIds V.!? 0
+                HM.lookup logId eventMeta
+              patternHash = toXXHash dp.templateStr
+              hashTag = "pat:" <> patternHash
+          void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
+          void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}
+          void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
+
     extractFieldPatterns :: UTCTime -> ATBackgroundCtx ()
     extractFieldPatterns startTime = do
       urlPaths :: [(Maybe Text, Maybe Text, Int64)] <- PG.query [sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|] (pid, startTime, scheduledTime)
@@ -504,44 +538,11 @@ logsPatternExtraction scheduledTime pid = do
       forM_ exceptions \(msgM, serviceName, level, cnt) -> whenJust msgM \msg -> upsertNormalized "exception" msg serviceName level cnt
 
     upsertNormalized :: Text -> Text -> Maybe Text -> Maybe Text -> Int64 -> ATBackgroundCtx ()
-    upsertNormalized sourceField raw serviceName logLevel cnt = do
+    upsertNormalized sf raw serviceName logLevel cnt = do
       let normalized = replaceAllFormats raw
           patternHash = toXXHash normalized
-      void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField, serviceName, logLevel, traceId = Nothing, sampleMessage = Just raw, eventCount = cnt}
-      void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime cnt
-
-
--- | Summary pattern extraction via Drain tree clustering
--- events: (id, content, traceId, serviceName, level)
-processPatterns :: V.Vector (Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Projects.ProjectId -> UTCTime -> UTCTime -> ATBackgroundCtx ()
-processPatterns events pid scheduledTime since = do
-  let sourceField = "summary" :: Text
-      -- O(1) metadata lookup by event id (avoids O(n) V.find per pattern)
-      eventMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- V.toList events, i /= ""]
-  unless (V.null events) do
-    existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-    Relude.when (length existingPatterns > 5000)
-      $ Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
-    let known = V.fromList $ map SeedPattern existingPatterns
-        combined = known <> ((\(logId, content, _, _, _) -> NewEvent logId content) <$> events)
-        drainTree = processBatch True combined scheduledTime Drain.emptyDrainTree
-        newPatterns = Drain.getAllLogGroups drainTree
-    unless (V.null newPatterns)
-      $ Log.logInfo "Extracted summary patterns" ("count", AE.toJSON $ V.length newPatterns)
-
-    forM_ newPatterns \dp -> do
-      let filteredIds = V.filter (/= "") dp.logIds
-          eventCount = fromIntegral $ V.length filteredIds :: Int64
-      unless (V.null filteredIds || T.null dp.templateStr) do
-        let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) $ do
-              logId <- filteredIds V.!? 0
-              HM.lookup logId eventMeta
-            patternHash = toXXHash dp.templateStr
-            hashTag = "pat:" <> patternHash
-        -- Append pattern hash to hashes array on matched event rows
-        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
-        void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}
-        void $ LogPatterns.upsertHourlyStat pid sourceField patternHash scheduledTime eventCount
+      void $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField = sf, serviceName, logLevel, traceId = Nothing, sampleMessage = Just raw, eventCount = cnt}
+      void $ LogPatterns.upsertHourlyStat pid sf patternHash scheduledTime cnt
 
 
 -- | Input for Drain tree processing.
@@ -1640,10 +1641,11 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
 -- ============================================================================
 
 -- Tuning knobs for log pattern baseline and spike detection
-baselineWindowHours, baselinePageSize, maxNewPatternsPerRun :: Int
+baselineWindowHours, baselinePageSize, maxNewPatternsPerRun, stalePatternDays :: Int
 baselineWindowHours = 48 -- 2 days
 baselinePageSize = 1000
 maxNewPatternsPerRun = 500
+stalePatternDays = 30 -- prune acknowledged patterns older than this
 
 
 minMedianForEstablished, minAgeDaysForEstablished, spikeZScoreThreshold, spikeMinAbsoluteDelta :: Double
@@ -1702,18 +1704,22 @@ detectSpikeOrDrop zThreshold minDelta mean mad currentCount
     z = (rate - mean) / effectiveMad
 
 
--- | Detect log pattern volume spikes and create issues
+-- | Detect log pattern volume spikes and create issues.
+-- Projects partial-hour counts to hourly rate for sub-hourly detection.
 detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
   now <- Time.currentTime
+  let minutesIntoHour = max 5 $ todMin (timeToTimeOfDay $ utctDayTime now)
+      scaleFactor = 60.0 / fromIntegral minutesIntoHour :: Double
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid now
   let anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad) ->
-            detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad lpRate.currentHourCount <&> (lpRate,)
+            let projectedCount = round (fromIntegral lpRate.currentHourCount * scaleFactor)
+            in detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount <&> (lpRate,)
           _ -> Nothing
 
   forM_ anomalies \(lpRate, sr) -> do
@@ -1741,11 +1747,24 @@ processNewLogPatterns pid authCtx = do
     if totalEvents < (2000 :: Int64)
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
-        issueIds <- forM newPatterns \lp -> do
+        -- url_path patterns skip new-pattern issues (noise) but still get rate-change alerts
+        let issueWorthy = filter (\lp -> lp.sourceField /= "url_path") newPatterns
+        issueIds <- forM issueWorthy \lp -> do
           issue <- Issues.createLogPatternIssue pid lp
           Issues.insertIssue issue
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
           pure issue.id
+        -- Acknowledge ALL patterns (including url_path) to prevent pile-up
         void $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.fromList $ map (.patternHash) newPatterns)
         liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
+
+
+-- | Prune acknowledged patterns not seen in 30 days and stats older than baseline window
+pruneStaleLogPatterns :: Projects.ProjectId -> ATBackgroundCtx ()
+pruneStaleLogPatterns pid = do
+  now <- Time.currentTime
+  pruned <- LogPatterns.pruneStalePatterns pid now stalePatternDays
+  statsPruned <- LogPatterns.pruneOldHourlyStats pid now (baselineWindowHours + 24)
+  Relude.when (pruned > 0 || statsPruned > 0) $
+    Log.logInfo "Pruned stale log patterns and old stats" (pid, "patterns" :: Text, pruned, "stats" :: Text, statsPruned)

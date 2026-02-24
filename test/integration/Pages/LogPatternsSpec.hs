@@ -147,14 +147,14 @@ spec = aroundAll withTestResources do
                 LIMIT 1 |]
           (PGS.Only pid) :: IO [(Text, Text, Double, Double)]
 
-      -- Spike detection uses the previous completed hour (frozenTime - 1h)
-      let prevHour = addUTCTime (-3600) frozenTime
+      -- Spike detection uses the current hour + projected rate.
+      -- frozenTime is exactly :00, so minutesIntoHour = max 5 0 = 5, scaleFactor = 12.0
+      -- Stats go into the current hour bucket and get projected: count * 12
       case established of
         [(patHash, srcField, mean, mad)] -> do
-          -- Insert a spike: previous hour count well above the baseline
-          -- z-score threshold is 3.0 and minDelta is 50; set count to mean + 5*mad + 100 to guarantee detection
-          let spikeCount = ceiling (mean + 5 * mad + 100) :: Int64
-          insertHourlyStat tr srcField patHash prevHour spikeCount
+          -- projected = rawCount * 12 must exceed mean + 5*mad + 50
+          let rawCount = ceiling ((mean + 5 * mad + 100) / 12) :: Int64
+          insertHourlyStat tr srcField patHash frozenTime rawCount
 
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
           runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid tr.trATCtx
@@ -175,8 +175,8 @@ spec = aroundAll withTestResources do
             insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime)
               (600 + fromIntegral (h `mod` 5))
           runTestBg tr $ BackgroundJobs.calculateLogPatternBaselines pid
-          -- Now spike at 2000 in the previous completed hour
-          insertHourlyStat tr srcField patHash prevHour 2000
+          -- Spike in current hour; projected = 200 * 12 = 2400 >> baseline ~600
+          insertHourlyStat tr srcField patHash frozenTime 200
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
           runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
@@ -191,20 +191,33 @@ spec = aroundAll withTestResources do
           , sourceField = "summary", serviceName = Just "test-svc", logLevel = Just "WARN"
           , traceId = Nothing, sampleMessage = Just ("Sample " <> h), eventCount = 10
           }
-        -- Ensure total event volume >= 2000 to pass the low-volume guard
         insertHourlyStat tr "summary" h frozenTime 1500
+
+      -- Also insert a url_path pattern — should be acknowledged but NO issue created
+      let urlPathHash = "url-path-pat-001"
+      void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+        { projectId = pid, logPattern = "/api/users/<*>", hash = urlPathHash
+        , sourceField = "url_path", serviceName = Just "test-svc", logLevel = Nothing
+        , traceId = Nothing, sampleMessage = Just "/api/users/123", eventCount = 50
+        }
+      insertHourlyStat tr "url_path" urlPathHash frozenTime 1500
 
       issuesBefore <- countIssues tr Issues.LogPattern
       runTestBg tr $ BackgroundJobs.processNewLogPatterns pid tr.trATCtx
       issuesAfter <- countIssues tr Issues.LogPattern
+      -- Only summary patterns create issues, not url_path
       issuesAfter `shouldSatisfy` (>= issuesBefore + length patHashes)
 
-      -- Verify patterns were auto-acknowledged after issue creation
+      -- Verify ALL patterns (including url_path) were auto-acknowledged
       forM_ patHashes \h -> do
         patM <- runTestBg tr $ LogPatterns.getLogPatternByHash pid "summary" h
         case patM of
           Just p -> p.state `shouldBe` LPSAcknowledged
           Nothing -> error $ "Pattern " <> h <> " not found after processNewLogPatterns"
+      urlPathPat <- runTestBg tr $ LogPatterns.getLogPatternByHash pid "url_path" urlPathHash
+      case urlPathPat of
+        Just p -> p.state `shouldBe` LPSAcknowledged
+        Nothing -> error "url_path pattern not found after processNewLogPatterns"
 
     it "6. Acknowledge log patterns (exercises PGArray fix)" \tr -> do
       -- Insert fresh patterns to test acknowledgment
@@ -228,3 +241,34 @@ spec = aroundAll withTestResources do
         case patM of
           Just p -> p.state `shouldBe` LPSAcknowledged
           Nothing -> error $ "Pattern " <> h <> " not found after acknowledge"
+
+    it "7. Prune stale acknowledged patterns" \tr -> do
+      let staleHash = "stale-prune-001"
+          sourceField = "summary"
+      void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+        { projectId = pid, logPattern = "Stale pattern <*>", hash = staleHash
+        , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
+        , traceId = Nothing, sampleMessage = Just "Stale test", eventCount = 5
+        }
+      -- Acknowledge it so it's eligible for pruning
+      void $ runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton staleHash)
+      -- Backdate last_seen_at to 60 days ago (exceeds stalePatternDays=30)
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.log_patterns SET last_seen_at = ?::timestamptz - INTERVAL '60 days'
+                WHERE project_id = ? AND pattern_hash = ? |]
+          (frozenTime, pid, staleHash)
+
+      -- Also insert an old hourly stat (exceeds baselineWindowHours + 24 = 72h)
+      insertHourlyStat tr sourceField staleHash (addUTCTime (-100 * 3600) frozenTime) 100
+
+      beforeCount <- countPatterns tr
+      pruned <- runTestBg tr $ LogPatterns.pruneStalePatterns pid frozenTime 30
+      pruned `shouldSatisfy` (>= 1)
+
+      afterCount <- countPatterns tr
+      afterCount `shouldSatisfy` (< beforeCount)
+
+      -- Verify stale hourly stats are also prunable
+      statsPruned <- runTestBg tr $ LogPatterns.pruneOldHourlyStats pid frozenTime 72
+      statsPruned `shouldSatisfy` (>= 1)

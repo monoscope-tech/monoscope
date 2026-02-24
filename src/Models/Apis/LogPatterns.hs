@@ -25,6 +25,9 @@ module Models.Apis.LogPatterns (
   sourceFieldLabel,
   -- Volume check
   getTotalEventCount,
+  -- Pruning
+  pruneStalePatterns,
+  pruneOldHourlyStats,
 )
 where
 
@@ -195,6 +198,8 @@ updateBaselineBatch pid rows
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
 -- Accumulates counts across multiple 5-min extraction runs within the same hour.
+-- Note: SUM semantics mean job retries double-count. This is acceptable because
+-- retries are rare and the median/MAD baseline is robust to occasional outliers.
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid sourceField patHash hourBucket count =
   PG.execute
@@ -270,7 +275,7 @@ data LogPatternWithRate = LogPatternWithRate
 
 
 -- | Get all established patterns with their current hour counts for spike detection.
--- Uses the previous completed hour to avoid partial-hour comparisons.
+-- Uses the current (partial) hour's count; caller projects to hourly rate.
 -- Intentionally unbounded: the established filter is a natural cap and we need
 -- completeness to avoid missing spikes. A LIMIT would silently skip patterns.
 -- Scale ceiling: established patterns grow slowly (~weeks); expect <1k per project at steady state.
@@ -287,7 +292,7 @@ getPatternsWithCurrentRates pid now =
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
-          AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', ?::timestamptz - INTERVAL '1 hour')
+          AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', ?::timestamptz)
         WHERE lp.project_id = ?
           AND lp.state != 'ignored' AND lp.baseline_state = 'established'
       |]
@@ -327,3 +332,13 @@ sourceFieldLabel f = fromMaybe f $ lookup f knownPatternFields
 getTotalEventCount :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
 getTotalEventCount pid now hoursBack =
   maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= ?::timestamptz - INTERVAL '1 hour' * ? |] (pid, now, hoursBack)
+
+
+-- | Delete acknowledged patterns not seen in staleDays
+pruneStalePatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
+pruneStalePatterns pid now staleDays = PG.execute [sql| DELETE FROM apis.log_patterns WHERE project_id = ? AND last_seen_at < ?::timestamptz - INTERVAL '1 day' * ? AND state = 'acknowledged' |] (pid, now, staleDays)
+
+
+-- | Delete hourly stats older than hoursBack (keeps baseline window + buffer)
+pruneOldHourlyStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
+pruneOldHourlyStats pid now hoursBack = PG.execute [sql| DELETE FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket < ?::timestamptz - INTERVAL '1 hour' * ? |] (pid, now, hoursBack)
