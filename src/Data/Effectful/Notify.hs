@@ -284,7 +284,7 @@ runNotifyProduction = interpret $ \_ -> \case
     sendSlack :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => SlackData -> Eff es (Maybe Text)
     sendSlack SlackData{..} = do
       appCtx <- ask @Config.AuthContext
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> appCtx.config.slackBotToken]
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> botToken]
       case payload of
         AE.Object obj -> do
           let withThread = case threadTs of

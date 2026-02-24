@@ -1847,7 +1847,10 @@ processNewError pid errorHash authCtx = do
           let issueId = UUID.toText issue.id.unUUIDId
           let runtimeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = NewRuntimeError}
           forM_ project.notificationsChannel \case
-            Projects.NSlack -> sendSlackAlert runtimeAlert pid project.title Nothing
+            Projects.NSlack -> do 
+              tsM <- sendSlackAlertThreaded runtimeAlert pid project.title Nothing Nothing
+              Relude.when (isJust tsM) $
+                void $ Errors.updateErrorThreadIds err.id tsM Nothing
             Projects.NDiscord -> sendDiscordAlert runtimeAlert pid project.title Nothing
             Projects.NPhone -> sendWhatsAppAlert runtimeAlert pid project.title project.whatsappNumbers
             Projects.NEmail -> do

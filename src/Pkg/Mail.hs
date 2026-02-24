@@ -153,16 +153,17 @@ sendSlackAlertThreaded alert pid pTitle channelM threadTsM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
   let channelIdM = channelM <|> fmap (.channelId) slackData
-      webhookUrlM = (.webhookUrl) <$> slackData
-  for_ ((,) <$> channelIdM <*> webhookUrlM) \(cid, wurl) -> do
-    let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-    case alert of
-      RuntimeErrorAlert{..} ->
-        Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid wurl (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
-      _ -> do
-        sendSlackAlert alert pid pTitle channelM
-        pure Nothing
-  pure Nothing
+      botTokenM = (.botToken) <$> slackData
+  case (channelIdM, botTokenM) of
+    (Just cid, Just bt) -> do
+      let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
+      case alert of
+        RuntimeErrorAlert{..} ->
+          Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid bt (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
+        _ -> do
+          sendSlackAlert alert pid pTitle channelM
+          pure Nothing
+    (_, _) -> pure Nothing
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
