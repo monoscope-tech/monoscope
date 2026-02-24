@@ -64,7 +64,6 @@ newtype LogPatternId = LogPatternId {unLogPatternId :: Int64}
 data LogPatternState
   = LPSNew
   | LPSAcknowledged
-  | LPSIgnored
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving
@@ -144,8 +143,8 @@ getNewLogPatterns :: DB es => Projects.ProjectId -> Int -> Eff es [LogPattern]
 getNewLogPatterns pid limit = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]] <> " ORDER BY created_at ASC LIMIT ?") (pid, LPSNew, limit)
 
 
--- | Acknowledge log patterns
-acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Users.UserId -> V.Vector Text -> Eff es Int64
+-- | Acknowledge log patterns. Pass Nothing for system-triggered acknowledgments.
+acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Maybe Users.UserId -> V.Vector Text -> Eff es Int64
 acknowledgeLogPatterns pid uid patternHashes
   | V.null patternHashes = pure 0
   | otherwise = PG.execute q (LPSAcknowledged, uid, pid, patternHashes)
@@ -195,14 +194,14 @@ updateBaselineBatch pid rows
 
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
--- Uses GREATEST to stay idempotent on job retries within the same hour.
+-- Accumulates counts across multiple 5-min extraction runs within the same hour.
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid sourceField patHash hourBucket count =
   PG.execute
     [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
         VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-        DO UPDATE SET event_count = GREATEST(apis.log_pattern_hourly_stats.event_count, EXCLUDED.event_count) |]
+        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
     (pid, sourceField, patHash, hourBucket, count)
 
 
@@ -220,14 +219,14 @@ data BatchPatternStats = BatchPatternStats
   deriving anyclass (FromRow)
 
 
-getBatchPatternStats :: DB es => Projects.ProjectId -> Int -> Eff es [BatchPatternStats]
-getBatchPatternStats pid hoursBack = PG.query q (pid, hoursBack)
+getBatchPatternStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es [BatchPatternStats]
+getBatchPatternStats pid now hoursBack = PG.query q (pid, now, hoursBack)
   where
     q =
       [sql|
         WITH hourly_counts AS (
           SELECT source_field, pattern_hash, hour_bucket, event_count FROM apis.log_pattern_hourly_stats
-          WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ?
+          WHERE project_id = ? AND hour_bucket >= ?::timestamptz - INTERVAL '1 hour' * ?
         ),
         median_calc AS (
           SELECT source_field, pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
@@ -271,12 +270,13 @@ data LogPatternWithRate = LogPatternWithRate
 
 
 -- | Get all established patterns with their current hour counts for spike detection.
+-- Uses the previous completed hour to avoid partial-hour comparisons.
 -- Intentionally unbounded: the established filter is a natural cap and we need
 -- completeness to avoid missing spikes. A LIMIT would silently skip patterns.
 -- Scale ceiling: established patterns grow slowly (~weeks); expect <1k per project at steady state.
-getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [LogPatternWithRate]
-getPatternsWithCurrentRates pid =
-  PG.query q (Only pid)
+getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [LogPatternWithRate]
+getPatternsWithCurrentRates pid now =
+  PG.query q (now, pid)
   where
     q =
       [sql|
@@ -287,7 +287,7 @@ getPatternsWithCurrentRates pid =
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
-          AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', NOW())
+          AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', ?::timestamptz - INTERVAL '1 hour')
         WHERE lp.project_id = ?
           AND lp.state != 'ignored' AND lp.baseline_state = 'established'
       |]
@@ -324,6 +324,6 @@ sourceFieldLabel f = fromMaybe f $ lookup f knownPatternFields
 
 
 -- | Total event count across all patterns for a project within a time window.
-getTotalEventCount :: DB es => Projects.ProjectId -> Int -> Eff es Int64
-getTotalEventCount pid hoursBack =
-  maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= NOW() - INTERVAL '1 hour' * ? |] (pid, hoursBack)
+getTotalEventCount :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
+getTotalEventCount pid now hoursBack =
+  maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= ?::timestamptz - INTERVAL '1 hour' * ? |] (pid, now, hoursBack)

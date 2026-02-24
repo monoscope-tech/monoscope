@@ -50,7 +50,7 @@ insertHourlyStat tr sourceField patternHash hourBucket count =
       [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
             VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
             ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-            DO UPDATE SET event_count = GREATEST(apis.log_pattern_hourly_stats.event_count, EXCLUDED.event_count) |]
+            DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
       (pid, sourceField, patternHash, hourBucket, count)
 
 
@@ -112,9 +112,10 @@ spec = aroundAll withTestResources do
         }
 
       -- Seed 50 hours of stats (exceeds baselineWindowHours=48) to get enough data
+      -- 600/hour exceeds minMedianForEstablished=500 for immediate establishment
       let hourOffsets = [-50 .. -1] :: [Int]
       forM_ hourOffsets \h ->
-        insertHourlyStat tr sourceField patHash (addUTCTime (fromIntegral h * 3600) frozenTime) 150
+        insertHourlyStat tr sourceField patHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
 
       -- Run baseline calculation
       runTestBg tr $ BackgroundJobs.calculateLogPatternBaselines pid
@@ -146,12 +147,14 @@ spec = aroundAll withTestResources do
                 LIMIT 1 |]
           (PGS.Only pid) :: IO [(Text, Text, Double, Double)]
 
+      -- Spike detection uses the previous completed hour (frozenTime - 1h)
+      let prevHour = addUTCTime (-3600) frozenTime
       case established of
         [(patHash, srcField, mean, mad)] -> do
-          -- Insert a spike: current hour count well above the baseline
-          -- z-score threshold is 3.0 and minDelta is 10; set count to mean + 5*mad + 20 to guarantee detection
-          let spikeCount = ceiling (mean + 5 * mad + 20) :: Int64
-          insertHourlyStat tr srcField patHash frozenTime spikeCount
+          -- Insert a spike: previous hour count well above the baseline
+          -- z-score threshold is 3.0 and minDelta is 50; set count to mean + 5*mad + 100 to guarantee detection
+          let spikeCount = ceiling (mean + 5 * mad + 100) :: Int64
+          insertHourlyStat tr srcField patHash prevHour spikeCount
 
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
           runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid tr.trATCtx
@@ -167,13 +170,13 @@ spec = aroundAll withTestResources do
             , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "INFO"
             , traceId = Nothing, sampleMessage = Just "Spike test", eventCount = 50
             }
-          -- Seed baseline: 48 hours at 100 events/hour with some variance
+          -- Seed baseline: 48 hours at 600 events/hour with some variance
           forM_ ([-48 .. -1] :: [Int]) \h ->
             insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime)
-              (100 + fromIntegral (h `mod` 5))
+              (600 + fromIntegral (h `mod` 5))
           runTestBg tr $ BackgroundJobs.calculateLogPatternBaselines pid
-          -- Now spike at 500
-          insertHourlyStat tr srcField patHash frozenTime 500
+          -- Now spike at 2000 in the previous completed hour
+          insertHourlyStat tr srcField patHash prevHour 2000
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
           runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
@@ -196,19 +199,32 @@ spec = aroundAll withTestResources do
       issuesAfter <- countIssues tr Issues.LogPattern
       issuesAfter `shouldSatisfy` (>= issuesBefore + length patHashes)
 
-    it "6. Acknowledge log patterns (exercises PGArray fix)" \tr -> do
-      patterns <- runTestBg tr $ LogPatterns.getLogPatterns pid 100 0
-      let newPatterns = filter (\p -> p.state == LPSNew) patterns
-      newPatterns `shouldSatisfy` (not . null) -- there may be some from step 1
+      -- Verify patterns were auto-acknowledged after issue creation
+      forM_ patHashes \h -> do
+        patM <- runTestBg tr $ LogPatterns.getLogPatternByHash pid "summary" h
+        case patM of
+          Just p -> p.state `shouldBe` LPSAcknowledged
+          Nothing -> error $ "Pattern " <> h <> " not found after processNewLogPatterns"
 
-      let hashes = V.fromList $ map (.patternHash) $ take 2 newPatterns
+    it "6. Acknowledge log patterns (exercises PGArray fix)" \tr -> do
+      -- Insert fresh patterns to test acknowledgment
+      let ackHashes = ["ack-test-001", "ack-test-002"] :: [Text]
+          sourceField = "summary"
+      forM_ ackHashes \h ->
+        void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+          { projectId = pid, logPattern = "Ack test " <> h <> " <*>", hash = h
+          , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
+          , traceId = Nothing, sampleMessage = Just ("Ack sample " <> h), eventCount = 5
+          }
+
+      let hashes = V.fromList ackHashes
           sess = Servant.getResponse tr.trSessAndHeader
-      updated <- runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid sess.user.id hashes
+      updated <- runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid (Just sess.user.id) hashes
       updated `shouldBe` fromIntegral (V.length hashes)
 
       -- Verify state change
-      forM_ (V.toList hashes) \h -> do
-        patM <- runTestBg tr $ LogPatterns.getLogPatternByHash pid (fromMaybe "summary" $ (.sourceField) <$> find (\p -> p.patternHash == h) newPatterns) h
+      forM_ ackHashes \h -> do
+        patM <- runTestBg tr $ LogPatterns.getLogPatternByHash pid sourceField h
         case patM of
           Just p -> p.state `shouldBe` LPSAcknowledged
           Nothing -> error $ "Pattern " <> h <> " not found after acknowledge"

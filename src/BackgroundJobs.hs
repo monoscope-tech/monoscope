@@ -112,7 +112,7 @@ data BgJobs
   | SlackNotification Projects.ProjectId Text
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
-  | FifteenMinutesLogsPatternProcessing UTCTime Projects.ProjectId
+  | FiveMinuteLogPatternExtraction UTCTime Projects.ProjectId
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
@@ -289,7 +289,7 @@ processBackgroundJob authCtx bgJob =
                 -- Schedule 5-minute log pattern extraction
                 forM_ [0 .. 287] \interval -> do
                   let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
-                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FifteenMinutesLogsPatternProcessing scheduledTime p) scheduledTime
+                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteLogPatternExtraction scheduledTime p) scheduledTime
                   pass
                 -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
                 forM_ [0 .. 287] \interval -> do
@@ -333,7 +333,7 @@ processBackgroundJob authCtx bgJob =
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
-    FifteenMinutesLogsPatternProcessing scheduledTime pid -> logsPatternExtraction scheduledTime pid
+    FiveMinuteLogPatternExtraction scheduledTime pid -> logsPatternExtraction scheduledTime pid
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
@@ -1647,19 +1647,19 @@ maxNewPatternsPerRun = 500
 
 
 minMedianForEstablished, minAgeDaysForEstablished, spikeZScoreThreshold, spikeMinAbsoluteDelta :: Double
-minMedianForEstablished = 100 -- events/hour required for immediate "established"
+minMedianForEstablished = 500 -- events/hour required for immediate "established"
 minAgeDaysForEstablished = 3 -- days old enough for reliable baselines
 spikeZScoreThreshold = 3.0 -- 99.7% confidence interval
-spikeMinAbsoluteDelta = 10 -- avoids alerting on tiny volumes (e.g. 2→5/hr)
+spikeMinAbsoluteDelta = 50 -- avoids alerting on tiny volumes (e.g. 20→35/hr)
 
 
 -- | Calculate baselines for log patterns
--- Uses hourly counts from otel_logs_and_spans over the last 7 days
+-- Uses hourly counts over the last 48 hours
 calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateLogPatternBaselines pid = do
   Log.logInfo "Calculating log pattern baselines" pid
   now <- Time.currentTime
-  allStats <- LogPatterns.getBatchPatternStats pid baselineWindowHours
+  allStats <- LogPatterns.getBatchPatternStats pid now baselineWindowHours
   let statsMap = HM.fromList $ map (\s -> ((s.sourceField, s.patternHash), s)) allStats
       go offset totalProcessed totalEstablished = do
         patterns <- LogPatterns.getLogPatterns pid baselinePageSize offset
@@ -1690,24 +1690,26 @@ data SpikeResult = SpikeResult
 
 
 -- | Pure spike/drop detection for a single pattern.
+-- Uses a MAD floor of 1.0 so perfectly stable patterns (MAD=0) can still trigger.
 detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int64 -> Maybe SpikeResult
 detectSpikeOrDrop zThreshold minDelta mean mad currentCount
-  | mad <= 0 = Nothing
-  | z > zThreshold && rate > mean + minDelta = Just $ SpikeResult rate mean mad z Issues.Spike
-  | z < negate zThreshold && rate < mean - minDelta = Just $ SpikeResult rate mean mad z Issues.Drop
+  | z > zThreshold && rate > mean + minDelta = Just $ SpikeResult rate mean effectiveMad z Issues.Spike
+  | z < negate zThreshold && rate < mean - minDelta = Just $ SpikeResult rate mean effectiveMad z Issues.Drop
   | otherwise = Nothing
   where
     rate = fromIntegral currentCount
-    z = (rate - mean) / mad
+    effectiveMad = max mad 1.0
+    z = (rate - mean) / effectiveMad
 
 
 -- | Detect log pattern volume spikes and create issues
 detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
+  now <- Time.currentTime
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
-  patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid
+  patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid now
   let anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad) ->
@@ -1734,7 +1736,8 @@ processNewLogPatterns pid authCtx = do
   Relude.when (length newPatterns >= maxNewPatternsPerRun) $ Log.logWarn "getNewLogPatterns hit limit, some patterns deferred" (pid, length newPatterns)
   unless (null newPatterns) do
     -- Skip in low-volume projects: <2k events in 48h means the project is still onboarding
-    totalEvents <- LogPatterns.getTotalEventCount pid baselineWindowHours
+    now <- Time.currentTime
+    totalEvents <- LogPatterns.getTotalEventCount pid now baselineWindowHours
     if totalEvents < (2000 :: Int64)
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
@@ -1743,5 +1746,6 @@ processNewLogPatterns pid authCtx = do
           Issues.insertIssue issue
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
           pure issue.id
+        void $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.fromList $ map (.patternHash) newPatterns)
         liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
