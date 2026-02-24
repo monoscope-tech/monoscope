@@ -147,6 +147,8 @@ getNewLogPatterns pid limit = PG.query (_selectWhere @LogPattern [[DAT.field| pr
 
 
 -- | Acknowledge log patterns. Pass Nothing for system-triggered acknowledgments.
+-- Note: matches on (project_id, pattern_hash) without source_field. Safe because
+-- pattern_hash includes source-field-specific content, making cross-field collisions negligible.
 acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Maybe Users.UserId -> V.Vector Text -> Eff es Int64
 acknowledgeLogPatterns pid uid patternHashes
   | V.null patternHashes = pure 0

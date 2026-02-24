@@ -1648,6 +1648,9 @@ baselinePageSize = 1000
 maxNewPatternsPerRun = 500
 stalePatternDays = 30 -- prune acknowledged patterns older than this
 
+minEventsForNewPatternAlerts :: Int64
+minEventsForNewPatternAlerts = 2000 -- skip onboarding projects with <2k events/48h
+
 
 minMedianForEstablished, minAgeDaysForEstablished, spikeZScoreThreshold, spikeMinAbsoluteDelta :: Double
 minMedianForEstablished = 500 -- events/hour required for immediate "established"
@@ -1723,18 +1726,18 @@ detectLogPatternSpikes pid authCtx = do
              in detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount <&> (lpRate,)
           _ -> Nothing
 
-  forM_ anomalies \(lpRate, sr) -> do
+  issueIds <- forM anomalies \(lpRate, sr) -> do
     let dir = display sr.direction
     Log.logInfo ("Log pattern " <> dir <> " detected") (lpRate.patternId, lpRate.logPattern, sr.currentRate, sr.mean)
     issue <- Issues.createLogPatternRateChangeIssue pid lpRate sr.currentRate sr.mean sr.mad sr.zScore sr.direction
     Issues.insertIssue issue
-    liftIO $ withResource authCtx.jobsPool \conn ->
-      void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
     Log.logInfo ("Created issue for log pattern " <> dir) (pid, lpRate.patternId, issue.id)
+    pure issue.id
+  unless (null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
+    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
   Log.logInfo "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalies)
 
 
--- | Process a new log pattern and create an issue
 -- | Batch-process all state='new' log patterns for a project.
 -- Runs as part of the hourly pipeline instead of per-insert trigger.
 processNewLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
@@ -1742,23 +1745,22 @@ processNewLogPatterns pid authCtx = do
   newPatterns <- LogPatterns.getNewLogPatterns pid maxNewPatternsPerRun
   Relude.when (length newPatterns >= maxNewPatternsPerRun) $ Log.logWarn "getNewLogPatterns hit limit, some patterns deferred" (pid, length newPatterns)
   unless (null newPatterns) do
-    -- Skip in low-volume projects: <2k events in 48h means the project is still onboarding
     now <- Time.currentTime
     totalEvents <- LogPatterns.getTotalEventCount pid now baselineWindowHours
-    if totalEvents < (2000 :: Int64)
+    if totalEvents < minEventsForNewPatternAlerts
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
         -- url_path patterns skip new-pattern issues (noise) but still get rate-change alerts
-        let issueWorthy = filter (\lp -> lp.sourceField /= "url_path") newPatterns
-        issueIds <- forM issueWorthy \lp -> do
+        let issueWorthy = V.fromList $ filter (\lp -> lp.sourceField /= "url_path") newPatterns
+        issueIds <- V.forM issueWorthy \lp -> do
           issue <- Issues.createLogPatternIssue pid lp
           Issues.insertIssue issue
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
           pure issue.id
         -- Acknowledge ALL patterns (including url_path) to prevent pile-up
         void $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.fromList $ map (.patternHash) newPatterns)
-        liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
+        unless (V.null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
+          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid issueIds
 
 
 -- | Prune acknowledged patterns not seen in 30 days and stats older than baseline window
