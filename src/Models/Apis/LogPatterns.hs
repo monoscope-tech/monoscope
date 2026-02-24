@@ -154,8 +154,9 @@ getNewLogPatterns pid limit = PG.query (_selectWhere @LogPattern [[DAT.field| pr
 acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Maybe Users.UserId -> V.Vector (Text, Text) -> Eff es Int64
 acknowledgeLogPatterns pid uid fieldHashPairs
   | V.null fieldHashPairs = pure 0
-  | otherwise = let (fields, hashes) = V.unzip fieldHashPairs
-     in PG.execute q (LPSAcknowledged, uid, pid, fields, hashes)
+  | otherwise =
+      let (fields, hashes) = V.unzip fieldHashPairs
+       in PG.execute q (LPSAcknowledged, uid, pid, fields, hashes)
   where
     q =
       [sql|

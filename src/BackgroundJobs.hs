@@ -355,9 +355,12 @@ processBackgroundJob authCtx bgJob =
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-tryLog label = (`catch` \(e :: SomeException) ->
-  whenJust (fromException @SomeAsyncException e) throwIO
-    >> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e))
+tryLog label =
+  ( `catch`
+      \(e :: SomeException) ->
+        whenJust (fromException @SomeAsyncException e) throwIO
+          >> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e)
+  )
 
 
 -- | Run hourly scheduled tasks for all projects
