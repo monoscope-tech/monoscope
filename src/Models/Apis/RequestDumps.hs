@@ -49,7 +49,6 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
-import System.Config qualified as Config
 import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
@@ -59,6 +58,7 @@ import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
+import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (replaceAllFormats)
@@ -571,7 +571,7 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-fetchLogPatterns :: (DB es, Labeled "timefusion" WithConnection :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
+fetchLogPatterns :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Labeled "timefusion" WithConnection :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
