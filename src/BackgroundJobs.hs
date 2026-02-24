@@ -612,6 +612,7 @@ processNewLog _isSummary logId isSampleLog content now tree =
 -- processing delays and ensure no errors are missed.
 processOneMinuteErrors :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 processOneMinuteErrors scheduledTime pid = do
+  Log.logInfo "Starting 1-minute error processing for project" ("project_id", AE.toJSON pid.toText)
   ctx <- ask @Config.AuthContext
   -- This processing might happen before the spans within the timestamp are stored in db
   -- hence will be missed and never get processed
