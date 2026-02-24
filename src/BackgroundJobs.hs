@@ -1648,6 +1648,7 @@ baselinePageSize = 1000
 maxNewPatternsPerRun = 500
 stalePatternDays = 30 -- prune acknowledged patterns older than this
 
+
 minEventsForNewPatternAlerts :: Int64
 minEventsForNewPatternAlerts = 2000 -- skip onboarding projects with <2k events/48h
 
