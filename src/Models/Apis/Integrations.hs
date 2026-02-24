@@ -36,34 +36,35 @@ data SlackData = SlackData
   , teamId :: Text
   , channelId :: Text
   , teamName :: Maybe Text
+  , botToken :: Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SlackData
 
 
-insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
-insertAccessToken pid webhookUrl teamId channelId teamName = PG.execute q params
+insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
+insertAccessToken pid webhookUrl teamId channelId teamName botToken = PG.execute q params
   where
     q =
       [sql|INSERT INTO apis.slack
-               (project_id, webhook_url, team_id, channel_id, team_name)
-               VALUES (?,?,?,?,?)
+               (project_id, webhook_url, team_id, channel_id, team_name, bot_token)
+               VALUES (?,?,?,?,?,?)
                ON CONFLICT (project_id)
-               DO UPDATE SET webhook_url = EXCLUDED.webhook_url, team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name |]
-    params = (pid, webhookUrl, teamId, channelId, teamName)
+               DO UPDATE SET webhook_url = EXCLUDED.webhook_url, team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token |]
+    params = (pid, webhookUrl, teamId, channelId, teamName, botToken)
 
 
 getProjectSlackData :: DB es => Projects.ProjectId -> Eff es (Maybe SlackData)
 getProjectSlackData pid = listToMaybe <$> PG.query q (Only pid)
   where
-    q = [sql|SELECT project_id, webhook_url, team_id, channel_id, team_name FROM apis.slack WHERE project_id =? |]
+    q = [sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token FROM apis.slack WHERE project_id =? |]
 
 
 getSlackDataByTeamId :: DB es => Text -> Eff es (Maybe SlackData)
 getSlackDataByTeamId teamId = listToMaybe <$> PG.query q (Only teamId)
   where
-    q = [sql|SELECT project_id, webhook_url, team_id, channel_id, team_name FROM apis.slack WHERE team_id = ? |]
+    q = [sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token FROM apis.slack WHERE team_id = ? |]
 
 
 data DiscordData = DiscordData

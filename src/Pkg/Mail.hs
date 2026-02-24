@@ -43,7 +43,7 @@ sendSlackMessage pid message = do
   case slackData of
     Just s -> do
       let payload = [aesonQQ| {"text": #{message}, "type":"mrkdwn"} |]
-      Notify.sendNotification $ Notify.slackNotification s.channelId s.webhookUrl payload
+      Notify.sendNotification $ Notify.slackNotification s.channelId s.botToken payload
     Nothing -> Log.logAttention "sendSlackMessage is not configured. But was called" (pid, message)
 
 
@@ -134,8 +134,8 @@ sendSlackAlert alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
   let channelIdM = channelM <|> fmap (.channelId) slackData
-      webhookUrlM = (.webhookUrl) <$> slackData
-  for_ ((,) <$> channelIdM <*> webhookUrlM) \(cid, wurl) -> do
+      botTokenM = (.botToken) <$> slackData
+  for_ ((,) <$> channelIdM <*> botTokenM) \(cid, bt) -> do
     let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
         mkAlert = \case
           RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl
@@ -145,7 +145,7 @@ sendSlackAlert alert pid pTitle channelM = do
           a@LogPatternAlert{} -> Just $ slackLogPatternAlert a pTitle cid projectUrl
           a@LogPatternRateChangeAlert{} -> Just $ slackLogPatternRateChangeAlert a pTitle cid projectUrl
           ShapeAlert -> Nothing
-    traverse_ (Notify.sendNotification . Notify.slackNotification cid wurl) (mkAlert alert)
+    traverse_ (Notify.sendNotification . Notify.slackNotification cid bt) (mkAlert alert)
 
 
 sendSlackAlertThreaded :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)

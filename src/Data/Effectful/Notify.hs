@@ -68,7 +68,7 @@ data EmailData = EmailData
 
 data SlackData = SlackData
   { channelId :: Text
-  , webhookUrl :: Text
+  , botToken :: Text
   , payload :: AE.Value
   , threadTs :: Maybe Text
   }
@@ -148,12 +148,12 @@ emailNotification receiver subject htmlBody = EmailNotification EmailData{..}
 
 
 slackNotification :: Text -> Text -> AE.Value -> Notification
-slackNotification channelId webhookUrl payload =
+slackNotification channelId botToken payload =
   let threadTs = Nothing in SlackNotification SlackData{..}
 
 
 slackThreadedNotification :: Text -> Text -> AE.Value -> Maybe Text -> Notification
-slackThreadedNotification channelId webhookUrl payload threadTs =
+slackThreadedNotification channelId botToken payload threadTs =
   SlackNotification SlackData{..}
 
 
@@ -210,10 +210,17 @@ runNotifyProduction = interpret $ \_ -> \case
         Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
         Left ex -> Log.logAttention "Email send failed" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via, "error" AE..= displayException ex])
     SlackNotification SlackData{..} -> do
-      let opts = defaults & header "Content-Type" .~ ["application/json"]
-      re <- liftIO $ postWith opts (toString webhookUrl) payload
-      unless (statusIsSuccessful (re ^. responseStatus))
-        $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
+      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> botToken]
+      case payload of
+        AE.Object obj -> do
+          let withThread = case threadTs of
+                Just ts -> AEK.insert "thread_ts" (AE.String ts) obj
+                Nothing -> obj
+              msg = AE.Object $ AEK.insert "channel" (AE.String channelId) withThread
+          re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" msg
+          unless (statusIsSuccessful (re ^. responseStatus))
+            $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
+        _ -> Log.logAttention "Slack notification message is not an object" (channelId, show payload)
       pass
     DiscordNotification DiscordData{..} -> do
       appCtx <- ask @Config.AuthContext
