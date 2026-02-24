@@ -491,7 +491,7 @@ logsPatternExtraction scheduledTime pid = do
     limitVal = 250
     sourceField = "summary" :: Text
 
-    -- | Build Drain tree incrementally across pages, persist results once at end
+    -- \| Build Drain tree incrementally across pages, persist results once at end
     extractSummaryPatterns :: UTCTime -> ATBackgroundCtx ()
     extractSummaryPatterns startTime = do
       existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
@@ -503,15 +503,16 @@ logsPatternExtraction scheduledTime pid = do
 
     paginateTree tree meta offset startTime = do
       otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
-      if null otelEvents then pure (tree, meta)
-      else do
-        Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-        let newMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- otelEvents, i /= ""]
-            batch = V.fromList [NewEvent logId content | (logId, content, _, _, _) <- otelEvents]
-            tree' = processBatch True batch scheduledTime tree
-        if length otelEvents == limitVal
-          then paginateTree tree' (meta <> newMeta) (offset + limitVal) startTime
-          else pure (tree', meta <> newMeta)
+      if null otelEvents
+        then pure (tree, meta)
+        else do
+          Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
+          let newMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- otelEvents, i /= ""]
+              batch = V.fromList [NewEvent logId content | (logId, content, _, _, _) <- otelEvents]
+              tree' = processBatch True batch scheduledTime tree
+          if length otelEvents == limitVal
+            then paginateTree tree' (meta <> newMeta) (offset + limitVal) startTime
+            else pure (tree', meta <> newMeta)
 
     persistSummaryPatterns tree eventMeta since = do
       let allPatterns = Drain.getAllLogGroups tree
@@ -1719,7 +1720,7 @@ detectLogPatternSpikes pid authCtx = do
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad) ->
             let projectedCount = round (fromIntegral lpRate.currentHourCount * scaleFactor)
-            in detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount <&> (lpRate,)
+             in detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount <&> (lpRate,)
           _ -> Nothing
 
   forM_ anomalies \(lpRate, sr) -> do
@@ -1766,5 +1767,5 @@ pruneStaleLogPatterns pid = do
   now <- Time.currentTime
   pruned <- LogPatterns.pruneStalePatterns pid now stalePatternDays
   statsPruned <- LogPatterns.pruneOldHourlyStats pid now (baselineWindowHours + 24)
-  Relude.when (pruned > 0 || statsPruned > 0) $
-    Log.logInfo "Pruned stale log patterns and old stats" (pid, "patterns" :: Text, pruned, "stats" :: Text, statsPruned)
+  Relude.when (pruned > 0 || statsPruned > 0)
+    $ Log.logInfo "Pruned stale log patterns and old stats" (pid, "patterns" :: Text, pruned, "stats" :: Text, statsPruned)
