@@ -346,7 +346,7 @@ processBackgroundJob authCtx bgJob =
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     LogPatternPeriodicProcessing scheduledTime pid -> do
-      let isHourlyRun = todMin (timeToTimeOfDay $ utctDayTime scheduledTime) == 0
+      let isHourlyRun = todMin (timeToTimeOfDay $ utctDayTime scheduledTime) < 15
       Relude.when isHourlyRun do
         tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
         tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx

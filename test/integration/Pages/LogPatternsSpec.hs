@@ -45,13 +45,7 @@ insertTestLog tr body serviceName ts = do
 -- | Insert pre-aggregated hourly stats for a pattern to build baselines quickly
 insertHourlyStat :: TestResources -> Text -> Text -> UTCTime -> Int64 -> IO ()
 insertHourlyStat tr sourceField patternHash hourBucket count =
-  withResource tr.trPool \conn ->
-    void $ PGS.execute conn
-      [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
-            VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
-            ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-            DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-      (pid, sourceField, patternHash, hourBucket, count)
+  void $ runTestBg tr $ LogPatterns.upsertHourlyStat pid sourceField patternHash hourBucket count
 
 
 -- | Count log patterns in the database for the test project

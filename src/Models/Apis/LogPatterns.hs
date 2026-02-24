@@ -69,6 +69,7 @@ newtype LogPatternId = LogPatternId {unLogPatternId :: Int64}
 data LogPatternState
   = LPSNew
   | LPSAcknowledged
+  | LPSIgnored
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving
