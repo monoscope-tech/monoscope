@@ -731,6 +731,7 @@ notifyErrorSubscriptions pid errorHashes = do
         :: ATBackgroundCtx [ErrorSubscriptionDue]
     )
   unless (null dueErrors) do
+    Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
     projectM <- Projects.projectById pid
     whenJust projectM \project -> Relude.when project.errorAlerts do
       let alertTypeForState = \case
@@ -739,17 +740,9 @@ notifyErrorSubscriptions pid errorHashes = do
             _ -> NewRuntimeError
           runtimeAlert ed issueId st = RuntimeErrorAlert{issueId = Issues.issueIdText issueId, errorData = ed, runtimeAlertType = alertTypeForState st}
       forM_ dueErrors \sub -> do
-        newSlackTs <- newIORef sub.slackThreadTs
-        newDiscordMsgId <- newIORef sub.discordMessageId
         forM_ project.notificationsChannel \case
-          Projects.NSlack -> do
-            tsM <- sendSlackAlertThreaded (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing sub.slackThreadTs
-            Relude.when (isNothing sub.slackThreadTs)
-              $ writeIORef newSlackTs tsM
-          Projects.NDiscord -> do
-            msgIdM <- sendDiscordAlertThreaded (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing sub.discordMessageId
-            Relude.when (isNothing sub.discordMessageId)
-              $ writeIORef newDiscordMsgId msgIdM
+          Projects.NSlack -> void $ sendSlackAlertThreaded (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing sub.slackThreadTs
+          Projects.NDiscord -> void $ sendDiscordAlertThreaded (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing sub.discordMessageId
           Projects.NPhone -> sendWhatsAppAlert (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title project.whatsappNumbers
           Projects.NEmail -> do
             users <- Projects.usersByProjectId pid
@@ -762,12 +755,6 @@ notifyErrorSubscriptions pid errorHashes = do
             forM_ users \u ->
               sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Projects.NPagerduty -> pass
-        -- Store thread IDs if this was the first notification
-        finalSlackTs <- readIORef newSlackTs
-        finalDiscordMsgId <- readIORef newDiscordMsgId
-        Relude.when (finalSlackTs /= sub.slackThreadTs || finalDiscordMsgId /= sub.discordMessageId)
-          $ void
-          $ Errors.updateErrorThreadIds sub.errorId finalSlackTs finalDiscordMsgId
     let errIds = V.fromList $ map (.errorId) dueErrors
     void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ANY(?::uuid[]) |] (Only errIds)
 
