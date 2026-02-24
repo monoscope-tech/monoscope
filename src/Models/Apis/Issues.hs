@@ -343,18 +343,8 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash = listToMaybe <$> PG.query q (pid, "api_change" :: Text, endpointHash)
-  where
-    q =
-      [sql|
-      SELECT * FROM apis.issues
-      WHERE project_id = ? 
-        AND issue_type = ?
-        AND endpoint_hash = ?
-        AND acknowledged_at IS NULL
-        AND archived_at IS NULL
-      LIMIT 1
-    |]
+findOpenIssueForEndpoint pid endpointHash =
+  listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| issue_type |], [field| endpoint_hash |]] <> " AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1") (pid, APIChange, endpointHash)
 
 
 -- | Update issue with new anomaly data

@@ -43,7 +43,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.Labeled (Labeled, labeled)
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
@@ -60,7 +60,7 @@ import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
 import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Types (DB)
+import System.Types (DB, withTimefusion)
 import Utils (replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -579,11 +579,10 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       target = fromMaybe "summary" targetM
   if target `elem` map fst LogPatterns.knownPatternFields
-    then PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND state != 'ignored' ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
+    then PG.query [sql|SELECT log_pattern, occurrence_count::INT as p_count FROM apis.log_patterns WHERE project_id = ? AND source_field = ? ORDER BY occurrence_count DESC OFFSET ? LIMIT 15|] (pid, target, skip)
     else do
       authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
-      let otelQ q = if authCtx.env.enableTimefusionReads then labeled @"timefusion" @WithConnection q else subsume q
-      rawResults :: [(Text, Int)] <- otelQ $ case resolveFieldExpr target of
+      rawResults :: [(Text, Int)] <- withTimefusion authCtx.env.enableTimefusionReads case resolveFieldExpr target of
         Just (Left colExpr) -> do
           let q = "SELECT " <> colExpr <> "::text, count(*) as cnt FROM otel_logs_and_spans WHERE project_id=? AND " <> whereCondition <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1 ORDER BY cnt DESC LIMIT 2000"
           PG.query (Query $ encodeUtf8 q) (Only pid)
@@ -592,8 +591,11 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
         Nothing -> pure []
       -- In-memory pagination: capped at 2000 rows from DB, normalize then paginate.
       let normalized = HashMap.fromListWith (+) [(replaceAllFormats val, cnt) | (val, cnt) <- rawResults, not (T.null val)]
-      pure $ take 15 $ drop skip $ sortWith (Down . snd) $ HashMap.toList normalized
+      pure $ take 15 $ drop skip $ sortOn (Down . snd) $ HashMap.toList normalized
   where
+    -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
+    -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.
+    -- User input never reaches SQL as raw text — only as column lookups or parameterized values.
     resolveFieldExpr f
       | f `member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
       | f `elem` rootColumns = Just $ Left f

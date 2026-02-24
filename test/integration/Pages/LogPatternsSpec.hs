@@ -230,10 +230,10 @@ spec = aroundAll withTestResources do
           , traceId = Nothing, sampleMessage = Just ("Ack sample " <> h), eventCount = 5
           }
 
-      let hashes = V.fromList ackHashes
+      let fieldHashPairs = V.fromList $ map (sourceField,) ackHashes
           sess = Servant.getResponse tr.trSessAndHeader
-      updated <- runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid (Just sess.user.id) hashes
-      updated `shouldBe` fromIntegral (V.length hashes)
+      updated <- runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid (Just sess.user.id) fieldHashPairs
+      updated `shouldBe` fromIntegral (V.length fieldHashPairs)
 
       -- Verify state change
       forM_ ackHashes \h -> do
@@ -251,7 +251,7 @@ spec = aroundAll withTestResources do
         , traceId = Nothing, sampleMessage = Just "Stale test", eventCount = 5
         }
       -- Acknowledge it so it's eligible for pruning
-      void $ runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton staleHash)
+      void $ runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton (sourceField, staleHash))
       -- Backdate last_seen_at to 60 days ago (exceeds stalePatternDays=30)
       withResource tr.trPool \conn ->
         void $ PGS.execute conn

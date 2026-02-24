@@ -26,9 +26,9 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
-import Effectful (Eff, IOE, subsume, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Ki qualified as Ki
-import Effectful.Labeled (Labeled, labeled)
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
@@ -80,8 +80,8 @@ import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
-import System.Types (ATBackgroundCtx, DB, runBackground)
-import UnliftIO.Exception (bracket, catch, try)
+import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
+import UnliftIO.Exception (SomeAsyncException (..), bracket, catch, throwIO, try)
 import Utils (DBField, replaceAllFormats, toXXHash)
 
 
@@ -355,7 +355,9 @@ processBackgroundJob authCtx bgJob =
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-tryLog label = (`catch` \(e :: SomeException) -> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e))
+tryLog label = (`catch` \(e :: SomeException) ->
+  whenJust (fromException @SomeAsyncException e) throwIO
+    >> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e))
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -503,7 +505,7 @@ logsPatternExtraction scheduledTime pid = do
 
     otelQ q = do
       c <- ask @Config.AuthContext
-      if c.config.enableTimefusionReads then labeled @"timefusion" @WithConnection q else subsume q
+      withTimefusion c.config.enableTimefusionReads q
 
     paginateTree tree meta offset startTime = do
       otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- otelQ $ PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
@@ -551,6 +553,8 @@ logsPatternExtraction scheduledTime pid = do
 
 
 -- | Input for Drain tree processing.
+-- SeedPattern: re-inserts existing templates with no sample (Nothing). When a real log
+-- later matches, updateLogGroupWithTemplate replaces the sample with actual content.
 data DrainInput = SeedPattern Text | NewEvent {logId :: Text, content :: Text}
 
 
@@ -1646,11 +1650,12 @@ monitorStatus triggerLessThan warnThreshold alertThreshold alertRecovery warnRec
 -- ============================================================================
 
 -- Tuning knobs for log pattern baseline and spike detection
-baselineWindowHours, baselinePageSize, maxNewPatternsPerRun, stalePatternDays :: Int
+baselineWindowHours, baselinePageSize, maxNewPatternsPerRun, stalePatternDays, staleNewPatternDays :: Int
 baselineWindowHours = 48 -- 2 days
 baselinePageSize = 1000
 maxNewPatternsPerRun = 500
 stalePatternDays = 30 -- prune acknowledged patterns older than this
+staleNewPatternDays = 7 -- auto-acknowledge 'new' patterns older than this
 
 
 minEventsForNewPatternAlerts :: Int64
@@ -1705,7 +1710,7 @@ data SpikeResult = SpikeResult
 detectSpikeOrDrop :: Double -> Double -> Double -> Double -> Int64 -> Maybe SpikeResult
 detectSpikeOrDrop zThreshold minDelta mean mad currentCount
   | z > zThreshold && rate > mean + minDelta = Just $ SpikeResult rate mean effectiveMad z Issues.Spike
-  | z < negate zThreshold && rate < mean - minDelta = Just $ SpikeResult rate mean effectiveMad z Issues.Drop
+  | z < -zThreshold && rate < mean - minDelta = Just $ SpikeResult rate mean effectiveMad z Issues.Drop
   | otherwise = Nothing
   where
     rate = fromIntegral currentCount
@@ -1719,7 +1724,7 @@ detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgrou
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
   now <- Time.currentTime
-  let minutesIntoHour = max 5 $ todMin (timeToTimeOfDay $ utctDayTime now)
+  let minutesIntoHour = max 15 $ todMin (timeToTimeOfDay $ utctDayTime now)
       scaleFactor = 60.0 / fromIntegral minutesIntoHour :: Double
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
@@ -1763,16 +1768,18 @@ processNewLogPatterns pid authCtx = do
           Log.logInfo "Created issue for new log pattern" (pid, lp.id, issue.id)
           pure issue.id
         -- Acknowledge ALL patterns (including url_path) to prevent pile-up
-        void $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.fromList $ map (.patternHash) newPatterns)
+        void $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.fromList $ map (\lp -> (lp.sourceField, lp.patternHash)) newPatterns)
         unless (V.null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid issueIds
 
 
--- | Prune acknowledged patterns not seen in 30 days and stats older than baseline window
+-- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,
+-- and delete old hourly stats beyond the baseline window.
 pruneStaleLogPatterns :: Projects.ProjectId -> ATBackgroundCtx ()
 pruneStaleLogPatterns pid = do
   now <- Time.currentTime
+  autoAcked <- LogPatterns.autoAcknowledgeStaleNewPatterns pid now staleNewPatternDays
   pruned <- LogPatterns.pruneStalePatterns pid now stalePatternDays
   statsPruned <- LogPatterns.pruneOldHourlyStats pid now (baselineWindowHours + 24)
-  Relude.when (pruned > 0 || statsPruned > 0)
-    $ Log.logInfo "Pruned stale log patterns and old stats" (pid, "patterns" :: Text, pruned, "stats" :: Text, statsPruned)
+  Relude.when (autoAcked > 0 || pruned > 0 || statsPruned > 0)
+    $ Log.logInfo "Pruned stale log patterns and old stats" (pid, "autoAcked" :: Text, autoAcked, "pruned" :: Text, pruned, "statsPruned" :: Text, statsPruned)

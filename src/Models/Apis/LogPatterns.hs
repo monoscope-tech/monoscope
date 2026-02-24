@@ -28,10 +28,12 @@ module Models.Apis.LogPatterns (
   -- Pruning
   pruneStalePatterns,
   pruneOldHourlyStats,
+  autoAcknowledgeStaleNewPatterns,
 )
 where
 
 import Data.Aeson qualified as AE
+import Data.Default (Default)
 import Data.List (lookup)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
@@ -54,7 +56,7 @@ import System.Types (DB)
 
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
+  deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "BS", DAE.CamelToSnake]] BaselineState
   deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
 
@@ -147,18 +149,19 @@ getNewLogPatterns pid limit = PG.query (_selectWhere @LogPattern [[DAT.field| pr
 
 
 -- | Acknowledge log patterns. Pass Nothing for system-triggered acknowledgments.
--- Note: matches on (project_id, pattern_hash) without source_field. Safe because
--- pattern_hash includes source-field-specific content, making cross-field collisions negligible.
-acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Maybe Users.UserId -> V.Vector Text -> Eff es Int64
-acknowledgeLogPatterns pid uid patternHashes
-  | V.null patternHashes = pure 0
-  | otherwise = PG.execute q (LPSAcknowledged, uid, pid, patternHashes)
+-- Matches on (project_id, source_field, pattern_hash) — the unique key — to avoid
+-- cross-field collisions (e.g. url_path and exception sharing the same normalized hash).
+acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Maybe Users.UserId -> V.Vector (Text, Text) -> Eff es Int64
+acknowledgeLogPatterns pid uid fieldHashPairs
+  | V.null fieldHashPairs = pure 0
+  | otherwise = let (fields, hashes) = V.unzip fieldHashPairs
+     in PG.execute q (LPSAcknowledged, uid, pid, fields, hashes)
   where
     q =
       [sql|
         UPDATE apis.log_patterns
         SET state = ?, acknowledged_by = ?, acknowledged_at = NOW()
-        WHERE project_id = ? AND pattern_hash = ANY(?)
+        WHERE project_id = ? AND (source_field, pattern_hash) IN (SELECT unnest(?::text[]), unnest(?::text[]))
       |]
 
 
@@ -296,7 +299,7 @@ getPatternsWithCurrentRates pid now =
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
           AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', ?::timestamptz)
         WHERE lp.project_id = ?
-          AND lp.state != 'ignored' AND lp.baseline_state = 'established'
+          AND lp.baseline_state = 'established'
       |]
 
 
@@ -344,3 +347,9 @@ pruneStalePatterns pid now staleDays = PG.execute [sql| DELETE FROM apis.log_pat
 -- | Delete hourly stats older than hoursBack (keeps baseline window + buffer)
 pruneOldHourlyStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
 pruneOldHourlyStats pid now hoursBack = PG.execute [sql| DELETE FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket < ?::timestamptz - INTERVAL '1 hour' * ? |] (pid, now, hoursBack)
+
+
+-- | Auto-acknowledge patterns stuck in 'new' state longer than staleDays.
+-- Prevents unbounded accumulation for low-volume projects that never trigger processNewLogPatterns.
+autoAcknowledgeStaleNewPatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
+autoAcknowledgeStaleNewPatterns pid now staleDays = PG.execute [sql| UPDATE apis.log_patterns SET state = 'acknowledged', acknowledged_at = NOW() WHERE project_id = ? AND state = 'new' AND created_at < ?::timestamptz - INTERVAL '1 day' * ? |] (pid, now, staleDays)
