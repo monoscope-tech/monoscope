@@ -1,5 +1,3 @@
-ALTER TABLE projects.replay_sessions ADD COLUMN IF NOT EXISTS event_file_count INTEGER NOT NULL DEFAULT 0;
-
 -- ALTER TYPE ADD VALUE must run outside a transaction (PG 12+ allows IF NOT EXISTS in txn).
 -- Assumption: the migration runner does NOT wrap the whole file in an implicit transaction.
 ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'log_pattern';
