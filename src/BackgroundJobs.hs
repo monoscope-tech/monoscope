@@ -560,9 +560,13 @@ data DrainInput = SeedPattern Text | NewEvent Text Text
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl' (flip \case
-    SeedPattern c -> processNewLog isSummary "" Nothing c now
-    NewEvent lid c -> processNewLog isSummary lid (Just c) c now) inTree batch
+  V.foldl'
+    ( flip \case
+        SeedPattern c -> processNewLog isSummary "" Nothing c now
+        NewEvent lid c -> processNewLog isSummary lid (Just c) c now
+    )
+    inTree
+    batch
 
 
 processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree

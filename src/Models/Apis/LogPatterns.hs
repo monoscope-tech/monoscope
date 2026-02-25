@@ -34,6 +34,7 @@ module Models.Apis.LogPatterns (
 )
 where
 
+import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.List (lookup)
@@ -52,7 +53,6 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (WrappedEnumSC (..))
-import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Relude hiding (id)
 import System.Types (DB)
 
