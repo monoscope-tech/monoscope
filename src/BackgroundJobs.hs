@@ -560,7 +560,7 @@ logsPatternExtraction scheduledTime pid = do
 -- | Input for Drain tree processing.
 -- SeedPattern: re-inserts existing templates with no sample (Nothing). When a real log
 -- later matches, updateLogGroupWithTemplate replaces the sample with actual content.
-data DrainInput = SeedPattern Text | NewEvent {logId :: Text, content :: Text}
+data DrainInput = SeedPattern Text | NewEvent Text Text
 
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
