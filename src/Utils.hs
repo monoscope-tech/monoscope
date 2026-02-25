@@ -995,8 +995,9 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
                     <> TLB.fromText "{Mon DD, YYYY}"
                     <> scanMons (Just '}') Nothing rest
                 Nothing -> case deferred of
-                  Just (prefBefore, _ddDash) | Just rest <- matchDMonYFwd afterMon ->
-                    prefBefore <> TLB.fromText "{DD-Mon-YYYY}" <> scanMons (Just '}') Nothing rest
+                  Just (prefBefore, _ddDash)
+                    | Just rest <- matchDMonYFwd afterMon ->
+                        prefBefore <> TLB.fromText "{DD-Mon-YYYY}" <> scanMons (Just '}') Nothing rest
                   _ ->
                     maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
                       <> TLB.singleton (T.head t)
