@@ -946,6 +946,21 @@ getAlertStatusColor status = case status of
 --
 -- >>> replaceAllFormats "Jan 1, 2024 and Feb 28, 2025"
 -- "{Mon DD, YYYY} and {Mon DD, YYYY}"
+--
+-- >>> replaceAllFormats "1-Jan-2024 then 31-Dec-2025"
+-- "{DD-Mon-YYYY} then {DD-Mon-YYYY}"
+--
+-- >>> replaceAllFormats "Event on 5-Mar-2023 at noon"
+-- "Event on {DD-Mon-YYYY} at noon"
+--
+-- >>> replaceAllFormats "notJan 1, 2024"
+-- "notJan {integer}, {integer}"
+--
+-- >>> replaceAllFormats "14-Oct-2023 and Oct 14, 2023"
+-- "{DD-Mon-YYYY} and {Mon DD, YYYY}"
+--
+-- >>> replaceAllFormats "Sep 3, 2024 then 7-Sep-2024 end"
+-- "{Mon DD, YYYY} then {DD-Mon-YYYY} end"
 replaceAllFormats :: Text -> Text
 replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass input)
   where
@@ -953,31 +968,66 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
     replacePrePass :: Text -> Text
     replacePrePass = replaceJWTs . replaceEmails . replaceTextDates
 
-    -- Replace text-based date formats: "Oct 14, 2023" and "14-Oct-2023"
+    -- Replace text-based date formats: "Oct 14, 2023" and "14-Oct-2023" in a single pass.
+    -- Uses a deferred "DD-" buffer so DD-Mon-YYYY can be detected without backtracking.
+    monthSet :: HS.HashSet Text
+    monthSet = HS.fromList ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+
     replaceTextDates :: Text -> Text
-    replaceTextDates !txt =
-      foldl'
-        (flip replaceMonth)
-        txt
-        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
+    replaceTextDates !txt = toText . TLB.toLazyText $ scanMons Nothing Nothing txt
 
-    replaceMonth :: Text -> Text -> Text
-    replaceMonth mon = go'
-      where
-        go' !t = case T.breakOn mon t of
-          (before, after)
-            | T.null after -> t
-            | not (monthBoundaryBefore before) || not (monthBoundaryAfter (T.drop 3 after)) ->
-                before <> mon <> go' (T.drop 3 after)
-            | otherwise ->
-                let afterMon = T.drop 3 after
-                 in case matchMonDY afterMon of
-                      Just rest -> before <> "{Mon DD, YYYY}" <> go' rest
-                      Nothing -> case matchDMonY before afterMon of
-                        Just (prefix, rest) -> prefix <> "{DD-Mon-YYYY}" <> go' rest
-                        Nothing -> before <> mon <> go' afterMon
+    -- prev: last emitted char (for boundary checks)
+    -- deferred: a "DD-" prefix held back in case the next token is a month (Nothing or Just (prefixBeforeDD, ddDash))
+    scanMons :: Maybe Char -> Maybe (TLB.Builder, Text) -> Text -> TLB.Builder
+    scanMons !prev !deferred !t
+      -- End of input: flush deferred and remaining text
+      | T.null t = maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
+      | T.length t < 3 = maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred <> TLB.fromText t
+      -- Check for month abbreviation
+      | let mon = T.take 3 t
+      , HS.member mon monthSet
+      , maybe True (not . isAlpha) prev
+      , monthBoundaryAfter (T.drop 3 t) =
+          let afterMon = T.drop 3 t
+           in case matchMonDY afterMon of
+                Just rest ->
+                  maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
+                    <> TLB.fromText "{Mon DD, YYYY}"
+                    <> scanMons (Just '}') Nothing rest
+                Nothing -> case deferred of
+                  Just (prefBefore, _ddDash) | Just rest <- matchDMonYFwd afterMon ->
+                    prefBefore <> TLB.fromText "{DD-Mon-YYYY}" <> scanMons (Just '}') Nothing rest
+                  _ ->
+                    maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
+                      <> TLB.singleton (T.head t)
+                      <> scanMons (Just (T.head t)) Nothing (T.drop 1 t)
+      -- Detect "D-" or "DD-" that might precede a month: defer it
+      | isNothing deferred
+      , isDigit (T.head t)
+      , let (ds, r) = T.span isDigit t
+      , T.length ds <= 2
+      , not (T.null r)
+      , T.head r == '-'
+      , let afterDash = T.drop 1 r
+      , T.length afterDash >= 3
+      , HS.member (T.take 3 afterDash) monthSet
+      , maybe True (not . isAlphaNum) prev =
+          scanMons (Just '-') (Just (mempty, ds <> "-")) afterDash
+      -- Default: emit current char
+      | otherwise =
+          maybe mempty (\(pb, dd) -> pb <> TLB.fromText dd) deferred
+            <> TLB.singleton (T.head t)
+            <> scanMons (Just (T.head t)) Nothing (T.drop 1 t)
 
-    monthBoundaryBefore t = T.null t || not (isAlpha (T.last t))
+    -- Check "-YYYY" after month name for DD-Mon-YYYY pattern
+    matchDMonYFwd :: Text -> Maybe Text
+    matchDMonYFwd afterMon = do
+      r1 <- T.stripPrefix "-" afterMon
+      let (year, rest) = T.span isDigit r1
+      guard $ T.length year == 4
+      guard $ T.null rest || not (isAlphaNum (T.head rest))
+      pure rest
+
     monthBoundaryAfter t = T.null t || not (isAlpha (T.head t))
 
     -- Match " DD[,] YYYY" after a month name
@@ -992,21 +1042,6 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       guard $ T.length year == 4
       guard $ T.null r5 || not (isAlphaNum (T.head r5))
       pure r5
-
-    -- Match "DD-" before and "-YYYY" after a month name
-    matchDMonY :: Text -> Text -> Maybe (Text, Text)
-    matchDMonY before afterMon = do
-      r1 <- T.stripPrefix "-" afterMon
-      let (year, rest) = T.span isDigit r1
-      guard $ T.length year == 4
-      guard $ T.null rest || not (isAlphaNum (T.head rest))
-      b <- T.stripSuffix "-" before
-      guard $ not (T.null b)
-      let (dayRev, prefRev) = T.span isDigit (T.reverse b)
-      guard $ T.length dayRev >= 1 && T.length dayRev <= 2
-      let prefix = T.reverse prefRev
-      guard $ T.null prefix || not (isAlphaNum (T.last prefix))
-      pure (prefix, rest)
 
     replaceEmails :: Text -> Text
     replaceEmails !txt =
@@ -1308,11 +1343,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
       pure rest
 
     isOctet :: Text -> Bool
-    isOctet t =
-      let len = T.length t
-       in len >= 1 && len <= 3 && case readMaybe (toString t) :: Maybe Int of
-            Just n -> n >= 0 && n <= 255
-            Nothing -> False
+    isOctet t = let len = T.length t in len >= 1 && len <= 3 && T.all isDigit t && T.foldl' (\acc c -> acc * 10 + (fromEnum c - 48)) 0 t <= (255 :: Int)
 
     isHexAlpha :: Char -> Bool
     isHexAlpha c = (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')

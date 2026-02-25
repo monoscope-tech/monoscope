@@ -36,7 +36,7 @@ import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (Only (Only), ToRow)
+import Database.PostgreSQL.Simple (Only (Only), ToRow, fromOnly)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -598,7 +598,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   if not (null precomputed)
     then do
       Log.logTrace "fetchLogPatterns: using precomputed" $ AE.object ["count" AE..= length precomputed]
-      totalPatterns <- maybe 0 (\(Only n) -> n) . listToMaybe <$> PG.query [sql|SELECT count(*)::INT FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?)|] (pid, target, dateFrom, dateFrom, dateTo, dateTo)
+      totalPatterns <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql|SELECT count(*)::INT FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?)|] (pid, target, dateFrom, dateFrom, dateTo, dateTo)
       let hashes = V.fromList $ map (view _5) precomputed
           hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
           hourlyTo = fromMaybe now dateTo
@@ -653,7 +653,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       | f == "summary" = Just $ Left "array_to_string(summary, chr(30))"
       | f `member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
       | f `elem` rootColumns = Just $ Left f
-      | "attributes." `T.isPrefixOf` f = Just $ Right $ V.fromList $ drop 1 $ T.splitOn "." f
+      | "attributes." `T.isPrefixOf` f = let parts = drop 1 $ T.splitOn "." f in if null parts || parts == [""] then Nothing else Just $ Right $ V.fromList parts
       | otherwise = Nothing
     rootColumns = ["body", "level", "kind", "name", "status_code", "status_message"] :: [Text]
     -- ~20 buckets for the sparkline, minimum 1 second
