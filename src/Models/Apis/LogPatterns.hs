@@ -10,9 +10,11 @@ module Models.Apis.LogPatterns (
   acknowledgeLogPatterns,
   UpsertPattern (..),
   upsertLogPattern,
+  upsertLogPatternBatch,
   updateBaselineBatch,
   -- Hourly stats
   upsertHourlyStat,
+  upsertHourlyStatBatch,
   BatchPatternStats (..),
   getBatchPatternStats,
   -- Pattern with current rate for spike detection
@@ -183,12 +185,18 @@ upsertLogPattern up =
     up
 
 
--- | Bulk update baselines for multiple patterns in a single query
-updateBaselineBatch :: DB es => Projects.ProjectId -> V.Vector (Text, BaselineState, Double, Double, Int) -> Eff es Int64
+-- | Bulk update baselines for multiple patterns in a single query.
+-- Matches on (project_id, source_field, pattern_hash) since pattern_hash alone is not unique across source fields.
+updateBaselineBatch :: DB es => Projects.ProjectId -> V.Vector (Text, Text, BaselineState, Double, Double, Int) -> Eff es Int64
 updateBaselineBatch pid rows
   | V.null rows = pure 0
   | otherwise =
-      let (hashes, states, means, mads, samples) = V.unzip5 rows
+      let srcFields = V.map (\(s, _, _, _, _, _) -> s) rows
+          hashes = V.map (\(_, h, _, _, _, _) -> h) rows
+          states = V.map (\(_, _, s, _, _, _) -> s) rows
+          means = V.map (\(_, _, _, m, _, _) -> m) rows
+          mads = V.map (\(_, _, _, _, m, _) -> m) rows
+          samples = V.map (\(_, _, _, _, _, s) -> s) rows
        in PG.execute
             [sql|
               UPDATE apis.log_patterns lp
@@ -197,10 +205,28 @@ updateBaselineBatch pid rows
                   baseline_volume_hourly_mad = v.mad,
                   baseline_samples = v.samples,
                   baseline_updated_at = NOW()
-              FROM (SELECT unnest(?::text[]) AS hash, unnest(?::text[]) AS state, unnest(?::float8[]) AS mean, unnest(?::float8[]) AS mad, unnest(?::int[]) AS samples) v
-              WHERE lp.project_id = ? AND lp.pattern_hash = v.hash
+              FROM (SELECT unnest(?::text[]) AS source_field, unnest(?::text[]) AS hash, unnest(?::text[]) AS state, unnest(?::float8[]) AS mean, unnest(?::float8[]) AS mad, unnest(?::int[]) AS samples) v
+              WHERE lp.project_id = ? AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash
             |]
-            (hashes, states, means, mads, samples, pid)
+            (srcFields, hashes, states, means, mads, samples, pid)
+
+
+-- | Batch version of upsertLogPattern using executeMany.
+upsertLogPatternBatch :: DB es => [UpsertPattern] -> Eff es Int64
+upsertLogPatternBatch [] = pure 0
+upsertLogPatternBatch ups =
+  PG.executeMany
+    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
+          last_seen_at = NOW(),
+          occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
+          sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
+          service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
+          log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
+          trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
+  |]
+    ups
 
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
@@ -215,6 +241,18 @@ upsertHourlyStat pid sourceField patHash hourBucket count =
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
         DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
     (pid, sourceField, patHash, hourBucket, count)
+
+
+-- | Batch version of upsertHourlyStat using executeMany.
+upsertHourlyStatBatch :: DB es => [(Projects.ProjectId, Text, Text, UTCTime, Int64)] -> Eff es Int64
+upsertHourlyStatBatch [] = pure 0
+upsertHourlyStatBatch rows =
+  PG.executeMany
+    [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
+        VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
+        ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
+        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
+    rows
 
 
 -- | Batch: computes median + MAD for all patterns in one query.

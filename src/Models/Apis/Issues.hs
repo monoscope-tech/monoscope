@@ -44,6 +44,7 @@ module Models.Apis.Issues (
   createQueryAlertIssue,
   createLogPatternIssue,
   createLogPatternRateChangeIssue,
+  SpikeResult (..),
 
   -- * Utilities
   issueIdText,
@@ -124,7 +125,7 @@ issueIdText = idToText
 
 -- | Issue types
 data IssueType
-  = APIChange
+  = ApiChange
   | RuntimeException
   | QueryAlert
   | LogPattern
@@ -213,7 +214,6 @@ data Issue = Issue
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
-  , sourceType :: Maybe Text
   , targetHash :: Text -- Must stay non-null: used in ON CONFLICT unique index for dedup
   , endpointHash :: Text -- Deprecated: always == targetHash (set by mkIssue). Drop column once selectIssues/selectIssueByHash are migrated.
   , acknowledgedAt :: Maybe ZonedTime
@@ -280,13 +280,13 @@ insertIssue issue = void $ PG.execute q issue
     q =
       [sql|
 INSERT INTO apis.issues (
-  id, created_at, updated_at, project_id, issue_type, source_type, target_hash, endpoint_hash,
+  id, created_at, updated_at, project_id, issue_type, target_hash, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
   title, service, environment, critical, severity,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
@@ -333,7 +333,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       _ -> "ORDER BY critical DESC, created_at DESC"
     q =
       [text|
-      SELECT id, created_at, updated_at, project_id, issue_type::text, endpoint_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
+      SELECT id, created_at, updated_at, project_id, issue_type::text, target_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
         CASE WHEN critical THEN 'critical' ELSE 'info' END, affected_requests, affected_clients, NULL::double precision,
         recommended_action, migration_complexity, issue_data, request_payloads, response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
       FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
@@ -343,8 +343,8 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-findOpenIssueForEndpoint pid endpointHash =
-  listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| issue_type |], [field| endpoint_hash |]] <> " AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1") (pid, APIChange, endpointHash)
+findOpenIssueForEndpoint pid targetHash =
+  listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| issue_type |], [field| target_hash |]] <> " AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1") (pid, ApiChange, targetHash)
 
 
 -- | Update issue with new anomaly data
@@ -427,7 +427,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
   mkIssue
     MkIssueOpts
       { projectId
-      , issueType = APIChange
+      , issueType = ApiChange
       , targetHash = endpointHash
       , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
       , critical = isCritical
@@ -594,13 +594,13 @@ tryAcquireChatMigrationLock convId = do
 
 
 -- | Create an issue for a log pattern rate change
-createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPatternWithRate -> Double -> Double -> Double -> Double -> RateChangeDirection -> Eff es Issue
-createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMad zScoreVal direction = do
+createLogPatternRateChangeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPatternWithRate -> SpikeResult -> Eff es Issue
+createLogPatternRateChangeIssue projectId lp sr = do
   now <- Time.currentTime
-  let changePercentVal = if baselineMean > 0 then abs ((currentRate / baselineMean) - 1) * 100 else 0
-      dir = display direction
+  let changePercentVal = if sr.mean > 1 then min 9999 $ abs ((sr.currentRate / sr.mean) - 1) * 100 else 0
+      dir = display sr.direction
       zonedNow = utcToZonedTime utc now
-      severity = case (direction, lp.logLevel) of
+      severity = case (sr.direction, lp.logLevel) of
         (Spike, Just "error") -> "critical"
         (Spike, _) -> "warning"
         (Drop, _) -> "info"
@@ -610,10 +610,10 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
       , issueType = LogPatternRateChange
       , targetHash = lp.patternHash
       , service = lp.serviceName
-      , critical = direction == Spike && lp.logLevel == Just "error"
+      , critical = sr.direction == Spike && lp.logLevel == Just "error"
       , severity
       , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> showPct changePercentVal <> ")"
-      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate currentRate <> ", Baseline: " <> showRate baselineMean <> " (" <> show (round (abs zScoreVal) :: Int) <> " std devs)."
+      , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> show (round (abs sr.zScore) :: Int) <> " std devs)."
       , migrationComplexity = "n/a"
       , issueData =
           LogPatternRateChangeData
@@ -623,12 +623,12 @@ createLogPatternRateChangeIssue projectId lp currentRate baselineMean baselineMa
             , logLevel = lp.logLevel
             , serviceName = lp.serviceName
             , sourceField = lp.sourceField
-            , currentRatePerHour = currentRate
-            , baselineMean
-            , baselineMad
-            , zScore = abs zScoreVal
+            , currentRatePerHour = sr.currentRate
+            , baselineMean = sr.mean
+            , baselineMad = sr.mad
+            , zScore = abs sr.zScore
             , changePercent = changePercentVal
-            , changeDirection = direction
+            , changeDirection = sr.direction
             , detectedAt = now
             }
       , timestamp = Just zonedNow
@@ -693,6 +693,16 @@ data RateChangeDirection = Spike | Drop
   deriving (Display) via WrappedEnumSC "" RateChangeDirection
 
 
+data SpikeResult = SpikeResult
+  { currentRate :: Double
+  , mean :: Double
+  , mad :: Double
+  , zScore :: Double
+  , direction :: RateChangeDirection
+  }
+  deriving stock (Eq, Show)
+
+
 -- | Log Pattern Rate Change issue data (volume spike/drop)
 data LogPatternRateChangeData = LogPatternRateChangeData
   { patternHash :: Text
@@ -741,7 +751,6 @@ mkIssue opts = do
       , updatedAt = zonedNow
       , projectId = opts.projectId
       , issueType = opts.issueType
-      , sourceType = Just $ issueTypeToText opts.issueType -- Redundant with issueType; kept for legacy queries
       , targetHash = opts.targetHash
       , endpointHash = opts.targetHash
       , acknowledgedAt = Nothing

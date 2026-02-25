@@ -523,17 +523,14 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let effectiveVizType = vizTypeM <|> ((.visualizationType) <$> alertDM)
 
   -- Skip table load on initial page load unless it's a JSON request
-  let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true" || effectiveVizType == Just "patterns"
+  let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
           then labeled @"timefusion" @PG.WithConnection $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
           else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
-  let isJsonFastPath =
-        jsonM == Just "true"
-          && effectiveVizType /= Just "patterns"
-          && layoutM /= Just "SaveQuery"
+  let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"
 
   let buildLogResult (requestVecs, colNames, resultCount') = do
         let colIdxMap = listToIndexHashMap colNames
@@ -570,13 +567,17 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let fetchOrSkip = if shouldSkipLoad then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0) else fetchLogs
 
   if isJsonFastPath
-    then do
-      tableAsVecE <- fetchOrSkip
-      case hush tableAsVecE of
-        Just tableResult -> buildLogResult tableResult >>= addRespHeaders . LogsGetJson
-        Nothing -> do
-          addErrorToast "Something went wrong" Nothing
-          addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
+    then case effectiveVizType of
+      Just "patterns" -> do
+        (totalPatterns, patternRows) <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+        addRespHeaders $ LogsPatternJson totalPatterns (V.fromList patternRows)
+      _ -> do
+        tableAsVecE <- fetchOrSkip
+        case hush tableAsVecE of
+          Just tableResult -> buildLogResult tableResult >>= addRespHeaders . LogsGetJson
+          Nothing -> do
+            addErrorToast "Something went wrong" Nothing
+            addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
     else do
       -- Full HTML path: parallelize independent DB queries
       (tableAsVecE, queryLib, facetSummary, freeTierExceeded, teams, patterns) <- Ki.scoped \scope -> do
@@ -587,7 +588,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         t4 <- Ki.fork scope $ checkFreeTierExceeded pid project.paymentPlan
         t5 <- Ki.fork scope $ V.fromList <$> ManageMembers.getTeams pid
         t6 <- Ki.fork scope $ case effectiveVizType of
-          Just "patterns" -> Just . V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+          Just "patterns" -> Just . second V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
           _ -> pure Nothing
         (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
@@ -635,7 +636,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       case tableAsVecM of
         Just tableResult -> do
           r <- buildLogResult tableResult
-          let patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
+          let patternsToSkip = fromMaybe 0 skipM + maybe 0 (V.length . snd) patterns
 
           -- Build widgets with PNG URLs
           let baseChartWidget = logChartWidget pid
@@ -686,7 +687,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   }
 
           addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
-            (_, _, Just "true", Just "patterns") -> LogsPatternJson (fromMaybe V.empty patterns)
+            (_, _, Just "true", Just "patterns") -> let (tp, ps) = fromMaybe (0, V.empty) patterns in LogsPatternJson tp ps
             (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
             (Just "resultTable", Just "true", _, _) -> LogsGetJson r
             (Just "all", Just "true", _, _) -> LogsGetJson r
@@ -749,7 +750,7 @@ data LogsGet
   | LogsGetErrorSimple Text
   | LogsGetJson LogResult
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
-  | LogsPatternJson (V.Vector RequestDumps.PatternRow)
+  | LogsPatternJson Int (V.Vector RequestDumps.PatternRow)
 
 
 instance ToHtml LogsGet where
@@ -764,10 +765,8 @@ instance ToHtml LogsGet where
 
 instance AE.ToJSON LogsGet where
   toJSON (LogsGetJson r) = AE.object ["logsData" AE..= r.finalVecs, "serviceColors" AE..= r.serviceColors, "nextUrl" AE..= r.nextLogsURL, "resetLogsUrl" AE..= r.resetLogsURL, "recentUrl" AE..= r.recentLogsURL, "cols" AE..= r.curatedColNames, "colIdxMap" AE..= r.colIdxMap, "count" AE..= r.resultCount, "traces" AE..= r.traces, "hasMore" AE..= (r.queryResultCount < r.resultCount), "queryResultCount" AE..= r.queryResultCount]
-  toJSON (LogsPatternJson patterns) =
+  toJSON (LogsPatternJson totalPatterns patterns) =
     let total = V.foldl' (\acc p -> acc + p.count) 0 patterns
-        -- Row layout: [id, pattern_count, volume, level, service, summary] — must match colIdxMap
-        -- On-the-fly patterns use chr(30) separator; Drain patterns are space-separated
         patternToSummary pat
           | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
           | otherwise = AE.toJSON (T.words pat)
@@ -777,7 +776,8 @@ instance AE.ToJSON LogsGet where
           , "cols" AE..= (["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text])
           , "colIdxMap" AE..= HM.fromList [("id" :: Text, 0 :: Int), ("pattern_count", 1), ("volume", 2), ("level", 3), ("service", 4), ("summary", 5)]
           , "count" AE..= total
-          , "hasMore" AE..= (V.length patterns > 14)
+          , "totalPatterns" AE..= totalPatterns
+          , "hasMore" AE..= (V.length patterns > 99)
           , "queryResultCount" AE..= V.length patterns
           , "serviceColors" AE..= AE.object []
           , "traces" AE..= ([] :: [AE.Value])
@@ -818,7 +818,7 @@ data ApiLogsPageData = ApiLogsPageData
   , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
-  , patterns :: Maybe (V.Vector RequestDumps.PatternRow)
+  , patterns :: Maybe (Int, V.Vector RequestDumps.PatternRow)
   , patternsToSkip :: Int
   , targetPattern :: Maybe Text
   , project :: Projects.Project
@@ -931,8 +931,7 @@ apiLogsPage page = do
             showTrace = isJust page.showTrace
         div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
           -- Filters and row count header
-          let isPatterns = page.vizType == Just "patterns"
-          div_ [class_ $ "flex gap-2  pt-1 text-sm z-10 w-max bg-bgBase" <> bool " -mb-6" "" isPatterns] do
+          div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
             label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
               faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
               span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
@@ -956,7 +955,7 @@ apiLogsPage page = do
               span_ [class_ "text-textStrong", id_ "row-count-suffix"] $ toHtml $ bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
 
           -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
-          div_ [class_ $ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden" <> bool "" " hidden" isPatterns] do
+          div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden"] do
             let pid = page.pid.toText
             let vizType = maybe "\"timeseries\"" show page.vizType
             script_
@@ -995,7 +994,7 @@ apiLogsPage page = do
           -- Logs view section (also within the scrollable container)
           div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
             -- Virtual table for logs
-            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing page.vizType
+            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
 
         -- Alert configuration panel on the right
         div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False

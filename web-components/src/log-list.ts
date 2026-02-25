@@ -73,6 +73,7 @@ export class LogList extends LitElement {
   @state() private expandTimeRange: boolean = true;
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
+  @state() private totalPatterns: number = 0;
   @state() private isLiveStreaming: boolean = false;
   @state() private isLoading: boolean = false;
   @state() private isFetchingRecent: boolean = false;
@@ -113,6 +114,17 @@ export class LogList extends LitElement {
 
   // Bound functions for event listeners
   private boundHandleResize: any;
+  private handleFormSubmit = (e: Event) => {
+    if ((e.target as HTMLElement)?.id === 'log_explorer_form') {
+      e.preventDefault();
+      this.debouncedRefetchLogs();
+    }
+  };
+  private handleUpdateQuery = (e: Event) => {
+    const source = (e as CustomEvent).detail?.source || 'default';
+    if (source === 'expand-timerange') return;
+    this.debouncedRefetchLogs();
+  };
   private isCalculatingWidths: boolean = false;
   private lastVisibilityRange: { first: number; last: number } | null = null;
   private isScrolling = false;
@@ -163,7 +175,7 @@ export class LogList extends LitElement {
         startNs: 0, duration: 0, traceStart: 0, traceEnd: 0,
         childrenTimeSpans: [], type: 'log' as const,
       }));
-      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap: data.colIdxMap || {}, count: data.count || 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
+      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap: data.colIdxMap || {}, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
     }
 
     // Use early fetch promise if available (set by server-rendered script in head)
@@ -212,37 +224,13 @@ export class LogList extends LitElement {
     }
 
     // Global event listeners
-    ['submit', 'add-query'].forEach((ev) =>
-      window.addEventListener(ev, () => {
-        this.debouncedRefetchLogs();
-      })
-    );
+    ['submit', 'add-query'].forEach((ev) => window.addEventListener(ev, this.debouncedRefetchLogs));
 
     // Form submit listener
-    document.addEventListener('submit', (e) => {
-      if ((e.target as HTMLElement)?.id === 'log_explorer_form') {
-        e.preventDefault();
-        this.debouncedRefetchLogs();
-      }
-    });
+    document.addEventListener('submit', this.handleFormSubmit);
 
     // Filter element update listener
-    document.addEventListener('update-query', (e: Event) => {
-      const customEvent = e as CustomEvent;
-      const source = customEvent.detail?.source || 'default';
-
-      console.log('update-query event received', { source, detail: customEvent.detail });
-
-      // Handle expand-timerange specially - don't clear existing data
-      if (source === 'expand-timerange') {
-        // Fetch more data without clearing - the expandTimeRangeUrl button handler will call fetchData
-        console.log('Expand time range - data will be fetched by button handler');
-        return;
-      }
-
-      // For all other sources (timepicker, chart-zoom, query changes, etc.) - full reload
-      this.debouncedRefetchLogs();
-    });
+    document.addEventListener('update-query', this.handleUpdateQuery);
 
     // Window lifecycle events
     window.addEventListener('pagehide', () => {
@@ -276,7 +264,6 @@ export class LogList extends LitElement {
   }
 
   private buildJsonUrl(): string {
-    console.log(this.initialFetchUrl);
     // Preserve all existing query parameters and add json=true
     if (this.initialFetchUrl) {
       const url = new URL(this.initialFetchUrl, window.location.origin);
@@ -285,6 +272,9 @@ export class LogList extends LitElement {
     } else {
       const p = new URLSearchParams(window.location.search);
       p.set('json', 'true');
+      // Sync viz_type with current mode (URL update may be deferred via rAF)
+      if (this.mode === 'patterns') p.set('viz_type', 'patterns');
+      else if (p.get('viz_type') === 'patterns') p.delete('viz_type');
       const pathName = window.location.pathname;
       return `${window.location.origin}${pathName}?${p.toString()}`;
     }
@@ -361,18 +351,6 @@ export class LogList extends LitElement {
     // The from/to/since tell the server what time range to query within
     url.searchParams.set('cursor', date.toISOString());
 
-    console.log('[LoadMore] Built cursor URL', {
-      flipDirection: this.flipDirection,
-      treeLength: this.spanListTree.length,
-      oldestTimestamp: timestamp,
-      cursor: date.toISOString(),
-      timeRange: {
-        from: url.searchParams.get('from'),
-        to: url.searchParams.get('to'),
-        since: url.searchParams.get('since'),
-      },
-    });
-
     return url.toString();
   }
 
@@ -437,11 +415,12 @@ export class LogList extends LitElement {
   }
 
   async fetchInitialData() {
+    const vizType = new URLSearchParams(window.location.search).get('viz_type');
+    this.mode = vizType === 'patterns' ? 'patterns' : 'logs';
     this.fetchData(this.buildJsonUrl(), false);
   }
 
   async refetchLogs() {
-    console.log('refetchLogs called - stack trace:', new Error().stack);
     this.fetchData(this.buildJsonUrl(), true);
   }
 
@@ -463,7 +442,6 @@ export class LogList extends LitElement {
   };
 
   handleChartZoom = (params: { batch?: { startValue: string; endValue: string }[] }) => {
-    console.log('zooooooomiiiiiiiiiing');
     const zoom = params.batch ? params.batch[0] : undefined;
     if (!zoom) return;
     let startValue = zoom.startValue;
@@ -556,10 +534,13 @@ export class LogList extends LitElement {
   private updateRowCountDisplay() {
     const countElement = document.getElementById('row-count-display');
     if (!countElement) return;
-    countElement.textContent = this.formatCount(this.loadedCount);
     const suffixEl = document.getElementById('row-count-suffix');
-    if (suffixEl) {
-      suffixEl.textContent = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
+    if (this.mode === 'patterns') {
+      countElement.textContent = `${this.formatCount(this.totalPatterns)} patterns`;
+      if (suffixEl) suffixEl.textContent = ` found (based on ${this.formatCount(this.totalCount)} logs)`;
+    } else {
+      countElement.textContent = this.formatCount(this.loadedCount);
+      if (suffixEl) suffixEl.textContent = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
     }
   }
 
@@ -660,6 +641,8 @@ export class LogList extends LitElement {
       window.removeEventListener('mouseup', this.handleMouseUp);
     }
     ['submit', 'add-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
+    document.removeEventListener('submit', this.handleFormSubmit);
+    document.removeEventListener('update-query', this.handleUpdateQuery);
 
     // Clean up chart event handlers
     if (this.barChart) {
@@ -785,8 +768,6 @@ export class LogList extends LitElement {
   };
 
   fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
-    console.log('fetchData called', { url, isRefresh, isRecentFetch, isLoadMore, currentTreeLength: this.spanListTree.length });
-
     if (isRecentFetch && this.isFetchingRecent) return;
     if (isLoadMore && this.isLoadingMore) return;
     if (!isRecentFetch && !isLoadMore && this.isLoading) return;
@@ -815,9 +796,8 @@ export class LogList extends LitElement {
       } else {
         this.loadedCount = meta.queryResultCount ?? 0;
       }
-      if (meta.count !== undefined) {
-        this.totalCount = meta.count;
-      }
+      if (meta.count !== undefined && !isLoadMore) this.totalCount = meta.count;
+      if (meta.totalPatterns !== undefined && !isLoadMore) this.totalPatterns = meta.totalPatterns;
       this.updateRowCountDisplay();
       if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
       this.logsColumns = meta.cols;
@@ -875,7 +855,7 @@ export class LogList extends LitElement {
         setTimeout(() => this.updateColumnMaxWidthMap(tree.map((t) => t.data).filter(Boolean)), 100);
       }
     } catch (error) {
-      console.log(error);
+      console.error(error);
       this.showErrorToast(error instanceof Error ? error.message : 'Network error');
     } finally {
       this.isLoading = false;
@@ -1202,7 +1182,7 @@ export class LogList extends LitElement {
       <div
         ${ref(this.containerRef)}
         class=${clsx(
-          'relative  group-hash-full shrink-1 min-w-0 pb-32 m-0 bg-bgBase w-full h-full c-scroll  overflow-y-auto will-change-scroll contain-strict',
+          'relative group-hash-full shrink-1 min-w-0 pb-32 m-0 bg-bgBase w-full h-full c-scroll overflow-y-auto will-change-scroll contain-strict',
           isInitialLoading && 'overflow-hidden'
         )}
         id="logs_list_container_inner"
@@ -1550,7 +1530,7 @@ export class LogList extends LitElement {
           rowData._summaryCache = { content: this.renderSummaryElements(summaryArray, this.wrapLines), wrapLines: this.wrapLines };
         }
         if (this.mode === 'patterns') {
-          return html`<div class="flex items-center gap-1 flex-wrap break-all whitespace-break-spaces">${rowData._summaryCache.content}</div>`;
+          return html`<div class="break-all whitespace-break-spaces">${rowData._summaryCache.content}</div>`;
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
@@ -1907,10 +1887,10 @@ export class LogList extends LitElement {
         <span class="sm:inline hidden">${label}</span>
       </button>`;
 
-    if (this.mode === 'patterns') return nothing;
+    if (this.mode === 'patterns') return html`<div class="border-b" style="border-color: var(--color-strokeWeak)"></div>`;
 
     return html`
-      <div class="w-full flex justify-end px-2 pb-1 gap-3">
+      <div class="w-full flex justify-end px-2 gap-3">
         <div class="tabs tabs-box tabs-md p-0 tabs-outline items-center border">
           ${viewButton('tree', 'tree', 'Tree')} ${viewButton('list', 'list-view', 'List')}
         </div>

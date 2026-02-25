@@ -142,12 +142,12 @@ spec = aroundAll withTestResources do
           (PGS.Only pid) :: IO [(Text, Text, Double, Double)]
 
       -- Spike detection uses the current hour + projected rate.
-      -- frozenTime is exactly :00, so minutesIntoHour = max 5 0 = 5, scaleFactor = 12.0
-      -- Stats go into the current hour bucket and get projected: count * 12
+      -- frozenTime is exactly :00, so minutesIntoHour = max 15 0 = 15, scaleFactor = 4.0
+      -- Stats go into the current hour bucket and get projected: count * 4
       case established of
         [(patHash, srcField, mean, mad)] -> do
-          -- projected = rawCount * 12 must exceed mean + 5*mad + 50
-          let rawCount = ceiling ((mean + 5 * mad + 100) / 12) :: Int64
+          -- projected = rawCount * 4 must exceed mean + 3*mad + 50
+          let rawCount = ceiling ((mean + 3 * mad + 100) / 4) :: Int64
           insertHourlyStat tr srcField patHash frozenTime rawCount
 
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
@@ -169,7 +169,7 @@ spec = aroundAll withTestResources do
             insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime)
               (600 + fromIntegral (h `mod` 5))
           runTestBg tr $ BackgroundJobs.calculateLogPatternBaselines pid
-          -- Spike in current hour; projected = 200 * 12 = 2400 >> baseline ~600
+          -- Spike in current hour; projected = 200 * 4 = 800 >> baseline ~600
           insertHourlyStat tr srcField patHash frozenTime 200
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
           runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid tr.trATCtx

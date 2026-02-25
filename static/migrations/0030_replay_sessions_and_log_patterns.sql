@@ -48,7 +48,6 @@ CREATE INDEX IF NOT EXISTS idx_log_patterns_service ON apis.log_patterns(project
 CREATE INDEX IF NOT EXISTS idx_log_patterns_project_hash
   ON apis.log_patterns(project_id, pattern_hash);
 
-ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS source_type TEXT;
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS target_hash TEXT NOT NULL DEFAULT '';
 ALTER TABLE apis.issues ADD COLUMN IF NOT EXISTS environment TEXT;
 ALTER TABLE apis.issues ALTER COLUMN service DROP NOT NULL;

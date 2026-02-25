@@ -289,11 +289,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
     forM_ visTypes $ \(icon, label, vizType, emoji) -> do
       label_
         [ term "data-value" vizType
-        , term "data-reload" $ if vizTypeM == Just "patterns" || vizType == "patterns" then "patterns" else ""
         , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
-        , [__| on click
-               if @data-reload == "patterns" then window.setParams({viz_type:@data-value}, true) end
-          |]
         ]
         do
           input_
@@ -309,6 +305,15 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                             call updateVizTypeInUrl(my.value, @data-update-url === 'true')
                             set widgetJSON.type to my.value
                             send 'update-widget' to #{@data-container-id}
+                            set resultTable to document.getElementById('resultTable')
+                            if resultTable
+                              if my.value is 'patterns'
+                                set resultTable.mode to 'patterns'
+                              else
+                                set resultTable.mode to 'logs'
+                              end
+                              call resultTable.refetchLogs()
+                            end
                           end
                        |]
               ]

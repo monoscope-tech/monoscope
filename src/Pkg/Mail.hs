@@ -368,7 +368,7 @@ sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 
 sampleAlert :: IssueType -> Text -> NotificationAlerts
 sampleAlert = \case
-  APIChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
+  ApiChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
   RuntimeException ->
     const
       $ RuntimeErrorAlert

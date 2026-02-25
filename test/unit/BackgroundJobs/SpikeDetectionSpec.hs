@@ -1,7 +1,7 @@
 module BackgroundJobs.SpikeDetectionSpec (spec) where
 
-import BackgroundJobs (SpikeResult (..), detectSpikeOrDrop, spikeMinAbsoluteDelta, spikeZScoreThreshold)
-import Models.Apis.Issues (RateChangeDirection (..))
+import BackgroundJobs (detectSpikeOrDrop, spikeMinAbsoluteDelta, spikeZScoreThreshold)
+import Models.Apis.Issues (RateChangeDirection (..), SpikeResult (..))
 import Relude
 import Test.Hspec
 

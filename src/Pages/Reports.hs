@@ -271,7 +271,7 @@ singleReportPage pid report =
                             span_ [class_ "h-3 w-3 rounded bg-yellow-500"] pass
                             span_ [class_ "text-xs"] "Monitor alerts"
                         let totalAnomalies = length v.issues
-                            (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) x -> (e + if x.issueType == Issues.RuntimeException then 1 else 0, a + if x.issueType == Issues.APIChange then 1 else 0, m + if x.issueType == Issues.QueryAlert then 1 else 0)) (0, 0, 0) v.issues
+                            (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) x -> (e + if x.issueType == Issues.RuntimeException then 1 else 0, a + if x.issueType == Issues.ApiChange then 1 else 0, m + if x.issueType == Issues.QueryAlert then 1 else 0)) (0, 0, 0) v.issues
                         div_ [class_ "w-full h-3 rounded overflow-x-hidden bg-fillWeak"] do
                           when (totalAnomalies > 0) do
                             div_ [class_ "h-full bg-fillError-strong", style_ $ "width: " <> show (errTotal `div` totalAnomalies * 100) <> "%"] pass

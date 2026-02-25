@@ -39,7 +39,9 @@ import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
+import Servant (err400, errBody)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -157,7 +159,7 @@ anomalyBulkActionsPostH pid action items = do
         "archive" -> do
           _ <- PG.execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
           pass
-        _ -> error $ "unhandled anomaly bulk action state " <> action
+        _ -> throwError err400{errBody = "unhandled anomaly bulk action: " <> encodeUtf8 action}
       addSuccessToast (action <> "d items Successfully") Nothing
       addRespHeaders Bulk
 
@@ -318,7 +320,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
                 div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
             _ -> pass
-          Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
+          Issues.ApiChange -> case AE.fromJSON (getAeson issue.issueData) of
             AE.Success (d :: Issues.APIChangeData) -> do
               div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
                 span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
@@ -1024,7 +1026,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   -- Metadata row (method, endpoint, service, time)
   div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
     -- Method and endpoint (for API changes)
-    when (issue.issueType == Issues.APIChange) do
+    when (issue.issueType == Issues.ApiChange) do
       case AE.fromJSON (getAeson issue.issueData) of
         AE.Success (apiData :: Issues.APIChangeData) -> do
           div_ [class_ "flex items-center gap-2"] do
@@ -1039,7 +1041,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 
   -- Statistics row (only for API changes)
-  when (issue.issueType == Issues.APIChange) do
+  when (issue.issueType == Issues.ApiChange) do
     let allChanges = getAeson issue.requestPayloads <> getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
         countChange (!b, !i, !t) c = case c.changeType of
           Anomalies.Breaking -> (b + 1, i, t + 1)
@@ -1105,7 +1107,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
 
   -- Collapsible payload changes (only for API changes)
-  when (issue.issueType == Issues.APIChange) $ details_ [class_ "group mb-4"] do
+  when (issue.issueType == Issues.ApiChange) $ details_ [class_ "group mb-4"] do
     summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
       faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
       "View detailed payload changes"
@@ -1148,7 +1150,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
 -- Render payload changes section
 renderPayloadChanges :: Issues.IssueL -> Html ()
 renderPayloadChanges issue =
-  when (issue.issueType == Issues.APIChange) do
+  when (issue.issueType == Issues.ApiChange) do
     let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
     let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
 
@@ -1360,7 +1362,7 @@ issueTypeBadge issueType critical = badge cls icon txt
       Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
       Issues.LogPattern -> ("bg-fillInformation-strong", "file-text", "LOG PATTERN")
       Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "trending-up", "RATE CHANGE")
-      Issues.APIChange
+      Issues.ApiChange
         | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
         | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
     badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t
