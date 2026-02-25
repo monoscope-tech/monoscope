@@ -937,12 +937,73 @@ getAlertStatusColor status = case status of
 --
 -- >>> replaceAllFormats "{\"status_code\":200,\"count\":42}"
 -- "{\"status_code\":{integer},\"count\":{integer}}"
+--
+-- >>> replaceAllFormats "Oct 14, 2023 - User 12345 logged in"
+-- "{Mon DD, YYYY} - User {integer} logged in"
+--
+-- >>> replaceAllFormats "Error on 14-Oct-2023 at 10:30"
+-- "Error on {DD-Mon-YYYY} at {integer}{port}"
+--
+-- >>> replaceAllFormats "Jan 1, 2024 and Feb 28, 2025"
+-- "{Mon DD, YYYY} and {Mon DD, YYYY}"
 replaceAllFormats :: Text -> Text
 replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass input)
   where
-    -- Pre-pass: replace emails and JWTs before the main scan
+    -- Pre-pass: replace emails, JWTs, and text dates before the main scan
     replacePrePass :: Text -> Text
-    replacePrePass = replaceJWTs . replaceEmails
+    replacePrePass = replaceJWTs . replaceEmails . replaceTextDates
+
+    -- Replace text-based date formats: "Oct 14, 2023" and "14-Oct-2023"
+    replaceTextDates :: Text -> Text
+    replaceTextDates !txt = foldl' (flip replaceMonth) txt
+      ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+
+    replaceMonth :: Text -> Text -> Text
+    replaceMonth mon = go'
+      where
+        go' !t = case T.breakOn mon t of
+          (before, after)
+            | T.null after -> t
+            | not (monthBoundaryBefore before) || not (monthBoundaryAfter (T.drop 3 after)) ->
+                before <> mon <> go' (T.drop 3 after)
+            | otherwise ->
+                let afterMon = T.drop 3 after
+                 in case matchMonDY afterMon of
+                      Just rest -> before <> "{Mon DD, YYYY}" <> go' rest
+                      Nothing -> case matchDMonY before afterMon of
+                        Just (prefix, rest) -> prefix <> "{DD-Mon-YYYY}" <> go' rest
+                        Nothing -> before <> mon <> go' afterMon
+
+    monthBoundaryBefore t = T.null t || not (isAlpha (T.last t))
+    monthBoundaryAfter t = T.null t || not (isAlpha (T.head t))
+
+    -- Match " DD[,] YYYY" after a month name
+    matchMonDY :: Text -> Maybe Text
+    matchMonDY !rest = do
+      r1 <- T.stripPrefix " " rest
+      let (day, r2) = T.span isDigit r1
+      guard $ T.length day >= 1 && T.length day <= 2
+      let r3 = fromMaybe r2 (T.stripPrefix "," r2)
+      r4 <- T.stripPrefix " " r3
+      let (year, r5) = T.span isDigit r4
+      guard $ T.length year == 4
+      guard $ T.null r5 || not (isAlphaNum (T.head r5))
+      pure r5
+
+    -- Match "DD-" before and "-YYYY" after a month name
+    matchDMonY :: Text -> Text -> Maybe (Text, Text)
+    matchDMonY before afterMon = do
+      r1 <- T.stripPrefix "-" afterMon
+      let (year, rest) = T.span isDigit r1
+      guard $ T.length year == 4
+      guard $ T.null rest || not (isAlphaNum (T.head rest))
+      b <- T.stripSuffix "-" before
+      guard $ not (T.null b)
+      let (dayRev, prefRev) = T.span isDigit (T.reverse b)
+      guard $ T.length dayRev >= 1 && T.length dayRev <= 2
+      let prefix = T.reverse prefRev
+      guard $ T.null prefix || not (isAlphaNum (T.last prefix))
+      pure (prefix, rest)
 
     replaceEmails :: Text -> Text
     replaceEmails !txt =

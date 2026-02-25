@@ -422,7 +422,7 @@ spec = do
     it "should handle log lines with timestamps" do
       Utils.replaceAllFormats "2023-10-14 10:29:38 ERROR: Connection refused" `shouldBe` "{YYYY-MM-DD HH:MM:SS} ERROR: Connection refused"
       Utils.replaceAllFormats "[2023-10-14T10:29:38.123Z] INFO: Server started on port 8080" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] INFO: Server started on port {integer}"
-      Utils.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "Oct {integer}, {integer} - User {integer} logged in from {ipv4}"
+      Utils.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "{Mon DD, YYYY} - User {integer} logged in from {ipv4}"
       
     it "should handle file paths in error messages" do
       Utils.replaceAllFormats "File not found: /usr/local/app/config.json" `shouldBe` "File not found: /usr/local/app/config.json"
