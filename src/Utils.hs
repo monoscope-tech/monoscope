@@ -955,8 +955,11 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 
     -- Replace text-based date formats: "Oct 14, 2023" and "14-Oct-2023"
     replaceTextDates :: Text -> Text
-    replaceTextDates !txt = foldl' (flip replaceMonth) txt
-      ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"]
+    replaceTextDates !txt =
+      foldl'
+        (flip replaceMonth)
+        txt
+        ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
     replaceMonth :: Text -> Text -> Text
     replaceMonth mon = go'
