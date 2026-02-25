@@ -64,12 +64,14 @@ import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap (lookup)
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
-import Data.Char (isDigit)
+import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
+import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Clock (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
@@ -97,7 +99,6 @@ import Pkg.DeriveUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant
 import Text.Printf (printf)
-import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))
 import Text.Regex.TDFA ((=~))
 import Text.Show
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -879,8 +880,8 @@ getAlertStatusColor status = case status of
   _ -> "badge-success"
 
 
--- | Replaces all format patterns in the input text with their format names
--- This function applies all regex patterns and replaces matches until no more replacements are made
+-- | Single-pass scanner that replaces variable tokens (IDs, numbers, dates, etc.) with type placeholders.
+-- Used for log pattern grouping — normalizes log messages so structurally identical messages cluster together.
 --
 -- >>> map replaceAllFormats ["123", "c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd", "550e8400-e29b-41d4-a716-446655440000", "507f1f77bcf86cd799439011"]
 -- ["{integer}","{uuid}","{uuid}","{uuid}"]
@@ -896,7 +897,6 @@ getAlertStatusColor status = case status of
 --
 -- >>> map replaceAllFormats ["Server on :8080", "localhost:3000", "api.com:443", ":22"]
 -- ["Server on {port}","localhost{port}","api.com{port}","{port}"]
---
 -- >>> replaceAllFormats "Connected to 10.0.0.1:443 and 192.168.1.100:22"
 -- "Connected to {ipv4}{port} and {ipv4}{port}"
 --
@@ -913,7 +913,7 @@ getAlertStatusColor status = case status of
 -- "Hash: {sha1}, Status: {integer}, Port: {port}"
 --
 -- >>> replaceAllFormats "Processing request 123456 at 2023-10-15:3000"
--- "Processing request {integer} at {integer}-{integer}-{integer}{port}"
+-- "Processing request {integer} at {YYYY-MM-DD}{port}"
 --
 -- >>> map replaceAllFormats ["Mixed: 192.168.1.1 123 :80 404", "0xDEADBEEF", "Values: 999, 1000, 1001"]
 -- ["Mixed: {ipv4} {integer} {port} {integer}","{hex}","Values: {integer}, {integer}, {integer}"]
@@ -923,96 +923,322 @@ getAlertStatusColor status = case status of
 --
 -- >>> map replaceAllFormats ["Multiple formats: 123 abc def456789 :9000", "Log entry 404 at 10.0.0.1:8080"]
 -- ["Multiple formats: {integer} abc def{integer} {port}","Log entry {integer} at {ipv4}{port}"]
+--
+-- >>> replaceAllFormats "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.signature sent to user@example.com"
+-- "{jwt} sent to {email}"
+--
+-- >>> replaceAllFormats "2023-10-14 10:29:38 ERROR: Connection refused"
+-- "{YYYY-MM-DD HH:MM:SS} ERROR: Connection refused"
+--
+-- >>> replaceAllFormats "[2023-10-14T10:29:38.123Z] INFO: Started"
+-- "[{YYYY-MM-DDThh:mm:ss.sTZD}] INFO: Started"
+--
+-- >>> replaceAllFormats "123-45-6789 is a SSN"
+-- "{ssn} is a SSN"
+--
+-- >>> replaceAllFormats "{\"status_code\":200,\"count\":42}"
+-- "{\"status_code\":{integer},\"count\":{integer}}"
 replaceAllFormats :: Text -> Text
-replaceAllFormats input = restorePlaceholders $ processPatterns input formatPatternsForReplacement
+replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePrePass input)
   where
-    -- Process patterns sequentially with (*=~/)
-    -- Use special Unicode characters as temporary placeholders to prevent re-matching
-    processPatterns :: Text -> [SearchReplace RE Text] -> Text
-    processPatterns txt [] = txt
-    processPatterns txt (sr : rest) =
-      let newTxt = txt *=~/ sr
-       in processPatterns newTxt rest
+    -- Pre-pass: replace emails and JWTs before the main scan
+    replacePrePass :: Text -> Text
+    replacePrePass = replaceJWTs . replaceEmails
 
-    -- Restore the Unicode placeholders to the final format
-    restorePlaceholders :: Text -> Text
-    restorePlaceholders txt =
-      txt
-        *=~/ [ed|〖×UUID×〗///{uuid}|]
-        *=~/ [ed|〖×SHA-TWO-FIVE-SIX×〗///{sha256}|]
-        *=~/ [ed|〖×SHA-ONE×〗///{sha1}|]
-        *=~/ [ed|〖×MD-FIVE×〗///{md5}|]
-        *=~/ [ed|〖×IPV-FOUR×〗///{ipv4}|]
-        *=~/ [ed|〖×PORT×〗///{port}|]
-        *=~/ [ed|〖×HEX×〗///{hex}|]
-        *=~/ [ed|〖×INTEGER×〗///{integer}|]
+    replaceEmails :: Text -> Text
+    replaceEmails !txt =
+      let (before, after) = T.breakOn "@" txt
+       in if T.null after then txt
+          else
+            let (localRev, prefixRev) = T.span isLocalChar (T.reverse before)
+             in if not (T.null localRev)
+                  then case tryEmailDomain (T.drop 1 after) of
+                    Just rest -> T.reverse prefixRev <> "{email}" <> replaceEmails rest
+                    Nothing -> before <> "@" <> replaceEmails (T.drop 1 after)
+                  else before <> "@" <> replaceEmails (T.drop 1 after)
 
-    -- Use a subset of patterns that should be replaced in text
-    -- Using Unicode characters with no alphanumeric content that won't match any patterns
-    formatPatternsForReplacement :: [SearchReplace RE Text]
-    formatPatternsForReplacement =
-      [ -- UUIDs and hashes first (most specific)
-        [ed|[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}///〖×UUID×〗|]
-      , [ed|[a-fA-F0-9]{64}///〖×SHA-TWO-FIVE-SIX×〗|]
-      , [ed|[a-fA-F0-9]{40}///〖×SHA-ONE×〗|]
-      , [ed|[a-fA-F0-9]{32}///〖×MD-FIVE×〗|]
-      , [ed|[0-9a-fA-F]{24}///〖×UUID×〗|]
-      , -- Visa 13 or 16 digits
-        [ed|5[1-5][0-9]{14}///{credit_card}|]
-      , -- Mastercard
-        [ed|3[47][0-9]{13}///{credit_card}|]
-      , -- Amex
-        [ed|eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+///{jwt}|]
-      , -- JWT
-        -- IBAN (moved before base64)
-        [ed|[A-Z]{2}[0-9]{2}[A-Za-z0-9]{4}[0-9]{7}[A-Za-z0-9]{0,16}///{iban}|]
-      , -- Date patterns (before file paths to avoid conflicts)
-        [ed|(Mon|Tue|Wed|Thu|Fri|Sat|Sun), [0-9]{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2} [+\-][0-9]{4}///{rfc2822}|]
-      , [ed|[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\.[0-9]+)?(Z|[+\-][0-9]{2}:[0-9]{2})?///{YYYY-MM-DDThh:mm:ss.sTZD}|]
-      , -- ISO 8601
-        [ed|[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}///{YYYY-MM-DD HH:MM:SS}|]
-      , -- MySQL datetime
-        [ed|[0-9]{2}/[0-9]{2}/[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{MM/DD/YYYY HH:MM:SS}|]
-      , -- US datetime
-        [ed|[0-9]{2}-[0-9]{2}-[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{MM-DD-YYYY HH:MM:SS}|]
-      , [ed|[0-9]{2}\.[0-9]{2}\.[0-9]{4} [0-9]{2}:[0-9]{2}:[0-9]{2}///{DD.MM.YYYY HH:MM:SS}|]
-      , -- European datetime
-        [ed|(0[1-9]|[12][0-9]|3[01])[/](0[1-9]|1[012])[/](19|20)[0-9][0-9]///{dd/mm/yyyy}|]
-      , -- European date
-        [ed|(0[1-9]|[12][0-9]|3[01])-(0[1-9]|1[012])-(19|20)[0-9][0-9]///{dd-mm-yyyy}|]
-      , [ed|(0[1-9]|[12][0-9]|3[01])\.(0[1-9]|1[012])\.(19|20)[0-9][0-9]///{dd.mm.yyyy}|]
-      , [ed|(0[1-9]|1[012])[/](0[1-9]|[12][0-9]|3[01])[/](19|20)[0-9][0-9]///{mm/dd/yyyy}|]
-      , -- US date
-        [ed|(0[1-9]|1[012])-(0[1-9]|[12][0-9]|3[01])-(19|20)[0-9][0-9]///{mm-dd-yyyy}|]
-      , [ed|(0[1-9]|1[012])\.(0[1-9]|[12][0-9]|3[01])\.(19|20)[0-9][0-9]///{mm.dd.yyyy}|]
-      , -- Note: Removed [0-9]{4}-[0-9]{2}-[0-9]{2} pattern to avoid matching dates followed by ports (e.g. 2023-10-15:3000)
-        -- The more specific datetime pattern [0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} handles actual dates with times
-        [ed|[0-9]{4}/[0-9]{2}/[0-9]{2}///{YYYY/MM/DD}|]
-      , -- Compact date
-        [ed|(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) [0-9]{1,2}, [0-9]{4}///{Mon DD, YYYY}|]
-      , -- Long month
-        [ed|[0-9]{1,2}-(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)-[0-9]{4}///{DD-Mon-YYYY}|]
-      , -- Oracle date
-        -- Time patterns
-        [ed|[0-9]{2}:[0-9]{2}:[0-9]{2}\.[0-9]{3}///{HH:MM:SS.mmm}|]
-      , -- Time with milliseconds
-        [ed|[0-9]{2}:[0-9]{2}:[0-9]{2}///{HH:MM:SS}|]
-      , -- Time only
-        [ed|[0-9]{1,2}:[0-9]{2} (AM|PM|am|pm)///{H:MM AM/PM}|]
-      , -- Personal identifiers
-        [ed|[0-9]{3}-[0-9]{2}-[0-9]{4}///{ssn}|]
-      , [ed|\+1 \([0-9]{3}\) [0-9]{3}-[0-9]{4}///{phone}|]
-      , -- Network patterns
-        [ed|(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)///〖×IPV-FOUR×〗|]
-      , [ed|:[0-9]{1,5}///〖×PORT×〗|]
-      , [ed|https?://[^\s]+///{url}|]
-      , [ed|([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4}///{ipv6}|]
-      , [ed|([0-9A-Fa-f]{2}[:-]){5}[0-9A-Fa-f]{2}///{mac}|]
-      , [ed|[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}///{email}|]
-      , -- Hex numbers (must come before general integers)
-        [ed|0x[0-9A-Fa-f]+///〖×HEX×〗|]
-      , --- float
-        [ed|[+-]?[0-9]+\.[0-9]+///{float}|]
-      , -- Numbers (including HTTP status codes)
-        [ed|[0-9]+///〖×INTEGER×〗|]
-      ]
+    isLocalChar :: Char -> Bool
+    isLocalChar c = isAlphaNum c || c `elem` ("._%+-" :: [Char])
+
+    tryEmailDomain :: Text -> Maybe Text
+    tryEmailDomain !afterAt = do
+      let isDomainChar c = isAlphaNum c || c == '.' || c == '-'
+          (domain, rest) = T.span isDomainChar afterAt
+          parts = T.splitOn "." domain
+      guard $ length parts >= 2
+      let tld = viaNonEmpty last parts
+      guard $ maybe False (\t -> T.length t >= 2 && T.all isAlpha t) tld
+      pure rest
+
+    replaceJWTs :: Text -> Text
+    replaceJWTs !txt =
+      let (before, after) = T.breakOn "eyJ" txt
+       in if T.null after then txt
+          else let rest3 = T.drop 3 after
+                   (_seg1, r1) = T.span isBase64Url rest3
+                in if not (T.null r1) && T.head r1 == '.'
+                     then let (seg2, r2) = T.span isBase64Url (T.drop 1 r1)
+                           in if not (T.null seg2) && not (T.null r2) && T.head r2 == '.'
+                                then let (seg3, r3) = T.span isBase64Url (T.drop 1 r2)
+                                      in if not (T.null seg3)
+                                           then before <> "{jwt}" <> replaceJWTs r3
+                                           else before <> "eyJ" <> replaceJWTs rest3
+                                else before <> "eyJ" <> replaceJWTs rest3
+                     else before <> "eyJ" <> replaceJWTs rest3
+
+    isBase64Url :: Char -> Bool
+    isBase64Url c = isAlphaNum c || c == '_' || c == '-'
+
+    -- Main single-pass scanner. Triggers on digits and ':'
+    go :: Maybe Char -> Text -> TLB.Builder
+    go !prev !txt = case T.break trigger txt of
+      (safe, rest)
+        | T.null rest -> TLB.fromText safe
+        | otherwise ->
+            let lastCh = if T.null safe then prev else Just (T.last safe)
+                ch = T.head rest
+             in if ch == ':'
+                  then TLB.fromText safe <> dispatchColon lastCh (T.drop 1 rest)
+                  else -- Digit trigger: check for hex-alpha suffix to peel
+                    case peelHexSuffix safe of
+                      (safePre, hexPart) | not (T.null hexPart) ->
+                        let combined = hexPart <> rest
+                            lastPre = if T.null safePre then prev else Just (T.last safePre)
+                         in TLB.fromText safePre <> scanHexDigit lastPre combined
+                      _ -> TLB.fromText safe <> scanDigit lastCh rest
+
+    trigger :: Char -> Bool
+    trigger c = isDigit c || c == ':'
+
+    -- Peel trailing hex-alpha chars (a-f, A-F) from safe text
+    peelHexSuffix :: Text -> (Text, Text)
+    peelHexSuffix !t =
+      let rev = T.reverse t
+          (hexRev, preRev) = T.span isHexAlpha rev
+       in (T.reverse preRev, T.reverse hexRev)
+
+    -- Colon dispatch: context-aware port detection
+    dispatchColon :: Maybe Char -> Text -> TLB.Builder
+    dispatchColon !lastCh !rest
+      | not (T.null rest) && isDigit (T.head rest) && isPortContext lastCh =
+          let (digits, after) = T.span isDigit rest
+           in if T.length digits <= 5
+                then "{port}" <> go (Just '}') after
+                else TLB.singleton ':' <> go (Just ':') rest
+      | otherwise = TLB.singleton ':' <> go (Just ':') rest
+
+    isPortContext :: Maybe Char -> Bool
+    isPortContext Nothing = True -- start of line or after placeholder
+    isPortContext (Just c) = isAlphaNum c || c `elem` ("})]-. " :: [Char])
+
+    -- Hex+digit sequence starting with hex alpha (from suffix peeling)
+    scanHexDigit :: Maybe Char -> Text -> TLB.Builder
+    scanHexDigit !prev !txt =
+      let (fullHex, rest) = T.span isHexDigit' txt
+          len = T.length fullHex
+          atBoundary = T.null rest || not (isHexDigit' (T.head rest))
+       in case () of
+            _ | len >= 8 && not (T.null rest) && T.head rest == '-' ->
+                  case tryUUID txt of
+                    Just r -> "{uuid}" <> go (Just '}') r
+                    Nothing -> recognizeHex prev len atBoundary fullHex rest txt
+              | otherwise -> recognizeHex prev len atBoundary fullHex rest txt
+
+    recognizeHex :: Maybe Char -> Int -> Bool -> Text -> Text -> Text -> TLB.Builder
+    recognizeHex !prev !len !atBoundary !fullHex !rest !txt = case len of
+      64 | atBoundary -> "{sha256}" <> go (Just '}') rest
+      40 | atBoundary -> "{sha1}" <> go (Just '}') rest
+      32 | atBoundary -> "{md5}" <> go (Just '}') rest
+      24 | atBoundary -> "{uuid}" <> go (Just '}') rest
+      _ -> -- Fallback: emit one char at a time so digits within get replaced
+        TLB.singleton (T.head txt) <> go (Just (T.head txt)) (T.drop 1 txt)
+
+    -- Starts with digit
+    scanDigit :: Maybe Char -> Text -> TLB.Builder
+    scanDigit !prev !txt
+      -- 0x hex literal
+      | T.length txt >= 2 && T.head txt == '0' && T.index txt 1 == 'x' =
+          let (hexRun, rest) = T.span isHexDigit' (T.drop 2 txt)
+           in if T.null hexRun then "{integer}" <> go (Just '}') (T.drop 1 txt) else "{hex}" <> go (Just '}') rest
+      | otherwise =
+          let (digits, afterDigits) = T.span isDigit txt
+              dLen = T.length digits
+           in -- Timestamp: 4 digits + '-' → try YYYY-MM-DD...
+              if dLen == 4 && not (T.null afterDigits) && T.head afterDigits == '-'
+                then case tryTimestamp digits afterDigits of
+                  Just (placeholder, rest) -> placeholder <> go (Just '}') rest
+                  Nothing -> case tryUUID txt of
+                    Just rest -> "{uuid}" <> go (Just '}') rest
+                    Nothing -> trySSNOrFallback prev digits afterDigits txt
+              -- Time: 1-2 digits + ':' → try HH:MM:SS
+              else if dLen <= 2 && dLen >= 1 && not (T.null afterDigits) && T.head afterDigits == ':'
+                then case tryTimeOnly digits (T.drop 1 afterDigits) of
+                  Just (placeholder, rest) -> placeholder <> go (Just '}') rest
+                  Nothing -> "{integer}" <> go (Just '}') afterDigits
+              -- UUID check: up to 8 hex digits + '-'
+              else if dLen <= 8 && not (T.null afterDigits) && T.head afterDigits == '-'
+                then case tryUUID txt of
+                  Just rest -> "{uuid}" <> go (Just '}') rest
+                  Nothing -> trySSNOrFallback prev digits afterDigits txt
+              else classifyDigit prev txt digits afterDigits
+
+    trySSNOrFallback :: Maybe Char -> Text -> Text -> Text -> TLB.Builder
+    trySSNOrFallback !prev !digits !afterDigits !txt
+      -- SSN: 3 digits + '-' → NNN-NN-NNNN
+      | T.length digits == 3 && not (T.null afterDigits) && T.head afterDigits == '-' =
+          case trySSN (T.drop 1 afterDigits) of
+            Just rest -> "{ssn}" <> go (Just '}') rest
+            Nothing -> classifyDigit prev txt digits afterDigits
+      | otherwise = classifyDigit prev txt digits afterDigits
+
+    classifyDigit :: Maybe Char -> Text -> Text -> Text -> TLB.Builder
+    classifyDigit !_prev !txt !digits !afterDigits
+      | T.null afterDigits = "{integer}" <> go (Just '}') afterDigits
+      | T.head afterDigits == '.' = case tryIPv4 digits afterDigits of
+          Just rest -> "{ipv4}" <> go (Just '}') rest
+          Nothing ->
+            let (decimals, rest) = T.span isDigit (T.drop 1 afterDigits)
+             in if not (T.null decimals)
+                  then "{float}" <> go (Just '}') rest
+                  else "{integer}" <> TLB.singleton '.' <> go (Just '.') (T.drop 1 afterDigits)
+      | isHexAlpha (T.head afterDigits) = classifyHexContinuation txt digits afterDigits
+      | otherwise = "{integer}" <> go (Just '}') afterDigits
+
+    classifyHexContinuation :: Text -> Text -> Text -> TLB.Builder
+    classifyHexContinuation !txt !digits !afterDigits =
+      let (fullHex, rest) = T.span isHexDigit' txt
+          len = T.length fullHex
+          atBoundary = T.null rest || not (isHexDigit' (T.head rest))
+          fallback = "{integer}" <> go (Just '}') afterDigits
+       in if | len == 64 && atBoundary -> "{sha256}" <> go (Just '}') rest
+             | len == 40 && atBoundary -> "{sha1}" <> go (Just '}') rest
+             | len == 32 && atBoundary -> "{md5}" <> go (Just '}') rest
+             | len == 24 && atBoundary -> "{uuid}" <> go (Just '}') rest
+             | len == 8 && not (T.null rest) && T.head rest == '-' ->
+                 maybe fallback (\r -> "{uuid}" <> go (Just '}') r) (tryUUID txt)
+             | otherwise -> fallback
+
+    -- Timestamp: YYYY-MM-DD, optionally followed by ' HH:MM:SS' or 'THH:MM:SS[.sss][Z/+TZ]'
+    tryTimestamp :: Text -> Text -> Maybe (TLB.Builder, Text)
+    tryTimestamp !yyyy !afterYear = do
+      -- Already have 4 digits (yyyy) and afterYear starts with '-'
+      r1 <- T.stripPrefix "-" afterYear
+      let (mm, r2) = T.span isDigit r1
+      guard $ T.length mm == 2
+      r3 <- T.stripPrefix "-" r2
+      let (dd, r4) = T.span isDigit r3
+      guard $ T.length dd == 2
+      -- Got YYYY-MM-DD. Check for time part
+      case T.uncons r4 of
+        Just (' ', r5) -> -- Space separator: YYYY-MM-DD HH:MM:SS
+          case tryTimePart r5 of
+            Just (_, rest) -> Just ("{YYYY-MM-DD HH:MM:SS}", rest)
+            Nothing -> Just ("{YYYY-MM-DD}", r4)
+        Just ('T', r5) -> -- ISO 8601: YYYY-MM-DDThh:mm:ss[.sss][Z/±TZ]
+          case tryTimePart r5 of
+            Just (_, rest) -> Just ("{YYYY-MM-DDThh:mm:ss.sTZD}", skipTZD rest)
+            Nothing -> Just ("{YYYY-MM-DD}", r4)
+        _ -> Just ("{YYYY-MM-DD}", r4)
+
+    -- Parse HH:MM:SS[.sss] — returns (placeholder, rest)
+    tryTimePart :: Text -> Maybe (TLB.Builder, Text)
+    tryTimePart !txt = do
+      let (hh, r1) = T.span isDigit txt
+      guard $ T.length hh == 2
+      r2 <- T.stripPrefix ":" r1
+      let (mm, r3) = T.span isDigit r2
+      guard $ T.length mm == 2
+      r4 <- T.stripPrefix ":" r3
+      let (ss, r5) = T.span isDigit r4
+      guard $ T.length ss == 2
+      -- Optional fractional seconds
+      let rest = case T.uncons r5 of
+            Just ('.', r6) -> let (_, r7) = T.span isDigit r6 in r7
+            _ -> r5
+      Just ("{HH:MM:SS}", rest)
+
+    -- Skip timezone suffix: Z, +HH:MM, -HH:MM, +HHMM, -HHMM
+    skipTZD :: Text -> Text
+    skipTZD !txt = case T.uncons txt of
+      Just ('Z', rest) -> rest
+      Just (c, rest) | c == '+' || c == '-' ->
+        let (d1, r1) = T.span isDigit rest
+         in if T.length d1 >= 2
+              then case T.uncons r1 of
+                Just (':', r2) -> let (d2, r3) = T.span isDigit r2 in if T.length d2 == 2 then r3 else r1
+                _ -> if T.length d1 == 4 then r1 else r1
+              else txt
+      _ -> txt
+
+    -- Standalone time: HH:MM:SS[.mmm] — digits already consumed, rest starts after ':'
+    tryTimeOnly :: Text -> Text -> Maybe (TLB.Builder, Text)
+    tryTimeOnly !hh !afterColon = do
+      let (mm, r1) = T.span isDigit afterColon
+      guard $ T.length mm == 2
+      r2 <- T.stripPrefix ":" r1
+      let (ss, r3) = T.span isDigit r2
+      guard $ T.length ss == 2
+      let (placeholder, rest) = case T.uncons r3 of
+            Just ('.', r4) ->
+              let (frac, r5) = T.span isDigit r4
+               in if not (T.null frac) then ("{HH:MM:SS.mmm}", r5) else ("{HH:MM:SS}", r3)
+            _ -> ("{HH:MM:SS}", r3)
+      Just (placeholder, rest)
+
+    -- SSN: NN-NNNN (already consumed NNN and '-', rest starts after '-')
+    trySSN :: Text -> Maybe Text
+    trySSN !txt = do
+      let (d2, r1) = T.span isDigit txt
+      guard $ T.length d2 == 2
+      r2 <- T.stripPrefix "-" r1
+      let (d3, rest) = T.span isDigit r2
+      guard $ T.length d3 == 4
+      pure rest
+
+    -- UUID: exactly 8-4-4-4-12 hex chars with dashes
+    tryUUID :: Text -> Maybe Text
+    tryUUID !txt = do
+      (_, r1) <- consumeHexSeg 8 txt
+      r1' <- T.stripPrefix "-" r1
+      (_, r2) <- consumeHexSeg 4 r1'
+      r2' <- T.stripPrefix "-" r2
+      (_, r3) <- consumeHexSeg 4 r2'
+      r3' <- T.stripPrefix "-" r3
+      (_, r4) <- consumeHexSeg 4 r3'
+      r4' <- T.stripPrefix "-" r4
+      (_, r5) <- consumeHexSeg 12 r4'
+      guard $ T.null r5 || not (isHexDigit' (T.head r5))
+      pure r5
+
+    consumeHexSeg :: Int -> Text -> Maybe (Text, Text)
+    consumeHexSeg n t =
+      let seg = T.take n t
+       in if T.length seg == n && T.all isHexDigit' seg then Just (seg, T.drop n t) else Nothing
+
+    -- IPv4: N.N.N.N where N is 0-255
+    tryIPv4 :: Text -> Text -> Maybe Text
+    tryIPv4 !firstOctet !afterFirst = do
+      guard $ isOctet firstOctet
+      r1 <- T.stripPrefix "." afterFirst
+      let (o2, r2) = T.span isDigit r1
+      guard $ not (T.null o2) && isOctet o2
+      r2' <- T.stripPrefix "." r2
+      let (o3, r3) = T.span isDigit r2'
+      guard $ not (T.null o3) && isOctet o3
+      r3' <- T.stripPrefix "." r3
+      let (o4, rest) = T.span isDigit r3'
+      guard $ not (T.null o4) && isOctet o4
+      pure rest
+
+    isOctet :: Text -> Bool
+    isOctet t =
+      let len = T.length t
+       in len >= 1 && len <= 3 && case readMaybe (toString t) :: Maybe Int of
+            Just n -> n >= 0 && n <= 255
+            Nothing -> False
+
+    isHexAlpha :: Char -> Bool
+    isHexAlpha c = (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+    isHexDigit' :: Char -> Bool
+    isHexDigit' c = isDigit c || isHexAlpha c

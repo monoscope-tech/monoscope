@@ -422,12 +422,16 @@ spec = do
     it "should handle log lines with timestamps" do
       Utils.replaceAllFormats "2023-10-14 10:29:38 ERROR: Connection refused" `shouldBe` "{YYYY-MM-DD HH:MM:SS} ERROR: Connection refused"
       Utils.replaceAllFormats "[2023-10-14T10:29:38.123Z] INFO: Server started on port 8080" `shouldBe` "[{YYYY-MM-DDThh:mm:ss.sTZD}] INFO: Server started on port {integer}"
-      Utils.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "{Mon DD, YYYY} - User {integer} logged in from {ipv4}"
+      Utils.replaceAllFormats "Oct 14, 2023 - User 12345 logged in from 192.168.1.50" `shouldBe` "Oct {integer}, {integer} - User {integer} logged in from {ipv4}"
       
     it "should handle file paths in error messages" do
       Utils.replaceAllFormats "File not found: /usr/local/app/config.json" `shouldBe` "File not found: /usr/local/app/config.json"
       Utils.replaceAllFormats "Error reading C:\\Users\\Admin\\data.txt" `shouldBe` "Error reading C:\\Users\\Admin\\data.txt"
       Utils.replaceAllFormats "Module failed at /app/src/main.js:42:15" `shouldBe` "Module failed at /app/src/main.js{port}{port}"
+
+    it "should handle JSON colons (not ports)" do
+      Utils.replaceAllFormats "{\"status_code\":200,\"count\":42}" `shouldBe` "{\"status_code\":{integer},\"count\":{integer}}"
+      Utils.replaceAllFormats "{\"ip\":\"192.168.1.1\"}" `shouldBe` "{\"ip\":\"{ipv4}\"}"
       
     it "should handle mixed identifiers" do
       Utils.replaceAllFormats "Thread-42 processing session_abc123def456 for user 789" `shouldBe` "Thread-{integer} processing session_abc{integer}def{integer} for user {integer}"

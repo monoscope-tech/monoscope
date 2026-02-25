@@ -49,7 +49,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, htmxIndicatorWith_, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, onpointerdown_, prettyPrintCount, statusFillColorText)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -531,11 +531,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
   let isJsonFastPath =
-        jsonM
-          == Just "true"
-          && not (hxRequestM == Just "true" && effectiveVizType == Just "patterns")
-          && layoutM
-          /= Just "SaveQuery"
+        jsonM == Just "true"
+          && effectiveVizType /= Just "patterns"
+          && layoutM /= Just "SaveQuery"
 
   let buildLogResult (requestVecs, colNames, resultCount') = do
         let colIdxMap = listToIndexHashMap colNames
@@ -640,7 +638,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           let patternsToSkip = fromMaybe 0 skipM + maybe 0 V.length patterns
 
           -- Build widgets with PNG URLs
-          let baseChartWidget = logChartWidget pid effectiveVizType pTargetM
+          let baseChartWidget = logChartWidget pid
               baseLatencyWidget = logLatencyWidget pid
           chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
           latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
@@ -688,7 +686,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   }
 
           addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
-            (_, Just "true", _, Just "patterns") -> LogsPatternList pid (fromMaybe V.empty patterns) patternsToSkip pTargetM
+            (_, _, Just "true", Just "patterns") -> LogsPatternJson (fromMaybe V.empty patterns)
             (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
             (Just "resultTable", Just "true", _, _) -> LogsGetJson r
             (Just "all", Just "true", _, _) -> LogsGetJson r
@@ -709,13 +707,13 @@ textToUTC = iso8601ParseM . toString
 
 
 -- Widget definitions for log explorer charts
-logChartWidget :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Widget.Widget
-logChartWidget pid vizType targetPattern =
+logChartWidget :: Projects.ProjectId -> Widget.Widget
+logChartWidget pid =
   (def :: Widget.Widget)
-    { Widget.wType = tp
-    , Widget.query = Just query
+    { Widget.wType = WTTimeseries
+    , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
     , Widget.unit = Just "rows"
-    , Widget.title = Just title
+    , Widget.title = Just "All traces"
     , Widget.legendPosition = Just "top-right"
     , Widget.legendSize = Just "xs"
     , Widget._projectId = Just pid
@@ -725,12 +723,6 @@ logChartWidget pid vizType targetPattern =
     , Widget.showMarkArea = Just True
     , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
     }
-  where
-    patternTarget = fromMaybe "summary" targetPattern
-    nm = fromMaybe "Log" $ viaNonEmpty head $ T.splitOn "_" patternTarget
-    (tp, query, title) = case vizType of
-      Just "patterns" -> (WTTimeseriesLine, patternTarget <> " != null | summarize count(*) by bin_auto(timestamp), " <> patternTarget, nm <> " patterns")
-      _ -> (WTTimeseries, "summarize count(*) by bin_auto(timestamp), status_code", "All traces")
 
 
 logLatencyWidget :: Projects.ProjectId -> Widget.Widget
@@ -757,21 +749,39 @@ data LogsGet
   | LogsGetErrorSimple Text
   | LogsGetJson LogResult
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
-  | LogsPatternList Projects.ProjectId (V.Vector (Text, Int)) Int (Maybe Text)
+  | LogsPatternJson (V.Vector RequestDumps.PatternRow)
 
 
 instance ToHtml LogsGet where
   toHtml (LogPage (PageCtx conf pa_dat)) = toHtml $ PageCtx conf $ apiLogsPage pa_dat
   toHtml (LogsGetErrorSimple err) = span_ [class_ "text-textError"] $ toHtml err
   toHtml (LogsGetError (PageCtx conf err)) = toHtml $ PageCtx conf err
-  toHtml (LogsPatternList pid patterns skip tg) = toHtml $ patternList patterns pid skip (skip > 0) tg
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
   toHtml x@LogsGetJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
+  toHtml x@LogsPatternJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
   toJSON (LogsGetJson r) = AE.object ["logsData" AE..= r.finalVecs, "serviceColors" AE..= r.serviceColors, "nextUrl" AE..= r.nextLogsURL, "resetLogsUrl" AE..= r.resetLogsURL, "recentUrl" AE..= r.recentLogsURL, "cols" AE..= r.curatedColNames, "colIdxMap" AE..= r.colIdxMap, "count" AE..= r.resultCount, "traces" AE..= r.traces, "hasMore" AE..= (r.queryResultCount < r.resultCount), "queryResultCount" AE..= r.queryResultCount]
+  toJSON (LogsPatternJson patterns) =
+    let total = V.foldl' (\acc p -> acc + p.count) 0 patterns
+        -- Row layout: [id, pattern_count, volume, level, service, summary] — must match colIdxMap
+        -- On-the-fly patterns use chr(30) separator; Drain patterns are space-separated
+        patternToSummary pat
+          | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
+          | otherwise = AE.toJSON (T.words pat)
+        rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern]) patterns
+    in AE.object
+          [ "logsData" AE..= rows
+          , "cols" AE..= (["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text])
+          , "colIdxMap" AE..= HM.fromList [("id" :: Text, 0 :: Int), ("pattern_count", 1), ("volume", 2), ("level", 3), ("service", 4), ("summary", 5)]
+          , "count" AE..= total
+          , "hasMore" AE..= (V.length patterns > 14)
+          , "queryResultCount" AE..= V.length patterns
+          , "serviceColors" AE..= AE.object []
+          , "traces" AE..= ([] :: [AE.Value])
+          ]
   toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
   toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
   toJSON _ = AE.object ["error" AE..= True]
@@ -808,7 +818,7 @@ data ApiLogsPageData = ApiLogsPageData
   , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
-  , patterns :: Maybe (V.Vector (Text, Int))
+  , patterns :: Maybe (V.Vector RequestDumps.PatternRow)
   , patternsToSkip :: Int
   , targetPattern :: Maybe Text
   , project :: Projects.Project
@@ -831,8 +841,8 @@ data LogResult = LogResult
   }
 
 
-virtualTable :: Projects.ProjectId -> Maybe Text -> Html ()
-virtualTable pid initialFetchUrl = do
+virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()
+virtualTable pid initialFetchUrl modeM = do
   termRaw
     "log-list"
     ( [ id_ "resultTable"
@@ -841,6 +851,7 @@ virtualTable pid initialFetchUrl = do
       , term "projectId" pid.toText
       ]
         <> [term "initialFetchUrl" (fromMaybe "" initialFetchUrl) | isJust initialFetchUrl]
+        <> [term "mode" m | m <- maybeToList modeM]
     )
     ("" :: Text)
 
@@ -892,12 +903,8 @@ apiLogsPage page = do
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
         Widget.widget_ page.chartWidget
-        unless (page.vizType == Just "patterns") $ Widget.widget_ page.latencyWidget
-    whenJust page.patterns \patternsData ->
-      div_ [class_ "overflow-y-auto max-h-96 border border-strokeWeak rounded mt-3"] do
-        patternList patternsData page.pid page.patternsToSkip False page.targetPattern
-    unless (page.vizType == Just "patterns")
-      $ div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
+        Widget.widget_ page.latencyWidget
+    div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
         -- FACETS
         div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
           div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
@@ -924,7 +931,8 @@ apiLogsPage page = do
             showTrace = isJust page.showTrace
         div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
           -- Filters and row count header
-          div_ [class_ "flex gap-2  pt-1 text-sm -mb-6 z-10 w-max bg-bgBase"] do
+          let isPatterns = page.vizType == Just "patterns"
+          div_ [class_ $ "flex gap-2  pt-1 text-sm z-10 w-max bg-bgBase" <> bool " -mb-6" "" isPatterns] do
             label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
               faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
               span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
@@ -947,8 +955,8 @@ apiLogsPage page = do
               span_ [class_ "text-textStrong", id_ "row-count-display"] $ toHtml $ prettyPrintCount page.queryResultCount
               span_ [class_ "text-textStrong", id_ "row-count-suffix"] $ toHtml $ bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
 
-          -- Visualization widget that shows when not in logs view
-          div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden"] do
+          -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
+          div_ [class_ $ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden" <> bool "" " hidden" isPatterns] do
             let pid = page.pid.toText
             let vizType = maybe "\"timeseries\"" show page.vizType
             script_
@@ -987,7 +995,7 @@ apiLogsPage page = do
           -- Logs view section (also within the scrollable container)
           div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
             -- Virtual table for logs
-            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block"] $ virtualTable page.pid Nothing
+            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing page.vizType
 
         -- Alert configuration panel on the right
         div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
@@ -1161,94 +1169,4 @@ alertConfigurationForm_ project alertM teams = do
                 if isJust alertM then "Update alert" else "Create Alert"
 
 
-patternList :: V.Vector (Text, Int) -> Projects.ProjectId -> Int -> Bool -> Maybe Text -> Html ()
-patternList patterns pid skip onlyRows targetPattern = do
-  let total = V.foldl' (\acc (_, c) -> acc + c) 0 patterns
-      url = "/p/" <> pid.toText <> "/log_explorer?viz_type=patterns&pattern_skip=" <> show skip <> "&pattern_target=" <> fromMaybe "summary" targetPattern
-  if onlyRows
-    then do
-      forM_ patterns $ \p -> renderPattern p total pid
-      when (V.length patterns > 14)
-        $ loadMore url
-    else
-      if V.null patterns
-        then div_ [class_ "p-6 bg-bgBase rounded-lg text-center", id_ "pattern-list"] $ do
-          faSprite_ "magnifying-glass" "regular" "w-6 h-6 mx-auto text-iconNeutral"
-          h3_ [class_ "mt-3 text-sm font-medium text-textStrong"] "No patterns found"
-          p_ [class_ "mt-1 text-xs text-textWeak"] "Try expanding the time range or adjust your query to surface patterns."
-          div_ [class_ "mt-3"]
-            $ button_
-              [ class_ "btn btn-sm btn-ghost"
-              , onpointerdown_ "dispatchEvent(new Event('update-query'))"
-              ]
-              "Refresh"
-        else do
-          table_ [class_ "min-w-full table table-sm rounded-2xl text-sm", id_ "pattern-list"] $ do
-            thead_ [class_ "sticky top-0 bg-bgBase z-10 text-xs"]
-              $ tr_
-              $ do
-                th_ [class_ "px-4 py-2 text-left"] ""
-                th_ [class_ "px-4 py-2 text-left"] "Count"
-                th_ [class_ "px-4 py-2 text-left"] "%"
-                th_ [class_ "px-4 py-2 text-left"] "Pattern"
-            tbody_ [class_ "divide-y divide-border"] do
-              forM_ patterns $ \p -> renderPattern p total pid
-              when (V.length patterns > 14)
-                $ loadMore url
 
-  script_
-    [text|
-       ['submit', 'add-query', 'update-query'].forEach((ev) =>
-         window.addEventListener(ev, () => {
-          const p = new URLSearchParams(window.location.search);
-          const pathName = window.location.pathname;
-          const url = window.location.origin + pathName + "?" + p.toString();
-          htmx.ajax('GET', url, { target: '#pattern-list', swap: 'outerHTML', indicator: '#details_indicator' });
-      })
-    );
-    |]
-
-
-loadMore :: Text -> Html ()
-loadMore url =
-  tr_
-    [ class_ ""
-    , hxTrigger_ "click, intersect once"
-    , hxSwap_ "outerHTML"
-    , hxGet_ url
-    , hxIndicator_ "#rowsIndicator"
-    ]
-    do
-      td_ ""
-      td_ ""
-      td_ ""
-      td_
-        [class_ "col-span-4 w-full relative w-full cursor-pointer flex items-center p-1 text-textBrand"]
-        do
-          "Load more"
-          htmxIndicatorWith_ "rowsIndicator" LdMD "ml-2"
-
-
-renderPattern :: (Text, Int) -> Int -> Projects.ProjectId -> Html ()
-renderPattern (template, count) total pid =
-  tr_ [class_ "hover:bg-fillWeaker"] $ do
-    td_ [class_ "flex items-center justify-center w-32 h-12"]
-      $ Widget.widget_
-      $ (def :: Widget.Widget)
-        { Widget.wType = WTTimeseries
-        , Widget.query = Just "kind == \"log\" | summarize count() by bin_auto(timestamp)"
-        , Widget.naked = Just True
-        , Widget.xAxis = Just (def{showAxisLabel = Just False})
-        , Widget.yAxis = Just (def{showAxisLabel = Just False})
-        , Widget.hideLegend = Just True
-        , Widget._projectId = Just pid
-        , Widget.standalone = Just True
-        , Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})
-        }
-    td_ [class_ "px-4 py-2 monospace"] (toHtml (show count))
-    td_ [class_ "px-4 py-2"]
-      $ toHtml (take 4 (show (fromIntegral count / fromIntegral total * 100 :: Double)) ++ "%")
-    td_ [class_ "px-4 py-2 max-w-xl truncate whitespace-nowrap"]
-      $ code_
-        [class_ "bg-muted/50 px-2 py-1 rounded monospace text-foreground"]
-        (toHtml template)

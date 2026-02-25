@@ -566,7 +566,7 @@ processBatch isSummary batch now inTree =
   V.foldl'
     ( \tree -> \case
         SeedPattern c -> processNewLog isSummary "" Nothing c now tree
-        NewEvent{..} -> processNewLog isSummary logId (Just content) content now tree
+        NewEvent lid c -> processNewLog isSummary lid (Just c) c now tree
     )
     inTree
     batch

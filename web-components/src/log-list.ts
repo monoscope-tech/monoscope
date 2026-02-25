@@ -27,6 +27,10 @@ import {
   createCachedIconRenderer,
   WEAK_TEXT_STYLES,
   RIGHT_PREFIX_REGEX,
+  formatPatternCount,
+  highlightPlaceholders,
+  generateId,
+  renderSparkline,
 } from './log-list-utils';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
@@ -45,6 +49,7 @@ const _ensureBadgeClasses = html`
   <span class="badge-GET badge-POST badge-PUT badge-DELETE badge-PATCH"></span>
   <span class="cbadge cbadge-sm"></span>
   <span class="bg-fillBrand-strong bg-fillWarning-strong bg-fillError-strong bg-fillSuccess-strong bg-fillWarning-strong bg-fillInformation-strong bg-fillBrand-strong bg-fillBrand-strong bg-fillStrong bg-fillWarning-strong"></span>
+  <span class="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"></span>
 `;
 
 // Special item types for virtual list
@@ -54,6 +59,7 @@ type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' 
 export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
   @property({ type: String }) initialFetchUrl: string = '';
+  @property({ type: String }) mode: 'logs' | 'patterns' = 'logs';
 
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
@@ -145,6 +151,21 @@ export class LogList extends LitElement {
   }
 
   private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
+    // Patterns mode: fetch directly, no span grouping needed
+    if (this.mode === 'patterns') {
+      const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
+      const data = await resp.json();
+      if (data.error) throw new Error(data.message || 'Server error');
+      const tree = (data.logsData || []).map((row: any[]) => ({
+        id: generateId(), data: row, depth: 0, children: 0, traceId: '', parentIds: [],
+        show: true, expanded: false, isLastChild: true, siblingsArr: [],
+        childErrors: false, hasErrors: false, isNew: false,
+        startNs: 0, duration: 0, traceStart: 0, traceEnd: 0,
+        childrenTimeSpans: [], type: 'log' as const,
+      }));
+      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap: data.colIdxMap || {}, count: data.count || 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
+    }
+
     // Use early fetch promise if available (set by server-rendered script in head)
     const earlyPromise = (window as any).logDataPromise;
     if (earlyPromise) {
@@ -294,6 +315,14 @@ export class LogList extends LitElement {
   }
 
   private buildLoadMoreUrl(): string {
+    // Patterns mode: increment pattern_skip based on loaded count
+    if (this.mode === 'patterns') {
+      const url = new URL(window.location.href);
+      url.searchParams.set('json', 'true');
+      url.searchParams.set('pattern_skip', String(this.spanListTree.length));
+      return url.toString();
+    }
+
     // If we have no data, use base URL
     if (this.spanListTree.length === 0) {
       console.warn('[LoadMore] No data in spanListTree, using buildJsonUrl');
@@ -509,15 +538,18 @@ export class LogList extends LitElement {
     // Set fixed widths for all columns to avoid dynamic calculations during scroll
     this.fixedColumnWidths = {
       id: 24,
-      timestamp: 155, // Reduced to fit smaller text-xs font while ensuring full "MMM dd HH:mm:ss.SSS" format fits
-      created_at: 155, // Reduced to fit smaller text-xs font while ensuring full "MMM dd HH:mm:ss.SSS" format fits
+      pattern_count: 115,
+      volume: 165,
+      level: 70,
+      timestamp: 155,
+      created_at: 155,
       status_code: 102,
       method: 102,
       raw_url: 212,
       url_path: 212,
       service: 136,
       summary: 3600,
-      latency_breakdown: 120, // Reduced by 20% from 150px (total 40% reduction from original)
+      latency_breakdown: 120,
     };
   }
 
@@ -677,7 +709,9 @@ export class LogList extends LitElement {
 
   private updateVisibleItems() {
     let items: EventLine[];
-    if (this.view === 'tree') {
+    if (this.mode === 'patterns') {
+      items = this.spanListTree;
+    } else if (this.view === 'tree') {
       items = this.spanListTree.filter((e) => e.show);
     } else {
       items = this.spanListTree;
@@ -687,24 +721,29 @@ export class LogList extends LitElement {
     // Build virtual list with special items
     const virtualItems: VirtualListItem[] = [];
 
-    // Add fetch recent button at the start (for non-flipped) or end (for flipped)
-    if (!this.flipDirection && items.length > 0) {
-      virtualItems.push({ type: 'fetchRecent' });
-    }
-
-    // Add all data items
-    virtualItems.push(...items);
-
-    // Add load more button at the end (for non-flipped) or start (for flipped)
-    if (!this.flipDirection && (this.hasMore || items.length > 0)) {
-      virtualItems.push({ type: 'loadMore' });
-    } else if (this.flipDirection) {
-      // For flipped direction, add buttons in reverse order
-      if (items.length > 0) {
+    if (this.mode === 'patterns') {
+      virtualItems.push(...items);
+      if (this.hasMore || items.length > 0) virtualItems.push({ type: 'loadMore' });
+    } else {
+      // Add fetch recent button at the start (for non-flipped) or end (for flipped)
+      if (!this.flipDirection && items.length > 0) {
         virtualItems.push({ type: 'fetchRecent' });
       }
-      if (this.hasMore || items.length > 0) {
-        virtualItems.unshift({ type: 'loadMore' });
+
+      // Add all data items
+      virtualItems.push(...items);
+
+      // Add load more button at the end (for non-flipped) or start (for flipped)
+      if (!this.flipDirection && (this.hasMore || items.length > 0)) {
+        virtualItems.push({ type: 'loadMore' });
+      } else if (this.flipDirection) {
+        // For flipped direction, add buttons in reverse order
+        if (items.length > 0) {
+          virtualItems.push({ type: 'fetchRecent' });
+        }
+        if (this.hasMore || items.length > 0) {
+          virtualItems.unshift({ type: 'loadMore' });
+        }
       }
     }
 
@@ -898,6 +937,7 @@ export class LogList extends LitElement {
             this.columnMaxWidthMap[key] = Math.min(maxWidth, 400); // Cap at 400px
           });
         }
+        this.batchRequestUpdate('columnWidths');
       } finally {
         this.isCalculatingWidths = false;
       }
@@ -1087,6 +1127,7 @@ export class LogList extends LitElement {
   render() {
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
+    const isPatterns = this.mode === 'patterns';
 
     return html`
       <style>
@@ -1145,81 +1186,17 @@ export class LogList extends LitElement {
           contain: strict;
         }
 
-        /* Column width styles using CSS custom properties */
-        .col-trace_id {
-          width: var(--col-trace_id-width);
-          min-width: var(--col-trace_id-width);
-          max-width: var(--col-trace_id-width);
-        }
-        .col-severity_text {
-          width: var(--col-severity_text-width);
-          min-width: var(--col-severity_text-width);
-          max-width: var(--col-severity_text-width);
-        }
-        .col-parent_id {
-          width: var(--col-parent_id-width);
-          min-width: var(--col-parent_id-width);
-          max-width: var(--col-parent_id-width);
-        }
-        .col-errors {
-          width: var(--col-errors-width);
-          min-width: var(--col-errors-width);
-          max-width: var(--col-errors-width);
-        }
-        .col-kind {
-          width: var(--col-kind-width);
-          min-width: var(--col-kind-width);
-          max-width: var(--col-kind-width);
-        }
-        .col-span_name {
-          width: var(--col-span_name-width);
-          min-width: var(--col-span_name-width);
-          max-width: var(--col-span_name-width);
-        }
-        .col-status {
-          width: var(--col-status-width);
-          min-width: var(--col-status-width);
-          max-width: var(--col-status-width);
-        }
-        .col-start_time {
-          width: var(--col-start_time-width);
-          min-width: var(--col-start_time-width);
-          max-width: var(--col-start_time-width);
-        }
-        .col-end_time {
-          width: var(--col-end_time-width);
-          min-width: var(--col-end_time-width);
-          max-width: var(--col-end_time-width);
-        }
-        .col-duration {
-          width: var(--col-duration-width);
-          min-width: var(--col-duration-width);
-          max-width: var(--col-duration-width);
-        }
-        .col-timestamp {
-          width: var(--col-timestamp-width);
-          min-width: var(--col-timestamp-width);
-          max-width: var(--col-timestamp-width);
-        }
-        .col-service {
-          width: var(--col-service-width);
-          min-width: var(--col-service-width);
-          max-width: var(--col-service-width);
-        }
-        .col-summary.break-all {
-          width: var(--col-summary-width);
-          min-width: var(--col-summary-width);
-        }
-        .col-summary:not(.break-all) {
-          width: var(--col-summary-width);
-          min-width: var(--col-summary-width);
-          max-width: var(--col-summary-width);
-        }
-        .col-latency_breakdown {
-          width: var(--col-latency_breakdown-width);
-          min-width: var(--col-latency_breakdown-width);
-          max-width: var(--col-latency_breakdown-width);
-        }
+        /* Column width styles - dynamically generated for all known columns */
+        ${unsafeHTML(
+          [...new Set([...this.logsColumns, ...Object.keys(this.columnMaxWidthMap)])]
+            .map((col) => {
+              if (col === 'summary')
+                return `.col-summary.break-all { width: var(--col-summary-width); min-width: var(--col-summary-width); }
+.col-summary:not(.break-all) { width: var(--col-summary-width); min-width: var(--col-summary-width); max-width: var(--col-summary-width); }`;
+              return `.col-${col} { width: var(--col-${col}-width); min-width: var(--col-${col}-width); max-width: var(--col-${col}-width); }`;
+            })
+            .join('\n')
+        )}
       </style>
       ${this.options()}
       <div
@@ -1231,7 +1208,7 @@ export class LogList extends LitElement {
         id="logs_list_container_inner"
         style="min-height: 500px; overflow-anchor: none;"
       >
-        ${this.recentDataToBeAdded.length > 0 && !this.flipDirection
+        ${!isPatterns && this.recentDataToBeAdded.length > 0 && !this.flipDirection
           ? html` <div class="sticky top-[30px] z-50 flex justify-center">
               <button
                 class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm"
@@ -1242,7 +1219,7 @@ export class LogList extends LitElement {
             </div>`
           : nothing}
         <table
-          class="table-fixed ${this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
+          class="table-fixed ${isPatterns || this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
           style=${Object.entries(
             this.logsColumns.reduce((acc, column) => {
               const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
@@ -1259,7 +1236,7 @@ export class LogList extends LitElement {
             <tr class="text-textWeak border-b flex min-w-0 relative font-medium isolate">
               ${isInitialLoading
                 ? html`
-                    ${[...Array(6)].map(
+                    ${[...Array(this.logsColumns.length || 6)].map(
                       (_, idx) => html`
                         <td
                           class=${`p-0 m-0 whitespace-nowrap relative flex justify-between items-center pl-2.5 pr-2 text-sm font-normal bg-bgBase ${getSkeletonColumnWidth(
@@ -1275,7 +1252,7 @@ export class LogList extends LitElement {
                   `
                 : html`
                     ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
-                    ${this.logsColumns.length > 0 ? this.logTableHeading('latency_breakdown') : nothing}
+                    ${this.logsColumns.length > 0 && !isPatterns ? this.logTableHeading('latency_breakdown') : nothing}
                   `}
             </tr>
           </thead>
@@ -1289,7 +1266,7 @@ export class LogList extends LitElement {
                     @visibilityChanged=${this.handleVisibilityChange}
                     .layout=${{
                       itemSize: {
-                        ...(!this.wrapLines && { height: 28 }), // Fixed height only when wrap is disabled
+                        ...(!this.wrapLines && !isPatterns && { height: 28 }), // Fixed height only when wrap is disabled and not patterns
                         width: '100%',
                       },
                     }}
@@ -1298,7 +1275,7 @@ export class LogList extends LitElement {
               `}
         </table>
 
-        ${!this.shouldScrollToBottom && this.flipDirection
+        ${!isPatterns && !this.shouldScrollToBottom && this.flipDirection
           ? html` <div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
                 @pointerdown=${() => {
@@ -1405,7 +1382,11 @@ export class LogList extends LitElement {
         if (p.type !== 'plain' && RIGHT_PREFIX_REGEX.test(p.style)) continue;
 
         if (p.type === 'plain') {
-          result.push(html`<span class=${`fill-textStrong ${wrapClass}`}>${unsafeHTML(getCachedUnescape(p.content))}</span>`);
+          if (this.mode === 'patterns') {
+            result.push(html`<span class=${`fill-textStrong ${wrapClass}`}>${highlightPlaceholders(p.content)}</span>`);
+          } else {
+            result.push(html`<span class=${`fill-textStrong ${wrapClass}`}>${unsafeHTML(getCachedUnescape(p.content))}</span>`);
+          }
           continue;
         }
 
@@ -1427,9 +1408,13 @@ export class LogList extends LitElement {
 
         // Direct style checks with early returns
         if (style === 'text-textStrong') {
-          result.push(html`<span class="text-textStrong">${value}</span>`);
+          result.push(this.mode === 'patterns'
+            ? html`<span class="text-textStrong">${highlightPlaceholders(value)}</span>`
+            : html`<span class="text-textStrong">${value}</span>`);
         } else if (WEAK_TEXT_STYLES.has(style)) {
-          result.push(html`<span class="text-textWeak">${unsafeHTML(getCachedUnescape(value))}</span>`);
+          result.push(this.mode === 'patterns'
+            ? html`<span class="text-textWeak">${highlightPlaceholders(value)}</span>`
+            : html`<span class="text-textWeak">${unsafeHTML(getCachedUnescape(value))}</span>`);
         } else {
           result.push(renderBadge(clsx('cbadge-sm', this.getStyleClass(style), wrapClass), value));
         }
@@ -1456,7 +1441,30 @@ export class LogList extends LitElement {
     const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
 
     switch (key) {
+      case 'pattern_count':
+        const count = lookupVecValue<number>(dataArr, this.colIdxMap, key);
+        const maxCount = this.mode === 'patterns' && this.visibleItems.length
+          ? lookupVecValue<number>(this.visibleItems[0].data, this.colIdxMap, key) || 1
+          : 1;
+        const pct = (count / maxCount) * 100;
+        return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total">
+          <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatPatternCount(count)}</span>
+          <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
+            <div class="h-full bg-[#7ab8d0] rounded-sm" style="width:${pct}%"></div>
+          </div>
+        </div>`;
+      case 'volume':
+        const volBuckets = lookupVecValue<number[]>(dataArr, this.colIdxMap, key);
+        return html`<div class="flex items-center w-full">${renderSparkline(volBuckets)}</div>`;
+      case 'level':
+        const lv = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        if (!lv) return html`<span class="text-textWeak text-xs text-center w-full inline-block">-</span>`;
+        const lvColors: Record<string, string> = { error: 'badge-error', warn: 'badge-warning', warning: 'badge-warning', info: 'badge-info', debug: 'badge-neutral' };
+        return renderBadge(`cbadge-sm ${lvColors[lv.toLowerCase()] || 'badge-neutral'}`, lv);
       case 'id':
+        if (this.mode === 'patterns') {
+          return html`<div class="flex items-center justify-between w-3"><span class="col-span-1 h-5 rounded-sm flex w-1 bg-strokeBrand-weak"></span></div>`;
+        }
         const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, this.colIdxMap);
         const isExpanded = expanded || rowData.parentIds?.some((pid: string) => this.expandedTraces[pid]);
         const indicatorClass = isExpanded ? errClass.replace('-weak', '-strong') : errClass;
@@ -1540,6 +1548,9 @@ export class LogList extends LitElement {
         if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
           const summaryArray = this.parseSummaryData(dataArr);
           rowData._summaryCache = { content: this.renderSummaryElements(summaryArray, this.wrapLines), wrapLines: this.wrapLines };
+        }
+        if (this.mode === 'patterns') {
+          return html`<div class="flex items-center gap-1 flex-wrap break-all whitespace-break-spaces">${rowData._summaryCache.content}</div>`;
         }
         const errClas = hasErrors
           ? 'bg-fillError-strong text-textInverse-strong fill-textInverse-strong stroke-strokeError-strong'
@@ -1706,10 +1717,13 @@ export class LogList extends LitElement {
   }
 
   logTableHeading(column: string) {
-    if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap w-3 pl-2.5"></td>`;
+    if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap col-id pl-2.5"></td>`;
 
     const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
     const config = {
+      pattern_count: { title: 'count', classes: 'shrink-0' },
+      volume: { title: '~volume', classes: 'shrink-0' },
+      level: { title: 'status', classes: 'shrink-0' },
       timestamp: { title: 'timestamp', classes: 'shrink-0' },
       created_at: { title: 'timestamp', classes: 'shrink-0' },
       latency_breakdown: { title: 'latency', classes: 'sticky right-0 shrink-0' },
@@ -1739,8 +1753,9 @@ export class LogList extends LitElement {
 
   logItemRow = (rowData: EventLine) => {
     try {
+      const isPatterns = this.mode === 'patterns';
       const s = rowData.type === 'log' ? 'logs' : 'spans';
-      const targetInfo = requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
+      const targetInfo = isPatterns ? '' : requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
       const isNew = rowData.isNew;
 
       // Pre-calculate CSS custom properties for widths
@@ -1755,23 +1770,24 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex group cursor-pointer whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto isolate',
-            !this.wrapLines && 'h-[28px]',
+            'item-row relative p-0 flex group whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto isolate cursor-pointer',
+            isPatterns && 'items-start',
+            !this.wrapLines && !isPatterns && 'h-[28px]',
             isNew && 'animate-fadeBg'
           )}
           style=${Object.entries(columnStyles)
             .map(([k, v]) => `${k}: ${v}`)
             .join('; ')}
-          @click=${(event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
+          @click=${isPatterns ? nothing : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
             .filter((v) => v !== 'latency_breakdown')
             .map((column) => {
               const hasWidth = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
               return html`<td
-                class=${`${this.wrapLines ? 'break-all whitespace-wrap' : ''} bg-bgBase relative pl-2 ${
-                  column === 'summary' ? 'flex-1' : 'flex-shrink-0'
-                } ${hasWidth ? `col-${column}` : ''}`}
+                class=${`${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} bg-bgBase group-hover:bg-inherit relative pl-2 ${
+                  column === 'summary' ? 'flex-1 min-w-0' : 'flex-shrink-0'
+                } ${hasWidth && !(isPatterns && column === 'summary') ? `col-${column}` : ''}`}
               >
                 ${this.logItemCol(rowData, column)}
               </td>`;
@@ -1890,6 +1906,8 @@ export class LogList extends LitElement {
         ${faSprite(icon, 'regular', 'h-4 w-4')}
         <span class="sm:inline hidden">${label}</span>
       </button>`;
+
+    if (this.mode === 'patterns') return nothing;
 
     return html`
       <div class="w-full flex justify-end px-2 pb-1 gap-3">

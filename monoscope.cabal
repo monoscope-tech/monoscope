@@ -55,7 +55,7 @@ extra-source-files:
     static/migrations/0027_notification_test.sql
     static/migrations/0028_everyone_team.sql
     static/migrations/0029_replay_sessions.sql
-    static/migrations/0030_replay_event_file_count.sql
+    static/migrations/0030_replay_sessions_and_log_patterns.sql
 
 source-repository head
   type: git
@@ -576,6 +576,7 @@ test-suite unit-tests
       Pkg.QueryCacheSpec
       RequestMessagesSpec
       Spec
+      UtilsBenchSpec
   hs-source-dirs:
       test/unit
   default-extensions:

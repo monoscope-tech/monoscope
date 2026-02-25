@@ -406,7 +406,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
 
           div_ [id_ "log-content", class_ "hidden err-tab-content"]
             $ div_ [class_ "flex flex-col gap-4"]
-            $ virtualTable pid (Just $ "/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.recentTraceId)) <> "\""))
+            $ virtualTable pid (Just $ "/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.recentTraceId)) <> "\"")) Nothing
 
           div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
             let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
