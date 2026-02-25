@@ -84,6 +84,7 @@ data TokenResponseTeam = TokenResponseTeam
 
 data TokenResponse = TokenResponse
   { ok :: Bool
+  , accessToken :: Text
   , incomingWebhook :: IncomingWebhook
   , team :: TokenResponseTeam
   }
@@ -132,7 +133,7 @@ linkProjectGetH slack_code stateM = do
       project <- Projects.projectById pid
       case (token, project) of
         (Just token', Just project') -> do
-          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId token'.team.name
+          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do

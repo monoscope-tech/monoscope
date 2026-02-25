@@ -83,7 +83,6 @@ library
       Models.Apis.Integrations
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
-      Models.Apis.LogPatterns
       Models.Apis.Monitors
       Models.Apis.RequestDumps
       Models.Apis.Shapes
