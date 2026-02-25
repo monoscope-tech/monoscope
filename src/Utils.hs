@@ -948,14 +948,15 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
     replaceEmails :: Text -> Text
     replaceEmails !txt =
       let (before, after) = T.breakOn "@" txt
-       in if T.null after then txt
-          else
-            let (localRev, prefixRev) = T.span isLocalChar (T.reverse before)
-             in if not (T.null localRev)
-                  then case tryEmailDomain (T.drop 1 after) of
-                    Just rest -> T.reverse prefixRev <> "{email}" <> replaceEmails rest
-                    Nothing -> before <> "@" <> replaceEmails (T.drop 1 after)
-                  else before <> "@" <> replaceEmails (T.drop 1 after)
+       in if T.null after
+            then txt
+            else
+              let (localRev, prefixRev) = T.span isLocalChar (T.reverse before)
+               in if not (T.null localRev)
+                    then case tryEmailDomain (T.drop 1 after) of
+                      Just rest -> T.reverse prefixRev <> "{email}" <> replaceEmails rest
+                      Nothing -> before <> "@" <> replaceEmails (T.drop 1 after)
+                    else before <> "@" <> replaceEmails (T.drop 1 after)
 
     isLocalChar :: Char -> Bool
     isLocalChar c = isAlphaNum c || c `elem` ("._%+-" :: [Char])
@@ -973,18 +974,22 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
     replaceJWTs :: Text -> Text
     replaceJWTs !txt =
       let (before, after) = T.breakOn "eyJ" txt
-       in if T.null after then txt
-          else let rest3 = T.drop 3 after
-                   (_seg1, r1) = T.span isBase64Url rest3
-                in if not (T.null r1) && T.head r1 == '.'
-                     then let (seg2, r2) = T.span isBase64Url (T.drop 1 r1)
-                           in if not (T.null seg2) && not (T.null r2) && T.head r2 == '.'
-                                then let (seg3, r3) = T.span isBase64Url (T.drop 1 r2)
-                                      in if not (T.null seg3)
-                                           then before <> "{jwt}" <> replaceJWTs r3
-                                           else before <> "eyJ" <> replaceJWTs rest3
-                                else before <> "eyJ" <> replaceJWTs rest3
-                     else before <> "eyJ" <> replaceJWTs rest3
+       in if T.null after
+            then txt
+            else
+              let rest3 = T.drop 3 after
+                  (_seg1, r1) = T.span isBase64Url rest3
+               in if not (T.null r1) && T.head r1 == '.'
+                    then
+                      let (seg2, r2) = T.span isBase64Url (T.drop 1 r1)
+                       in if not (T.null seg2) && not (T.null r2) && T.head r2 == '.'
+                            then
+                              let (seg3, r3) = T.span isBase64Url (T.drop 1 r2)
+                               in if not (T.null seg3)
+                                    then before <> "{jwt}" <> replaceJWTs r3
+                                    else before <> "eyJ" <> replaceJWTs rest3
+                            else before <> "eyJ" <> replaceJWTs rest3
+                    else before <> "eyJ" <> replaceJWTs rest3
 
     isBase64Url :: Char -> Bool
     isBase64Url c = isAlphaNum c || c == '_' || c == '-'
@@ -1001,10 +1006,11 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
                   then TLB.fromText safe <> dispatchColon lastCh (T.drop 1 rest)
                   else -- Digit trigger: check for hex-alpha suffix to peel
                     case peelHexSuffix safe of
-                      (safePre, hexPart) | not (T.null hexPart) ->
-                        let combined = hexPart <> rest
-                            lastPre = if T.null safePre then prev else Just (T.last safePre)
-                         in TLB.fromText safePre <> scanHexDigit lastPre combined
+                      (safePre, hexPart)
+                        | not (T.null hexPart) ->
+                            let combined = hexPart <> rest
+                                lastPre = if T.null safePre then prev else Just (T.last safePre)
+                             in TLB.fromText safePre <> scanHexDigit lastPre combined
                       _ -> TLB.fromText safe <> scanDigit lastCh rest
 
     trigger :: Char -> Bool
@@ -1038,7 +1044,8 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
           len = T.length fullHex
           atBoundary = T.null rest || not (isHexDigit' (T.head rest))
        in case () of
-            _ | len >= 8 && not (T.null rest) && T.head rest == '-' ->
+            _
+              | len >= 8 && not (T.null rest) && T.head rest == '-' ->
                   case tryUUID txt of
                     Just r -> "{uuid}" <> go (Just '}') r
                     Nothing -> recognizeHex prev len atBoundary fullHex rest txt
@@ -1050,7 +1057,8 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
       40 | atBoundary -> "{sha1}" <> go (Just '}') rest
       32 | atBoundary -> "{md5}" <> go (Just '}') rest
       24 | atBoundary -> "{uuid}" <> go (Just '}') rest
-      _ -> -- Fallback: emit one char at a time so digits within get replaced
+      _ ->
+        -- Fallback: emit one char at a time so digits within get replaced
         TLB.singleton (T.head txt) <> go (Just (T.head txt)) (T.drop 1 txt)
 
     -- Starts with digit
@@ -1070,17 +1078,19 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
                   Nothing -> case tryUUID txt of
                     Just rest -> "{uuid}" <> go (Just '}') rest
                     Nothing -> trySSNOrFallback prev digits afterDigits txt
-              -- Time: 1-2 digits + ':' → try HH:MM:SS
-              else if dLen <= 2 && dLen >= 1 && not (T.null afterDigits) && T.head afterDigits == ':'
-                then case tryTimeOnly digits (T.drop 1 afterDigits) of
-                  Just (placeholder, rest) -> placeholder <> go (Just '}') rest
-                  Nothing -> "{integer}" <> go (Just '}') afterDigits
-              -- UUID check: up to 8 hex digits + '-'
-              else if dLen <= 8 && not (T.null afterDigits) && T.head afterDigits == '-'
-                then case tryUUID txt of
-                  Just rest -> "{uuid}" <> go (Just '}') rest
-                  Nothing -> trySSNOrFallback prev digits afterDigits txt
-              else classifyDigit prev txt digits afterDigits
+                -- Time: 1-2 digits + ':' → try HH:MM:SS
+                else
+                  if dLen <= 2 && dLen >= 1 && not (T.null afterDigits) && T.head afterDigits == ':'
+                    then case tryTimeOnly digits (T.drop 1 afterDigits) of
+                      Just (placeholder, rest) -> placeholder <> go (Just '}') rest
+                      Nothing -> "{integer}" <> go (Just '}') afterDigits
+                    -- UUID check: up to 8 hex digits + '-'
+                    else
+                      if dLen <= 8 && not (T.null afterDigits) && T.head afterDigits == '-'
+                        then case tryUUID txt of
+                          Just rest -> "{uuid}" <> go (Just '}') rest
+                          Nothing -> trySSNOrFallback prev digits afterDigits txt
+                        else classifyDigit prev txt digits afterDigits
 
     trySSNOrFallback :: Maybe Char -> Text -> Text -> Text -> TLB.Builder
     trySSNOrFallback !prev !digits !afterDigits !txt
@@ -1110,13 +1120,14 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
           len = T.length fullHex
           atBoundary = T.null rest || not (isHexDigit' (T.head rest))
           fallback = "{integer}" <> go (Just '}') afterDigits
-       in if | len == 64 && atBoundary -> "{sha256}" <> go (Just '}') rest
-             | len == 40 && atBoundary -> "{sha1}" <> go (Just '}') rest
-             | len == 32 && atBoundary -> "{md5}" <> go (Just '}') rest
-             | len == 24 && atBoundary -> "{uuid}" <> go (Just '}') rest
-             | len == 8 && not (T.null rest) && T.head rest == '-' ->
-                 maybe fallback (\r -> "{uuid}" <> go (Just '}') r) (tryUUID txt)
-             | otherwise -> fallback
+       in if
+            | len == 64 && atBoundary -> "{sha256}" <> go (Just '}') rest
+            | len == 40 && atBoundary -> "{sha1}" <> go (Just '}') rest
+            | len == 32 && atBoundary -> "{md5}" <> go (Just '}') rest
+            | len == 24 && atBoundary -> "{uuid}" <> go (Just '}') rest
+            | len == 8 && not (T.null rest) && T.head rest == '-' ->
+                maybe fallback (\r -> "{uuid}" <> go (Just '}') r) (tryUUID txt)
+            | otherwise -> fallback
 
     -- Timestamp: YYYY-MM-DD, optionally followed by ' HH:MM:SS' or 'THH:MM:SS[.sss][Z/+TZ]'
     tryTimestamp :: Text -> Text -> Maybe (TLB.Builder, Text)
@@ -1130,11 +1141,13 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
       guard $ T.length dd == 2
       -- Got YYYY-MM-DD. Check for time part
       case T.uncons r4 of
-        Just (' ', r5) -> -- Space separator: YYYY-MM-DD HH:MM:SS
+        Just (' ', r5) ->
+          -- Space separator: YYYY-MM-DD HH:MM:SS
           case tryTimePart r5 of
             Just (_, rest) -> Just ("{YYYY-MM-DD HH:MM:SS}", rest)
             Nothing -> Just ("{YYYY-MM-DD}", r4)
-        Just ('T', r5) -> -- ISO 8601: YYYY-MM-DDThh:mm:ss[.sss][Z/±TZ]
+        Just ('T', r5) ->
+          -- ISO 8601: YYYY-MM-DDThh:mm:ss[.sss][Z/±TZ]
           case tryTimePart r5 of
             Just (_, rest) -> Just ("{YYYY-MM-DDThh:mm:ss.sTZD}", skipTZD rest)
             Nothing -> Just ("{YYYY-MM-DD}", r4)
@@ -1161,13 +1174,14 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
     skipTZD :: Text -> Text
     skipTZD !txt = case T.uncons txt of
       Just ('Z', rest) -> rest
-      Just (c, rest) | c == '+' || c == '-' ->
-        let (d1, r1) = T.span isDigit rest
-         in if T.length d1 >= 2
-              then case T.uncons r1 of
-                Just (':', r2) -> let (d2, r3) = T.span isDigit r2 in if T.length d2 == 2 then r3 else r1
-                _ -> if T.length d1 == 4 then r1 else r1
-              else txt
+      Just (c, rest)
+        | c == '+' || c == '-' ->
+            let (d1, r1) = T.span isDigit rest
+             in if T.length d1 >= 2
+                  then case T.uncons r1 of
+                    Just (':', r2) -> let (d2, r3) = T.span isDigit r2 in if T.length d2 == 2 then r3 else r1
+                    _ -> if T.length d1 == 4 then r1 else r1
+                  else txt
       _ -> txt
 
     -- Standalone time: HH:MM:SS[.mmm] — digits already consumed, rest starts after ':'

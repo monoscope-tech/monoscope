@@ -56,6 +56,7 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (WrappedEnumShow (..))
+import Pkg.Drain qualified as Drain
 import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (SSpans))
@@ -63,7 +64,6 @@ import Relude hiding (many, some)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (DB, withTimefusion)
-import Pkg.Drain qualified as Drain
 import Utils (replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -577,7 +577,7 @@ valueToVector (Only val) = case val of
 data PatternRow = PatternRow {logPattern :: Text, count :: Int, level :: Maybe Text, service :: Maybe Text, volume :: [Int]}
 
 
-fetchLogPatterns :: (DB es, Log :> es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Labeled "timefusion" WithConnection :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (Int, [PatternRow])
+fetchLogPatterns :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (Int, [PatternRow])
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let sqlCfg = (defSqlQueryCfg pid now sourceM Nothing){dateRange}
@@ -587,12 +587,14 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
       fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
       target = fromMaybe "summary" targetM
-  Log.logTrace "fetchLogPatterns: start" $ AE.object
-    ["project_id" AE..= pid, "target" AE..= target, "skip" AE..= skip, "date_range" AE..= show dateRange]
+  Log.logTrace "fetchLogPatterns: start"
+    $ AE.object
+      ["project_id" AE..= pid, "target" AE..= target, "skip" AE..= skip, "date_range" AE..= show dateRange]
   let (dateFrom, dateTo) = dateRange
-  precomputed :: [(Text, Int, Maybe Text, Maybe Text, Text)] <- if target `elem` map fst LogPatterns.knownPatternFields
-    then PG.query [sql|SELECT log_pattern, occurrence_count::INT, log_level, service_name, pattern_hash FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?) ORDER BY occurrence_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
-    else pure []
+  precomputed :: [(Text, Int, Maybe Text, Maybe Text, Text)] <-
+    if target `elem` map fst LogPatterns.knownPatternFields
+      then PG.query [sql|SELECT log_pattern, occurrence_count::INT, log_level, service_name, pattern_hash FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?) ORDER BY occurrence_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
+      else pure []
   if not (null precomputed)
     then do
       Log.logTrace "fetchLogPatterns: using precomputed" $ AE.object ["count" AE..= length precomputed]
@@ -617,15 +619,24 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
         Nothing -> pure []
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
       let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, l1 <|> l2, s1 <|> s2, b1 ++ b2)
-          grouped = HashMap.fromListWith agg
-            [(replaceAllFormats val, (cnt, lvl, svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
-          drainTree = HashMap.foldlWithKey' (\tree pat _ ->
-              let tokens = Drain.tokenizeForDrain pat
-              in if V.null tokens then tree else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens pat Nothing now
-            ) Drain.emptyDrainTree grouped
-          merged = HashMap.fromListWith agg
-            [ (dr.templateStr, foldl' agg (0, Nothing, Nothing, []) $ mapMaybe (`HashMap.lookup` grouped) $ V.toList dr.logIds)
-            | dr <- V.toList $ Drain.getAllLogGroups drainTree]
+          grouped =
+            HashMap.fromListWith
+              agg
+              [(replaceAllFormats val, (cnt, lvl, svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
+          drainTree =
+            HashMap.foldlWithKey'
+              ( \tree pat _ ->
+                  let tokens = Drain.tokenizeForDrain pat
+                   in if V.null tokens then tree else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens pat Nothing now
+              )
+              Drain.emptyDrainTree
+              grouped
+          merged =
+            HashMap.fromListWith
+              agg
+              [ (dr.templateStr, foldl' agg (0, Nothing, Nothing, []) $ mapMaybe (`HashMap.lookup` grouped) $ V.toList dr.logIds)
+              | dr <- V.toList $ Drain.getAllLogGroups drainTree
+              ]
           sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HashMap.toList merged
           allBIs = [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
           (minB, maxB) = case allBIs of [] -> (0, 0); xs -> (foldl' min maxBound xs, foldl' max minBound xs)

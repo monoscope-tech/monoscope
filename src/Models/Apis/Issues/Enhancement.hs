@@ -69,38 +69,63 @@ withIssueData issue f fallback = case AE.fromJSON (getAeson issue.issueData) of
 buildTitlePrompt :: Issues.Issue -> Text
 buildTitlePrompt issue =
   let baseContext = case issue.issueType of
-        Issues.ApiChange -> withIssueData @Issues.APIChangeData issue (\d ->
-            [fmtTrim|Generate a concise, descriptive title for this API change.
+        Issues.ApiChange ->
+          withIssueData @Issues.APIChangeData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise, descriptive title for this API change.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
             Modified fields: {V.length d.modifiedFields}
-            Service: {Issues.serviceLabel issue.service}|]) "Generate a concise title for this API change."
-        Issues.RuntimeException -> withIssueData @Issues.RuntimeExceptionData issue (\d ->
-            [fmtTrim|Generate a concise title for this runtime exception.
+            Service: {Issues.serviceLabel issue.service}|]
+            )
+            "Generate a concise title for this API change."
+        Issues.RuntimeException ->
+          withIssueData @Issues.RuntimeExceptionData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise title for this runtime exception.
             Error type: {d.errorType}
             Error message: {T.take 100 d.errorMessage}
-            Service: {Issues.serviceLabel issue.service}|]) "Generate a concise title for this runtime exception."
-        Issues.QueryAlert -> withIssueData @Issues.QueryAlertData issue (\d ->
-            [fmtTrim|Generate a concise title for this query alert.
+            Service: {Issues.serviceLabel issue.service}|]
+            )
+            "Generate a concise title for this runtime exception."
+        Issues.QueryAlert ->
+          withIssueData @Issues.QueryAlertData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise title for this query alert.
             Query: {d.queryName}
             Threshold: {d.thresholdValue} ({d.thresholdType})
-            Actual value: {d.actualValue}|]) "Generate a concise title for this query alert."
-        Issues.LogPattern -> withIssueData @Issues.LogPatternData issue (\d ->
-            [fmtTrim|Generate a concise title for this new log pattern detection.
+            Actual value: {d.actualValue}|]
+            )
+            "Generate a concise title for this query alert."
+        Issues.LogPattern ->
+          withIssueData @Issues.LogPatternData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise title for this new log pattern detection.
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Log level: {fromMaybe "unknown" d.logLevel}
             Service: {Issues.serviceLabel d.serviceName}
-            Occurrences: {d.occurrenceCount}|]) ("Generate a concise title for this log pattern. Title: " <> issue.title)
-        Issues.LogPatternRateChange -> withIssueData @Issues.LogPatternRateChangeData issue (\d ->
-            let dir = display d.changeDirection
-             in [fmtTrim|Generate a concise title for this log pattern volume {dir}.
+            Occurrences: {d.occurrenceCount}|]
+            )
+            ("Generate a concise title for this log pattern. Title: " <> issue.title)
+        Issues.LogPatternRateChange ->
+          withIssueData @Issues.LogPatternRateChangeData
+            issue
+            ( \d ->
+                let dir = display d.changeDirection
+                 in [fmtTrim|Generate a concise title for this log pattern volume {dir}.
             Log pattern: {d.logPattern}
             Current rate: {Issues.showRate d.currentRatePerHour}
             Baseline: {Issues.showRate d.baselineMean}
             Change: {Issues.showPct d.changePercent}
-            Service: {Issues.serviceLabel d.serviceName}|]) ("Generate a concise title for this log pattern rate change. Title: " <> issue.title)
+            Service: {Issues.serviceLabel d.serviceName}|]
+            )
+            ("Generate a concise title for this log pattern rate change. Title: " <> issue.title)
 
       systemPrompt =
         unlines
@@ -121,40 +146,63 @@ buildTitlePrompt issue =
 buildDescriptionPrompt :: Issues.Issue -> Text
 buildDescriptionPrompt issue =
   let baseContext = case issue.issueType of
-        Issues.ApiChange -> withIssueData @Issues.APIChangeData issue (\d ->
-            [fmtTrim|Describe this API change and its impact.
+        Issues.ApiChange ->
+          withIssueData @Issues.APIChangeData
+            issue
+            ( \d ->
+                [fmtTrim|Describe this API change and its impact.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {show $ V.toList d.newFields}
             Deleted fields: {show $ V.toList d.deletedFields}
             Modified fields: {show $ V.toList d.modifiedFields}
             Total anomalies grouped: {V.length d.anomalyHashes}
-            Service: {Issues.serviceLabel issue.service}|]) "Describe this API change and its implications."
-        Issues.RuntimeException -> withIssueData @Issues.RuntimeExceptionData issue (\d ->
-            [fmtTrim|Analyze this runtime exception and provide debugging guidance.
+            Service: {Issues.serviceLabel issue.service}|]
+            )
+            "Describe this API change and its implications."
+        Issues.RuntimeException ->
+          withIssueData @Issues.RuntimeExceptionData
+            issue
+            ( \d ->
+                [fmtTrim|Analyze this runtime exception and provide debugging guidance.
             Error type: {d.errorType}
             Error message: {d.errorMessage}
             Stack trace: {T.take 500 d.stackTrace}
             Request context: {fromMaybe "Unknown" d.requestMethod} {fromMaybe "Unknown" d.requestPath}
-            Occurrences: {d.occurrenceCount}|]) "Analyze this runtime exception."
-        Issues.QueryAlert -> withIssueData @Issues.QueryAlertData issue (\d ->
-            [fmtTrim|Describe this query alert and recommended actions.
+            Occurrences: {d.occurrenceCount}|]
+            )
+            "Analyze this runtime exception."
+        Issues.QueryAlert ->
+          withIssueData @Issues.QueryAlertData
+            issue
+            ( \d ->
+                [fmtTrim|Describe this query alert and recommended actions.
             Query: {d.queryName}
             Expression: {d.queryExpression}
             Threshold: {d.thresholdValue} ({d.thresholdType})
             Actual value: {d.actualValue}
-            Triggered at: {show d.triggeredAt}|]) "Describe this query alert."
-        Issues.LogPattern -> withIssueData @Issues.LogPatternData issue (\d ->
-            [fmtTrim|Describe this new log pattern and its implications.
+            Triggered at: {show d.triggeredAt}|]
+            )
+            "Describe this query alert."
+        Issues.LogPattern ->
+          withIssueData @Issues.LogPatternData
+            issue
+            ( \d ->
+                [fmtTrim|Describe this new log pattern and its implications.
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Log level: {fromMaybe "unknown" d.logLevel}
             Service: {Issues.serviceLabel d.serviceName}
             Source: {d.sourceField}
             Occurrences: {d.occurrenceCount}
-            First seen: {show d.firstSeenAt}|]) ("Describe this log pattern issue. Title: " <> issue.title)
-        Issues.LogPatternRateChange -> withIssueData @Issues.LogPatternRateChangeData issue (\d ->
-            let dir = display d.changeDirection
-             in [fmtTrim|Describe this log pattern volume {dir} and its implications.
+            First seen: {show d.firstSeenAt}|]
+            )
+            ("Describe this log pattern issue. Title: " <> issue.title)
+        Issues.LogPatternRateChange ->
+          withIssueData @Issues.LogPatternRateChangeData
+            issue
+            ( \d ->
+                let dir = display d.changeDirection
+                 in [fmtTrim|Describe this log pattern volume {dir} and its implications.
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Current rate: {Issues.showRate d.currentRatePerHour}
@@ -163,7 +211,9 @@ buildDescriptionPrompt issue =
             Z-score: {show (round d.zScore :: Int)} standard deviations
             Change: {Issues.showPct d.changePercent}
             Service: {Issues.serviceLabel d.serviceName}
-            Log level: {fromMaybe "unknown" d.logLevel}|]) ("Describe this log pattern rate change. Title: " <> issue.title)
+            Log level: {fromMaybe "unknown" d.logLevel}|]
+            )
+            ("Describe this log pattern rate change. Title: " <> issue.title)
 
       systemPrompt =
         [text|
@@ -202,12 +252,17 @@ classifyIssueCriticality authCtx issue = runExceptT do
 buildCriticalityPrompt :: Issues.Issue -> Text
 buildCriticalityPrompt issue =
   let context = case issue.issueType of
-        Issues.ApiChange -> withIssueData @Issues.APIChangeData issue (\d ->
-            [fmtTrim|API change detected
+        Issues.ApiChange ->
+          withIssueData @Issues.APIChangeData
+            issue
+            ( \d ->
+                [fmtTrim|API change detected
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
-            Modified fields: {V.length d.modifiedFields}|]) ("API change: " <> issue.title)
+            Modified fields: {V.length d.modifiedFields}|]
+            )
+            ("API change: " <> issue.title)
         Issues.RuntimeException -> "Runtime exception: " <> issue.title
         Issues.QueryAlert -> "Query alert: " <> issue.title
         Issues.LogPattern -> "Log pattern: " <> issue.title

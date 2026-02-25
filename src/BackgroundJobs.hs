@@ -524,10 +524,12 @@ logsPatternExtraction scheduledTime pid = do
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let filteredIds = V.filter (/= "") dp.logIds
                 eventCount = fromIntegral $ V.length filteredIds :: Int64
-             in if V.null filteredIds || T.null dp.templateStr then Nothing
-                else let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) (filteredIds V.!? 0 >>= (`HM.lookup` eventMeta))
-                         patternHash = toXXHash dp.templateStr
-                      in Just (filteredIds, patternHash, LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}, (pid, sourceField, patternHash, scheduledTime, eventCount))
+             in if V.null filteredIds || T.null dp.templateStr
+                  then Nothing
+                  else
+                    let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) (filteredIds V.!? 0 >>= (`HM.lookup` eventMeta))
+                        patternHash = toXXHash dp.templateStr
+                     in Just (filteredIds, patternHash, LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}, (pid, sourceField, patternHash, scheduledTime, eventCount))
       -- Tag otel events with pattern hashes
       forM_ prepared \(filteredIds, patternHash, _, _) -> do
         let hashTag = "pat:" <> patternHash
@@ -551,7 +553,8 @@ logsPatternExtraction scheduledTime pid = do
       let normalized = replaceAllFormats raw
           patternHash = toXXHash normalized
        in ( LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField = sf, serviceName, logLevel, traceId = Nothing, sampleMessage = Just raw, eventCount = cnt}
-          , (pid, sf, patternHash, scheduledTime, cnt) )
+          , (pid, sf, patternHash, scheduledTime, cnt)
+          )
 
 
 -- | Input for Drain tree processing.

@@ -771,7 +771,7 @@ instance AE.ToJSON LogsGet where
           | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
           | otherwise = AE.toJSON (T.words pat)
         rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern]) patterns
-    in AE.object
+     in AE.object
           [ "logsData" AE..= rows
           , "cols" AE..= (["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text])
           , "colIdxMap" AE..= HM.fromList [("id" :: Text, 0 :: Int), ("pattern_count", 1), ("volume", 2), ("level", 3), ("service", 4), ("summary", 5)]
@@ -905,16 +905,16 @@ apiLogsPage page = do
         Widget.widget_ page.chartWidget
         Widget.widget_ page.latencyWidget
     div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
-        -- FACETS
-        div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
-          div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
-            span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
-              $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
-            input_
-              [ placeholder_ "Search filters..."
-              , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
-              , term "data-filterParent" "facets-container"
-              , [__| on keyup 
+      -- FACETS
+      div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
+        div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
+          span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
+            $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
+          input_
+            [ placeholder_ "Search filters..."
+            , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
+            , term "data-filterParent" "facets-container"
+            , [__| on keyup 
                     if the event's key is 'Escape' 
                       set my value to '' then trigger keyup 
                     else 
@@ -922,24 +922,24 @@ apiLogsPage page = do
                       show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                       show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                   |]
-              ]
-          whenJust page.facets renderFacets
+            ]
+        whenJust page.facets renderFacets
 
-        div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] $ resizer_ "facets-container" "facets_width" True
+      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] $ resizer_ "facets-container" "facets_width" True
 
-        let dW = fromMaybe "100%" page.detailsWidth
-            showTrace = isJust page.showTrace
-        div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-          -- Filters and row count header
-          div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
-            label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
-              faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
-              span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
-              span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
-              "filters"
-              input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
-              script_
-                [text|
+      let dW = fromMaybe "100%" page.detailsWidth
+          showTrace = isJust page.showTrace
+      div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
+        -- Filters and row count header
+        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+          label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
+            faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+            span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+            span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+            "filters"
+            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
+            script_
+              [text|
               document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
               // Ensure editor layout is correct on initial load
               setTimeout(() => {
@@ -949,17 +949,17 @@ apiLogsPage page = do
                 }
               }, 300);
             |]
-            span_ [class_ "text-strokeWeak "] "|"
-            div_ [class_ ""] do
-              span_ [class_ "text-textStrong", id_ "row-count-display"] $ toHtml $ prettyPrintCount page.queryResultCount
-              span_ [class_ "text-textStrong", id_ "row-count-suffix"] $ toHtml $ bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
+          span_ [class_ "text-strokeWeak "] "|"
+          div_ [class_ ""] do
+            span_ [class_ "text-textStrong", id_ "row-count-display"] $ toHtml $ prettyPrintCount page.queryResultCount
+            span_ [class_ "text-textStrong", id_ "row-count-suffix"] $ toHtml $ bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
 
-          -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
-          div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden"] do
-            let pid = page.pid.toText
-            let vizType = maybe "\"timeseries\"" show page.vizType
-            script_
-              [text| var widgetJSON = {
+        -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
+        div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden"] do
+          let pid = page.pid.toText
+          let vizType = maybe "\"timeseries\"" show page.vizType
+          script_
+            [text| var widgetJSON = {
                   "id": "visualization-widget",
                   "type": ${vizType}, 
                   "title": "Visualization",
@@ -970,45 +970,45 @@ apiLogsPage page = do
                   "layout": {"w": 6, "h": 4}
                 };
                 |]
-            div_
-              [ id_ "visualization-widget-container"
-              , class_ " w-full"
-              , style_ "aspect-ratio: 4 / 2;"
-              , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
-              , hxTrigger_ "intersect once, update-widget"
-              , hxTarget_ "this"
-              , hxSwap_ "innerHTML"
-              , hxVals_ "js:{...widgetJSON}"
-              , hxExt_ "json-enc,forward-page-params"
-              , term "hx-sync" "this:replace"
-              ]
-              ""
+          div_
+            [ id_ "visualization-widget-container"
+            , class_ " w-full"
+            , style_ "aspect-ratio: 4 / 2;"
+            , hxPost_ ("/p/" <> page.pid.toText <> "/widget")
+            , hxTrigger_ "intersect once, update-widget"
+            , hxTarget_ "this"
+            , hxSwap_ "innerHTML"
+            , hxVals_ "js:{...widgetJSON}"
+            , hxExt_ "json-enc,forward-page-params"
+            , term "hx-sync" "this:replace"
+            ]
+            ""
 
-          -- Trace view container
-          div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
-            whenJust page.showTrace \trIdAndTimestamp -> do
-              let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
-              loadingIndicator_ LdMD LdDots
-              div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
+        -- Trace view container
+        div_ [class_ $ "absolute top-0 right-0  w-full h-full overflow-scroll c-scroll z-50 bg-bgBase transition-all duration-100 " <> if showTrace then "" else "hidden", id_ "trace_expanded_view"] do
+          whenJust page.showTrace \trIdAndTimestamp -> do
+            let url = "/p/" <> page.pid.toText <> "/traces/" <> trIdAndTimestamp
+            loadingIndicator_ LdMD LdDots
+            div_ [hxGet_ url, hxTarget_ "#trace_expanded_view", hxSwap_ "innerHtml", hxTrigger_ "intersect one", term "hx-sync" "this:replace"] pass
 
-          -- Logs view section (also within the scrollable container)
-          div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
-            -- Virtual table for logs
-            div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
+        -- Logs view section (also within the scrollable container)
+        div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
+          -- Virtual table for logs
+          div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
 
-        -- Alert configuration panel on the right
-        div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
+      -- Alert configuration panel on the right
+      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
 
-        div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
-          alertConfigurationForm_ page.project page.alert page.teams
+      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
+        alertConfigurationForm_ page.project page.alert page.teams
 
-        div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+      div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
-        div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto", id_ "log_details_container"] do
-          htmxOverlayIndicator_ "details_indicator"
-          whenJust page.targetEvent \te -> do
-            script_
-              [text|
+      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto", id_ "log_details_container"] do
+        htmxOverlayIndicator_ "details_indicator"
+        whenJust page.targetEvent \te -> do
+          script_
+            [text|
             document.addEventListener('DOMContentLoaded', function() {
               const detailsContainer = document.getElementById('log_details_container');
               if (detailsContainer) {
@@ -1022,8 +1022,8 @@ apiLogsPage page = do
               }
               });
           |]
-            let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
-            div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
+          let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
+          div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType
 
@@ -1166,6 +1166,3 @@ alertConfigurationForm_ project alertM teams = do
               do
                 faSprite_ "plus" "regular" "w-3.5 h-3.5"
                 if isJust alertM then "Update alert" else "Create Alert"
-
-
-
