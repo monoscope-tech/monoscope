@@ -37,13 +37,13 @@
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/jsonpath": "^0.2.4",
-    "@types/node": "^25.0.6",
-    "@vitest/browser": "^4.0.16",
-    "happy-dom": "^20.1.0",
+    "@types/node": "^25.3.0",
+    "@vitest/browser": "^4.0.18",
+    "happy-dom": "^20.7.0",
     "jsdom": "^27.4.0",
     "typescript": "^5.9.3",
     "vite-plugin-monaco-editor": "^1.1.0",
-    "vite-plugin-node-polyfills": "^0.24.0",
+    "vite-plugin-node-polyfills": "^0.25.0",
     "vitest": "^4.0.16"
   }
 }
