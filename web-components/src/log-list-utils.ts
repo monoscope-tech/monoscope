@@ -284,7 +284,7 @@ export const formatPatternCount = (n: number): string => {
 
 const PLACEHOLDER_RE = /(\{[a-z0-9_]+\}|<\*>)/g;
 const unescapeBasic = (s: string): string =>
-  s.includes('\\') ? s.replace(ESCAPED_BACKSLASH_REGEX, '\\').replace(ESCAPED_QUOTE_REGEX, '"') : s;
+  s.includes('\\') ? s.replace(ESCAPED_QUOTE_REGEX, '"').replace(ESCAPED_BACKSLASH_REGEX, '\\') : s;
 
 export const highlightPlaceholders = (text: string): TemplateResult => {
   const unescaped = unescapeBasic(text);
