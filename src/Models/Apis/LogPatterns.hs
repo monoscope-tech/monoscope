@@ -52,6 +52,7 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Relude hiding (id)
 import System.Types (DB)
 
@@ -191,12 +192,12 @@ updateBaselineBatch :: DB es => Projects.ProjectId -> V.Vector (Text, Text, Base
 updateBaselineBatch pid rows
   | V.null rows = pure 0
   | otherwise =
-      let srcFields = V.map (\(s, _, _, _, _, _) -> s) rows
-          hashes = V.map (\(_, h, _, _, _, _) -> h) rows
-          states = V.map (\(_, _, s, _, _, _) -> s) rows
-          means = V.map (\(_, _, _, m, _, _) -> m) rows
-          mads = V.map (\(_, _, _, _, m, _) -> m) rows
-          samples = V.map (\(_, _, _, _, _, s) -> s) rows
+      let srcFields = V.map (view _1) rows
+          hashes = V.map (view _2) rows
+          states = V.map (view _3) rows
+          means = V.map (view _4) rows
+          mads = V.map (view _5) rows
+          samples = V.map (view _6) rows
        in PG.execute
             [sql|
               UPDATE apis.log_patterns lp

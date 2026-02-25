@@ -19,7 +19,7 @@ import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Clock (diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
-import Data.Time.LocalTime (LocalTime (localDay), TimeOfDay (todMin), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, timeToTimeOfDay, utcToZonedTime, zonedTimeToUTC)
+import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -81,7 +81,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
-import UnliftIO.Exception (SomeAsyncException (..), bracket, catch, throwIO, try)
+import UnliftIO.Exception (bracket, catch, try)
 import Utils (DBField, replaceAllFormats, toXXHash)
 
 
@@ -359,12 +359,7 @@ processBackgroundJob authCtx bgJob =
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
-tryLog label =
-  ( `catch`
-      \(e :: SomeException) ->
-        whenJust (fromException @SomeAsyncException e) throwIO
-          >> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e)
-  )
+tryLog label = (`catch` \(e :: SomeException) -> Log.logAttention ("LogPattern pipeline step failed: " <> label) (show e))
 
 
 -- | Run hourly scheduled tasks for all projects
@@ -545,9 +540,9 @@ logsPatternExtraction scheduledTime pid = do
       exceptions :: [(Maybe Text, Maybe Text, Maybe Text, Int64)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|] (pid, startTime, scheduledTime)
       Relude.when (length exceptions == 1000) $ Log.logWarn "exception pattern limit reached" pid
       let excUpserts = [(up, hs) | (Just msg, serviceName, level, cnt) <- exceptions, let (up, hs) = mkNormalized "exception" msg serviceName level cnt]
-          allUps = urlUpserts ++ excUpserts
-      void $ LogPatterns.upsertLogPatternBatch (map fst allUps)
-      void $ LogPatterns.upsertHourlyStatBatch (map snd allUps)
+          (ups, hss) = unzip (urlUpserts ++ excUpserts)
+      void $ LogPatterns.upsertLogPatternBatch ups
+      void $ LogPatterns.upsertHourlyStatBatch hss
 
     mkNormalized sf raw serviceName logLevel cnt =
       let normalized = replaceAllFormats raw
@@ -565,18 +560,14 @@ data DrainInput = SeedPattern Text | NewEvent Text Text
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now inTree =
-  V.foldl'
-    ( \tree -> \case
-        SeedPattern c -> processNewLog isSummary "" Nothing c now tree
-        NewEvent lid c -> processNewLog isSummary lid (Just c) c now tree
-    )
-    inTree
-    batch
+  V.foldl' (flip \case
+    SeedPattern c -> processNewLog isSummary "" Nothing c now
+    NewEvent lid c -> processNewLog isSummary lid (Just c) c now) inTree batch
 
 
 processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processNewLog isSummary logId sampleContent content now tree =
-  let tokens = bool Drain.generateDrainTokens Drain.generateSummaryDrainTokens isSummary content
+  let tokens = (if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens) content
    in if V.null tokens
         then tree
         else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens logId sampleContent now
@@ -1719,7 +1710,8 @@ detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgrou
 detectLogPatternSpikes pid authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
   now <- Time.currentTime
-  let minutesIntoHour = max 15 $ todMin (timeToTimeOfDay $ utctDayTime now)
+  let totalSecs = round (realToFrac (utctDayTime now) :: Double) :: Int
+      minutesIntoHour = max 15 $ (totalSecs `mod` 3600) `div` 60
       scaleFactor = 60.0 / fromIntegral minutesIntoHour :: Double
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
