@@ -769,7 +769,7 @@ instance AE.ToJSON LogsGet where
     let total = V.foldl' (\acc p -> acc + p.count) 0 patterns
         patternToSummary pat
           | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
-          | otherwise = AE.toJSON (T.words pat)
+          | otherwise = AE.toJSON (words pat)
         rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern]) patterns
      in AE.object
           [ "logsData" AE..= rows

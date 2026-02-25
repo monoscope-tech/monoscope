@@ -600,7 +600,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       Log.logTrace "fetchLogPatterns: using precomputed" $ AE.object ["count" AE..= length precomputed]
       totalPatterns <- maybe 0 (\(Only n) -> n) . listToMaybe <$> PG.query [sql|SELECT count(*)::INT FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?)|] (pid, target, dateFrom, dateFrom, dateTo, dateTo)
       let hashes = V.fromList $ map (view _5) precomputed
-          hourlyFrom = fromMaybe (addUTCTime (-24 * 3600) now) dateFrom
+          hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
           hourlyTo = fromMaybe now dateTo
       hourlyRows :: [(Text, UTCTime, Int)] <- PG.query [sql|SELECT pattern_hash, hour_bucket, event_count::INT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND source_field = ? AND pattern_hash = ANY(?) AND hour_bucket >= ? AND hour_bucket <= ? ORDER BY pattern_hash, hour_bucket|] (pid, target, hashes, hourlyFrom, hourlyTo)
       let volumeMap = HashMap.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
@@ -667,7 +667,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
 buildHourlyBuckets :: UTCTime -> [(UTCTime, Int)] -> [Int]
 buildHourlyBuckets now pairs = [fromMaybe 0 $ HashMap.lookup i bucketMap | i <- [0 .. 23]]
   where
-    startHour = addUTCTime (-23 * 3600) $ truncateToHour now
+    startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
     bucketMap = HashMap.fromListWith (+) [(hourIndex t, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0 && idx < 24]
     hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
     truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)

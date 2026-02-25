@@ -46,7 +46,7 @@ enhanceIssueWithLLM authCtx issue = runExceptT do
 generateEnhancedTitle :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
 generateEnhancedTitle authCtx issue = runExceptT do
   r <- ExceptT $ AI.callOpenAIAPIEff (buildTitlePrompt issue) authCtx.config.openaiApiKey
-  (title, _) <- ExceptT $ pure $ AI.getNormalTupleReponse r
+  (title, _) <- hoistEither $ AI.getNormalTupleReponse r
   pure $ T.take 200 title
 
 
@@ -54,7 +54,7 @@ generateEnhancedTitle authCtx issue = runExceptT do
 generateEnhancedDescription :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
 generateEnhancedDescription authCtx issue = runExceptT do
   r <- ExceptT $ AI.callOpenAIAPIEff (buildDescriptionPrompt issue) authCtx.config.openaiApiKey
-  (response, _) <- ExceptT $ pure $ AI.getNormalTupleReponse r
+  (response, _) <- hoistEither $ AI.getNormalTupleReponse r
   let lines' = lines response
   pure (fromMaybe "" $ viaNonEmpty head lines', fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1, fromMaybe "medium" $ lines' !!? 2)
 
@@ -241,11 +241,11 @@ buildDescriptionPrompt issue =
 classifyIssueCriticality :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
 classifyIssueCriticality authCtx issue = runExceptT do
   res <- ExceptT $ AI.callOpenAIAPIEff (buildCriticalityPrompt issue) authCtx.config.openaiApiKey
-  (response, _) <- ExceptT $ pure $ AI.getNormalTupleReponse res
+  (response, _) <- hoistEither $ AI.getNormalTupleReponse res
   case lines response of
     [criticalStr, breakingStr, incrementalStr] ->
       pure (T.toLower criticalStr == "critical", fromMaybe 0 $ readMaybe $ toString breakingStr, fromMaybe 0 $ readMaybe $ toString incrementalStr)
-    _ -> ExceptT $ pure $ Left "Invalid response format from LLM"
+    _ -> hoistEither $ Left "Invalid response format from LLM"
 
 
 -- | Build prompt for criticality classification

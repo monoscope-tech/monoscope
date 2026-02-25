@@ -70,7 +70,6 @@ import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
-import Data.Text.Lazy qualified as TL
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
 import Data.Time.Clock (UTCTime)
@@ -939,7 +938,7 @@ getAlertStatusColor status = case status of
 -- >>> replaceAllFormats "{\"status_code\":200,\"count\":42}"
 -- "{\"status_code\":{integer},\"count\":{integer}}"
 replaceAllFormats :: Text -> Text
-replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePrePass input)
+replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass input)
   where
     -- Pre-pass: replace emails and JWTs before the main scan
     replacePrePass :: Text -> Text
@@ -1180,7 +1179,7 @@ replaceAllFormats !input = TL.toStrict . TLB.toLazyText $ go Nothing (replacePre
              in if T.length d1 >= 2
                   then case T.uncons r1 of
                     Just (':', r2) -> let (d2, r3) = T.span isDigit r2 in if T.length d2 == 2 then r3 else r1
-                    _ -> if T.length d1 == 4 then r1 else r1
+                    _ -> r1
                   else txt
       _ -> txt
 
