@@ -815,16 +815,16 @@ getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Re
 getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @Report [[field| project_id |], [field| report_type |]] <> " ORDER BY created_at DESC LIMIT 1") (pid, reportType)
 
 
-createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> Eff es Issue
-createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
+createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.ErrorWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
+createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev = do
   now <- Time.currentTime
   let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
       increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
       exceptionData =
         RuntimeExceptionData
-          { errorType = err.errorType
-          , errorMessage = err.message
-          , stackTrace = err.stacktrace
+          { errorType = errRate.errorType
+          , errorMessage = errRate.message
+          , stackTrace = errRate.stacktrace
           , requestPath = Nothing
           , requestMethod = Nothing
           , occurrenceCount = round currentRate
@@ -835,11 +835,11 @@ createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
     MkIssueOpts
       { projectId
       , issueType = RuntimeException
-      , targetHash = err.hash
-      , service = err.service
+      , targetHash = errRate.hash
+      , service = errRate.service
       , critical = True
       , severity = "critical"
-      , title = "Error Spike: " <> err.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
+      , title = "Error Spike: " <> errRate.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
       , recommendedAction = "Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes."
       , migrationComplexity = "n/a"
       , issueData = exceptionData

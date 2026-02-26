@@ -216,9 +216,8 @@ anomalyDetailCore pid firstM fetchIssue = do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
                   when (issue.issueType == Issues.RuntimeException) do
-                    whenJust errorM \errL ->
+                    whenJust errorM \errL -> do
                       errorResolveAction pid errL.base.id errL.base.state canResolve
-                    whenJust errorM \errL ->
                       errorSubscriptionAction pid errL.base
               }
       (trItem, spanRecs) <- case errorM of

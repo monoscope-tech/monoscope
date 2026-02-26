@@ -352,7 +352,8 @@ updateErrorThreadIds eid slackTs discordMsgId =
       [sql|
         UPDATE apis.errors SET
           slack_thread_ts = COALESCE(?, slack_thread_ts),
-          discord_message_id = COALESCE(?, discord_message_id)
+          discord_message_id = COALESCE(?, discord_message_id),
+          updated_at = NOW()
         WHERE id = ?
       |]
 
@@ -470,6 +471,11 @@ data ErrorWithCurrentRate = ErrorWithCurrentRate
   , baselineMean :: Maybe Double
   , baselineStddev :: Maybe Double
   , currentHourCount :: Int
+  , errorData :: ATError
+  , stacktrace :: Text
+  , hash :: Text
+  , slackThreadTs :: Maybe Text
+  , discordMessageId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow)
@@ -490,7 +496,12 @@ getErrorsWithCurrentRates pid =
           e.baseline_state,
           e.baseline_error_rate_mean,
           e.baseline_error_rate_stddev,
-          COALESCE(counts.current_count, 0)::INT AS current_hour_count
+          COALESCE(counts.current_count, 0)::INT AS current_hour_count,
+          e.error_data,
+          e.stacktrace,
+          e.hash,
+          e.slack_thread_ts,
+          e.discord_message_id
         FROM apis.errors e
         LEFT JOIN (
           SELECT error_id, COUNT(*) AS current_count
@@ -1092,5 +1103,4 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
    in
     toXXHash combined
   where
-    hasUsableStackTrace :: Text -> Bool
-    hasUsableStackTrace = any (not . T.null . T.strip) . T.lines
+    hasUsableStackTrace = not . T.null . T.strip

@@ -367,8 +367,8 @@ processBackgroundJob authCtx bgJob =
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
-    ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
-    NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
+    ErrorSpikeDetection pid -> detectErrorSpikes pid
+    NewErrorDetected pid errorHash -> processNewError pid errorHash
     LogPatternPeriodicProcessing scheduledTime pid ->
       tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
@@ -727,6 +727,7 @@ notifyErrorSubscriptions pid errorHashes = do
     Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
     projectM <- Projects.projectById pid
     whenJust projectM \project -> Relude.when project.errorAlerts do
+      users <- Projects.usersByProjectId pid
       let alertTypeForState = \case
             Errors.ESEscalating -> EscalatingErrors
             Errors.ESRegressed -> RegressedErrors
@@ -738,7 +739,6 @@ notifyErrorSubscriptions pid errorHashes = do
           Projects.NDiscord -> void $ sendDiscordAlertWith sub.discordMessageId (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing
           Projects.NPhone -> sendWhatsAppAlert (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title project.whatsappNumbers
           Projects.NEmail -> do
-            users <- Projects.usersByProjectId pid
             let e = sub.errorData
                 errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
                 (subj, html) = case alertTypeForState sub.errorState of
@@ -1838,8 +1838,9 @@ calculateErrorBaselines pid = do
 
 -- | Detect error spikes and create issues
 -- Uses error_events table for current rate calculation
-detectErrorSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
-detectErrorSpikes pid authCtx = do
+detectErrorSpikes :: Projects.ProjectId -> ATBackgroundCtx ()
+detectErrorSpikes pid = do
+  authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
   Log.logInfo "Detecting error spikes" pid
 
   -- Get all errors with their current hour counts in one query
@@ -1856,48 +1857,46 @@ detectErrorSpikes pid authCtx = do
         Relude.when isSpike $ do
           Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
 
-          -- Get full error record for issue creation
-          errorM <- Errors.getErrorById errRate.errorId
-          whenJust errorM \err -> do
-            void $ Errors.updateErrorState err.id Errors.ESEscalating
-            issue <- Issues.createErrorSpikeIssue pid err currentRate mean stddev
-            Issues.insertIssue issue
-            liftIO $ withResource authCtx.jobsPool \conn ->
-              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-            projectM <- Projects.projectById pid
-            whenJust projectM \project -> Relude.when project.errorAlerts do
-              users <- Projects.usersByProjectId pid
-              let issueId = UUID.toText issue.id.unUUIDId
-                  spikeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = ErrorSpike}
-                  errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
-                  (subj, html) = ET.errorSpikesEmail project.title errorsUrl [err.errorData]
-              (finalSlackTs, finalDiscordMsgId) <-
-                foldlM
-                  ( \(slackTs, discordMsgId) -> \case
-                      Projects.NSlack -> do
-                        tsM <- sendSlackAlertWith slackTs spikeAlert pid project.title Nothing
-                        pure (slackTs <|> tsM, discordMsgId)
-                      Projects.NDiscord -> do
-                        msgIdM <- sendDiscordAlertWith discordMsgId spikeAlert pid project.title Nothing
-                        pure (slackTs, discordMsgId <|> msgIdM)
-                      Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert spikeAlert pid project.title project.whatsappNumbers
-                      Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-                      Projects.NPagerduty -> pure (slackTs, discordMsgId)
-                  )
-                  (err.slackThreadTs, err.discordMessageId)
-                  project.notificationsChannel
-              Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId)
-                $ void
-                $ Errors.updateErrorThreadIds err.id finalSlackTs finalDiscordMsgId
+          void $ Errors.updateErrorState errRate.errorId Errors.ESEscalating
+          issue <- Issues.createErrorSpikeIssue pid errRate currentRate mean stddev
+          Issues.insertIssue issue
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          projectM <- Projects.projectById pid
+          whenJust projectM \project -> Relude.when project.errorAlerts do
+            users <- Projects.usersByProjectId pid
+            let issueId = UUID.toText issue.id.unUUIDId
+                spikeAlert = RuntimeErrorAlert{issueId = issueId, errorData = errRate.errorData, runtimeAlertType = ErrorSpike}
+                errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
+                (subj, html) = ET.errorSpikesEmail project.title errorsUrl [errRate.errorData]
+            (finalSlackTs, finalDiscordMsgId) <-
+              foldlM
+                ( \(slackTs, discordMsgId) -> \case
+                    Projects.NSlack -> do
+                      tsM <- sendSlackAlertWith slackTs spikeAlert pid project.title Nothing
+                      pure (slackTs <|> tsM, discordMsgId)
+                    Projects.NDiscord -> do
+                      msgIdM <- sendDiscordAlertWith discordMsgId spikeAlert pid project.title Nothing
+                      pure (slackTs, discordMsgId <|> msgIdM)
+                    Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert spikeAlert pid project.title project.whatsappNumbers
+                    Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                    Projects.NPagerduty -> pure (slackTs, discordMsgId)
+                )
+                (errRate.slackThreadTs, errRate.discordMessageId)
+                project.notificationsChannel
+            Relude.when (finalSlackTs /= errRate.slackThreadTs || finalDiscordMsgId /= errRate.discordMessageId)
+              $ void
+              $ Errors.updateErrorThreadIds errRate.errorId finalSlackTs finalDiscordMsgId
 
-            Log.logInfo "Created issue for error spike" (pid, err.id, issue.id)
+          Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
       _ -> pass -- Skip errors without established baseline
   Log.logInfo "Finished error spike detection" pid
 
 
 -- | Process a new error and create an issue
-processNewError :: Projects.ProjectId -> Text -> Config.AuthContext -> ATBackgroundCtx ()
-processNewError pid errorHash authCtx = do
+processNewError :: Projects.ProjectId -> Text -> ATBackgroundCtx ()
+processNewError pid errorHash = do
+  authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
   Log.logInfo "Processing new error" (pid, errorHash)
   errorM <- Errors.getErrorByHash pid errorHash
   case errorM of
@@ -1916,23 +1915,25 @@ processNewError pid errorHash authCtx = do
         whenJust projectM \project -> Relude.when project.errorAlerts do
           users <- Projects.usersByProjectId pid
           let issueId = UUID.toText issue.id.unUUIDId
-          let runtimeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = NewRuntimeError}
-          forM_ project.notificationsChannel \case
-            Projects.NSlack -> do
-              tsM <- sendSlackAlert runtimeAlert pid project.title Nothing
-              Relude.when (isJust tsM)
-                $ void
-                $ Errors.updateErrorThreadIds err.id tsM Nothing
-            Projects.NDiscord -> do
-              msgIdM <- sendDiscordAlert runtimeAlert pid project.title Nothing
-              Relude.when (isJust msgIdM)
-                $ void
-                $ Errors.updateErrorThreadIds err.id Nothing msgIdM
-            Projects.NPhone -> sendWhatsAppAlert runtimeAlert pid project.title project.whatsappNumbers
-            Projects.NEmail -> do
-              let errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                  (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl [err.errorData]
-              forM_ users \u ->
-                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-            Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
+              runtimeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = NewRuntimeError}
+              errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+              (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl [err.errorData]
+          (finalSlackTs, finalDiscordMsgId) <-
+            foldlM
+              ( \(slackTs, discordMsgId) -> \case
+                  Projects.NSlack -> do
+                    tsM <- sendSlackAlert runtimeAlert pid project.title Nothing
+                    pure (slackTs <|> tsM, discordMsgId)
+                  Projects.NDiscord -> do
+                    msgIdM <- sendDiscordAlert runtimeAlert pid project.title Nothing
+                    pure (slackTs, discordMsgId <|> msgIdM)
+                  Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert runtimeAlert pid project.title project.whatsappNumbers
+                  Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                  Projects.NPagerduty -> pure (slackTs, discordMsgId)
+              )
+              (Nothing, Nothing)
+              project.notificationsChannel
+          Relude.when (isJust finalSlackTs || isJust finalDiscordMsgId)
+            $ void
+            $ Errors.updateErrorThreadIds err.id finalSlackTs finalDiscordMsgId
         Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
