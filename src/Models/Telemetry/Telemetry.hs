@@ -87,7 +87,6 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Errors qualified as Errors
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), unAesonTextMaybe)
@@ -98,7 +97,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (lookupValueText, replaceAllFormats)
+import Utils (lookupValueText)
 
 
 -- Helper function to get nested value from a map using dot notation

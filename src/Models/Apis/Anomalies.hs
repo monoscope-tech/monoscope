@@ -55,14 +55,12 @@ import Models.Apis.Fields qualified as Fields (
   FieldTypes,
   FormatId,
  )
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)
-import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import System.Types (DB)
 import Text.Megaparsec
@@ -207,8 +205,8 @@ countAnomalies :: DB es => Projects.ProjectId -> Text -> Eff es Int
 countAnomalies pid report_type = do
   result <- PG.query (Query $ encodeUtf8 q) (Only pid)
   case result of
-    [Only countt] -> return countt
-    v -> return $ length v
+    [Only countt] -> pure countt
+    v -> pure $ length v
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
@@ -391,7 +389,7 @@ instance FromField IssueEventAgg where
     Nothing -> returnError UnexpectedNull f ""
     Just bs -> case parseMaybe parseIssueEventAgg (BSC.unpack bs) of
       Nothing -> returnError ConversionFailed f "Failed to parse IssueEventAgg"
-      Just result -> return result
+      Just result -> pure result
 
 
 type Parser = Parsec Void String
@@ -406,7 +404,7 @@ parseIssueEventAgg = do
   str <- char '"' *> manyTill L.charLiteral (char '"')
   utcTime <- case parseUTCTime (encodeUtf8 str) of
     Left err -> fail err
-    Right time -> return time
+    Right time -> pure time
   _ <- char ')'
   pure $ IssueEventAgg cnt utcTime
 
@@ -546,8 +544,7 @@ errorsByHashes pid hashes
 
 errorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ATError)
 errorByHash pid hash = do
-  results <- PG.query q (pid, hash)
-  return $ listToMaybe results
+  listToMaybe <$> PG.query q (pid, hash)
   where
     q =
       [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id

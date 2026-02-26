@@ -77,13 +77,10 @@ CREATE TABLE apis.errors (
 );
 SELECT manage_updated_at('apis.errors');
 
-CREATE UNIQUE INDEX uniq_error_group ON apis.errors (project_id, hash, environment);
+CREATE UNIQUE INDEX idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
 CREATE INDEX idx_errors_project_state ON apis.errors (project_id, state);
 CREATE INDEX idx_errors_last_seen ON apis.errors (project_id, last_event_id);
-CREATE UNIQUE INDEX idx_apis_errors_project_id_hash ON apis.errors(project_id, hash);
-CREATE INDEX idx_apis_errors_project_id ON apis.errors(project_id);
 CREATE INDEX idx_errors_active ON apis.errors(project_id, state) WHERE state != 'resolved';
-CREATE INDEX idx_errors_state ON apis.errors(project_id, state);
 CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.new_error_proc('runtime_exception', 'created', 'skip_anomaly_record');
 
 -- all data here that is not in errors (top level) go into error_data jsonb
@@ -93,8 +90,9 @@ CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.errors FOR EACH ROW EX
 CREATE TABLE apis.error_events (
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id         UUID NOT NULL REFERENCES projects.projects(id) ON DELETE CASCADE,
+    error_id           UUID NOT NULL REFERENCES apis.errors(id) ON DELETE CASCADE,
     occurred_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    target_hash        TEXT NOT NULL,  -- references apis.errors.hash (no FK due to composite unique)  
+    target_hash        TEXT NOT NULL,  -- references apis.errors.hash (no FK due to composite unique)
     exception_type     TEXT NOT NULL,   
     message            TEXT NOT NULL,
     stack_trace        TEXT NOT NULL,   
@@ -118,18 +116,31 @@ CREATE TABLE apis.error_events (
 CREATE INDEX idx_error_events_project ON apis.error_events (project_id, occurred_at DESC);
 CREATE INDEX idx_error_event_error_hash ON apis.error_events (project_id, target_hash);
 CREATE INDEX idx_error_events_service ON apis.error_events (service_name);
+CREATE INDEX idx_error_events_error_id ON apis.error_events (error_id, occurred_at);
 
 -- Trigger function to create error_events from error_data JSONB on errors table
 -- The error_data column contains ATError structure with event-specific details
 CREATE OR REPLACE FUNCTION apis.create_error_event_proc() RETURNS trigger AS $$
+DECLARE
+  v_user_ip INET;
 BEGIN
   IF TG_WHEN <> 'AFTER' THEN
     RAISE EXCEPTION 'apis.create_error_event_proc() may only run as an AFTER trigger';
   END IF;
 
   IF NEW.error_data IS NOT NULL AND NEW.error_data != '{}'::jsonb THEN
+    -- Safely attempt INET cast; invalid values become NULL
+    BEGIN
+      IF NEW.error_data->>'user_ip' IS NOT NULL AND NEW.error_data->>'user_ip' != '' THEN
+        v_user_ip := (NEW.error_data->>'user_ip')::inet;
+      END IF;
+    EXCEPTION WHEN OTHERS THEN
+      v_user_ip := NULL;
+    END;
+
     INSERT INTO apis.error_events (
       project_id,
+      error_id,
       occurred_at,
       target_hash,
       exception_type,
@@ -150,6 +161,7 @@ BEGIN
       sample_rate
     ) VALUES (
       NEW.project_id,
+      NEW.id,
       COALESCE((NEW.error_data->>'when')::timestamptz, NOW()),
       NEW.hash,
       COALESCE(NEW.error_data->>'root_exception_type', NEW.error_data->>'error_type', NEW.error_type),
@@ -165,13 +177,7 @@ BEGIN
       NEW.error_data->>'parent_span_id',
       NEW.error_data->>'user_id',
       NEW.error_data->>'user_email',
-      -- Handle user_ip carefully - convert to INET if valid, otherwise NULL
-      CASE
-        WHEN NEW.error_data->>'user_ip' IS NOT NULL
-             AND NEW.error_data->>'user_ip' != ''
-        THEN (NEW.error_data->>'user_ip')::inet
-        ELSE NULL
-      END,
+      v_user_ip,
       NEW.error_data->>'session_id',
       1.0 -- default sample rate
     );

@@ -41,30 +41,25 @@ module Models.Apis.Errors (
 where
 
 import Data.Aeson qualified as AE
-import Data.Char (isSpace)
 import Data.Default
-import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (FromField, ResultError (UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
-import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Simple.Types (Query)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.LogPatterns (BaselineState (..))
-import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Relude hiding (id)
 import System.Types (DB)
-import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))
 import Utils (DBField (MkDBField), replaceAllFormats, toXXHash)
 
 
@@ -221,9 +216,6 @@ data ErrorL = ErrorL
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Error)
-  deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorL
 
@@ -295,9 +287,11 @@ data ErrorEvent = ErrorEvent
 
 -- | Get errors for a project with optional state filter
 getErrors :: DB es => Projects.ProjectId -> Maybe ErrorState -> Int -> Int -> Eff es [Error]
-getErrors pid mstate limit offset = PG.query q (pid, maybe "%" errorStateToText mstate, limit, offset)
+getErrors pid mstate limit offset = case mstate of
+  Nothing -> PG.query qAll (pid, limit, offset)
+  Just st -> PG.query qFiltered (pid, st, limit, offset)
   where
-    q =
+    qAll =
       [sql|
         SELECT id, project_id, created_at, updated_at,
                error_type, message, stacktrace, hash,
@@ -311,18 +305,29 @@ getErrors pid mstate limit offset = PG.query q (pid, maybe "%" errorStateToText 
                baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
                is_ignored, ignored_until,
                slack_thread_ts, discord_message_id
-        FROM apis.errors
-        WHERE project_id = ? AND state LIKE ?
-        ORDER BY updated_at DESC
-        LIMIT ? OFFSET ?
+        FROM apis.errors WHERE project_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?
+      |]
+    qFiltered =
+      [sql|
+        SELECT id, project_id, created_at, updated_at,
+               error_type, message, stacktrace, hash,
+               environment, service, runtime, error_data,
+               first_trace_id, recent_trace_id, first_event_id, last_event_id,
+               state, assignee_id, assigned_at, resolved_at, regressed_at,
+               subscribed, notify_every_minutes, last_notified_at,
+               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
+               quiet_minutes, resolution_threshold_minutes,
+               baseline_state, baseline_samples,
+               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
+               is_ignored, ignored_until,
+               slack_thread_ts, discord_message_id
+        FROM apis.errors WHERE project_id = ? AND state = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?
       |]
 
 
 -- | Get error by ID
 getErrorById :: DB es => ErrorId -> Eff es (Maybe Error)
-getErrorById eid = do
-  results <- PG.query q (Only eid)
-  return $ listToMaybe results
+getErrorById eid = listToMaybe <$> PG.query q (Only eid)
   where
     q =
       [sql|
@@ -345,9 +350,7 @@ getErrorById eid = do
 
 -- | Get error by hash
 getErrorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Error)
-getErrorByHash pid hash = do
-  results <- PG.query q (pid, hash)
-  return $ listToMaybe results
+getErrorByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
   where
     q =
       [sql|
@@ -369,29 +372,31 @@ getErrorByHash pid hash = do
 
 
 getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
-getErrorLByHash pid hash = do
-  results <- PG.query q (pid, hash)
-  return $ listToMaybe results
+getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
   where
     q =
       [sql|
-        SELECT id, project_id, created_at, updated_at,
-               error_type, message, stacktrace, hash,
-               environment, service, runtime, error_data,
-               first_trace_id, recent_trace_id, first_event_id, last_event_id,
-               state, assignee_id, assigned_at, resolved_at, regressed_at,
-               subscribed, notify_every_minutes, last_notified_at,
-               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
-               quiet_minutes, resolution_threshold_minutes,
-               baseline_state, baseline_samples,
-               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until,
-               slack_thread_ts, discord_message_id,
-               (SELECT COUNT(*) FROM apis.error_events WHERE target_hash = e.hash) AS occurrences,
-               (SELECT COUNT(DISTINCT user_id) FROM apis.error_events WHERE target_hash = e.hash) AS affected_users,
-               (SELECT MAX(occurred_at) FROM apis.error_events WHERE target_hash = e.hash) AS last_occurred_at
+        SELECT e.id, e.project_id, e.created_at, e.updated_at,
+               e.error_type, e.message, e.stacktrace, e.hash,
+               e.environment, e.service, e.runtime, e.error_data,
+               e.first_trace_id, e.recent_trace_id, e.first_event_id, e.last_event_id,
+               e.state, e.assignee_id, e.assigned_at, e.resolved_at, e.regressed_at,
+               e.subscribed, e.notify_every_minutes, e.last_notified_at,
+               e.occurrences_1m, e.occurrences_5m, e.occurrences_1h, e.occurrences_24h,
+               e.quiet_minutes, e.resolution_threshold_minutes,
+               e.baseline_state, e.baseline_samples,
+               e.baseline_error_rate_mean, e.baseline_error_rate_stddev, e.baseline_updated_at,
+               e.is_ignored, e.ignored_until,
+               e.slack_thread_ts, e.discord_message_id,
+               COALESCE(ev.occurrences, 0)::INT,
+               COALESCE(ev.affected_users, 0)::INT,
+               ev.last_occurred_at
         FROM apis.errors e
-        WHERE project_id = ? AND hash = ?
+        LEFT JOIN (
+          SELECT target_hash, COUNT(*) AS occurrences, COUNT(DISTINCT user_id) AS affected_users, MAX(occurred_at) AS last_occurred_at
+          FROM apis.error_events GROUP BY target_hash
+        ) ev ON ev.target_hash = e.hash
+        WHERE e.project_id = ? AND e.hash = ?
       |]
 
 
@@ -559,11 +564,7 @@ getHourlyErrorCounts eid hoursBack =
 
 -- | Get current hour error count for a specific error
 getCurrentHourErrorCount :: DB es => ErrorId -> Eff es Int
-getCurrentHourErrorCount eid = do
-  results <- PG.query q (Only eid)
-  case results of
-    [Only count] -> return count
-    _ -> return 0
+getCurrentHourErrorCount eid = maybe 0 fromOnly . listToMaybe <$> PG.query q (Only eid)
   where
     q =
       [sql|
@@ -588,9 +589,7 @@ data ErrorEventStats = ErrorEventStats
 
 
 getErrorEventStats :: DB es => ErrorId -> Int -> Eff es (Maybe ErrorEventStats)
-getErrorEventStats eid hoursBack = do
-  results <- PG.query q (eid, hoursBack)
-  return $ listToMaybe results
+getErrorEventStats eid hoursBack = listToMaybe <$> PG.query q (eid, hoursBack)
   where
     q =
       [sql|
@@ -623,16 +622,15 @@ getErrorEventStats eid hoursBack = do
 -- | Check if an error is spiking compared to its baseline
 -- Returns (isSpike, currentRate, zScore) if baseline is established
 checkErrorSpike :: DB es => Error -> Eff es (Maybe (Bool, Double, Double))
-checkErrorSpike err = do
+checkErrorSpike err =
   case (err.baselineState, err.baselineErrorRateMean, err.baselineErrorRateStddev) of
     (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
       currentCount <- getCurrentHourErrorCount err.id
       let currentRate = fromIntegral currentCount :: Double
           zScore = (currentRate - mean) / stddev
-          -- Spike: > 3 std devs AND at least 5 more than mean (avoid noise on low-volume errors)
           isSpike = zScore > 3.0 && currentRate > mean + 5
-      return $ Just (isSpike, currentRate, zScore)
-    _ -> return Nothing
+      pure $ Just (isSpike, currentRate, zScore)
+    _ -> pure Nothing
 
 
 -- | Get all errors with their current hour counts (for batch spike detection)
@@ -653,7 +651,7 @@ data ErrorWithCurrentRate = ErrorWithCurrentRate
 
 getErrorsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [ErrorWithCurrentRate]
 getErrorsWithCurrentRates pid =
-  PG.query q (pid)
+  PG.query q (Only pid)
   where
     q =
       [sql|
@@ -744,13 +742,13 @@ upsertErrorQueryAndParam pid err = (q, params)
 
 -- | Represents a parsed stack frame
 data StackFrame = StackFrame
-  { sfFilePath :: Text
-  , sfModule :: Maybe Text
-  , sfFunction :: Text
-  , sfLineNumber :: Maybe Int
-  , sfColumnNumber :: Maybe Int
-  , sfContextLine :: Maybe Text
-  , sfIsInApp :: Bool
+  { filePath :: Text
+  , module' :: Maybe Text
+  , function' :: Text
+  , lineNumber :: Maybe Int
+  , columnNumber :: Maybe Int
+  , contextLine :: Maybe Text
+  , isInApp :: Bool
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (NFData)
@@ -761,13 +759,13 @@ data StackFrame = StackFrame
 -- >>> length $ parseStackTrace "nodejs" "at processTicksAndRejections (node:internal/process/task_queues:95:5)\nat handleRequest (/app/src/server.js:42:15)"
 -- 2
 --
--- >>> map sfFunction $ parseStackTrace "python" "File \"/app/main.py\", line 10, in main\nFile \"/app/utils.py\", line 5, in helper"
+-- >>> map (.function') $ parseStackTrace "python" "File \"/app/main.py\", line 10, in main\nFile \"/app/utils.py\", line 5, in helper"
 -- ["main","helper"]
 --
--- >>> map sfIsInApp $ parseStackTrace "nodejs" "at handleRequest (/app/src/server.js:42:15)\nat processTicksAndRejections (node:internal/process/task_queues:95:5)"
+-- >>> map (.isInApp) $ parseStackTrace "nodejs" "at handleRequest (/app/src/server.js:42:15)\nat processTicksAndRejections (node:internal/process/task_queues:95:5)"
 -- [True,False]
 --
--- >>> map sfFunction $ parseStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
+-- >>> map (.function') $ parseStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
 -- ["doWork","doDispatch"]
 parseStackTrace :: Text -> Text -> [StackFrame]
 parseStackTrace mSdk stackText =
@@ -802,26 +800,26 @@ parseGoFrame line
           lineNum = readMaybe $ toString $ T.takeWhile (/= ':') lineCol
        in Just
             StackFrame
-              { sfFilePath = T.dropEnd 1 filePath -- Remove trailing ':'
-              , sfModule = extractGoModule filePath
-              , sfFunction = ""
-              , sfLineNumber = lineNum
-              , sfColumnNumber = Nothing
-              , sfContextLine = Nothing
-              , sfIsInApp = isGoInApp filePath
+              { filePath = T.dropEnd 1 filePath -- Remove trailing ':'
+              , module' = extractGoModule filePath
+              , function' = ""
+              , lineNumber = lineNum
+              , columnNumber = Nothing
+              , contextLine = Nothing
+              , isInApp = isGoInApp filePath
               }
   | "(" `T.isInfixOf` line =
       -- Function call line: main.foo(0x1234, 0x5678)
       let (funcPart, _) = T.breakOn "(" line
        in Just
             StackFrame
-              { sfFilePath = ""
-              , sfModule = extractGoModuleFromFunc funcPart
-              , sfFunction = extractGoFuncName funcPart
-              , sfLineNumber = Nothing
-              , sfColumnNumber = Nothing
-              , sfContextLine = Nothing
-              , sfIsInApp = isGoFuncInApp funcPart
+              { filePath = ""
+              , module' = extractGoModuleFromFunc funcPart
+              , function' = extractGoFuncName funcPart
+              , lineNumber = Nothing
+              , columnNumber = Nothing
+              , contextLine = Nothing
+              , isInApp = isGoFuncInApp funcPart
               }
   | otherwise = Nothing
   where
@@ -880,13 +878,13 @@ parseJsFrame line
           (lineNum, colNum) = parseLineCol lineCol
        in Just
             StackFrame
-              { sfFilePath = filePath
-              , sfModule = extractJsModule filePath
-              , sfFunction = cleanJsFunction funcPart
-              , sfLineNumber = lineNum
-              , sfColumnNumber = colNum
-              , sfContextLine = Nothing
-              , sfIsInApp = isJsInApp filePath
+              { filePath = filePath
+              , module' = extractJsModule filePath
+              , function' = cleanJsFunction funcPart
+              , lineNumber = lineNum
+              , columnNumber = colNum
+              , contextLine = Nothing
+              , isInApp = isJsInApp filePath
               }
 
     parseJsWithoutParens txt =
@@ -894,13 +892,13 @@ parseJsFrame line
           (lineNum, colNum) = parseLineCol lineCol
        in Just
             StackFrame
-              { sfFilePath = filePath
-              , sfModule = extractJsModule filePath
-              , sfFunction = "<anonymous>"
-              , sfLineNumber = lineNum
-              , sfColumnNumber = colNum
-              , sfContextLine = Nothing
-              , sfIsInApp = isJsInApp filePath
+              { filePath = filePath
+              , module' = extractJsModule filePath
+              , function' = "<anonymous>"
+              , lineNumber = lineNum
+              , columnNumber = colNum
+              , contextLine = Nothing
+              , isInApp = isJsInApp filePath
               }
 
     parseJsLocation loc =
@@ -957,13 +955,13 @@ parsePythonFrame line
             Nothing -> "<module>"
        in Just
             StackFrame
-              { sfFilePath = filePath
-              , sfModule = extractPythonModule filePath
-              , sfFunction = cleanPythonFunction funcName
-              , sfLineNumber = lineNum
-              , sfColumnNumber = Nothing
-              , sfContextLine = Nothing
-              , sfIsInApp = isPythonInApp filePath
+              { filePath = filePath
+              , module' = extractPythonModule filePath
+              , function' = cleanPythonFunction funcName
+              , lineNumber = lineNum
+              , columnNumber = Nothing
+              , contextLine = Nothing
+              , isInApp = isPythonInApp filePath
               }
   | otherwise = Nothing
   where
@@ -997,13 +995,13 @@ parseJavaFrame line
           (moduleName, funcName) = splitJavaQualified qualifiedMethod
        in Just
             StackFrame
-              { sfFilePath = fileName
-              , sfModule = Just moduleName
-              , sfFunction = cleanJavaFunction funcName
-              , sfLineNumber = lineNum
-              , sfColumnNumber = Nothing
-              , sfContextLine = Nothing
-              , sfIsInApp = isJavaInApp qualifiedMethod
+              { filePath = fileName
+              , module' = Just moduleName
+              , function' = cleanJavaFunction funcName
+              , lineNumber = lineNum
+              , columnNumber = Nothing
+              , contextLine = Nothing
+              , isInApp = isJavaInApp qualifiedMethod
               }
   | otherwise = Nothing
   where
@@ -1041,13 +1039,13 @@ parsePhpFrame line
           funcName = T.takeWhile (/= '(') $ T.drop 2 funcPart
        in Just
             StackFrame
-              { sfFilePath = filePath
-              , sfModule = extractPhpModule filePath
-              , sfFunction = cleanPhpFunction funcName
-              , sfLineNumber = lineNum
-              , sfColumnNumber = Nothing
-              , sfContextLine = Nothing
-              , sfIsInApp = isPhpInApp filePath
+              { filePath = filePath
+              , module' = extractPhpModule filePath
+              , function' = cleanPhpFunction funcName
+              , lineNumber = lineNum
+              , columnNumber = Nothing
+              , contextLine = Nothing
+              , isInApp = isPhpInApp filePath
               }
   | otherwise = Nothing
   where
@@ -1091,13 +1089,13 @@ parseDotNetFrame line
           (filePath, lineNum) = parseDotNetLocation $ T.drop 4 locationPart
        in Just
             StackFrame
-              { sfFilePath = filePath
-              , sfModule = Just moduleName
-              , sfFunction = cleanDotNetFunction funcName
-              , sfLineNumber = lineNum
-              , sfColumnNumber = Nothing
-              , sfContextLine = Nothing
-              , sfIsInApp = isDotNetInApp qualifiedMethod
+              { filePath = filePath
+              , module' = Just moduleName
+              , function' = cleanDotNetFunction funcName
+              , lineNumber = lineNum
+              , columnNumber = Nothing
+              , contextLine = Nothing
+              , isInApp = isDotNetInApp qualifiedMethod
               }
   | otherwise = Nothing
   where
@@ -1133,13 +1131,13 @@ parseGenericFrame line =
         else
           Just
             StackFrame
-              { sfFilePath = trimmed
-              , sfModule = Nothing
-              , sfFunction = extractGenericFunction trimmed
-              , sfLineNumber = extractGenericLineNumber trimmed
-              , sfColumnNumber = Nothing
-              , sfContextLine = Nothing
-              , sfIsInApp = True -- Assume in-app by default
+              { filePath = trimmed
+              , module' = Nothing
+              , function' = extractGenericFunction trimmed
+              , lineNumber = extractGenericLineNumber trimmed
+              , columnNumber = Nothing
+              , contextLine = Nothing
+              , isInApp = True -- Assume in-app by default
               }
   where
     extractGenericFunction txt =
@@ -1174,17 +1172,17 @@ parseGenericFrame line =
 normalizeStackTrace :: Text -> Text -> Text
 normalizeStackTrace runtime stackText =
   let frames = parseStackTrace runtime stackText
-      inAppFrames = filter sfIsInApp frames
+      inAppFrames = filter (.isInApp) frames
       framesToUse = if null inAppFrames then frames else inAppFrames
       normalizedFrames = map normalizeFrame framesToUse
    in T.intercalate "\n" normalizedFrames
   where
     normalizeFrame :: StackFrame -> Text
     normalizeFrame frame =
-      let modulePart = fromMaybe "" frame.sfModule
-          funcPart = normalizeFunction frame.sfFunction
+      let modulePart = fromMaybe "" frame.module'
+          funcPart = normalizeFunction frame.function'
           -- Context line: normalize whitespace, truncate if > 120 chars
-          contextPart = maybe "" normalizeContextLine frame.sfContextLine
+          contextPart = maybe "" normalizeContextLine frame.contextLine
        in T.intercalate "|" $ filter (not . T.null) [modulePart, funcPart, contextPart]
 
     normalizeFunction :: Text -> Text

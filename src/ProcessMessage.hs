@@ -52,7 +52,6 @@ import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields qualified as Fields

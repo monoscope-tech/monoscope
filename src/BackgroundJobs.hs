@@ -23,7 +23,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (FromRow, Only (Only), SomePostgreSqlException)
+import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
@@ -46,7 +46,6 @@ import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Dashboards qualified as Dashboards
@@ -276,10 +275,8 @@ processBackgroundJob authCtx bgJob =
               Relude.when (dayOfWeek currentDay == Monday) do
                 void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
               forM_ [0 .. 23] \hour -> do
-                -- Schedule each hourly job to run at the appropriate hour
                 let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
-                _ <- scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
-                pass
+                void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
 
               -- Schedule issue enhancement processing every hour
               forM_ [0 .. 23] \hr -> do
@@ -309,18 +306,15 @@ processBackgroundJob authCtx bgJob =
 
             unless projectJobsExist $ do
               liftIO $ withResource authCtx.jobsPool \conn -> do
-                -- Report usage to lemon squeezy
-                _ <- createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
+                void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
                 -- Schedule 5-minute log pattern extraction (288 per day)
                 forM_ [0 .. 287] \interval -> do
                   let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
-                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteLogPatternExtraction scheduledTime p) scheduledTime
-                  pass
+                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteLogPatternExtraction scheduledTime p) scheduledTime
                 -- Schedule 15-minute spike detection (96 per day)
                 forM_ [0 .. 95] \interval -> do
                   let scheduledTime = addUTCTime (fromIntegral $ interval * 900) currentTime
-                  _ <- scheduleJob conn "background_jobs" (BackgroundJobs.LogPatternPeriodicProcessing scheduledTime p) scheduledTime
-                  pass
+                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.LogPatternPeriodicProcessing scheduledTime p) scheduledTime
                 -- Schedule hourly baseline + new-pattern + prune processing (24 per day)
                 forM_ [0 .. 23] \h -> do
                   let scheduledTime = addUTCTime (fromIntegral @Int $ h * 3600) currentTime
@@ -352,16 +346,14 @@ processBackgroundJob authCtx bgJob =
         Log.logInfo "Total events to report" ("events_count", totalToReport + totalMetricsCount)
         Relude.when (totalToReport > 0) do
           liftIO $ reportUsageToLemonsqueezy fSubId (totalToReport + totalMetricsCount) authCtx.config.lemonSqueezyApiKey
-          _ <- Projects.addDailyUsageReport pid totalToReport
-          _ <- Projects.updateUsageLastReported pid currentTime
-          pass
+          void $ Projects.addDailyUsageReport pid totalToReport
+          void $ Projects.updateUsageLastReported pid currentTime
       Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
     CleanupDemoProject -> do
       let pid = UUIDId UUID.nil
-      _ <- PG.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
-      _ <- PG.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
-      _ <- PG.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
-      pass
+      void $ PG.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
+      void $ PG.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
+      void $ PG.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
     FiveMinuteSpanProcessing scheduledTime pid -> processFiveMinuteSpans scheduledTime pid
     OneMinuteErrorProcessing scheduledTime pid -> processOneMinuteErrors scheduledTime pid
     SlackNotification pid message -> sendSlackMessage pid message
@@ -419,9 +411,8 @@ runHourlyJob scheduledTime hour = do
   -- Schedule baseline calculation and spike detection for active projects
   liftIO $ withResource ctx.jobsPool \conn ->
     forM_ activeProjects \pid -> do
-      -- Error baseline and spike detection
-      _ <- createJob conn "background_jobs" $ ErrorBaselineCalculation pid
-      createJob conn "background_jobs" $ ErrorSpikeDetection pid
+      void $ createJob conn "background_jobs" $ ErrorBaselineCalculation pid
+      void $ createJob conn "background_jobs" $ ErrorSpikeDetection pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -691,9 +682,8 @@ processOneMinuteErrors scheduledTime pid = do
             (spanIds, traceIds, errorsJson, pid)
         Relude.when (fromIntegral rowsUpdated /= V.length updates)
           $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= V.length updates, "actual" AE..= rowsUpdated])
-      Relude.when (V.length spansWithErrors == 30) $ do
-        processErrorsPaginated oneMinuteAgo (skip + 30)
-        pass
+      Relude.when (V.length spansWithErrors == 30)
+        $ processErrorsPaginated oneMinuteAgo (skip + 30)
 
 
 data ErrorSubscriptionDue = ErrorSubscriptionDue
@@ -1848,10 +1838,8 @@ calculateErrorBaselines pid = do
         let newSamples = stats.totalHours
             newMean = stats.hourlyMedian
             newStddev = stats.hourlyMADScaled
-            -- Establish baseline after 24 hours of data
             newState = if newSamples >= 24 then BSEstablished else BSLearning
-        _ <- Errors.updateBaseline err.id newState newMean newStddev newSamples
-        pass
+        void $ Errors.updateBaseline err.id newState newMean newStddev newSamples
 
   Log.logInfo "Finished calculating error baselines" (pid, length errors)
 
@@ -1879,7 +1867,7 @@ detectErrorSpikes pid authCtx = do
           -- Get full error record for issue creation
           errorM <- Errors.getErrorById errRate.errorId
           whenJust errorM \err -> do
-            _ <- Errors.updateErrorState err.id Errors.ESEscalating
+            void $ Errors.updateErrorState err.id Errors.ESEscalating
             issue <- Issues.createErrorSpikeIssue pid err currentRate mean stddev
             Issues.insertIssue issue
             liftIO $ withResource authCtx.jobsPool \conn ->
