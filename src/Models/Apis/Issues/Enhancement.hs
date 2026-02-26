@@ -10,6 +10,7 @@ module Models.Apis.Issues.Enhancement (
 import Data.Aeson qualified as AE
 import Data.Effectful.LLM qualified as ELLM
 import Data.Text qualified as T
+import Data.Text.Display (display)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Newtypes (getAeson)
 import Effectful (Eff, (:>))
@@ -35,95 +36,96 @@ data IssueEnhancement = IssueEnhancement
 
 -- | Enhance a single issue with LLM-generated title and description
 enhanceIssueWithLLM :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text IssueEnhancement)
-enhanceIssueWithLLM authCtx issue = do
-  -- Generate enhanced title
-  titleResult <- generateEnhancedTitle authCtx issue
-  case titleResult of
-    Left err -> pure $ Left err
-    Right enhancedTitle -> do
-      -- Generate enhanced description
-      descResult <- generateEnhancedDescription authCtx issue
-      case descResult of
-        Left err -> pure $ Left err
-        Right (enhancedDesc, recommendedAction, complexity) ->
-          pure
-            $ Right
-              IssueEnhancement
-                { issueId = issue.id
-                , enhancedTitle = enhancedTitle
-                , enhancedDescription = enhancedDesc
-                , recommendedAction = recommendedAction
-                , migrationComplexity = complexity
-                }
+enhanceIssueWithLLM authCtx issue = runExceptT do
+  enhancedTitle <- ExceptT $ generateEnhancedTitle authCtx issue
+  (enhancedDescription, recommendedAction, migrationComplexity) <- ExceptT $ generateEnhancedDescription authCtx issue
+  pure IssueEnhancement{issueId = issue.id, enhancedTitle, enhancedDescription, recommendedAction, migrationComplexity}
 
 
 -- | Generate an enhanced title using LLM
 generateEnhancedTitle :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
-generateEnhancedTitle authCtx issue = do
-  let prompt = buildTitlePrompt issue
-  result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
-  case result of
-    Left err -> pure $ Left err
-    Right r -> do
-      let response' = AI.getNormalTupleReponse r
-      case response' of
-        Left e -> pure $ Left e
-        Right (title, _) -> pure $ Right $ T.take 200 title -- Limit title length
+generateEnhancedTitle authCtx issue = runExceptT do
+  r <- ExceptT $ AI.callOpenAIAPIEff (buildTitlePrompt issue) authCtx.config.openaiApiKey
+  (title, _) <- hoistEither $ AI.getNormalTupleReponse r
+  pure $ T.take 200 title
 
 
 -- | Generate enhanced description with recommended actions
 generateEnhancedDescription :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
-generateEnhancedDescription authCtx issue = do
-  let prompt = buildDescriptionPrompt issue
-  result <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
-  case result of
-    Left err -> pure $ Left err
-    Right r -> do
-      let response' = AI.getNormalTupleReponse r
-      case response' of
-        Left e -> pure $ Left e
-        Right (response, _) -> do
-          let lines' = lines response
-              description = fromMaybe "" $ viaNonEmpty head lines'
-              recommendedAction = fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1
-              complexity = fromMaybe "medium" $ lines' !!? 2
-          -- Note: Classification happens separately in the background job
-          pure $ Right (description, recommendedAction, complexity)
+generateEnhancedDescription authCtx issue = runExceptT do
+  r <- ExceptT $ AI.callOpenAIAPIEff (buildDescriptionPrompt issue) authCtx.config.openaiApiKey
+  (response, _) <- hoistEither $ AI.getNormalTupleReponse r
+  let lines' = lines response
+  pure (fromMaybe "" $ viaNonEmpty head lines', fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1, fromMaybe "medium" $ lines' !!? 2)
+
+
+withIssueData :: AE.FromJSON a => Issues.Issue -> (a -> Text) -> Text -> Text
+withIssueData issue f fallback = case AE.fromJSON (getAeson issue.issueData) of
+  AE.Success d -> f d
+  _ -> fallback
 
 
 -- | Build prompt for title generation
 buildTitlePrompt :: Issues.Issue -> Text
 buildTitlePrompt issue =
   let baseContext = case issue.issueType of
-        Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.APIChangeData) ->
-            [fmtTrim|
-            Generate a concise, descriptive title for this API change.
+        Issues.ApiChange ->
+          withIssueData @Issues.APIChangeData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise, descriptive title for this API change.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
             Modified fields: {V.length d.modifiedFields}
-            Service: {issue.service}
-            |]
-          _ -> "Generate a concise title for this API change."
-        Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.RuntimeExceptionData) ->
-            [fmtTrim|
-            Generate a concise title for this runtime exception.
+            Service: {Issues.serviceLabel issue.service}|]
+            )
+            "Generate a concise title for this API change."
+        Issues.RuntimeException ->
+          withIssueData @Issues.RuntimeExceptionData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise title for this runtime exception.
             Error type: {d.errorType}
             Error message: {T.take 100 d.errorMessage}
-            Service: {issue.service}
-            |]
-          _ -> "Generate a concise title for this runtime exception."
-        Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.QueryAlertData) ->
-            [fmtTrim|
-            Generate a concise title for this query alert.
+            Service: {Issues.serviceLabel issue.service}|]
+            )
+            "Generate a concise title for this runtime exception."
+        Issues.QueryAlert ->
+          withIssueData @Issues.QueryAlertData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise title for this query alert.
             Query: {d.queryName}
             Threshold: {d.thresholdValue} ({d.thresholdType})
-            Actual value: {d.actualValue}
-            |]
-          _ -> "Generate a concise title for this query alert."
+            Actual value: {d.actualValue}|]
+            )
+            "Generate a concise title for this query alert."
+        Issues.LogPattern ->
+          withIssueData @Issues.LogPatternData
+            issue
+            ( \d ->
+                [fmtTrim|Generate a concise title for this new log pattern detection.
+            Log pattern: {d.logPattern}
+            Sample message: {fromMaybe "N/A" d.sampleMessage}
+            Log level: {fromMaybe "unknown" d.logLevel}
+            Service: {Issues.serviceLabel d.serviceName}
+            Occurrences: {d.occurrenceCount}|]
+            )
+            ("Generate a concise title for this log pattern. Title: " <> issue.title)
+        Issues.LogPatternRateChange ->
+          withIssueData @Issues.LogPatternRateChangeData
+            issue
+            ( \d ->
+                let dir = display d.changeDirection
+                 in [fmtTrim|Generate a concise title for this log pattern volume {dir}.
+            Log pattern: {d.logPattern}
+            Current rate: {Issues.showRate d.currentRatePerHour}
+            Baseline: {Issues.showRate d.baselineMean}
+            Change: {Issues.showPct d.changePercent}
+            Service: {Issues.serviceLabel d.serviceName}|]
+            )
+            ("Generate a concise title for this log pattern rate change. Title: " <> issue.title)
 
       systemPrompt =
         unlines
@@ -144,40 +146,74 @@ buildTitlePrompt issue =
 buildDescriptionPrompt :: Issues.Issue -> Text
 buildDescriptionPrompt issue =
   let baseContext = case issue.issueType of
-        Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.APIChangeData) ->
-            [fmtTrim|
-            Describe this API change and its impact.
+        Issues.ApiChange ->
+          withIssueData @Issues.APIChangeData
+            issue
+            ( \d ->
+                [fmtTrim|Describe this API change and its impact.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {show $ V.toList d.newFields}
             Deleted fields: {show $ V.toList d.deletedFields}
             Modified fields: {show $ V.toList d.modifiedFields}
             Total anomalies grouped: {V.length d.anomalyHashes}
-            Service: {issue.service}
-            |]
-          _ -> "Describe this API change and its implications."
-        Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.RuntimeExceptionData) ->
-            [fmtTrim|
-            Analyze this runtime exception and provide debugging guidance.
+            Service: {Issues.serviceLabel issue.service}|]
+            )
+            "Describe this API change and its implications."
+        Issues.RuntimeException ->
+          withIssueData @Issues.RuntimeExceptionData
+            issue
+            ( \d ->
+                [fmtTrim|Analyze this runtime exception and provide debugging guidance.
             Error type: {d.errorType}
             Error message: {d.errorMessage}
             Stack trace: {T.take 500 d.stackTrace}
             Request context: {fromMaybe "Unknown" d.requestMethod} {fromMaybe "Unknown" d.requestPath}
-            Occurrences: {d.occurrenceCount}
-            |]
-          _ -> "Analyze this runtime exception."
-        Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.QueryAlertData) ->
-            [fmtTrim|
-            Describe this query alert and recommended actions.
+            Occurrences: {d.occurrenceCount}|]
+            )
+            "Analyze this runtime exception."
+        Issues.QueryAlert ->
+          withIssueData @Issues.QueryAlertData
+            issue
+            ( \d ->
+                [fmtTrim|Describe this query alert and recommended actions.
             Query: {d.queryName}
             Expression: {d.queryExpression}
             Threshold: {d.thresholdValue} ({d.thresholdType})
             Actual value: {d.actualValue}
-            Triggered at: {show d.triggeredAt}
-            |]
-          _ -> "Describe this query alert."
+            Triggered at: {show d.triggeredAt}|]
+            )
+            "Describe this query alert."
+        Issues.LogPattern ->
+          withIssueData @Issues.LogPatternData
+            issue
+            ( \d ->
+                [fmtTrim|Describe this new log pattern and its implications.
+            Log pattern: {d.logPattern}
+            Sample message: {fromMaybe "N/A" d.sampleMessage}
+            Log level: {fromMaybe "unknown" d.logLevel}
+            Service: {Issues.serviceLabel d.serviceName}
+            Source: {d.sourceField}
+            Occurrences: {d.occurrenceCount}
+            First seen: {show d.firstSeenAt}|]
+            )
+            ("Describe this log pattern issue. Title: " <> issue.title)
+        Issues.LogPatternRateChange ->
+          withIssueData @Issues.LogPatternRateChangeData
+            issue
+            ( \d ->
+                let dir = display d.changeDirection
+                 in [fmtTrim|Describe this log pattern volume {dir} and its implications.
+            Log pattern: {d.logPattern}
+            Sample message: {fromMaybe "N/A" d.sampleMessage}
+            Current rate: {Issues.showRate d.currentRatePerHour}
+            Baseline mean: {Issues.showRate d.baselineMean}
+            Baseline MAD: {Issues.showRate d.baselineMad}
+            Z-score: {show (round d.zScore :: Int)} standard deviations
+            Change: {Issues.showPct d.changePercent}
+            Service: {Issues.serviceLabel d.serviceName}
+            Log level: {fromMaybe "unknown" d.logLevel}|]
+            )
+            ("Describe this log pattern rate change. Title: " <> issue.title)
 
       systemPrompt =
         [text|
@@ -203,42 +239,34 @@ buildDescriptionPrompt issue =
 
 -- | Classify issue as critical/safe and count breaking/incremental changes
 classifyIssueCriticality :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
-classifyIssueCriticality authCtx issue = do
-  let prompt = buildCriticalityPrompt issue
-  result' <- AI.callOpenAIAPIEff prompt authCtx.config.openaiApiKey
-  case result' of
-    Left err -> pure $ Left err
-    Right res -> do
-      let r = AI.getNormalTupleReponse res
-      case r of
-        Left e -> pure $ Left e
-        Right (response, _) -> do
-          let lines' = lines response
-          case lines' of
-            [criticalStr, breakingStr, incrementalStr] -> do
-              let isCritical = T.toLower criticalStr == "critical"
-                  breakingCount = fromMaybe 0 $ readMaybe $ toString breakingStr
-                  incrementalCount = fromMaybe 0 $ readMaybe $ toString incrementalStr
-              pure $ Right (isCritical, breakingCount, incrementalCount)
-            _ -> pure $ Left "Invalid response format from LLM"
+classifyIssueCriticality authCtx issue = runExceptT do
+  res <- ExceptT $ AI.callOpenAIAPIEff (buildCriticalityPrompt issue) authCtx.config.openaiApiKey
+  (response, _) <- hoistEither $ AI.getNormalTupleReponse res
+  case lines response of
+    [criticalStr, breakingStr, incrementalStr] ->
+      pure (T.toLower criticalStr == "critical", fromMaybe 0 $ readMaybe $ toString breakingStr, fromMaybe 0 $ readMaybe $ toString incrementalStr)
+    _ -> hoistEither $ Left "Invalid response format from LLM"
 
 
 -- | Build prompt for criticality classification
 buildCriticalityPrompt :: Issues.Issue -> Text
 buildCriticalityPrompt issue =
   let context = case issue.issueType of
-        Issues.APIChange -> case AE.fromJSON (getAeson issue.issueData) of
-          AE.Success (d :: Issues.APIChangeData) ->
-            [fmtTrim|
-            API change detected
+        Issues.ApiChange ->
+          withIssueData @Issues.APIChangeData
+            issue
+            ( \d ->
+                [fmtTrim|API change detected
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
-            Modified fields: {V.length d.modifiedFields}
-            |]
-          _ -> "API change: " <> issue.title
+            Modified fields: {V.length d.modifiedFields}|]
+            )
+            ("API change: " <> issue.title)
         Issues.RuntimeException -> "Runtime exception: " <> issue.title
         Issues.QueryAlert -> "Query alert: " <> issue.title
+        Issues.LogPattern -> "Log pattern: " <> issue.title
+        Issues.LogPatternRateChange -> "Log pattern rate change: " <> issue.title
 
       systemPrompt =
         [text|

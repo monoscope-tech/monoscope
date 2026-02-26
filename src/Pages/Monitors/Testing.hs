@@ -485,7 +485,7 @@ monitorHistoryTab_ pid alertId = do
   let query = "kind==\"alert\" and parent_id==\"" <> alertId.toText <> "\""
       initialUrl = "/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr query
   div_ [class_ "mt-2 p-2 border border-strokeWeak rounded-lg"] do
-    virtualTable pid (Just initialUrl)
+    virtualTable pid (Just initialUrl) Nothing
 
 
 -- | Alert statistics boxes (copied from Alerts module for consolidation)

@@ -393,3 +393,17 @@ tests:
       - log-base
       - vector
       - time
+
+benchmarks:
+  utils-bench:
+    main: Main.hs
+    source-dirs: test/bench
+    ghc-options:
+      - -threaded
+      - -rtsopts
+      - -with-rtsopts=-N
+    dependencies:
+      - monoscope
+      - hspec
+      - relude >= 1.2.0.0
+      - time

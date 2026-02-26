@@ -143,7 +143,7 @@ spec = aroundAll withTestResources do
         AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
-          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) tbl.rows
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.ApiChange) tbl.rows
           V.length acknowledgedApiChangeIssues `shouldSatisfy` (> 0)
         _ -> error "Unexpected response"
 
@@ -221,7 +221,7 @@ spec = aroundAll withTestResources do
 
       -- Get updated anomaly list
       anomalies <- getAnomalies tr
-      let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) anomalies
+      let formatApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.ApiChange) anomalies
 
       -- In the new Issues system, format anomalies are part of API changes
       length formatApiChangeIssues `shouldSatisfy` (>= 1)
@@ -233,7 +233,7 @@ spec = aroundAll withTestResources do
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
           -- Acknowledged anomalies should include API changes
-          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.APIChange) tbl.rows
+          let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.ApiChange) tbl.rows
 
           -- We acknowledged at least one API change issue in the previous test
           length acknowledgedApiChangeIssues `shouldSatisfy` (>= 1)

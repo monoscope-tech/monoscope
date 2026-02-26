@@ -428,6 +428,10 @@ spec = do
       Utils.replaceAllFormats "File not found: /usr/local/app/config.json" `shouldBe` "File not found: /usr/local/app/config.json"
       Utils.replaceAllFormats "Error reading C:\\Users\\Admin\\data.txt" `shouldBe` "Error reading C:\\Users\\Admin\\data.txt"
       Utils.replaceAllFormats "Module failed at /app/src/main.js:42:15" `shouldBe` "Module failed at /app/src/main.js{port}{port}"
+
+    it "should handle JSON colons (not ports)" do
+      Utils.replaceAllFormats "{\"status_code\":200,\"count\":42}" `shouldBe` "{\"status_code\":{integer},\"count\":{integer}}"
+      Utils.replaceAllFormats "{\"ip\":\"192.168.1.1\"}" `shouldBe` "{\"ip\":\"{ipv4}\"}"
       
     it "should handle mixed identifiers" do
       Utils.replaceAllFormats "Thread-42 processing session_abc123def456 for user 789" `shouldBe` "Thread-{integer} processing session_abc{integer}def{integer} for user {integer}"

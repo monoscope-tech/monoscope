@@ -6,6 +6,7 @@ module Models.Apis.RequestDumps (
   RequestTypes (..),
   RequestForReport (..),
   ATError (..),
+  PatternRow (..),
   normalizeUrlPath,
   selectLogTable,
   executeArbitraryQuery,
@@ -21,18 +22,21 @@ module Models.Apis.RequestDumps (
 where
 
 import Control.Exception.Annotated (checkpoint, try)
+import Control.Lens (view, _5)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
+import Data.HashMap.Strict qualified as HashMap
+import Data.Set (member)
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, addUTCTime)
+import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (Only (Only), ToRow)
+import Database.PostgreSQL.Simple (Only (Only), ToRow, fromOnly)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -41,18 +45,26 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful
+import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
+import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.Fields ()
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (WrappedEnumShow (..))
+import Pkg.Drain qualified as Drain
 import Pkg.Parser
+import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
+import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Types (DB)
+import System.Types (DB, withTimefusion)
+import Utils (replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
 
@@ -562,15 +574,103 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-fetchLogPatterns :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es [(Text, Int)]
+data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int]}
+
+
+fetchLogPatterns :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (Int, [PatternRow])
 fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
-  let (_, queryComponents) = queryASTToComponents ((defSqlQueryCfg pid now sourceM Nothing){dateRange}) queryAST
+  let sqlCfg = (defSqlQueryCfg pid now sourceM Nothing){dateRange}
+      (_, queryComponents) = queryASTToComponents sqlCfg queryAST
       pidTxt = pid.toText
+      dateRangeClause = buildDateRange sqlCfg
       whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
-      target = fromMaybe "log_pattern" targetM
-      q = [text|select $target, count(*) as p_count from otel_logs_and_spans where project_id='${pidTxt}' and ${whereCondition} and $target is not null GROUP BY $target ORDER BY p_count desc offset ? limit 15;|]
-  PG.query (Query $ encodeUtf8 q) (Only skip)
+      fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
+      target = fromMaybe "summary" targetM
+  Log.logTrace "fetchLogPatterns: start"
+    $ AE.object
+      ["project_id" AE..= pid, "target" AE..= target, "skip" AE..= skip, "date_range" AE..= show dateRange]
+  let (dateFrom, dateTo) = dateRange
+  precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text)] <-
+    if target `elem` map fst LogPatterns.knownPatternFields
+      then PG.query [sql|SELECT log_pattern, occurrence_count, log_level, service_name, pattern_hash FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?) ORDER BY occurrence_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
+      else pure []
+  if not (null precomputed)
+    then do
+      Log.logTrace "fetchLogPatterns: using precomputed" $ AE.object ["count" AE..= length precomputed]
+      totalPatterns <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql|SELECT count(*)::INT FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?)|] (pid, target, dateFrom, dateFrom, dateTo, dateTo)
+      let hashes = V.fromList $ map (view _5) precomputed
+          hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
+          hourlyTo = fromMaybe now dateTo
+      hourlyRows :: [(Text, UTCTime, Int)] <- PG.query [sql|SELECT pattern_hash, hour_bucket, event_count::INT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND source_field = ? AND pattern_hash = ANY(?) AND hour_bucket >= ? AND hour_bucket <= ? ORDER BY pattern_hash, hour_bucket|] (pid, target, hashes, hourlyFrom, hourlyTo)
+      let volumeMap = HashMap.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
+      pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = buildHourlyBuckets now $ fromMaybe [] $ HashMap.lookup h volumeMap} | (pat, cnt, lvl, svc, h) <- precomputed])
+    else do
+      Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
+      authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+      let bucketW = bucketWidthSecs dateRange now
+          bucketCol = "floor(extract(epoch from timestamp) / " <> show bucketW <> ")::INT"
+      rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- withTimefusion authCtx.env.enableTimefusionReads case resolveFieldExpr target of
+        Just (Left colExpr) -> do
+          let q = "SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=? AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000"
+          PG.query (Query $ encodeUtf8 q) (Only pid)
+        Just (Right pathParts) ->
+          PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, " <> bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=? AND " <> fullWhere <> " AND attributes #>> ? IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000") (pathParts, pid, pathParts)
+        Nothing -> pure []
+      Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
+      let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, l1 <|> l2, s1 <|> s2, b1 ++ b2)
+          grouped =
+            HashMap.fromListWith
+              agg
+              [(replaceAllFormats val, (cnt, lvl, svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
+          drainTree =
+            HashMap.foldlWithKey'
+              ( \tree pat _ ->
+                  let tokens = Drain.tokenizeForDrain pat
+                   in if V.null tokens then tree else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens pat Nothing now
+              )
+              Drain.emptyDrainTree
+              grouped
+          merged =
+            HashMap.fromListWith
+              agg
+              [ (dr.templateStr, foldl' agg (0, Nothing, Nothing, []) $ mapMaybe (`HashMap.lookup` grouped) $ V.toList dr.logIds)
+              | dr <- V.toList $ Drain.getAllLogGroups drainTree
+              ]
+          sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HashMap.toList merged
+          allBIs = [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
+          (minB, maxB) = case allBIs of [] -> (0, 0); xs -> (foldl' min maxBound xs, foldl' max minBound xs)
+          buildVolume bs = let bMap = HashMap.fromListWith (+) bs in [fromMaybe 0 $ HashMap.lookup i bMap | i <- [minB .. maxB]]
+      Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HashMap.size merged]
+      pure (HashMap.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = buildVolume bs} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+  where
+    -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
+    -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.
+    -- User input never reaches SQL as raw text — only as column lookups or parameterized values.
+    resolveFieldExpr f
+      | f == "url_path" = Just $ Left "attributes___url___path"
+      | f == "exception" = Just $ Left "attributes___exception___message"
+      | f == "summary" = Just $ Left "array_to_string(summary, chr(30))"
+      | f `member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
+      | f `elem` rootColumns = Just $ Left f
+      | "attributes." `T.isPrefixOf` f = let parts = drop 1 $ T.splitOn "." f in if null parts || parts == [""] then Nothing else Just $ Right $ V.fromList parts
+      | otherwise = Nothing
+    rootColumns = ["body", "level", "kind", "name", "status_code", "status_message"] :: [Text]
+    -- ~20 buckets for the sparkline, minimum 1 second
+    bucketWidthSecs (from, to) n =
+      let start = fromMaybe (addUTCTime (-3600) n) from
+          rangeSecs = max 60 $ round $ diffUTCTime (fromMaybe n to) start :: Int
+       in max 1 $ rangeSecs `div` 20 :: Int
+
+
+-- | Build a fixed 24-slot hourly bucket array from sparse (UTCTime, Int) pairs.
+buildHourlyBuckets :: UTCTime -> [(UTCTime, Int)] -> [Int]
+buildHourlyBuckets now pairs = [fromMaybe 0 $ HashMap.lookup i bucketMap | i <- [0 .. 23]]
+  where
+    startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
+    bucketMap = HashMap.fromListWith (+) [(hourIndex t, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0 && idx < 24]
+    hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
+    truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
 
 
 getLast24hTotalRequest :: DB es => Projects.ProjectId -> Eff es Int

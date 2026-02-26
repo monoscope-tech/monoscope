@@ -368,7 +368,7 @@ sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 
 sampleAlert :: IssueType -> Text -> NotificationAlerts
 sampleAlert = \case
-  APIChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
+  ApiChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
   RuntimeException ->
     const
       $ RuntimeErrorAlert
@@ -390,6 +390,8 @@ sampleAlert = \case
           , RequestDumps.stack = Just "at sampleFunction (sample.js:42:15)"
           }
   QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
+  LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test"
+  LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test"
 
 
 sampleReport :: Text -> NotificationAlerts
