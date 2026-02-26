@@ -745,20 +745,22 @@ notifyErrorSubscriptions pid errorHashes = do
                   msgIdM <- sendDiscordAlertWith discordMsgId alert pid project.title Nothing
                   pure (slackTs, discordMsgId <|> msgIdM)
                 Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-                Projects.NEmail -> (slackTs, discordMsgId) <$ do
-                  let e = sub.errorData
-                      errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-                      (subj, html) = case alertTypeForState sub.errorState of
-                        EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [e]
-                        RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [e]
-                        _ -> ET.runtimeErrorsEmail project.title errorsUrl [e]
-                  forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                Projects.NEmail ->
+                  (slackTs, discordMsgId) <$ do
+                    let e = sub.errorData
+                        errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
+                        (subj, html) = case alertTypeForState sub.errorState of
+                          EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [e]
+                          RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [e]
+                          _ -> ET.runtimeErrorsEmail project.title errorsUrl [e]
+                    forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
                 Projects.NPagerduty -> pure (slackTs, discordMsgId)
             )
             (sub.slackThreadTs, sub.discordMessageId)
             project.notificationsChannel
         Relude.when (finalSlackTs /= sub.slackThreadTs || finalDiscordMsgId /= sub.discordMessageId)
-          $ void $ Errors.updateErrorThreadIds sub.errorId finalSlackTs finalDiscordMsgId
+          $ void
+          $ Errors.updateErrorThreadIds sub.errorId finalSlackTs finalDiscordMsgId
         void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ? |] (Only sub.errorId)
 
 
@@ -1834,11 +1836,11 @@ calculateErrorBaselines pid = do
     -- Get hourly stats from error_events over last 7 days (168 hours)
     statsM <- Errors.getErrorEventStats err.id 168
     whenJust statsM \stats -> do
-        let newSamples = stats.totalHours
-            newMean = stats.hourlyMedian
-            newStddev = stats.hourlyMADScaled
-            newState = if newSamples >= 24 then BSEstablished else BSLearning
-        void $ Errors.updateBaseline err.id newState newMean newStddev newSamples
+      let newSamples = stats.totalHours
+          newMean = stats.hourlyMedian
+          newStddev = stats.hourlyMADScaled
+          newState = if newSamples >= 24 then BSEstablished else BSLearning
+      void $ Errors.updateBaseline err.id newState newMean newStddev newSamples
 
   Log.logInfo "Finished calculating error baselines" (pid, length errors)
 
