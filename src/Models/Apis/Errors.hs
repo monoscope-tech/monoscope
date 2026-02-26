@@ -82,8 +82,7 @@ data ErrorState
   | ESRegressed
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "ES", DAE.CamelToSnake]] ErrorState
-  deriving (FromField, ToField) via WrappedEnumSC "ES" ErrorState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "ES" ErrorState
 
 
 data Error = Error
@@ -460,8 +459,8 @@ getCurrentHourErrorCount eid = maybe 0 fromOnly . listToMaybe <$> PG.query q (On
 -- Returns median and MAD (Median Absolute Deviation) of hourly counts over the lookback period
 -- Using median + MAD instead of mean + stddev for robustness against outliers/spikes
 data ErrorEventStats = ErrorEventStats
-  { hourlyMedian :: Double -- Actually stores median for robustness
-  , hourlyMADScaled :: Double -- Actually stores MAD * 1.4826 (scaled to be comparable to stddev)
+  { hourlyMedian :: Double
+  , hourlyMADScaled :: Double -- MAD * 1.4826 (scaled to be comparable to stddev)
   , totalHours :: Int
   , totalEvents :: Int
   }

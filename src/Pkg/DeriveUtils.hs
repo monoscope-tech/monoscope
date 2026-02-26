@@ -169,6 +169,15 @@ instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC prefix a) where
   displayBuilder (WrappedEnumSC a) = fromString . quietSnake . drop (length $ symbolVal (Proxy @prefix)) . show $ a
 
 
+instance (KnownSymbol prefix, Show a) => AE.ToJSON (WrappedEnumSC prefix a) where
+  toJSON (WrappedEnumSC a) = AE.String . toText . quietSnake . fromString . drop (length $ symbolVal (Proxy @prefix)) . show $ a
+
+instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC prefix a) where
+  parseJSON = AE.withText "WrappedEnumSC" \t ->
+    case readMaybe (symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString t)) of
+      Just a -> pure $ WrappedEnumSC a
+      Nothing -> fail $ "Invalid value: " <> toString t
+
 instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC prefix a) where
   parseUrlPiece t =
     case readMaybe (symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text t)) of

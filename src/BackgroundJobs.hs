@@ -73,7 +73,7 @@ import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
-import ProcessMessage (processErrors, processSpanToEntities)
+import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
@@ -771,10 +771,7 @@ processProjectErrors pid errors = do
         $ Log.logInfo "Successfully inserted errors for project"
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
   where
-    -- Process a single error - the error already has requestMethod and requestPath
-    -- set by getAllATErrors if it was extracted from span context
-    processError :: Errors.ATError -> (Errors.ATError, Query, [DBField])
-    processError = processErrors pid
+    processError err = (err, q, params) where (q, params) = Errors.upsertErrorQueryAndParam pid err
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance

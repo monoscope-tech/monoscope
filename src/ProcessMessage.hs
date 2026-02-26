@@ -12,7 +12,6 @@ module ProcessMessage (
   fieldsToFieldDTO,
   sortVector,
   ensureUrlParams,
-  processErrors,
   dedupFields,
 )
 where
@@ -44,7 +43,6 @@ import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent)
@@ -53,7 +51,6 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
@@ -592,13 +589,6 @@ redactJSON paths' = redactJSON' (V.map stripPrefixDot paths')
 replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
 
-
--- | Process errors with optional HTTP-specific fields
--- If HTTP fields are not provided, they remain as Nothing in the error record
-processErrors :: Projects.ProjectId -> Errors.ATError -> (Errors.ATError, Query, [DBField])
-processErrors pid err = (err, q, params)
-  where
-    (q, params) = Errors.upsertErrorQueryAndParam pid err
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a

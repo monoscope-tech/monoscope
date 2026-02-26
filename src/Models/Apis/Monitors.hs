@@ -68,8 +68,7 @@ instance HasField "toText" QueryMonitorId Text where
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "MS", DAE.CamelToSnake]] MonitorStatus
-  deriving (Display, FromField, ToField) via WrappedEnumSC "MS" MonitorStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "MS" MonitorStatus
 
 
 data MonitorAlertConfig = MonitorAlertConfig

@@ -60,8 +60,7 @@ import System.Types (DB)
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "BS", DAE.CamelToSnake]] BaselineState
-  deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "BS" BaselineState
 
 
 newtype LogPatternId = LogPatternId {unLogPatternId :: Int64}
@@ -75,10 +74,7 @@ data LogPatternState
   | LPSIgnored
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "LPS", DAE.CamelToSnake]] LogPatternState
-  deriving (FromField, ToField) via WrappedEnumSC "LPS" LogPatternState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "LPS" LogPatternState
 
 
 data LogPattern = LogPattern

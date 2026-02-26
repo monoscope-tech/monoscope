@@ -159,8 +159,7 @@ slackThreadedNotification channelId botToken payload threadTs =
 
 
 discordNotification :: Text -> AE.Value -> Notification
-discordNotification channelId payload =
-  let replyToMessageId = Nothing in DiscordNotification DiscordData{..}
+discordNotification channelId payload = discordThreadedNotification channelId payload Nothing
 
 
 discordThreadedNotification :: Text -> AE.Value -> Maybe Text -> Notification
