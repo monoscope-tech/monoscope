@@ -590,7 +590,6 @@ replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
 
 
-
 sortVector :: Ord a => V.Vector a -> V.Vector a
 sortVector vec = runST $ do
   mvec <- V.thaw vec
