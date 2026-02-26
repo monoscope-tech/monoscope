@@ -274,8 +274,9 @@ runNotifyProduction = interpret $ \_ -> \case
               msg = AE.Object $ AEK.insert "channel" (AE.String channelId) withThread
           result <- liftIO $ try @SomeException $ postWith opts "https://slack.com/api/chat.postMessage" msg
           case result of
-            Right re | statusIsSuccessful (re ^. responseStatus) ->
-              pure $ AE.decode (re ^. responseBody) >>= (^? key "ts" . _String)
+            Right re
+              | statusIsSuccessful (re ^. responseStatus) ->
+                  pure $ AE.decode (re ^. responseBody) >>= (^? key "ts" . _String)
             Right re -> do
               Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
               pure Nothing
@@ -297,8 +298,9 @@ runNotifyProduction = interpret $ \_ -> \case
             _ -> payload
       result <- liftIO $ try @SomeException $ postWith opts url payloadWithReply
       case result of
-        Right re | statusIsSuccessful (re ^. responseStatus) ->
-          pure $ AE.decode (re ^. responseBody) >>= (^? key "id" . _String)
+        Right re
+          | statusIsSuccessful (re ^. responseStatus) ->
+              pure $ AE.decode (re ^. responseBody) >>= (^? key "id" . _String)
         Right re -> do
           Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
           pure Nothing
