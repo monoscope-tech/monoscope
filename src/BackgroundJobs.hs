@@ -560,7 +560,7 @@ logsPatternExtraction scheduledTime pid = do
                     let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) (filteredIds V.!? 0 >>= (`HM.lookup` eventMeta))
                         patternHash = toXXHash dp.templateStr
                      in Just (filteredIds, patternHash, LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}, (pid, sourceField, patternHash, scheduledTime, eventCount))
-      let (idHashPairs, ups, hss) = unzip3 [(( filteredIds, patternHash), up, hs) | (filteredIds, patternHash, up, hs) <- prepared]
+      let (idHashPairs, ups, hss) = unzip3 [((filteredIds, patternHash), up, hs) | (filteredIds, patternHash, up, hs) <- prepared]
       -- Tag otel events with pattern hashes
       forM_ idHashPairs \(filteredIds, patternHash) -> do
         let hashTag = "pat:" <> patternHash
