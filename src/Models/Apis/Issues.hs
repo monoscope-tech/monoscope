@@ -86,9 +86,8 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Hashable (hash)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
-import Data.Time (UTCTime, getCurrentTime)
+import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC, zonedTimeToUTC)
-import Data.UUID.V4 qualified as UUID4
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
@@ -843,17 +842,19 @@ createErrorSpikeIssue projectId err currentRate baselineMean baselineStddev = do
           , lastSeen = now
           }
   mkIssue
-    projectId
-    RuntimeException
-    err.hash
-    err.hash
-    err.service
-    True
-    "critical"
-    ("Error Spike: " <> err.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)")
-    ("Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes.")
-    "n/a"
-    exceptionData
+    MkIssueOpts
+      { projectId
+      , issueType = RuntimeException
+      , targetHash = err.hash
+      , service = err.service
+      , critical = True
+      , severity = "critical"
+      , title = "Error Spike: " <> err.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
+      , recommendedAction = "Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes."
+      , migrationComplexity = "n/a"
+      , issueData = exceptionData
+      , timestamp = Nothing
+      }
 
 
 -- | Create issue for a new error
@@ -872,14 +873,16 @@ createNewErrorIssue projectId err = do
           , lastSeen = now
           }
   mkIssue
-    projectId
-    RuntimeException
-    err.hash
-    err.hash
-    err.service
-    True
-    "critical"
-    ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
-    "Investigate the new error and implement a fix."
-    "n/a"
-    exceptionData
+    MkIssueOpts
+      { projectId
+      , issueType = RuntimeException
+      , targetHash = err.hash
+      , service = err.service
+      , critical = True
+      , severity = "critical"
+      , title = "New Error: " <> err.errorType <> " - " <> T.take 80 err.message
+      , recommendedAction = "Investigate the new error and implement a fix."
+      , migrationComplexity = "n/a"
+      , issueData = exceptionData
+      , timestamp = Nothing
+      }

@@ -61,7 +61,7 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..))
+import Models.Apis.LogPatterns (BaselineState (..))
 import Relude hiding (id)
 import System.Types (DB)
 import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))

@@ -62,7 +62,6 @@ import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -293,22 +292,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
         severityBadge issue.severity
       h3_ [class_ "text-textStrong text-2xl font-semibold"] $ toHtml issue.title
       p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
-    let widget title q =
-          div_ [class_ "col-span-4"]
-            $ Widget.widget_
-            $ (def :: Widget.Widget)
-              { Widget.standalone = Just True
-              , Widget.id = Just $ issueId <> "-timeline"
-              , Widget.naked = Just True
-              , Widget.wType = Widget.WTTimeseries
-              , Widget.title = Just title
-              , Widget.showTooltip = Just True
-              , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
-              , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-              , Widget.query = Just q
-              , Widget._projectId = Just issue.projectId
-              , Widget.hideLegend = Just True
-              }
     -- Two Column Layout
     div_ [class_ "flex flex-col gap-4"] do
       div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
@@ -343,7 +326,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
                     detailItem
                 div_ [class_ "flex items-center gap-4"]
                   $ forM_
-                    [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.stack)
+                    [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
                     , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
                     ]
                     detailItem
@@ -441,11 +424,9 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
               (div_ [class_ "flex flex-col gap-4"] $ emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide")
               (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
               (not $ V.null withSessionIds)
->>>>>>> origin/master
 
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
-
 
 errorAssigneeSection :: Projects.ProjectId -> Maybe Errors.ErrorId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 errorAssigneeSection pid errIdM assigneeIdM members = do

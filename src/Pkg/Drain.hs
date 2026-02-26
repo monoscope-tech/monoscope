@@ -86,8 +86,12 @@ emptyDrainTree =
     }
 
 
-createLogGroup :: V.Vector Text -> Text -> Text -> UTCTime -> LogGroup
-createLogGroup templateTokens templateString logId now =
+templateText :: V.Vector Text -> Text
+templateText = T.intercalate " "  . V.toList
+
+
+createLogGroup :: V.Vector Text -> Text -> Text -> Maybe Text -> UTCTime -> LogGroup
+createLogGroup templateTokens templateString logId sampleContent now =
   LogGroup
     { template = templateTokens
     , templateStr = templateString
@@ -240,7 +244,7 @@ tokenizeJsonLike txt
   where
     go t
       | T.null t = []
-      | T.head t `elem` ['{', '}', '[', ']', ',', ':'] =
+      | T.head t `elem` (['{', '}', '[', ']', ',', ':'] :: String) =
           let c = one (T.head t)
            in c : go (T.tail t)
       | T.head t == '"' =
@@ -250,7 +254,7 @@ tokenizeJsonLike txt
       | isSpace (T.head t) =
           go (T.dropWhile isSpace t)
       | otherwise =
-          let (chunk, rest) = T.span (\c -> not (isSpace c) && notElem c ['{', '}', '[', ']', ',', ':']) t
+          let (chunk, rest) = T.span (\c -> not (isSpace c) && notElem c (['{', '}', '[', ']', ',', ':'] :: String)) t
            in chunk : go rest
 
 

@@ -609,12 +609,35 @@ sampleAlert = \case
   LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test"
   LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test"
 
+sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts
+sampleRuntimeAlert alertType _title =
+  RuntimeErrorAlert
+    "test-123"
+    def
+      { Errors.when = UTCTime (fromGregorian 2025 1 1) 0
+      , Errors.errorType = "🧪 TEST: TypeError"
+      , Errors.rootErrorType = "TypeError"
+      , Errors.message = "Sample error message for testing"
+      , Errors.rootErrorMessage = "Sample error"
+      , Errors.stackTrace = "at sampleFunction (sample.js:42:15)"
+      , Errors.hash = "test-hash-xyz"
+      , Errors.technology = Just RequestDumps.JsExpress
+      , Errors.requestMethod = Just "GET"
+      , Errors.requestPath = Just "/api/test"
+      , Errors.spanId = Just "test-span-id"
+      , Errors.traceId = Just "test-trace-id"
+      , Errors.serviceName = Just "api"
+      , Errors.runtime = Just "nodejs"
+      }
+    alertType
+
+
 sampleAlertByIssueTypeText :: Text -> Text -> NotificationAlerts
 sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
   "escalating_errors" -> sampleRuntimeAlert EscalatingErrors title
   "regressed_errors" -> sampleRuntimeAlert RegressedErrors title
   "error_spike" -> sampleRuntimeAlert ErrorSpike title
-  _ -> sampleAlert (fromMaybe APIChange $ parseIssueType issueTypeText) title
+  _ -> sampleAlert (fromMaybe ApiChange $ parseIssueType issueTypeText) title
 
 
 

@@ -68,7 +68,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
+import Pkg.DeriveUtils ( UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
@@ -126,9 +126,6 @@ data BgJobs
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
   | ErrorAssigned Projects.ProjectId Errors.ErrorId Users.UserId -- projectId, errorId, assigneeId
-  | LogPatternBaselineCalculation Projects.ProjectId
-  | LogPatternSpikeDetection Projects.ProjectId
-  | NewLogPatternDetected Projects.ProjectId Text
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -381,7 +378,6 @@ processBackgroundJob authCtx bgJob =
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid authCtx
     NewErrorDetected pid errorHash -> processNewError pid errorHash authCtx
-
     LogPatternPeriodicProcessing scheduledTime pid ->
       tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
@@ -427,15 +423,6 @@ runHourlyJob scheduledTime hour = do
       -- Error baseline and spike detection
       _ <- createJob conn "background_jobs" $ ErrorBaselineCalculation pid
       createJob conn "background_jobs" $ ErrorSpikeDetection pid
-  -- Schedule baseline calculation and spike detection for active projects
-  liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ activeProjects \pid -> do
-      _ <- createJob conn "background_jobs" $ LogPatternBaselineCalculation pid
-      createJob conn "background_jobs" $ LogPatternSpikeDetection pid
-  -- Baseline calculation then spike detection (sequential within single job to ensure correct ordering)
-  liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ activeProjects \pid ->
-      createJob conn "background_jobs" $ LogPatternHourlyProcessing pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -1252,36 +1239,6 @@ newAnomalyJob pid createdAt anomalyTypesT anomalyActionsT targetHashes = do
     Anomalies.ATFormat -> processAPIChangeAnomalies pid targetHashes
     -- Runtime exceptions get individual issues
     -- Each unique error pattern gets its own issue for tracking
-    Anomalies.ATRuntimeException -> do
-      errors <- Anomalies.errorsByHashes pid targetHashes
-
-      -- Create one issue per error
-      forM_ errors \err -> do
-        issue <- Issues.createRuntimeExceptionIssue pid err.errorData
-        Issues.insertIssue issue
-        -- Queue enhancement job
-        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        -- Send notifications only if project exists and has alerts enabled
-        projectM <- Projects.projectById pid
-        whenJust projectM \project -> Relude.when project.errorAlerts do
-          users <- Projects.usersByProjectId pid
-          let issueId = UUID.toText issue.id.unUUIDId
-          forM_ project.notificationsChannel \case
-            Projects.NSlack ->
-              forM_ errors \err' -> sendSlackAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData, runtimeAlertType = NewRuntimeError}) pid project.title Nothing
-            Projects.NDiscord ->
-              forM_ errors \err' -> sendDiscordAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData, runtimeAlertType = NewRuntimeError}) pid project.title Nothing
-            Projects.NPhone ->
-              forM_ errors \err' ->
-                sendWhatsAppAlert (RuntimeErrorAlert{issueId = issueId, errorData = err'.errorData, runtimeAlertType = NewRuntimeError}) pid project.title project.whatsappNumbers
-            Projects.NEmail ->
-              forM_ users \u -> do
-                let errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
-                    (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl (map (.errorData) errors)
-                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-            Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts, not runtime errors
-            -- Ignore other anomaly types
     _ -> pass
 
 
