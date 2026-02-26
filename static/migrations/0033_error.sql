@@ -1,3 +1,7 @@
+-- ALTER TYPE ADD VALUE must run outside a transaction (PG 12+ allows IF NOT EXISTS in txn).
+ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'error_escalating';
+ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'error_regressed';
+
 BEGIN;
 
 -- Drop existing trigger and table
@@ -63,7 +67,13 @@ CREATE TABLE apis.errors (
     baseline_updated_at TIMESTAMPTZ,
 
     is_ignored                BOOLEAN DEFAULT false,
-    ignored_until             TIMESTAMPTZ
+    ignored_until             TIMESTAMPTZ,
+
+    subscribed                BOOLEAN NOT NULL DEFAULT FALSE,
+    notify_every_minutes      INT NOT NULL DEFAULT 30,
+    last_notified_at          TIMESTAMPTZ,
+    slack_thread_ts           TEXT,
+    discord_message_id        TEXT
 );
 SELECT manage_updated_at('apis.errors');
 
@@ -108,10 +118,6 @@ CREATE TABLE apis.error_events (
 CREATE INDEX idx_error_events_project ON apis.error_events (project_id, occurred_at DESC);
 CREATE INDEX idx_error_event_error_hash ON apis.error_events (project_id, target_hash);
 CREATE INDEX idx_error_events_service ON apis.error_events (service_name);
-
-ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'error_escalating';
-ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'error_regressed';
-
 
 -- Trigger function to create error_events from error_data JSONB on errors table
 -- The error_data column contains ATError structure with event-specific details
