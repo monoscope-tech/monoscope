@@ -583,7 +583,7 @@ sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 
 sampleAlert :: IssueType -> Text -> NotificationAlerts
 sampleAlert = \case
-  APIChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
+  ApiChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
   RuntimeException ->
     const
       $ RuntimeErrorAlert
@@ -605,8 +605,9 @@ sampleAlert = \case
           , Errors.runtime = Just "nodejs"
           }
         NewRuntimeError
-  _ -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
-
+  QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
+  LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test"
+  LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test"
 
 sampleAlertByIssueTypeText :: Text -> Text -> NotificationAlerts
 sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
@@ -615,29 +616,6 @@ sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
   "error_spike" -> sampleRuntimeAlert ErrorSpike title
   _ -> sampleAlert (fromMaybe APIChange $ parseIssueType issueTypeText) title
 
-
-sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts
-sampleRuntimeAlert alertType title =
-  RuntimeErrorAlert
-    "test-123"
-    ( def
-        { Errors.when = UTCTime (fromGregorian 2025 1 1) 0
-        , Errors.errorType = "🧪 TEST: TypeError"
-        , Errors.rootErrorType = "TypeError"
-        , Errors.message = "Sample error message for testing"
-        , Errors.rootErrorMessage = "Sample error"
-        , Errors.stackTrace = "at sampleFunction (sample.js:42:15)"
-        , Errors.hash = "test-hash-xyz"
-        , Errors.technology = Just RequestDumps.JsExpress
-        , Errors.requestMethod = Just "GET"
-        , Errors.requestPath = Just "/api/test"
-        , Errors.spanId = Just "test-span-id"
-        , Errors.traceId = Just "test-trace-id"
-        , Errors.serviceName = Just ("api-" <> title)
-        , Errors.runtime = Just "nodejs"
-        }
-    )
-    alertType
 
 
 sampleReport :: Text -> NotificationAlerts

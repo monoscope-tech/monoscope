@@ -10,6 +10,7 @@ import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.LogPatterns (knownPatternFields)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
@@ -195,8 +196,7 @@ logQueryBox_ config = do
         div_ [class_ "flex items-center gap-2"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
-            let precomputed = [("log_pattern", "Log body"), ("summary_pattern", "Event summary"), ("url_path", "URL path"), ("exception", "Exception message")] :: [(Text, Text)]
-                isCustom = maybe False (\s -> s `notElem` map fst precomputed) config.patternSelected
+            let isCustom = maybe False (\s -> s `notElem` map fst knownPatternFields) config.patternSelected
             select_
               [ class_ "select select-sm max-w-[140px]"
               , id_ "pattern-target-select"
@@ -211,8 +211,8 @@ logQueryBox_ config = do
                     end|]
               ]
               do
-                forM_ precomputed \(v, label) ->
-                  option_ ([value_ v] <> [selected_ "" | config.patternSelected == Just v || (v == "log_pattern" && isNothing config.patternSelected)]) $ toHtml label
+                forM_ knownPatternFields \(v, label) ->
+                  option_ ([value_ v] <> [selected_ "" | config.patternSelected == Just v || (v == "summary" && isNothing config.patternSelected)]) $ toHtml label
                 option_ ([value_ "__custom__"] <> [selected_ "" | isCustom]) "Other field..."
             input_
               [ class_ $ "input input-sm max-w-[200px]" <> bool " hidden" "" isCustom
@@ -229,7 +229,7 @@ logQueryBox_ config = do
                     else
                       add .hidden to me
                       remove .hidden from #pattern-target-select
-                      set #pattern-target-select.value to 'log_pattern'
+                      set #pattern-target-select.value to 'summary'
                     end|]
               ]
             datalist_ [id_ "pattern-field-list"]
@@ -289,11 +289,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
     forM_ visTypes $ \(icon, label, vizType, emoji) -> do
       label_
         [ term "data-value" vizType
-        , term "data-reload" $ if vizTypeM == Just "patterns" || vizType == "patterns" then "patterns" else ""
         , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
-        , [__| on click
-               if @data-reload == "patterns" then window.setParams({viz_type:@data-value}, true) end
-          |]
         ]
         do
           input_
@@ -309,6 +305,15 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                             call updateVizTypeInUrl(my.value, @data-update-url === 'true')
                             set widgetJSON.type to my.value
                             send 'update-widget' to #{@data-container-id}
+                            set resultTable to document.getElementById('resultTable')
+                            if resultTable
+                              if my.value is 'patterns'
+                                set resultTable.mode to 'patterns'
+                              else
+                                set resultTable.mode to 'logs'
+                              end
+                              call resultTable.refetchLogs()
+                            end
                           end
                        |]
               ]

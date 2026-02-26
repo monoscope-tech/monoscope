@@ -57,6 +57,7 @@ extra-source-files:
     static/migrations/0029_replay_sessions.sql
     static/migrations/0030_replay_event_file_count.sql
     static/migrations/0031_slack_bot_token.sql
+    static/migrations/0032_log_patterns.sql
 
 source-repository head
   type: git
@@ -83,6 +84,7 @@ library
       Models.Apis.Integrations
       Models.Apis.Issues
       Models.Apis.Issues.Enhancement
+      Models.Apis.LogPatterns
       Models.Apis.Monitors
       Models.Apis.RequestDumps
       Models.Apis.Shapes
@@ -469,6 +471,7 @@ test-suite integration-tests
       Pages.Endpoints.ApiCatalogSpec
       Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
+      Pages.LogPatternsSpec
       Pages.MonitorsSpec
       Pages.Projects.IntegrationsSpec
       Pages.Projects.ManageMembersSpec
@@ -568,6 +571,7 @@ test-suite unit-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      BackgroundJobs.SpikeDetectionSpec
       Data.Effectful.NotifySpec
       Pkg.DrainSpec
       Pkg.Parser.ExprSpec
@@ -627,4 +631,52 @@ test-suite unit-tests
     , uuid
     , uuid-quasi
     , vector
+  default-language: GHC2021
+
+benchmark utils-bench
+  type: exitcode-stdio-1.0
+  main-is: Main.hs
+  other-modules:
+      UtilsBenchSpec
+  hs-source-dirs:
+      test/bench
+  default-extensions:
+      BlockArguments
+      DataKinds
+      MultilineStrings
+      DerivingVia
+      DeriveAnyClass
+      DerivingStrategies
+      DuplicateRecordFields
+      ExplicitNamespaces
+      ExtendedDefaultRules
+      LambdaCase
+      MultiWayIf
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedRecordDot
+      OverloadedStrings
+      PatternSynonyms
+      QuasiQuotes
+      RoleAnnotations
+      UndecidableInstances
+      TypeFamilies
+      RecordWildCards
+      TemplateHaskell
+      AllowAmbiguousTypes
+      TupleSections
+      ViewPatterns
+      DeriveGeneric
+      BangPatterns
+      GADTs
+      PackageImports
+  ghc-options: -fwrite-ide-info -threaded -fplugin AutoInstrument -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
+  build-depends:
+      hspec
+    , monoscope
+    , relude >=1.2.0.0
+    , time
   default-language: GHC2021

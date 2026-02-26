@@ -79,7 +79,7 @@ data FieldTypes
   | FTList
   | FTNull
   deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (NFData)
+  deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via WrappedEnumSC "FT" FieldTypes
 
 
@@ -90,10 +90,6 @@ instance AE.FromJSON FieldTypes where
 
 instance AE.ToJSON FieldTypes where
   toJSON = AE.String . fieldTypeToText
-
-
-instance Default FieldTypes where
-  def = FTUnknown
 
 
 instance HasField "toText" FieldTypes Text where
@@ -128,7 +124,7 @@ data FieldCategoryEnum
   | FCRequestBody
   | FCResponseBody
   deriving stock (Eq, Generic, Ord, Read, Show)
-  deriving anyclass (NFData)
+  deriving anyclass (Default, NFData)
   deriving (Display, FromField, ToField) via WrappedEnumSC "FC" FieldCategoryEnum
 
 
@@ -139,10 +135,6 @@ instance AE.FromJSON FieldCategoryEnum where
 
 instance AE.ToJSON FieldCategoryEnum where
   toJSON = AE.String . display
-
-
-instance Default FieldCategoryEnum where
-  def = FCQueryParam
 
 
 parseFieldCategoryEnum :: (Eq s, IsString s) => s -> Maybe FieldCategoryEnum

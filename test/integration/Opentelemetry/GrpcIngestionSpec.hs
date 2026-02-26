@@ -53,7 +53,7 @@ expectLogsJson = \case
   Log.LogsGetError (PageCtx _ err) -> fail $ "Got LogsGetError: " <> toString err
   Log.LogsGetErrorSimple err -> fail $ "Got LogsGetErrorSimple: " <> toString err
   Log.LogsQueryLibrary{} -> fail "Got LogsQueryLibrary instead of LogsGetJson"
-  Log.LogsPatternList{} -> fail "Got LogsPatternList instead of LogsGetJson"
+  Log.LogsPatternJson{} -> fail "Got LogsPatternJson instead of LogsGetJson"
 
 
 spec :: Spec

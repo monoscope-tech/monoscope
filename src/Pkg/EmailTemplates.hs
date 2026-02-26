@@ -656,7 +656,7 @@ sampleWeeklyReport eventsChart errorsChart =
       , runtimeErrorsPct = 42.8
       , apiChangesPct = 28.6
       , alertsPct = 28.6
-      , anomalies = V.fromList [(UUIDId UUID.nil, "TypeError: Cannot read property 'map'", True, "critical", Issues.RuntimeException), (UUIDId UUID.nil, "New endpoint detected: POST /api/orders", False, "medium", Issues.APIChange)]
+      , anomalies = V.fromList [(UUIDId UUID.nil, "TypeError: Cannot read property 'map'", True, "critical", Issues.RuntimeException), (UUIDId UUID.nil, "New endpoint detected: POST /api/orders", False, "medium", Issues.ApiChange)]
       , performance = V.fromList [("api.example.com", "GET", "/api/v1/users", 245, -12.5, 5000, 8.3), ("api.example.com", "POST", "/api/v1/orders", 890, 45.2, 1200, -3.1)]
       , slowQueries = V.fromList [("SELECT * FROM users WHERE email = $1", 3400, 1250 :: Int)]
       , freeTierExceeded = False

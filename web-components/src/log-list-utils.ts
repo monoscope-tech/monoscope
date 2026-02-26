@@ -1,6 +1,6 @@
 import { format, isValid } from 'date-fns';
 import clsx from 'clsx';
-import { html, TemplateResult } from 'lit';
+import { html, svg, TemplateResult } from 'lit';
 import { get } from 'lodash';
 import { ColIdxMap, EventLine } from './types/types';
 import { AnsiUp } from 'ansi-up';
@@ -275,3 +275,49 @@ export const WEAK_TEXT_STYLES = new Set(['text-weak', 'text-textWeak']);
 
 // Pre-compiled regex for performance
 export const RIGHT_PREFIX_REGEX = /^right-/;
+
+export const formatPatternCount = (n: number): string => {
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+  return String(n);
+};
+
+const PLACEHOLDER_RE = /(\{[a-z0-9_]+\}|<\*>)/g;
+const unescapeBasic = (s: string): string =>
+  s.includes('\\') ? s.replace(ESCAPED_QUOTE_REGEX, '"').replace(ESCAPED_BACKSLASH_REGEX, '\\') : s;
+
+export const highlightPlaceholders = (text: string): TemplateResult => {
+  const unescaped = unescapeBasic(text);
+  const parts = unescaped.split(PLACEHOLDER_RE);
+  if (parts.length === 1) return html`${unescaped}`;
+  return html`${parts.map((part, i) =>
+    i % 2 === 1
+      ? html`<span class="bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300 rounded px-0.5 font-mono text-xs">${part}</span>`
+      : part
+  )}`;
+};
+
+export const renderSparkline = (buckets: number[]): TemplateResult => {
+  if (!buckets?.length) return html`<span class="text-textWeak text-xs">-</span>`;
+  const peak = Math.max(...buckets, 1);
+  const n = buckets.length;
+  const gap = 1, barW = 5;
+  const barsW = n * (barW + gap), h = 32, barZone = 24, topPad = h - barZone;
+  const peakLabel = formatPatternCount(peak);
+  const labelW = peakLabel.length * 6 + 4;
+  const w = barsW + labelW + 4;
+  const peakY = topPad;
+  let peakIdx = 0;
+  const bars = buckets.map((v, i) => {
+    if (v >= buckets[peakIdx]) peakIdx = i;
+    const barH = Math.max(v > 0 ? 1 : 0, (v / peak) * barZone);
+    return svg`<rect x="${i * (barW + gap)}" y="${h - barH}" width="${barW}" height="${barH}" rx="0.5" fill="var(--color-fillBrand-strong)" opacity="0.45"/>`;
+  });
+  const lineX1 = peakIdx * (barW + gap) + barW;
+  return html`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:32px" preserveAspectRatio="xMinYMid meet">
+    ${bars}
+    <line x1="0" y1="${h}" x2="${barsW}" y2="${h}" stroke="var(--color-textWeak)" stroke-width="0.7"/>
+    <line x1="${lineX1}" y1="${peakY}" x2="${w - labelW - 1}" y2="${peakY}" stroke="var(--color-textWeak)" stroke-width="0.7" stroke-dasharray="3,2"/>
+    <text x="${w}" y="${peakY + 3.5}" text-anchor="end" fill="var(--color-textWeak)" font-size="9" font-family="system-ui">${peakLabel}</text>
+  </svg>`;
+};

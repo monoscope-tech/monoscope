@@ -466,7 +466,7 @@ notificationsTestPostH pid TestForm{..} = do
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
   project <- Projects.projectById pid >>= maybe (throwError err404) pure
-  let alert = bool (sampleAlertByIssueTypeText issueType project.title) (sampleReport project.title) (issueType == "report")
+  let alert = bool (sampleAlert (fromMaybe ApiChange $ parseIssueType issueType) project.title) (sampleReport project.title) (issueType == "report")
       getTeam tid = listToMaybe <$> getTeamsById pid (V.singleton tid)
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)

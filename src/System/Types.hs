@@ -4,6 +4,7 @@ module System.Types (
   ATBackgroundCtx,
   DB,
   runBackground,
+  withTimefusion,
   addRespHeaders,
   addTriggerEvent,
   addToast,
@@ -37,10 +38,10 @@ import Effectful
 import Effectful.Concurrent.Async (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
-import Effectful.Labeled (Labeled, runLabeled)
+import Effectful.Labeled (Labeled, labeled, runLabeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
-import Effectful.Reader.Static (Reader, runReader)
+import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
@@ -210,6 +211,11 @@ runBackground logger appCtx tp process =
     & runConcurrent
     & Ki.runStructuredConcurrency
     & Effectful.runEff
+
+
+-- | Route a WithConnection action through the timefusion pool when enabled, otherwise use the main pool.
+withTimefusion :: (DB es, Labeled "timefusion" WithConnection :> es) => Bool -> Eff (WithConnection ': es) a -> Eff es a
+withTimefusion useTimefusion q = if useTimefusion then labeled @"timefusion" @WithConnection q else subsume q
 
 
 type instance

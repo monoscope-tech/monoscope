@@ -53,11 +53,8 @@ data LoggingDestination
   | -- | Logs are sent to a file as JSON
     JSONFile
   deriving stock (Generic, Read, Show)
+  deriving anyclass (Default)
   deriving (Var) via (ReadShowVar LoggingDestination)
-
-
-instance Default LoggingDestination where
-  def = StdOut
 
 
 -- | Wrapper around 'Log.runLogT' with necessary metadata
