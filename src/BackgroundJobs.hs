@@ -704,9 +704,9 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
 notifyErrorSubscriptions pid errorHashes = do
   ctx <- ask @Config.AuthContext
-  dueErrors <-
-    ( PG.query
-        [sql|
+  dueErrors :: [ErrorSubscriptionDue] <-
+    PG.query
+      [sql|
         SELECT e.id, e.error_data, e.state, i.id, i.title,
                e.notify_every_minutes, e.last_notified_at,
                e.slack_thread_ts, e.discord_message_id
@@ -722,9 +722,7 @@ notifyErrorSubscriptions pid errorHashes = do
             OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
           )
       |]
-        (pid, errorHashes)
-        :: ATBackgroundCtx [ErrorSubscriptionDue]
-    )
+      (pid, errorHashes)
   unless (null dueErrors) do
     Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
     projectM <- Projects.projectById pid

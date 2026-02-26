@@ -555,9 +555,9 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, errorData} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/anomalies/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
-sendPagerdutyAlertToService integrationKey (LogPatternAlert issueUrl patternText _ logLevel serviceName _ _) projectTitle _ =
+sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName} projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 patternText) (projectTitle <> ": New Log Pattern - " <> T.take 80 patternText) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= patternText, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl
-sendPagerdutyAlertToService integrationKey (LogPatternRateChangeAlert issueUrl patternText _ logLevel serviceName direction currentRate baselineMean changePercent) projectTitle _ =
+sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent} projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-rate-" <> T.take 40 patternText) (projectTitle <> ": Log Pattern " <> T.toTitle direction <> " - " <> T.take 60 patternText <> " (" <> show (round changePercent :: Int) <> "%)") (if direction == "spike" then Notify.PDCritical else Notify.PDWarning) (AE.object ["pattern" AE..= patternText, "direction" AE..= direction, "current_rate" AE..= currentRate, "baseline_mean" AE..= baselineMean, "service" AE..= serviceName]) issueUrl
 sendPagerdutyAlertToService _ ReportAlert{} _ _ = pass
 sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
@@ -593,26 +593,9 @@ sampleAlert = \case
 
 
 sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts
-sampleRuntimeAlert alertType _title =
-  RuntimeErrorAlert
-    "test-123"
-    def
-      { Errors.when = UTCTime (fromGregorian 2025 1 1) 0
-      , Errors.errorType = "🧪 TEST: TypeError"
-      , Errors.rootErrorType = "TypeError"
-      , Errors.message = "Sample error message for testing"
-      , Errors.rootErrorMessage = "Sample error"
-      , Errors.stackTrace = "at sampleFunction (sample.js:42:15)"
-      , Errors.hash = "test-hash-xyz"
-      , Errors.technology = Just RequestDumps.JsExpress
-      , Errors.requestMethod = Just "GET"
-      , Errors.requestPath = Just "/api/test"
-      , Errors.spanId = Just "test-span-id"
-      , Errors.traceId = Just "test-trace-id"
-      , Errors.serviceName = Just "api"
-      , Errors.runtime = Just "nodejs"
-      }
-    alertType
+sampleRuntimeAlert alertType title =
+  let RuntimeErrorAlert{..} = sampleAlert RuntimeException title
+   in RuntimeErrorAlert{runtimeAlertType = alertType, ..}
 
 
 sampleAlertByIssueTypeText :: Text -> Text -> NotificationAlerts
