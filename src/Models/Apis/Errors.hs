@@ -136,56 +136,15 @@ data Error = Error
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Error
 
 
--- error aggreted with number of occurrences and affected users
+-- error aggregated with number of occurrences and affected users
 data ErrorL = ErrorL
-  { id :: ErrorId
-  , projectId :: Projects.ProjectId
-  , createdAt :: ZonedTime
-  , updatedAt :: ZonedTime
-  , errorType :: Text
-  , message :: Text
-  , stacktrace :: Text
-  , hash :: Text
-  , environment :: Maybe Text
-  , service :: Maybe Text
-  , runtime :: Maybe Text
-  , errorData :: ATError
-  , firstTraceId :: Maybe Text
-  , recentTraceId :: Maybe Text
-  , firstEventId :: Maybe ErrorEventId
-  , lastEventId :: Maybe ErrorEventId
-  , state :: ErrorState
-  , assigneeId :: Maybe Projects.UserId
-  , assignedAt :: Maybe ZonedTime
-  , resolvedAt :: Maybe ZonedTime
-  , regressedAt :: Maybe ZonedTime
-  , subscribed :: Bool
-  , notifyEveryMinutes :: Int
-  , lastNotifiedAt :: Maybe ZonedTime
-  , occurrences1m :: Int
-  , occurrences5m :: Int
-  , occurrences1h :: Int
-  , occurrences24h :: Int
-  , quietMinutes :: Int
-  , resolutionThresholdMinutes :: Int
-  , baselineState :: BaselineState
-  , baselineSamples :: Int
-  , baselineErrorRateMean :: Maybe Double
-  , baselineErrorRateStddev :: Maybe Double
-  , baselineUpdatedAt :: Maybe ZonedTime
-  , isIgnored :: Bool
-  , ignoredUntil :: Maybe ZonedTime
-  , slackThreadTs :: Maybe Text
-  , discordMessageId :: Maybe Text
+  { base :: Error
   , occurrences :: Int
   , affectedUsers :: Int
   , lastOccurredAt :: Maybe ZonedTime
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorL
 
 
 data ATError = ATError
@@ -302,7 +261,7 @@ getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, pid, hash)
 
 -- | Get active (non-resolved) errors
 getActiveErrors :: DB es => Projects.ProjectId -> Eff es [Error]
-getActiveErrors pid = PG.query (_select @Error <> " WHERE project_id = ? AND state != 'resolved' ORDER BY updated_at DESC") (Only pid)
+getActiveErrors pid = PG.query (_select @Error <> " WHERE project_id = ? AND state != ? ORDER BY updated_at DESC") (pid, ESResolved)
 
 
 -- | Update occurrence counts (called periodically to decay counts)
@@ -518,7 +477,7 @@ data ErrorWithCurrentRate = ErrorWithCurrentRate
 
 getErrorsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [ErrorWithCurrentRate]
 getErrorsWithCurrentRates pid =
-  PG.query q (Only pid)
+  PG.query q (pid, pid)
   where
     q =
       [sql|
@@ -536,7 +495,7 @@ getErrorsWithCurrentRates pid =
         LEFT JOIN (
           SELECT error_id, COUNT(*) AS current_count
           FROM apis.error_events
-          WHERE occurred_at >= date_trunc('hour', NOW())
+          WHERE project_id = ? AND occurred_at >= date_trunc('hour', NOW())
           GROUP BY error_id
         ) counts ON counts.error_id = e.id
         WHERE e.project_id = ?
@@ -926,16 +885,8 @@ parsePhpFrame line
        in Just $ fromMaybe baseName $ T.stripSuffix ".php" baseName
 
     cleanPhpFunction func =
-      -- Remove {closure} markers
-      T.replace "{closure}" "closure"
-        $
-        -- Simplify class::method or class->method
-        let parts = T.splitOn "->" func
-         in if length parts > 1
-              then fromMaybe func $ viaNonEmpty last parts
-              else
-                let parts' = T.splitOn "::" func
-                 in if length parts' > 1 then fromMaybe func $ viaNonEmpty last parts' else func
+      T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::"
+      where splitLast sep = case T.splitOn sep func of (_ : t : ts) -> Just (last (t :| ts)); _ -> Nothing
 
     isPhpInApp path =
       not

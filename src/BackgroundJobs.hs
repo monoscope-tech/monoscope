@@ -363,7 +363,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
-    QueryMonitorsCheck -> pass -- TODO: re-enable checkTriggeredQueryMonitors once query monitor evaluation is implemented
+    QueryMonitorsCheck -> Log.logInfo "Skipping QueryMonitorsCheck - not yet implemented" () -- TODO: re-enable checkTriggeredQueryMonitors once query monitor evaluation is implemented
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid

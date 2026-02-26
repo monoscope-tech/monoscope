@@ -209,21 +209,22 @@ anomalyDetailCore pid firstM fetchIssue = do
       let canResolve =
             userPermission
               == Just ProjectMembers.PAdmin
-              || maybe False (\err -> err.assigneeId == Just sess.user.id) errorM
+              || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
       let bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
                   when (issue.issueType == Issues.RuntimeException) do
-                    whenJust errorM \err ->
-                      errorResolveAction pid err.id err.state canResolve
-                    whenJust errorM \err ->
-                      errorSubscriptionAction pid err
+                    whenJust errorM \errL ->
+                      errorResolveAction pid errL.base.id errL.base.state canResolve
+                    whenJust errorM \errL ->
+                      errorSubscriptionAction pid errL.base
               }
       (trItem, spanRecs) <- case errorM of
-        Just err -> do
-          let targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
+        Just errL -> do
+          let err = errL.base
+              targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
               targetTme = maybe (zonedTimeToUTC err.updatedAt) (const $ zonedTimeToUTC err.createdAt) firstM
           case targetTIdM of
             Just x -> do
@@ -305,8 +306,9 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
               $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
               $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
               $ toHtml exceptionData.stackTrace
-            whenJust errM \err -> do
-              let detailItem :: (Text, Text, Text) -> HtmlT Identity ()
+            whenJust errM \errL -> do
+              let err = errL.base
+                  detailItem :: (Text, Text, Text) -> HtmlT Identity ()
                   detailItem (icon, lbl, value) = div_ [class_ "flex items-center gap-2"] do
                     faSprite_ icon "regular" "w-3 h-3"
                     div_ [] do
@@ -415,7 +417,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
 
         div_ [id_ "log-content", class_ "hidden err-tab-content"] do
           div_ [class_ "flex flex-col gap-4"] do
-            virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (\x -> x.recentTraceId)) <> "\""))) Nothing
+            virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.base.recentTraceId)) <> "\""))) Nothing
 
           div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
             let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
@@ -703,8 +705,9 @@ buildSystemPromptForIssue pid issue now = do
       fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
   pure fullSystemPrompt
   where
-    fetchTrace err =
+    fetchTrace errL =
       fromMaybe (Nothing, V.empty) <$> runMaybeT do
+        let err = errL.base
         tId <- hoistMaybe err.recentTraceId
         trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
         spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
@@ -719,21 +722,22 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Service**: " <> fromMaybe "unknown-service" iss.service
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
-          , errM >>= \err ->
-              Just
-                $ unlines
-                  [ ""
-                  , "## Error Details"
-                  , "- **Error Type**: " <> err.errorType
-                  , "- **Message**: " <> err.message
-                  , "- **Stack Trace**:"
-                  , "```"
-                  , err.errorData.stackTrace
-                  , "```"
-                  , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-                  , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-                  , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-                  ]
+          , errM >>= \errL ->
+              let err = errL.base
+               in Just
+                    $ unlines
+                      [ ""
+                      , "## Error Details"
+                      , "- **Error Type**: " <> err.errorType
+                      , "- **Message**: " <> err.message
+                      , "- **Stack Trace**:"
+                      , "```"
+                      , err.errorData.stackTrace
+                      , "```"
+                      , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+                      , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+                      , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
+                      ]
           , trDataM >>= \tr ->
               Just
                 $ unlines

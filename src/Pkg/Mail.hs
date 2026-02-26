@@ -278,7 +278,7 @@ slackErrorAlert alertType err project channelId projectUrl =
     ]
   where
     targetUrl = projectUrl <> "/anomalies/"
-    title = "<" <> targetUrl <> "|" <> runtimeAlertPrefix alertType <> " " <> err.errorType <> ">"
+    title = "<" <> targetUrl <> "|" <> fst (runtimeAlertMessages alertType) <> " " <> err.errorType <> ">"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath
     enp = "`" <> method <> " " <> path <> "`"
@@ -438,7 +438,7 @@ discordErrorAlert alertType err project projectUrl =
       ],
       "url": #{url}
     }],
-  "content": #{runtimeDiscordContent alertType}
+  "content": #{snd (runtimeAlertMessages alertType)}
 }|]
   where
     url = projectUrl <> "/anomalies/by_hash/" <> err.hash
@@ -610,20 +610,12 @@ sampleReport :: Text -> NotificationAlerts
 sampleReport title = ReportAlert ("🧪 TEST: " <> title) "2025-01-01" "2025-01-02" 42 1250 (V.singleton ("api", 42, 1250)) "https://example.com" "https://example.com/chart.png" "https://example.com/errors.png"
 
 
-runtimeAlertPrefix :: RuntimeAlertType -> Text
-runtimeAlertPrefix = \case
-  NewRuntimeError -> ":red_circle:"
-  EscalatingErrors -> ":warning: Escalating Error"
-  RegressedErrors -> ":repeat: Regressed Error"
-  ErrorSpike -> ":chart_with_upwards_trend: Error Spike"
-
-
-runtimeDiscordContent :: RuntimeAlertType -> Text
-runtimeDiscordContent = \case
-  NewRuntimeError -> "**🔴 New Runtime Error**"
-  EscalatingErrors -> "**🧵 Escalating Error Alert**"
-  RegressedErrors -> "**🧵 Regressed Error Alert**"
-  ErrorSpike -> "**🧵 Error Spike Alert**"
+runtimeAlertMessages :: RuntimeAlertType -> (Text, Text)
+runtimeAlertMessages = \case
+  NewRuntimeError -> (":red_circle:", "**🔴 New Runtime Error**")
+  EscalatingErrors -> (":warning: Escalating Error", "**🧵 Escalating Error Alert**")
+  RegressedErrors -> (":repeat: Regressed Error", "**🧵 Regressed Error Alert**")
+  ErrorSpike -> (":chart_with_upwards_trend: Error Spike", "**🧵 Error Spike Alert**")
 
 
 addConvertKitUser :: HTTP :> es => Text -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es ()
