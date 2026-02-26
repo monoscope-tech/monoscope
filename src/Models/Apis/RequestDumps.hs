@@ -624,13 +624,8 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
               agg
               [(replaceAllFormats val, (cnt, lvl, svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
           drainTree =
-            HashMap.foldlWithKey'
-              ( \tree pat _ ->
-                  let tokens = Drain.tokenizeForDrain pat
-                   in if V.null tokens then tree else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens pat Nothing now
-              )
-              Drain.emptyDrainTree
-              grouped
+            let keys = V.fromList $ HashMap.keys grouped
+             in Drain.buildDrainTree Drain.tokenizeForDrain Relude.id (const Nothing) Drain.emptyDrainTree keys now
           merged =
             HashMap.fromListWith
               agg

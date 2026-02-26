@@ -2,7 +2,6 @@ module Pkg.DrainSpec (spec) where
 
 import Test.Hspec
 import Data.Vector qualified as V
-import Utils qualified
 import Data.Time
 import Pkg.Drain
 import Relude
@@ -15,17 +14,8 @@ testTime = UTCTime (fromGregorian 2024 1 1) 0
 testTimeOffset :: Int -> UTCTime
 testTimeOffset seconds = addUTCTime (fromIntegral seconds) testTime
 
-processNewLog :: Text -> Text -> UTCTime -> DrainTree -> DrainTree
-processNewLog logId logContent now tree = do
-  let tokensVec = V.fromList $ words $ Utils.replaceAllFormats logContent
-      tokenCount = V.length tokensVec
-      firstToken = if V.null tokensVec then "" else V.head tokensVec
-   in if tokenCount == 0
-        then tree
-        else updateTreeWithLog tree tokenCount firstToken tokensVec logId (Just logContent) now
 processBatch :: V.Vector (Text, Text) -> UTCTime -> DrainTree -> DrainTree
-processBatch logBatch now initialTree = do
-  V.foldl (\tree (logId, logContent) -> processNewLog logId logContent now tree) initialTree logBatch
+processBatch logBatch now initial = buildDrainTree (generateDrainTokens . snd) fst (Just . snd) initial logBatch now
 
 spec :: Spec
 spec = describe "DRAIN updateTreeWithLog" $ do

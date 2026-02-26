@@ -560,13 +560,13 @@ logsPatternExtraction scheduledTime pid = do
                     let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) (filteredIds V.!? 0 >>= (`HM.lookup` eventMeta))
                         patternHash = toXXHash dp.templateStr
                      in Just (filteredIds, patternHash, LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}, (pid, sourceField, patternHash, scheduledTime, eventCount))
+      let (idHashPairs, ups, hss) = unzip3 [(( filteredIds, patternHash), up, hs) | (filteredIds, patternHash, up, hs) <- prepared]
       -- Tag otel events with pattern hashes
-      forM_ prepared \(filteredIds, patternHash, _, _) -> do
+      forM_ idHashPairs \(filteredIds, patternHash) -> do
         let hashTag = "pat:" <> patternHash
         void $ withTimefusion tfEnabled $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
-      -- Batch upsert patterns and hourly stats
-      void $ LogPatterns.upsertLogPatternBatch [up | (_, _, up, _) <- prepared]
-      void $ LogPatterns.upsertHourlyStatBatch [hs | (_, _, _, hs) <- prepared]
+      void $ LogPatterns.upsertLogPatternBatch ups
+      void $ LogPatterns.upsertHourlyStatBatch hss
 
     extractFieldPatterns tfEnabled startTime = do
       urlPaths :: [(Maybe Text, Maybe Text, Int64)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|] (pid, startTime, scheduledTime)
@@ -594,22 +594,13 @@ data DrainInput = SeedPattern Text | NewEvent Text Text
 
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-processBatch isSummary batch now inTree =
-  V.foldl'
-    ( flip \case
-        SeedPattern c -> processNewLog isSummary "" Nothing c now
-        NewEvent lid c -> processNewLog isSummary lid (Just c) c now
-    )
-    inTree
-    batch
-
-
-processNewLog :: Bool -> Text -> Maybe Text -> Text -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-processNewLog isSummary logId sampleContent content now tree =
-  let tokens = (if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens) content
-   in if V.null tokens
-        then tree
-        else Drain.updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens logId sampleContent now
+processBatch isSummary batch now initial = Drain.buildDrainTree tokenize logId sampleContent initial batch now
+  where
+    tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
+    tokenize = tok . drainContent
+    logId = \case SeedPattern _ -> ""; NewEvent lid _ -> lid
+    sampleContent = \case SeedPattern _ -> Nothing; NewEvent _ c -> Just c
+    drainContent = \case SeedPattern c -> c; NewEvent _ c -> c
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions

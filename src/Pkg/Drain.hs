@@ -4,6 +4,7 @@ module Pkg.Drain (
   defaultDrainConfig,
   emptyDrainTree,
   updateTreeWithLog,
+  buildDrainTree,
   generateDrainTokens,
   generateSummaryDrainTokens,
   tokenizeForDrain,
@@ -293,3 +294,15 @@ generateSummaryDrainTokens content = V.fromList $ map normalizeMarkupToken $ wor
       (prefix, rest)
         | Just val <- T.stripPrefix "⇒" rest -> prefix <> "⇒" <> replaceAllFormats val
         | otherwise -> replaceAllFormats tok
+
+
+-- | Fold items into a DrainTree using a custom tokenizer.
+buildDrainTree :: (a -> V.Vector T.Text) -> (a -> Text) -> (a -> Maybe Text) -> DrainTree -> V.Vector a -> UTCTime -> DrainTree
+buildDrainTree tokenize logId sampleContent initial items now =
+  V.foldl'
+    ( \tree item ->
+        let tokens = tokenize item
+         in if V.null tokens then tree else updateTreeWithLog tree (V.length tokens) (V.head tokens) tokens (logId item) (sampleContent item) now
+    )
+    initial
+    items

@@ -52,7 +52,6 @@ module Models.Apis.Issues (
   issueIdText,
   parseIssueType,
   issueTypeToText,
-  serviceLabel,
   showRate,
   showPct,
 
@@ -145,10 +144,6 @@ issueTypeToText = display
 
 parseIssueType :: Text -> Maybe IssueType
 parseIssueType = rightToMaybe . parseUrlPiece
-
-
-serviceLabel :: Maybe Text -> Text
-serviceLabel = fromMaybe "unknown-service"
 
 
 showRate :: Double -> Text
