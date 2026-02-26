@@ -45,7 +45,6 @@ extra-source-files:
 ghc-options:
   - -fwrite-ide-info
   - -threaded
-  - -fplugin AutoInstrument
   - -Weverything
   # - -fdefer-type-errors
   - -Werror # Treat warnings as errors
@@ -118,6 +117,8 @@ default-extensions:
 description: Please see the README on GitHub at <https://github.com/githubuser/monoscope#readme>
 
 library:
+  ghc-options:
+    - -fplugin AutoInstrument
   source-dirs:
     - src
   generated-exposed-modules:
@@ -404,6 +405,7 @@ benchmarks:
       - -with-rtsopts=-N
     dependencies:
       - monoscope
+      - hs-opentelemetry-instrumentation-auto
       - hspec
       - relude >= 1.2.0.0
       - time
