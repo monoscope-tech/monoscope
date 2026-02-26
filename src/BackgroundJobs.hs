@@ -732,26 +732,35 @@ notifyErrorSubscriptions pid errorHashes = do
             Errors.ESEscalating -> EscalatingErrors
             Errors.ESRegressed -> RegressedErrors
             _ -> NewRuntimeError
-          runtimeAlert ed issueId st = RuntimeErrorAlert{issueId = Issues.issueIdText issueId, errorData = ed, runtimeAlertType = alertTypeForState st}
+          runtimeAlert ed issueId title st = RuntimeErrorAlert{issueId = Issues.issueIdText issueId, issueTitle = title, errorData = ed, runtimeAlertType = alertTypeForState st}
       forM_ dueErrors \sub -> do
-        forM_ project.notificationsChannel \case
-          Projects.NSlack -> void $ sendSlackAlertWith sub.slackThreadTs (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing
-          Projects.NDiscord -> void $ sendDiscordAlertWith sub.discordMessageId (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing
-          Projects.NPhone -> sendWhatsAppAlert (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title project.whatsappNumbers
-          Projects.NEmail -> do
-            let e = sub.errorData
-                errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-                (subj, html) = case alertTypeForState sub.errorState of
-                  EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [e]
-                  RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [e]
-                  _ -> ET.runtimeErrorsEmail project.title errorsUrl [e]
-            forM_ users \u ->
-              sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-          Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
+        let alert = runtimeAlert sub.errorData sub.issueId sub.issueTitle sub.errorState
+        (finalSlackTs, finalDiscordMsgId) <-
+          foldlM
+            ( \(slackTs, discordMsgId) -> \case
+                Projects.NSlack -> do
+                  tsM <- sendSlackAlertWith slackTs alert pid project.title Nothing
+                  pure (slackTs <|> tsM, discordMsgId)
+                Projects.NDiscord -> do
+                  msgIdM <- sendDiscordAlertWith discordMsgId alert pid project.title Nothing
+                  pure (slackTs, discordMsgId <|> msgIdM)
+                Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+                Projects.NEmail -> (slackTs, discordMsgId) <$ do
+                  let e = sub.errorData
+                      errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
+                      (subj, html) = case alertTypeForState sub.errorState of
+                        EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [e]
+                        RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [e]
+                        _ -> ET.runtimeErrorsEmail project.title errorsUrl [e]
+                  forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                Projects.NPagerduty -> pure (slackTs, discordMsgId)
+            )
+            (sub.slackThreadTs, sub.discordMessageId)
+            project.notificationsChannel
+        Relude.when (finalSlackTs /= sub.slackThreadTs || finalDiscordMsgId /= sub.discordMessageId)
+          $ void $ Errors.updateErrorThreadIds sub.errorId finalSlackTs finalDiscordMsgId
         void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ? |] (Only sub.errorId)
 
-
--- Log.logInfo "Completed 1-minute error processing" ()
 
 -- | Process and insert errors for a specific project
 processProjectErrors :: Projects.ProjectId -> V.Vector Errors.ATError -> ATBackgroundCtx ()
@@ -1824,9 +1833,7 @@ calculateErrorBaselines pid = do
   forM_ errors \err -> do
     -- Get hourly stats from error_events over last 7 days (168 hours)
     statsM <- Errors.getErrorEventStats err.id 168
-    case statsM of
-      Nothing -> pass
-      Just stats -> do
+    whenJust statsM \stats -> do
         let newSamples = stats.totalHours
             newMean = stats.hourlyMedian
             newStddev = stats.hourlyMADScaled
@@ -1866,7 +1873,7 @@ detectErrorSpikes pid = do
           whenJust projectM \project -> Relude.when project.errorAlerts do
             users <- Projects.usersByProjectId pid
             let issueId = UUID.toText issue.id.unUUIDId
-                spikeAlert = RuntimeErrorAlert{issueId = issueId, errorData = errRate.errorData, runtimeAlertType = ErrorSpike}
+                spikeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = errRate.errorData, runtimeAlertType = ErrorSpike}
                 errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
                 (subj, html) = ET.errorSpikesEmail project.title errorsUrl [errRate.errorData]
             (finalSlackTs, finalDiscordMsgId) <-
@@ -1915,7 +1922,7 @@ processNewError pid errorHash = do
         whenJust projectM \project -> Relude.when project.errorAlerts do
           users <- Projects.usersByProjectId pid
           let issueId = UUID.toText issue.id.unUUIDId
-              runtimeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = NewRuntimeError}
+              runtimeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = err.errorData, runtimeAlertType = NewRuntimeError}
               errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
               (subj, html) = ET.runtimeErrorsEmail project.title errorsUrl [err.errorData]
           (finalSlackTs, finalDiscordMsgId) <-

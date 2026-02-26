@@ -539,8 +539,7 @@ assignErrorPostH pid errUuid form = do
             void $ liftIO $ withResource appCtx.pool \conn ->
               createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
           addSuccessToast "Assignee updated" Nothing
-          errM' <- Errors.getErrorById err.id
-          render (errM' <&> (.id)) (errM' >>= (.assigneeId))
+          render (Just err.id) assigneeIdM
 
 
 resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))

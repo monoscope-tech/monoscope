@@ -23,11 +23,8 @@ module Models.Apis.Errors (
   updateErrorThreadIds,
   setErrorAssignee,
   -- Error Events (for baseline/spike detection)
-  HourlyBucket (..),
   ErrorEventStats (..),
   ErrorWithCurrentRate (..),
-  getHourlyErrorCounts,
-  getCurrentHourErrorCount,
   getErrorEventStats,
   getErrorsWithCurrentRates,
   -- Error Fingerprinting (Sentry-style)
@@ -376,46 +373,6 @@ updateBaseline eid bState rateMean rateStddev samples =
 
 
 -- | Hourly bucket for error event aggregation
-data HourlyBucket = HourlyBucket
-  { hourStart :: UTCTime
-  , eventCount :: Int
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
-
-
--- | Get hourly error counts for a specific error over a time range
--- Returns counts bucketed by hour for baseline calculation
-getHourlyErrorCounts :: DB es => ErrorId -> Int -> Eff es [HourlyBucket]
-getHourlyErrorCounts eid hoursBack =
-  PG.query q (eid, hoursBack)
-  where
-    q =
-      [sql|
-        SELECT
-          date_trunc('hour', occurred_at) AS hour_start,
-          COUNT(*)::INT AS event_count
-        FROM apis.error_events
-        WHERE error_id = ?
-          AND occurred_at >= NOW() - INTERVAL '1 hour' * ?
-        GROUP BY date_trunc('hour', occurred_at)
-        ORDER BY hour_start
-      |]
-
-
--- | Get current hour error count for a specific error
-getCurrentHourErrorCount :: DB es => ErrorId -> Eff es Int
-getCurrentHourErrorCount eid = maybe 0 fromOnly . listToMaybe <$> PG.query q (Only eid)
-  where
-    q =
-      [sql|
-        SELECT COUNT(*)::INT
-        FROM apis.error_events
-        WHERE error_id = ?
-          AND occurred_at >= date_trunc('hour', NOW())
-      |]
-
-
 -- | Get error event stats for baseline calculation
 -- Returns median and MAD (Median Absolute Deviation) of hourly counts over the lookback period
 -- Using median + MAD instead of mean + stddev for robustness against outliers/spikes
@@ -614,15 +571,33 @@ parseStackTrace mSdk stackText =
 parseStackFrame :: Text -> Text -> Maybe StackFrame
 parseStackFrame runtime line =
   let trimmed = T.strip line
-   in case runtime of
-        "go" -> parseGoFrame trimmed
-        "nodejs" -> parseJsFrame trimmed
-        "webjs" -> parseJsFrame trimmed
-        "python" -> parsePythonFrame trimmed
-        "java" -> parseJavaFrame trimmed
-        "php" -> parsePhpFrame trimmed
-        "dotnet" -> parseDotNetFrame trimmed
-        _ -> parseGenericFrame trimmed
+   in if
+        | runtime == "go" -> parseGoFrame trimmed
+        | runtime `elem` ["nodejs", "webjs"] -> parseJsFrame trimmed
+        | runtime == "python" -> parsePythonFrame trimmed
+        | runtime == "java" -> parseJavaFrame trimmed
+        | runtime == "php" -> parsePhpFrame trimmed
+        | runtime == "dotnet" -> parseDotNetFrame trimmed
+        | otherwise -> parseGenericFrame trimmed
+
+
+-- | Split a dot-qualified name into (module, function)
+splitDotted :: Text -> (Text, Text)
+splitDotted q = case (viaNonEmpty init parts, viaNonEmpty last parts) of
+  (Just ps, Just l) | length parts > 1 -> (T.intercalate "." ps, l)
+  _ -> ("", q)
+  where
+    parts = T.splitOn "." q
+
+
+-- | True when none of the needles appear as infixes in the haystack
+noneInfix :: [Text] -> Text -> Bool
+noneInfix needles haystack = not $ any (`T.isInfixOf` haystack) needles
+
+
+-- | True when none of the needles appear as prefixes of the text
+nonePrefix :: [Text] -> Text -> Bool
+nonePrefix needles txt = not $ any (`T.isPrefixOf` txt) needles
 
 
 -- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
@@ -676,17 +651,8 @@ parseGoFrame line
       let parts = T.splitOn "." func
        in fromMaybe func $ viaNonEmpty last parts
 
-    isGoInApp path =
-      not
-        $ any
-          (`T.isInfixOf` path)
-          ["go/src/", "pkg/mod/", "vendor/", "/runtime/", "/net/", "/syscall/"]
-
-    isGoFuncInApp func =
-      not
-        $ any
-          (`T.isPrefixOf` func)
-          ["runtime.", "syscall.", "net.", "net/http.", "reflect."]
+    isGoInApp = noneInfix ["go/src/", "pkg/mod/", "vendor/", "/runtime/", "/net/", "/syscall/"]
+    isGoFuncInApp = nonePrefix ["runtime.", "syscall.", "net.", "net/http.", "reflect."]
 
 
 -- | Parse JavaScript stack frame
@@ -710,7 +676,7 @@ parseJsFrame line
   where
     parseJsWithParens txt =
       let (funcPart, rest) = T.breakOn " (" txt
-          locationPart = T.dropAround (\c -> c == '(' || c == ')') rest
+          locationPart = T.dropAround (`elem` ("()" :: String)) rest
           (filePath, lineCol) = parseJsLocation locationPart
           (lineNum, colNum) = parseLineCol lineCol
        in Just
@@ -768,11 +734,7 @@ parseJsFrame line
       let parts = T.splitOn "." func
        in fromMaybe func $ viaNonEmpty last parts
 
-    isJsInApp path =
-      not
-        $ any
-          (`T.isInfixOf` path)
-          ["node_modules/", "<anonymous>", "internal/", "node:"]
+    isJsInApp = noneInfix ["node_modules/", "<anonymous>", "internal/", "node:"]
 
 
 -- | Parse Python stack frame
@@ -813,11 +775,7 @@ parsePythonFrame line
         $ T.replace "<listcomp>" "listcomp"
         $ T.replace "<dictcomp>" "dictcomp" func
 
-    isPythonInApp path =
-      not
-        $ any
-          (`T.isInfixOf` path)
-          ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
+    isPythonInApp = noneInfix ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
 
 
 -- | Parse Java stack frame
@@ -827,9 +785,9 @@ parseJavaFrame line
   | "at " `T.isPrefixOf` T.strip line =
       let content = T.drop 3 $ T.strip line
           (qualifiedMethod, rest) = T.breakOn "(" content
-          locationPart = T.dropAround (\c -> c == '(' || c == ')') rest
+          locationPart = T.dropAround (`elem` ("()" :: String)) rest
           (fileName, lineNum) = parseJavaLocation locationPart
-          (moduleName, funcName) = splitJavaQualified qualifiedMethod
+          (moduleName, funcName) = splitDotted qualifiedMethod
        in Just
             StackFrame
               { filePath = fileName
@@ -846,23 +804,11 @@ parseJavaFrame line
       let (file, lineStr) = T.breakOn ":" loc
        in (file, readMaybe $ toString $ T.drop 1 lineStr)
 
-    splitJavaQualified qualified =
-      let parts = T.splitOn "." qualified
-       in if length parts > 1
-            then case (viaNonEmpty init parts, viaNonEmpty last parts) of
-              (Just ps, Just l) -> (T.intercalate "." ps, l)
-              _ -> ("", qualified)
-            else ("", qualified)
-
     cleanJavaFunction func =
       -- Remove generics: method<T> -> method
       T.takeWhile (/= '<') func
 
-    isJavaInApp qualified =
-      not
-        $ any
-          (`T.isPrefixOf` qualified)
-          ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
+    isJavaInApp = nonePrefix ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
 
 
 -- | Parse PHP stack frame
@@ -900,11 +846,7 @@ parsePhpFrame line
       where
         splitLast sep = case T.splitOn sep func of (_ : t : ts) -> Just (last (t :| ts)); _ -> Nothing
 
-    isPhpInApp path =
-      not
-        $ any
-          (`T.isInfixOf` path)
-          ["/vendor/", "/phar://"]
+    isPhpInApp = noneInfix ["/vendor/", "/phar://"]
 
 
 -- | Parse .NET stack frame
@@ -915,7 +857,7 @@ parseDotNetFrame line
       let content = T.drop 3 $ T.strip line
           (methodPart, locationPart) = T.breakOn " in " content
           qualifiedMethod = T.takeWhile (/= '(') methodPart
-          (moduleName, funcName) = splitDotNetQualified qualifiedMethod
+          (moduleName, funcName) = splitDotted qualifiedMethod
           (filePath, lineNum) = parseDotNetLocation $ T.drop 4 locationPart
        in Just
             StackFrame
@@ -929,14 +871,6 @@ parseDotNetFrame line
               }
   | otherwise = Nothing
   where
-    splitDotNetQualified qualified =
-      let parts = T.splitOn "." qualified
-       in if length parts > 1
-            then case (viaNonEmpty init parts, viaNonEmpty last parts) of
-              (Just ps, Just l) -> (T.intercalate "." ps, l)
-              _ -> ("", qualified)
-            else ("", qualified)
-
     parseDotNetLocation loc =
       let (path, lineStr) = T.breakOn ":line " loc
        in (path, readMaybe $ toString $ T.drop 6 lineStr)
@@ -945,11 +879,7 @@ parseDotNetFrame line
       -- Remove generic arity: Method`1 -> Method
       T.takeWhile (/= '`') func
 
-    isDotNetInApp qualified =
-      not
-        $ any
-          (`T.isPrefixOf` qualified)
-          ["System.", "Microsoft.", "Newtonsoft."]
+    isDotNetInApp = nonePrefix ["System.", "Microsoft.", "Newtonsoft."]
 
 
 -- | Generic stack frame parser for unknown formats
@@ -1094,7 +1024,7 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
     -- Build fingerprint components based on priority
     fingerprintComponents =
       if
-        | hasUsableStackTrace normalizedStack -> [projectIdText, normalizedType, normalizedStack]
+        | not (T.null normalizedStack) -> [projectIdText, normalizedType, normalizedStack]
         | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedType, normalizedMsg]
         | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedMsg]
 
@@ -1103,4 +1033,3 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
    in
     toXXHash combined
   where
-    hasUsableStackTrace = not . T.null . T.strip

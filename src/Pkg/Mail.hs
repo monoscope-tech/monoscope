@@ -49,7 +49,7 @@ sendSlackMessage pid message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
-  | RuntimeErrorAlert {issueId :: Text, errorData :: Errors.ATError, runtimeAlertType :: RuntimeAlertType}
+  | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: Errors.ATError, runtimeAlertType :: RuntimeAlertType}
   | ShapeAlert
   | ReportAlert
       { reportType :: Text
@@ -112,7 +112,7 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl
+            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData issueTitle pTitle projectUrl
             EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ AE.object ["text" AE..= ("🤖 *Log Alert triggered for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
@@ -141,7 +141,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
     (Just cid, Just bt) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl
+            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData issueTitle pTitle cid projectUrl
             EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
@@ -161,7 +161,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
     RuntimeErrorAlert{..} -> do
       let template = appCtx.config.whatsappErrorTemplate
           url = pid.toText <> "/anomalies/by_hash/" <> errorData.hash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> errorData.errorType <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
       pass
     EndpointAlert{..} -> do
@@ -239,8 +239,8 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* Errors-" <> toText (show errCount) <> ", Total-" <> toText (show evCount))]) breakDown
 
 
-slackErrorAlert :: RuntimeAlertType -> Errors.ATError -> Text -> Text -> Text -> AE.Value
-slackErrorAlert alertType err project channelId projectUrl =
+slackErrorAlert :: RuntimeAlertType -> Errors.ATError -> Text -> Text -> Text -> Text -> AE.Value
+slackErrorAlert alertType err issTitle project channelId projectUrl =
   AE.object
     [ "blocks"
         AE..= AE.Array
@@ -278,7 +278,7 @@ slackErrorAlert alertType err project channelId projectUrl =
     ]
   where
     targetUrl = projectUrl <> "/anomalies/"
-    title = "<" <> targetUrl <> "|" <> fst (runtimeAlertMessages alertType) <> " " <> err.errorType <> ">"
+    title = "<" <> targetUrl <> "|" <> fst (runtimeAlertMessages alertType) <> " " <> err.errorType <> ": " <> issTitle <> ">"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath
     enp = "`" <> method <> " " <> path <> "`"
@@ -420,12 +420,12 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
-discordErrorAlert :: RuntimeAlertType -> Errors.ATError -> Text -> Text -> AE.Value
-discordErrorAlert alertType err project projectUrl =
+discordErrorAlert :: RuntimeAlertType -> Errors.ATError -> Text -> Text -> Text -> AE.Value
+discordErrorAlert alertType err issTitle project projectUrl =
   [aesonQQ|{
 "embeds": [
  {
-      "title": #{errorType},
+      "title": #{err.errorType <> ": " <> issTitle},
       "description": #{msg},
       "color": 16711680,
       "fields": [
@@ -447,7 +447,6 @@ discordErrorAlert alertType err project projectUrl =
     path = fromMaybe "" err.requestPath
     enp = "`" <> method <> " " <> path <> "`"
     firstSeen = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" err.when
-    errorType = err.errorType
     trId = fromMaybe "" err.traceId
     spanId = fromMaybe "" err.spanId
     serviceName = fromMaybe "" err.serviceName
@@ -552,9 +551,9 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
   let endpointUrl = projectUrl <> "/anomalies/by_hash/" <> hash
       endpointNames = T.intercalate ", " $ V.toList endpoints
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
-sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, errorData} projectTitle projectUrl =
+sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/anomalies/by_hash/" <> errorData.hash
-   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> T.take 100 errorData.message) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> issueTitle) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
 sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName} projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 patternText) (projectTitle <> ": New Log Pattern - " <> T.take 80 patternText) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= patternText, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl
 sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent} projectTitle _ =
@@ -570,6 +569,7 @@ sampleAlert = \case
     const
       $ RuntimeErrorAlert
         "test-123"
+        "TEST: TypeError - Sample error"
         def
           { Errors.when = UTCTime (fromGregorian 2025 1 1) 0
           , Errors.errorType = "🧪 TEST: TypeError"
