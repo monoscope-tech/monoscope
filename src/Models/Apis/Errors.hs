@@ -45,7 +45,8 @@ import Data.Default
 import Data.Text qualified as T
 import Data.Time
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity (_select, _selectWhere)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -288,87 +289,18 @@ data ErrorEvent = ErrorEvent
 -- | Get errors for a project with optional state filter
 getErrors :: DB es => Projects.ProjectId -> Maybe ErrorState -> Int -> Int -> Eff es [Error]
 getErrors pid mstate limit offset = case mstate of
-  Nothing -> PG.query qAll (pid, limit, offset)
-  Just st -> PG.query qFiltered (pid, st, limit, offset)
-  where
-    qAll =
-      [sql|
-        SELECT id, project_id, created_at, updated_at,
-               error_type, message, stacktrace, hash,
-               environment, service, runtime, error_data,
-               first_trace_id, recent_trace_id, first_event_id, last_event_id,
-               state, assignee_id, assigned_at, resolved_at, regressed_at,
-               subscribed, notify_every_minutes, last_notified_at,
-               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
-               quiet_minutes, resolution_threshold_minutes,
-               baseline_state, baseline_samples,
-               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until,
-               slack_thread_ts, discord_message_id
-        FROM apis.errors WHERE project_id = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?
-      |]
-    qFiltered =
-      [sql|
-        SELECT id, project_id, created_at, updated_at,
-               error_type, message, stacktrace, hash,
-               environment, service, runtime, error_data,
-               first_trace_id, recent_trace_id, first_event_id, last_event_id,
-               state, assignee_id, assigned_at, resolved_at, regressed_at,
-               subscribed, notify_every_minutes, last_notified_at,
-               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
-               quiet_minutes, resolution_threshold_minutes,
-               baseline_state, baseline_samples,
-               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until,
-               slack_thread_ts, discord_message_id
-        FROM apis.errors WHERE project_id = ? AND state = ? ORDER BY updated_at DESC LIMIT ? OFFSET ?
-      |]
+  Nothing -> PG.query (_selectWhere @Error [[field| project_id |]] <> " ORDER BY updated_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
+  Just st -> PG.query (_selectWhere @Error [[field| project_id |], [field| state |]] <> " ORDER BY updated_at DESC LIMIT ? OFFSET ?") (pid, st, limit, offset)
 
 
 -- | Get error by ID
 getErrorById :: DB es => ErrorId -> Eff es (Maybe Error)
-getErrorById eid = listToMaybe <$> PG.query q (Only eid)
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at,
-               error_type, message, stacktrace, hash,
-               environment, service, runtime, error_data,
-               first_trace_id, recent_trace_id, first_event_id, last_event_id,
-               state, assignee_id, assigned_at, resolved_at, regressed_at,
-               subscribed, notify_every_minutes, last_notified_at,
-               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
-               quiet_minutes, resolution_threshold_minutes,
-               baseline_state, baseline_samples,
-               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until,
-               slack_thread_ts, discord_message_id
-        FROM apis.errors
-        WHERE id = ?
-      |]
+getErrorById eid = listToMaybe <$> PG.query (_selectWhere @Error [[field| id |]]) (Only eid)
 
 
 -- | Get error by hash
 getErrorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Error)
-getErrorByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at,
-               error_type, message, stacktrace, hash,
-               environment, service, runtime, error_data,
-               first_trace_id, recent_trace_id, first_event_id, last_event_id,
-               state, assignee_id, assigned_at, resolved_at, regressed_at,
-               subscribed, notify_every_minutes, last_notified_at,
-               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
-               quiet_minutes, resolution_threshold_minutes,
-               baseline_state, baseline_samples,
-               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until,
-               slack_thread_ts, discord_message_id
-        FROM apis.errors
-        WHERE project_id = ? AND hash = ?
-      |]
+getErrorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @Error [[field| project_id |], [field| hash |]]) (pid, hash)
 
 
 getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
@@ -402,26 +334,7 @@ getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
 
 -- | Get active (non-resolved) errors
 getActiveErrors :: DB es => Projects.ProjectId -> Eff es [Error]
-getActiveErrors pid = PG.query q (Only pid)
-  where
-    q =
-      [sql|
-        SELECT id, project_id, created_at, updated_at,
-               error_type, message, stacktrace, hash,
-               environment, service, runtime, error_data,
-               first_trace_id, recent_trace_id, first_event_id, last_event_id,
-               state, assignee_id, assigned_at, resolved_at, regressed_at,
-               subscribed, notify_every_minutes, last_notified_at,
-               occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h,
-               quiet_minutes, resolution_threshold_minutes,
-               baseline_state, baseline_samples,
-               baseline_error_rate_mean, baseline_error_rate_stddev, baseline_updated_at,
-               is_ignored, ignored_until,
-               slack_thread_ts, discord_message_id
-        FROM apis.errors
-        WHERE project_id = ? AND state != 'resolved'
-        ORDER BY updated_at DESC
-      |]
+getActiveErrors pid = PG.query (_select @Error <> " WHERE project_id = ? AND state != 'resolved' ORDER BY updated_at DESC") (Only pid)
 
 
 -- | Update occurrence counts (called periodically to decay counts)

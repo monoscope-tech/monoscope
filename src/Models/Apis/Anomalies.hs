@@ -36,7 +36,8 @@ import Data.Text.Display (Display)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity (_select, _selectWhere)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -535,20 +536,11 @@ data ATError = ATError
 errorsByHashes :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [ATError]
 errorsByHashes pid hashes
   | V.null hashes = pure []
-  | otherwise = PG.query q (pid, hashes)
-  where
-    q =
-      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id
-            FROM apis.errors WHERE project_id=? AND hash=ANY(?); |]
+  | otherwise = PG.query (_select @ATError <> " WHERE project_id=? AND hash=ANY(?)") (pid, hashes)
 
 
 errorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ATError)
-errorByHash pid hash = do
-  listToMaybe <$> PG.query q (pid, hash)
-  where
-    q =
-      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id
-            FROM apis.errors WHERE project_id=? AND hash=?; |]
+errorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @ATError [[field| project_id |], [field| hash |]]) (pid, hash)
 
 
 insertErrorQueryAndParams :: Projects.ProjectId -> Errors.ATError -> (Query, [DBField])

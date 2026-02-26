@@ -808,16 +808,11 @@ getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |
 
 
 reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
-reportHistoryByProject pid page = PG.query q (pid, offset)
-  where
-    offset = page * 20
-    q = [sql| SELECT id, created_at, project_id, report_type FROM apis.reports WHERE project_id = ? ORDER BY created_at DESC LIMIT 20 OFFSET ?; |]
+reportHistoryByProject pid page = PG.query (_selectWhere @ReportListItem [[field| project_id |]] <> " ORDER BY created_at DESC LIMIT 20 OFFSET ?") (pid, page * 20)
 
 
 getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
-getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportType)
-  where
-    q = [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]
+getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @Report [[field| project_id |], [field| report_type |]] <> " ORDER BY created_at DESC LIMIT 1") (pid, reportType)
 
 
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.Error -> Double -> Double -> Double -> Eff es Issue
