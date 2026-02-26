@@ -70,7 +70,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
-import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertThreaded, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertThreaded, sendSlackMessage, sendWhatsAppAlert)
+import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (processErrors, processSpanToEntities)
@@ -736,8 +736,8 @@ notifyErrorSubscriptions pid errorHashes = do
           runtimeAlert ed issueId st = RuntimeErrorAlert{issueId = Issues.issueIdText issueId, errorData = ed, runtimeAlertType = alertTypeForState st}
       forM_ dueErrors \sub -> do
         forM_ project.notificationsChannel \case
-          Projects.NSlack -> void $ sendSlackAlertThreaded (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing sub.slackThreadTs
-          Projects.NDiscord -> void $ sendDiscordAlertThreaded (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing sub.discordMessageId
+          Projects.NSlack -> void $ sendSlackAlertWith sub.slackThreadTs (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing
+          Projects.NDiscord -> void $ sendDiscordAlertWith sub.discordMessageId (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title Nothing
           Projects.NPhone -> sendWhatsAppAlert (runtimeAlert sub.errorData sub.issueId sub.errorState) pid project.title project.whatsappNumbers
           Projects.NEmail -> do
             users <- Projects.usersByProjectId pid
@@ -749,7 +749,7 @@ notifyErrorSubscriptions pid errorHashes = do
                   _ -> ET.runtimeErrorsEmail project.title errorsUrl [e]
             forM_ users \u ->
               sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-          Projects.NPagerduty -> pass
+          Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
         void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ? |] (Only sub.errorId)
 
 
@@ -979,8 +979,8 @@ dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts 
 dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailAction = do
   emails <- ProjectMembers.resolveTeamEmails projectId team
   for_ emails (`emailAction` Nothing)
-  for_ team.slack_channels (sendSlackAlert alert projectId projectTitle . Just)
-  for_ team.discord_channels (sendDiscordAlert alert projectId projectTitle . Just)
+  for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
+  for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)
   for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
 
 
@@ -1137,10 +1137,8 @@ sendReportForProject pid rType = do
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case
-        Projects.NDiscord -> do
-          sendDiscordAlert alert pid pr.title Nothing
-        Projects.NSlack -> do
-          sendSlackAlert alert pid pr.title Nothing
+        Projects.NDiscord -> void $ sendDiscordAlert alert pid pr.title Nothing
+        Projects.NSlack -> void $ sendSlackAlert alert pid pr.title Nothing
         Projects.NPhone -> do
           sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
         _ -> do
@@ -1288,8 +1286,8 @@ processAPIChangeAnomalies pid targetHashes = do
       let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
 
       forM_ project.notificationsChannel \case
-        Projects.NSlack -> sendSlackAlert alert pid project.title Nothing
-        Projects.NDiscord -> sendDiscordAlert alert pid project.title Nothing
+        Projects.NSlack -> void $ sendSlackAlert alert pid project.title Nothing
+        Projects.NDiscord -> void $ sendDiscordAlert alert pid project.title Nothing
         Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
         Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
         Projects.NEmail -> do
@@ -1882,10 +1880,10 @@ detectErrorSpikes pid authCtx = do
                 foldlM
                   ( \(slackTs, discordMsgId) -> \case
                       Projects.NSlack -> do
-                        tsM <- sendSlackAlertThreaded spikeAlert pid project.title Nothing slackTs
+                        tsM <- sendSlackAlertWith slackTs spikeAlert pid project.title Nothing
                         pure (slackTs <|> tsM, discordMsgId)
                       Projects.NDiscord -> do
-                        msgIdM <- sendDiscordAlertThreaded spikeAlert pid project.title Nothing discordMsgId
+                        msgIdM <- sendDiscordAlertWith discordMsgId spikeAlert pid project.title Nothing
                         pure (slackTs, discordMsgId <|> msgIdM)
                       Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert spikeAlert pid project.title project.whatsappNumbers
                       Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
@@ -1926,11 +1924,15 @@ processNewError pid errorHash authCtx = do
           let runtimeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = NewRuntimeError}
           forM_ project.notificationsChannel \case
             Projects.NSlack -> do
-              tsM <- sendSlackAlertThreaded runtimeAlert pid project.title Nothing Nothing
+              tsM <- sendSlackAlert runtimeAlert pid project.title Nothing
               Relude.when (isJust tsM)
                 $ void
                 $ Errors.updateErrorThreadIds err.id tsM Nothing
-            Projects.NDiscord -> sendDiscordAlert runtimeAlert pid project.title Nothing
+            Projects.NDiscord -> do
+              msgIdM <- sendDiscordAlert runtimeAlert pid project.title Nothing
+              Relude.when (isJust msgIdM)
+                $ void
+                $ Errors.updateErrorThreadIds err.id Nothing msgIdM
             Projects.NPhone -> sendWhatsAppAlert runtimeAlert pid project.title project.whatsappNumbers
             Projects.NEmail -> do
               let errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"

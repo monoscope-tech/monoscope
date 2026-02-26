@@ -47,10 +47,10 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
@@ -58,6 +58,7 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (DBField (MkDBField), replaceAllFormats, toXXHash)
@@ -79,42 +80,10 @@ data ErrorState
   | ESOngoing
   | ESResolved
   | ESRegressed
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorState
-
-
-errorStateToText :: ErrorState -> Text
-errorStateToText ESNew = "new"
-errorStateToText ESEscalating = "escalating"
-errorStateToText ESOngoing = "ongoing"
-errorStateToText ESResolved = "resolved"
-errorStateToText ESRegressed = "regressed"
-
-
-parseErrorState :: (Eq s, IsString s) => s -> Maybe ErrorState
-parseErrorState "new" = Just ESNew
-parseErrorState "escalating" = Just ESEscalating
-parseErrorState "ongoing" = Just ESOngoing
-parseErrorState "resolved" = Just ESResolved
-parseErrorState "regressed" = Just ESRegressed
-parseErrorState _ = Nothing
-
-
-instance ToField ErrorState where
-  toField = Escape . encodeUtf8 <$> errorStateToText
-
-
-instance FromField ErrorState where
-  fromField f mdata =
-    case mdata of
-      Nothing -> returnError UnexpectedNull f ""
-      Just bs ->
-        case parseErrorState bs of
-          Just s -> pure s
-          Nothing -> returnError ConversionFailed f $ "Unknown error state: " <> show bs
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "ES", DAE.CamelToSnake]] ErrorState
+  deriving (FromField, ToField) via WrappedEnumSC "ES" ErrorState
 
 
 data Error = Error
@@ -345,9 +314,9 @@ updateOccurrenceCounts =
       [sql|
         UPDATE apis.errors SET
           occurrences_1m = 0,
-          occurrences_5m = CASE WHEN occurrences_5m > 0 THEN occurrences_5m - occurrences_1m ELSE 0 END,
-          occurrences_1h = CASE WHEN occurrences_1h > 0 THEN occurrences_1h - occurrences_5m ELSE 0 END,
-          occurrences_24h = CASE WHEN occurrences_24h > 0 THEN occurrences_24h - occurrences_1h ELSE 0 END,
+          occurrences_5m = GREATEST(0, occurrences_5m - occurrences_1m),
+          occurrences_1h = GREATEST(0, occurrences_1h - occurrences_5m),
+          occurrences_24h = GREATEST(0, occurrences_24h - occurrences_1h),
           quiet_minutes = quiet_minutes + 1,
           state = CASE
             WHEN state IN ('new', 'escalating', 'ongoing') AND quiet_minutes >= resolution_threshold_minutes THEN 'resolved'
@@ -362,14 +331,14 @@ updateOccurrenceCounts =
 
 
 updateErrorState :: DB es => ErrorId -> ErrorState -> Eff es Int64
-updateErrorState eid newState = PG.execute q (errorStateToText newState, eid)
+updateErrorState eid newState = PG.execute q (newState, eid)
   where
     q =
       [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE id = ? |]
 
 
 updateErrorStateByProjectAndHash :: DB es => Projects.ProjectId -> Text -> ErrorState -> Eff es Int64
-updateErrorStateByProjectAndHash pid hash newState = PG.execute q (errorStateToText newState, pid, hash)
+updateErrorStateByProjectAndHash pid hash newState = PG.execute q (newState, pid, hash)
   where
     q =
       [sql| UPDATE apis.errors SET state = ?, updated_at = NOW() WHERE project_id = ? AND hash = ? |]

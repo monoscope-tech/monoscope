@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertThreaded, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertThreaded, sendPagerdutyAlertToService, sampleAlert, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
+module Pkg.Mail (sendSlackMessage, sendRenderedEmail, sendWhatsAppAlert, sendSlackAlert, sendSlackAlertWith, NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sampleAlert, sampleAlertByIssueTypeText, sampleReport, addConvertKitUser, addConvertKitUserOrganization) where
 
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
@@ -96,60 +96,43 @@ data RuntimeAlertType
   deriving stock (Eq, Generic, Show)
 
 
-sendDiscordAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
-sendDiscordAlert alert pid pTitle channelIdM' = do
-  appCtx <- ask @Config.AuthContext
-  channelIdM <- maybe (getDiscordDataByProjectId pid <&> (>>= (.notifsChannelId))) (pure . Just) channelIdM'
-  for_ channelIdM \cid -> do
-    let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-        mkAlert = \case
-          RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl
-          EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
-          ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
-          MonitorsAlert{..} -> Just $ AE.object ["text" AE..= ("🤖 *Log Alert triggered for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
-          a@LogPatternAlert{} -> Just $ discordLogPatternAlert a pTitle projectUrl
-          a@LogPatternRateChangeAlert{} -> Just $ discordLogPatternRateChangeAlert a pTitle projectUrl
-          ShapeAlert -> Nothing
-    traverse_ (Notify.sendNotification . Notify.discordNotification cid) (mkAlert alert)
+-- | Send a Discord alert, optionally threading replies under a parent message.
+-- Returns the message ID if threading is enabled and the send succeeds.
+sendDiscordAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlert = sendDiscordAlertWith Nothing
 
 
-sendDiscordAlertThreaded :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)
-sendDiscordAlertThreaded alert pid pTitle channelIdM' replyToMsgIdM = do
+-- | Internal: send Discord alert with optional reply-to threading
+sendDiscordAlertWith :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   channelIdM <- maybe (getDiscordDataByProjectId pid <&> (>>= (.notifsChannelId))) (pure . Just) channelIdM'
   case channelIdM of
     Nothing -> pure Nothing
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-      case alert of
-        RuntimeErrorAlert{..} ->
-          Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid (discordErrorAlert runtimeAlertType errorData pTitle projectUrl) replyToMsgIdM
-        _ -> do
-          sendDiscordAlert alert pid pTitle channelIdM'
-          pure Nothing
+          mkPayload = \case
+            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData pTitle projectUrl
+            EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
+            ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
+            MonitorsAlert{..} -> Just $ AE.object ["text" AE..= ("🤖 *Log Alert triggered for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
+            LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle
+            LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle
+            ShapeAlert -> Nothing
+      case mkPayload alert of
+        Nothing -> pure Nothing
+        Just payload -> Notify.sendNotificationWithReply $ Notify.discordThreadedNotification cid payload replyToMsgIdM
 
 
-sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es ()
-sendSlackAlert alert pid pTitle channelM = do
-  appCtx <- ask @Config.AuthContext
-  slackData <- getProjectSlackData pid
-  let channelIdM = channelM <|> fmap (.channelId) slackData
-      botTokenM = (.botToken) <$> slackData
-  for_ ((,) <$> channelIdM <*> botTokenM) \(cid, bt) -> do
-    let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-        mkAlert = \case
-          RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl
-          EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
-          ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
-          MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
-          a@LogPatternAlert{} -> Just $ slackLogPatternAlert a pTitle cid projectUrl
-          a@LogPatternRateChangeAlert{} -> Just $ slackLogPatternRateChangeAlert a pTitle cid projectUrl
-          ShapeAlert -> Nothing
-    traverse_ (Notify.sendNotification . Notify.slackNotification cid bt) (mkAlert alert)
+-- | Send a Slack alert, optionally threading replies under a parent message.
+-- Returns the thread timestamp if the send succeeds.
+sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlert = sendSlackAlertWith Nothing
 
 
-sendSlackAlertThreaded :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Eff es (Maybe Text)
-sendSlackAlertThreaded alert pid pTitle channelM threadTsM = do
+-- | Internal: send Slack alert with optional thread-ts for threading
+sendSlackAlertWith :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlertWith threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
   let channelIdM = channelM <|> fmap (.channelId) slackData
@@ -157,13 +140,18 @@ sendSlackAlertThreaded alert pid pTitle channelM threadTsM = do
   case (channelIdM, botTokenM) of
     (Just cid, Just bt) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
-      case alert of
-        RuntimeErrorAlert{..} ->
-          Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid bt (slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl) threadTsM
-        _ -> do
-          sendSlackAlert alert pid pTitle channelM
-          pure Nothing
-    (_, _) -> pure Nothing
+          mkPayload = \case
+            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData pTitle cid projectUrl
+            EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
+            ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
+            MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
+            LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount pTitle cid
+            LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid
+            ShapeAlert -> Nothing
+      case mkPayload alert of
+        Nothing -> pure Nothing
+        Just payload -> Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid bt payload threadTsM
+    _ -> pure Nothing
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()
@@ -324,8 +312,8 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
 
 
-slackLogPatternAlert :: NotificationAlerts -> Text -> Text -> Text -> AE.Value
-slackLogPatternAlert LogPatternAlert{..} project channelId projectUrl =
+mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Text -> Text -> AE.Value
+mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount project channelId =
   AE.object
     [ "blocks"
         AE..= AE.Array
@@ -338,12 +326,11 @@ slackLogPatternAlert LogPatternAlert{..} project channelId projectUrl =
                   , "elements"
                       AE..= AE.Array
                         ( V.fromList
-                            $ catMaybes
-                              [ Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-                              , Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-                              , Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
-                              , Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Occurrences:* " <> show occurrenceCount)]
-                              ]
+                            [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Occurrences:* " <> show occurrenceCount)]
+                            ]
                         )
                   ]
               , AE.object ["type" AE..= "divider"]
@@ -355,11 +342,10 @@ slackLogPatternAlert LogPatternAlert{..} project channelId projectUrl =
           )
     , "channel" AE..= channelId
     ]
-slackLogPatternAlert _ _ _ _ = error "unreachable: slackLogPatternAlert only accepts LogPatternAlert"
 
 
-slackLogPatternRateChangeAlert :: NotificationAlerts -> Text -> Text -> Text -> AE.Value
-slackLogPatternRateChangeAlert LogPatternRateChangeAlert{..} project channelId projectUrl =
+mkSlackLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> Text -> Text -> AE.Value
+mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project channelId =
   AE.object
     [ "blocks"
         AE..= AE.Array
@@ -383,10 +369,9 @@ slackLogPatternRateChangeAlert LogPatternRateChangeAlert{..} project channelId p
                   , "elements"
                       AE..= AE.Array
                         ( V.fromList
-                            $ catMaybes
-                              [ Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-                              , Just $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-                              ]
+                            [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
+                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
+                            ]
                         )
                   ]
               , AE.object ["type" AE..= "divider"]
@@ -400,7 +385,6 @@ slackLogPatternRateChangeAlert LogPatternRateChangeAlert{..} project channelId p
     ]
   where
     icon = if direction == "spike" then ":chart_with_upwards_trend:" else ":chart_with_downwards_trend:"
-slackLogPatternRateChangeAlert _ _ _ _ = error "unreachable: slackLogPatternRateChangeAlert only accepts LogPatternRateChangeAlert"
 
 
 discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
@@ -500,8 +484,8 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
 
 
-discordLogPatternAlert :: NotificationAlerts -> Text -> Text -> AE.Value
-discordLogPatternAlert LogPatternAlert{..} project projectUrl =
+mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> AE.Value
+mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage project =
   AE.object
     [ "embeds"
         AE..= AE.Array
@@ -509,7 +493,7 @@ discordLogPatternAlert LogPatternAlert{..} project projectUrl =
               [ AE.object
                   [ "title" AE..= "New Log Pattern Detected"
                   , "description" AE..= ("A new log pattern has been detected in **" <> project <> "**.\n\n```" <> T.take 200 patternText <> "```")
-                  , "color" AE..= (5793266 :: Int) -- Blue
+                  , "color" AE..= (5793266 :: Int)
                   , "fields"
                       AE..= AE.Array
                         ( V.fromList
@@ -527,11 +511,10 @@ discordLogPatternAlert LogPatternAlert{..} project projectUrl =
           )
     , "content" AE..= "🔍 New Log Pattern"
     ]
-discordLogPatternAlert _ _ _ = error "unreachable: discordLogPatternAlert only accepts LogPatternAlert"
 
 
-discordLogPatternRateChangeAlert :: NotificationAlerts -> Text -> Text -> AE.Value
-discordLogPatternRateChangeAlert LogPatternRateChangeAlert{..} project projectUrl =
+mkDiscordLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> Text -> AE.Value
+mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project =
   AE.object
     [ "embeds"
         AE..= AE.Array
@@ -560,7 +543,6 @@ discordLogPatternRateChangeAlert LogPatternRateChangeAlert{..} project projectUr
   where
     color = if direction == "spike" then 16711680 :: Int else 16776960 -- Red for spike, yellow for drop
     icon = if direction == "spike" then "📈" else "📉"
-discordLogPatternRateChangeAlert _ _ _ = error "unreachable: discordLogPatternRateChangeAlert only accepts LogPatternRateChangeAlert"
 
 
 sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
