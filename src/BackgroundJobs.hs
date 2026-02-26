@@ -363,7 +363,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
-    QueryMonitorsCheck -> pass -- checkTriggeredQueryMonitors
+    QueryMonitorsCheck -> pass -- TODO: re-enable checkTriggeredQueryMonitors once query monitor evaluation is implemented
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
@@ -662,7 +662,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- (otel log and span, [errors])
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
       processProjectErrors pid allErrors
-      notifyErrorSubscriptions pid (V.fromList $ V.toList $ V.map (.hash) allErrors)
+      notifyErrorSubscriptions pid (V.map (.hash) allErrors)
       -- Batch all error updates into a single query using unnest (avoids N+1 pattern)
       let mkErrorUpdate groupedErrors = do
             (firstError, _) <- V.uncons groupedErrors
@@ -1859,7 +1859,7 @@ detectErrorSpikes pid authCtx = do
       (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
         let currentRate = fromIntegral errRate.currentHourCount :: Double
             zScore = (currentRate - mean) / stddev
-            isSpike = abs zScore > 3.0 && currentRate > mean + 5
+            isSpike = zScore > 3.0 && currentRate > mean + 5
 
         Relude.when isSpike $ do
           Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
@@ -1879,22 +1879,21 @@ detectErrorSpikes pid authCtx = do
                   spikeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = ErrorSpike}
                   errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
                   (subj, html) = ET.errorSpikesEmail project.title errorsUrl [err.errorData]
-              newSlackTs <- newIORef err.slackThreadTs
-              newDiscordMsgId <- newIORef err.discordMessageId
-              forM_ project.notificationsChannel \case
-                Projects.NSlack -> do
-                  tsM <- sendSlackAlertThreaded spikeAlert pid project.title Nothing err.slackThreadTs
-                  Relude.when (isNothing err.slackThreadTs) $ writeIORef newSlackTs tsM
-                Projects.NDiscord -> do
-                  msgIdM <- sendDiscordAlertThreaded spikeAlert pid project.title Nothing err.discordMessageId
-                  Relude.when (isNothing err.discordMessageId) $ writeIORef newDiscordMsgId msgIdM
-                Projects.NPhone -> sendWhatsAppAlert spikeAlert pid project.title project.whatsappNumbers
-                Projects.NEmail ->
-                  forM_ users \u ->
-                    sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-                Projects.NPagerduty -> pass
-              finalSlackTs <- readIORef newSlackTs
-              finalDiscordMsgId <- readIORef newDiscordMsgId
+              (finalSlackTs, finalDiscordMsgId) <-
+                foldlM
+                  ( \(slackTs, discordMsgId) -> \case
+                      Projects.NSlack -> do
+                        tsM <- sendSlackAlertThreaded spikeAlert pid project.title Nothing slackTs
+                        pure (slackTs <|> tsM, discordMsgId)
+                      Projects.NDiscord -> do
+                        msgIdM <- sendDiscordAlertThreaded spikeAlert pid project.title Nothing discordMsgId
+                        pure (slackTs, discordMsgId <|> msgIdM)
+                      Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert spikeAlert pid project.title project.whatsappNumbers
+                      Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                      Projects.NPagerduty -> pure (slackTs, discordMsgId)
+                  )
+                  (err.slackThreadTs, err.discordMessageId)
+                  project.notificationsChannel
               Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId)
                 $ void
                 $ Errors.updateErrorThreadIds err.id finalSlackTs finalDiscordMsgId

@@ -35,7 +35,7 @@ CREATE TABLE apis.errors (
     created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-    exception_type            TEXT NOT NULL,
+    error_type                TEXT NOT NULL,
     message                   TEXT NOT NULL,               
     stacktrace                TEXT NOT NULL,              
     hash                      TEXT NOT NULL,               
@@ -190,7 +190,6 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER error_insert_create_event AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.create_error_event_proc();
 CREATE TRIGGER error_update_create_event AFTER UPDATE OF error_data ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.create_error_event_proc();
 
-ALTER TABLE apis.errors RENAME COLUMN exception_type TO error_type;
 ALTER TABLE apis.errors
   ADD COLUMN first_trace_id TEXT,
   ADD COLUMN recent_trace_id TEXT;

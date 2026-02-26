@@ -29,7 +29,6 @@ module Models.Apis.Errors (
   getHourlyErrorCounts,
   getCurrentHourErrorCount,
   getErrorEventStats,
-  checkErrorSpike,
   getErrorsWithCurrentRates,
   -- Error Fingerprinting (Sentry-style)
   StackFrame (..),
@@ -530,20 +529,6 @@ getErrorEventStats eid hoursBack = listToMaybe <$> PG.query q (eid, hoursBack)
           (SELECT COALESCE(SUM(event_count), 0)::INT FROM hourly_counts) AS total_events
         FROM median_calc mc, mad_calc mad
       |]
-
-
--- | Check if an error is spiking compared to its baseline
--- Returns (isSpike, currentRate, zScore) if baseline is established
-checkErrorSpike :: DB es => Error -> Eff es (Maybe (Bool, Double, Double))
-checkErrorSpike err =
-  case (err.baselineState, err.baselineErrorRateMean, err.baselineErrorRateStddev) of
-    (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
-      currentCount <- getCurrentHourErrorCount err.id
-      let currentRate = fromIntegral currentCount :: Double
-          zScore = (currentRate - mean) / stddev
-          isSpike = zScore > 3.0 && currentRate > mean + 5
-      pure $ Just (isSpike, currentRate, zScore)
-    _ -> pure Nothing
 
 
 -- | Get all errors with their current hour counts (for batch spike detection)
@@ -1175,28 +1160,10 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
     normalizedType = T.strip exceptionType
 
     -- Build fingerprint components based on priority
-    fingerprintComponents =
-      if hasUsableStackTrace normalizedStack
-        then
-          [ projectIdText
-          , normalizedType
-          , normalizedStack
-          ]
-        else
-          if not (T.null normalizedType)
-            then
-              [ projectIdText
-              , fromMaybe "" mService
-              , fromMaybe "" spanName
-              , normalizedType
-              , normalizedMsg
-              ]
-            else
-              [ projectIdText
-              , fromMaybe "" mService
-              , fromMaybe "" spanName
-              , normalizedMsg
-              ]
+    fingerprintComponents = if
+      | hasUsableStackTrace normalizedStack -> [projectIdText, normalizedType, normalizedStack]
+      | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedType, normalizedMsg]
+      | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedMsg]
 
     -- Combine and hash
     combined = T.intercalate "|" $ filter (not . T.null) fingerprintComponents
@@ -1204,7 +1171,4 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
     toXXHash combined
   where
     hasUsableStackTrace :: Text -> Bool
-    hasUsableStackTrace normalized =
-      let lns = T.lines normalized
-          nonEmptyLines = filter (not . T.null . T.strip) lns
-       in length nonEmptyLines >= 1
+    hasUsableStackTrace = any (not . T.null . T.strip) . T.lines

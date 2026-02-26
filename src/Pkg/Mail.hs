@@ -355,7 +355,7 @@ slackLogPatternAlert LogPatternAlert{..} project channelId projectUrl =
           )
     , "channel" AE..= channelId
     ]
-slackLogPatternAlert _ _ _ _ = AE.object []
+slackLogPatternAlert _ _ _ _ = error "unreachable: slackLogPatternAlert only accepts LogPatternAlert"
 
 
 slackLogPatternRateChangeAlert :: NotificationAlerts -> Text -> Text -> Text -> AE.Value
@@ -400,7 +400,7 @@ slackLogPatternRateChangeAlert LogPatternRateChangeAlert{..} project channelId p
     ]
   where
     icon = if direction == "spike" then ":chart_with_upwards_trend:" else ":chart_with_downwards_trend:"
-slackLogPatternRateChangeAlert _ _ _ _ = AE.object []
+slackLogPatternRateChangeAlert a _ _ _ = error "unreachable: slackLogPatternRateChangeAlert only accepts LogPatternRateChangeAlert"
 
 
 discordReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> AE.Value
@@ -527,7 +527,7 @@ discordLogPatternAlert LogPatternAlert{..} project projectUrl =
           )
     , "content" AE..= "🔍 New Log Pattern"
     ]
-discordLogPatternAlert _ _ _ = AE.object []
+discordLogPatternAlert a _ _ = error "unreachable: discordLogPatternAlert only accepts LogPatternAlert"
 
 
 discordLogPatternRateChangeAlert :: NotificationAlerts -> Text -> Text -> AE.Value
@@ -560,7 +560,7 @@ discordLogPatternRateChangeAlert LogPatternRateChangeAlert{..} project projectUr
   where
     color = if direction == "spike" then 16711680 :: Int else 16776960 -- Red for spike, yellow for drop
     icon = if direction == "spike" then "📈" else "📉"
-discordLogPatternRateChangeAlert _ _ _ = AE.object []
+discordLogPatternRateChangeAlert a _ _ = error "unreachable: discordLogPatternRateChangeAlert only accepts LogPatternRateChangeAlert"
 
 
 sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()

@@ -208,7 +208,7 @@ anomalyDetailCore pid firstM fetchIssue = do
       let canResolve =
             userPermission
               == Just ProjectMembers.PAdmin
-              || any (\err -> err.assigneeId == Just sess.user.id) errorM
+              || maybe False (\err -> err.assigneeId == Just sess.user.id) errorM
       let bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex gap-2"] do
@@ -532,7 +532,7 @@ assignErrorPostH pid errUuid form = do
       | not isMember -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
       | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
       | otherwise -> do
-          _ <- Errors.setErrorAssignee err.id assigneeIdM
+          void $ Errors.setErrorAssignee err.id assigneeIdM
           whenJust assigneeIdM \assigneeId ->
             void $ liftIO $ withResource appCtx.pool \conn ->
               createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
@@ -578,17 +578,10 @@ errorSubscriptionPostH pid errUuid form = do
                   "unsubscribe" -> False
                   "subscribe" -> True
                   _ -> notifyEveryRaw > 0
-          if shouldSubscribe
-            then do
-              _ <- Errors.updateErrorSubscription err.id True notifyEvery
-              addSuccessToast "Subscribed to error" Nothing
-              errM' <- Errors.getErrorById err.id
-              maybe (addRespHeaders mempty) (addRespHeaders . errorSubscriptionAction pid) errM'
-            else do
-              _ <- Errors.updateErrorSubscription err.id False notifyEvery
-              addSuccessToast "Unsubscribed from error" Nothing
-              errM' <- Errors.getErrorById err.id
-              maybe (addRespHeaders mempty) (addRespHeaders . errorSubscriptionAction pid) errM'
+          void $ Errors.updateErrorSubscription err.id shouldSubscribe notifyEvery
+          addSuccessToast (if shouldSubscribe then "Subscribed to error" else "Unsubscribed from error") Nothing
+          errM' <- Errors.getErrorById err.id
+          maybe (addRespHeaders mempty) (addRespHeaders . errorSubscriptionAction pid) errM'
 
 
 -- | Form for AI chat input
