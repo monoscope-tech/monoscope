@@ -144,6 +144,7 @@ data ErrorL = ErrorL
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
 
+
 instance FromRow ErrorL where
   fromRow = ErrorL <$> FR.fromRow <*> FR.field <*> FR.field <*> FR.field
 
