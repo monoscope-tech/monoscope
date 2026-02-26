@@ -151,7 +151,7 @@ spec = aroundAll withTestResources do
           insertHourlyStat tr srcField patHash frozenTime rawCount
 
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
-          runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid tr.trATCtx
+          runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
@@ -172,7 +172,7 @@ spec = aroundAll withTestResources do
           -- Spike in current hour; projected = 200 * 4 = 800 >> baseline ~600
           insertHourlyStat tr srcField patHash frozenTime 200
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
-          runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid tr.trATCtx
+          runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
 

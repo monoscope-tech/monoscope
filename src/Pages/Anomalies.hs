@@ -283,8 +283,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 span_ [class_ "text-sm font-medium text-textStrong"] title
               content
         case issue.issueType of
-          Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (exceptionData :: Issues.RuntimeExceptionData) -> do
+          Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
               cardSection "code" "Stack Trace"
                 $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
                 $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
@@ -313,15 +312,11 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                       , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
                       ]
                       detailItem
-            _ -> pass
-          Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (alertData :: Issues.QueryAlertData) ->
+          Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
               div_ [class_ "mb-4"] do
                 span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
                 div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
-            _ -> pass
-          Issues.ApiChange -> case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (d :: Issues.APIChangeData) -> do
+          Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
               div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
                 span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
                 span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
@@ -346,9 +341,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                     , Widget._projectId = Just issue.projectId
                     , Widget.hideLegend = Just True
                     }
-            _ -> pass
-          Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (d :: Issues.LogPatternData) -> do
+          Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
               div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
                 statBox_ (Just pid) Nothing "Log Level" "" (fromMaybe "Unknown" d.logLevel) Nothing Nothing
                 statBox_ (Just pid) Nothing "Service" "" (fromMaybe "Unknown" d.serviceName) Nothing Nothing
@@ -363,9 +356,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                 div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
                   div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
                   div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml msg
-            _ -> pass
-          Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
-            AE.Success (d :: Issues.LogPatternRateChangeData) -> do
+          Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
               div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
                 statBox_ (Just pid) Nothing "Direction" "" (display d.changeDirection) Nothing Nothing
                 statBox_ (Just pid) Nothing "Change" "" (Issues.showPct d.changePercent) Nothing Nothing
@@ -376,7 +367,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                   span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
                   span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
                 div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
-            _ -> pass
 
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
         div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
@@ -725,6 +715,12 @@ parseStoredJSON :: AE.FromJSON a => Maybe (Aeson AE.Value) -> Maybe a
 parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
 
 
+withIssueDataH :: (AE.FromJSON a, Applicative m) => Aeson AE.Value -> (a -> m ()) -> m ()
+withIssueDataH d f = case AE.fromJSON (getAeson d) of
+  AE.Success v -> f v
+  _ -> pure ()
+
+
 -- | Process widgets to use cached tool call data (no re-query)
 processWidgetsWithToolData :: [AI.ToolCallInfo] -> [Widget.Widget] -> [Widget.Widget]
 processWidgetsWithToolData toolCalls = map \w -> case w.query >>= findToolCallData toolCalls of
@@ -1068,39 +1064,31 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
 
   -- Stack trace for runtime exceptions or Query for alerts
   case issue.issueType of
-    Issues.RuntimeException -> case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (exceptionData :: Issues.RuntimeExceptionData) ->
+    Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData ->
         div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
           label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
             faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
             "Stack trace"
             input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
           div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm monospace text-fillError-strong"] $ pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
-      _ -> pass
-    Issues.QueryAlert -> case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (alertData :: Issues.QueryAlertData) ->
+    Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
         div_ [class_ "mb-4"] do
           span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
           div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
-      _ -> pass
-    Issues.LogPattern -> case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (d :: Issues.LogPatternData) ->
+    Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
         div_ [class_ "border border-strokeWeak rounded-lg group/lp mb-4"] do
           label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
             faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lp-input:checked]/lp:rotate-90"
             toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
             input_ [class_ "lp-input w-0 h-0 opacity-0", type_ "checkbox"]
           div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
-      _ -> pass
-    Issues.LogPatternRateChange -> case AE.fromJSON (getAeson issue.issueData) of
-      AE.Success (d :: Issues.LogPatternRateChangeData) ->
+    Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
         div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
           label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
             faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
             toHtml $ "Rate " <> display d.changeDirection <> " (" <> Issues.showPct d.changePercent <> ")"
             input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
           div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
-      _ -> pass
     _ -> pass
 
   -- Recommended action
@@ -1361,7 +1349,7 @@ issueTypeBadge issueType critical = badge cls icon txt
       Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
       Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
       Issues.LogPattern -> ("bg-fillInformation-strong", "file-text", "LOG PATTERN")
-      Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "trending-up", "RATE CHANGE")
+      Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "activity", "RATE CHANGE")
       Issues.ApiChange
         | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
         | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")

@@ -171,19 +171,7 @@ acknowledgeLogPatterns pid uid fieldHashPairs
 
 
 upsertLogPattern :: DB es => UpsertPattern -> Eff es Int64
-upsertLogPattern up =
-  PG.execute
-    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
-          last_seen_at = NOW(),
-          occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
-          sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
-          service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
-          log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
-          trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
-  |]
-    up
+upsertLogPattern = upsertLogPatternBatch . pure
 
 
 -- | Bulk update baselines for multiple patterns in a single query.
@@ -327,7 +315,7 @@ data LogPatternWithRate = LogPatternWithRate
 -- Scale ceiling: established patterns grow slowly (~weeks); expect <1k per project at steady state.
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid now =
-  PG.query q (now, pid)
+  PG.query q (now, pid, BSEstablished)
   where
     q =
       [sql|
@@ -340,7 +328,7 @@ getPatternsWithCurrentRates pid now =
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
           AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', ?::timestamptz)
         WHERE lp.project_id = ?
-          AND lp.baseline_state = 'established'
+          AND lp.baseline_state = ?
       |]
 
 
@@ -382,7 +370,7 @@ getTotalEventCount pid now hoursBack =
 
 -- | Delete acknowledged patterns not seen in staleDays
 pruneStalePatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
-pruneStalePatterns pid now staleDays = PG.execute [sql| DELETE FROM apis.log_patterns WHERE project_id = ? AND last_seen_at < ?::timestamptz - INTERVAL '1 day' * ? AND state = 'acknowledged' |] (pid, now, staleDays)
+pruneStalePatterns pid now staleDays = PG.execute [sql| DELETE FROM apis.log_patterns WHERE project_id = ? AND last_seen_at < ?::timestamptz - INTERVAL '1 day' * ? AND state = ? |] (pid, now, staleDays, LPSAcknowledged)
 
 
 -- | Delete hourly stats older than hoursBack (keeps baseline window + buffer)
@@ -393,4 +381,4 @@ pruneOldHourlyStats pid now hoursBack = PG.execute [sql| DELETE FROM apis.log_pa
 -- | Auto-acknowledge patterns stuck in 'new' state longer than staleDays.
 -- Prevents unbounded accumulation for low-volume projects that never trigger processNewLogPatterns.
 autoAcknowledgeStaleNewPatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
-autoAcknowledgeStaleNewPatterns pid now staleDays = PG.execute [sql| UPDATE apis.log_patterns SET state = 'acknowledged', acknowledged_at = NOW() WHERE project_id = ? AND state = 'new' AND created_at < ?::timestamptz - INTERVAL '1 day' * ? |] (pid, now, staleDays)
+autoAcknowledgeStaleNewPatterns pid now staleDays = PG.execute [sql| UPDATE apis.log_patterns SET state = ?, acknowledged_at = NOW() WHERE project_id = ? AND state = ? AND created_at < ?::timestamptz - INTERVAL '1 day' * ? |] (LPSAcknowledged, pid, LPSNew, now, staleDays)

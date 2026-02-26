@@ -350,8 +350,8 @@ processBackgroundJob authCtx bgJob =
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
-    LogPatternPeriodicProcessing _scheduledTime pid ->
-      tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid authCtx
+    LogPatternPeriodicProcessing scheduledTime pid ->
+      tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
       tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
@@ -1710,16 +1710,15 @@ detectSpikeOrDrop zThreshold minDelta mean mad currentCount
 
 -- | Detect log pattern volume spikes and create issues.
 -- Projects partial-hour counts to hourly rate for sub-hourly detection.
-detectLogPatternSpikes :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
-detectLogPatternSpikes pid authCtx = do
+detectLogPatternSpikes :: Projects.ProjectId -> UTCTime -> Config.AuthContext -> ATBackgroundCtx ()
+detectLogPatternSpikes pid scheduledTime authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
-  now <- Time.currentTime
-  let totalSecs = round (realToFrac (utctDayTime now) :: Double) :: Int
+  let totalSecs = round (realToFrac (utctDayTime scheduledTime) :: Double) :: Int
       minutesIntoHour = max 15 $ (totalSecs `mod` 3600) `div` 60
       scaleFactor = 60.0 / fromIntegral minutesIntoHour :: Double
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
-  patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid now
+  patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid scheduledTime
   let anomalies = flip mapMaybe patternsWithRates \lpRate ->
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad) ->
