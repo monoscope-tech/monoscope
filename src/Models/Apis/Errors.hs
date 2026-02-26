@@ -58,10 +58,10 @@ import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
+import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.RequestDumps qualified as RequestDump
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Models.Apis.LogPatterns (BaselineState (..))
 import Relude hiding (id)
 import System.Types (DB)
 import Text.RE.TDFA (RE, SearchReplace, ed, (*=~/))

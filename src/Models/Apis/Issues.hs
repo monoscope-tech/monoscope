@@ -87,7 +87,7 @@ import Data.Hashable (hash)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Time (UTCTime)
-import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC, zonedTimeToUTC)
+import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
@@ -106,8 +106,8 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Errors qualified as Errors
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users

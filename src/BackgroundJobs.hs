@@ -45,7 +45,6 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps (ATError (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -68,7 +67,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils ( UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
@@ -1949,10 +1948,11 @@ processNewError pid errorHash authCtx = do
           let issueId = UUID.toText issue.id.unUUIDId
           let runtimeAlert = RuntimeErrorAlert{issueId = issueId, errorData = err.errorData, runtimeAlertType = NewRuntimeError}
           forM_ project.notificationsChannel \case
-            Projects.NSlack -> do 
+            Projects.NSlack -> do
               tsM <- sendSlackAlertThreaded runtimeAlert pid project.title Nothing Nothing
-              Relude.when (isJust tsM) $
-                void $ Errors.updateErrorThreadIds err.id tsM Nothing
+              Relude.when (isJust tsM)
+                $ void
+                $ Errors.updateErrorThreadIds err.id tsM Nothing
             Projects.NDiscord -> sendDiscordAlert runtimeAlert pid project.title Nothing
             Projects.NPhone -> sendWhatsAppAlert runtimeAlert pid project.title project.whatsappNumbers
             Projects.NEmail -> do

@@ -428,6 +428,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
 
+
 errorAssigneeSection :: Projects.ProjectId -> Maybe Errors.ErrorId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 errorAssigneeSection pid errIdM assigneeIdM members = do
   let isDisabled = isNothing errIdM || V.null members

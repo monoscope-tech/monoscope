@@ -609,6 +609,7 @@ sampleAlert = \case
   LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test"
   LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test"
 
+
 sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts
 sampleRuntimeAlert alertType _title =
   RuntimeErrorAlert
@@ -638,7 +639,6 @@ sampleAlertByIssueTypeText issueTypeText title = case issueTypeText of
   "regressed_errors" -> sampleRuntimeAlert RegressedErrors title
   "error_spike" -> sampleRuntimeAlert ErrorSpike title
   _ -> sampleAlert (fromMaybe ApiChange $ parseIssueType issueTypeText) title
-
 
 
 sampleReport :: Text -> NotificationAlerts
