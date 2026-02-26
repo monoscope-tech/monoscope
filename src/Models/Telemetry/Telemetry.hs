@@ -1044,6 +1044,7 @@ extractATError spanObj (AE.Object o) = do
         Just (AE.String s) -> Just s
         _ -> Nothing
       getTextOrEmpty k = fromMaybe "" (lookupText k)
+      getSpanAttr k = unAesonTextMaybe spanObj.attributes >>= Map.lookup k >>= \case AE.String s -> Just s; _ -> Nothing
       getUserAttrM k v = case unAesonTextMaybe spanObj.resource >>= Map.lookup v of
         Just (AE.Object userAttrs) -> KEM.lookup k userAttrs >>= asText
         _ -> Nothing
@@ -1054,6 +1055,7 @@ extractATError spanObj (AE.Object o) = do
 
       userId = getUserAttrM "id" "user"
       userEmail = getUserAttrM "email" "user"
+      userIp = getSpanAttr "client.address"
       sessionId = getUserAttrM "id" "session"
 
       -- TODO: parse telemetry.sdk.name to SDKTypes
@@ -1105,6 +1107,7 @@ extractATError spanObj (AE.Object o) = do
       , environment = Nothing
       , userId = userId
       , userEmail = userEmail
+      , userIp = userIp
       , sessionId = sessionId
       }
 extractATError _ _ = Nothing

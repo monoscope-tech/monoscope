@@ -218,6 +218,14 @@ emailDivider :: Html ()
 emailDivider = hr_ [class_ "divider"]
 
 
+metaCell :: Text -> Text -> Html ()
+metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
+  $ span_ [class_ "error-card-meta"] do
+    b_ [class_ "error-card-label"] $ toHtml @Text label
+    " "
+    toHtml @Text val
+
+
 emailHelpLinks :: Html ()
 emailHelpLinks = p_ do
   "Need help getting started? Check out our "
@@ -383,12 +391,6 @@ errorCard e =
     tr_ $ td_ [style_ "padding: 10px 20px 20px 20px;"] do
       h3_ [style_ "margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"] "Stack Trace"
       div_ [class_ "error-card-stack"] $ toHtml e.stackTrace
-  where
-    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
-      $ span_ [class_ "error-card-meta"] do
-        b_ [class_ "error-card-label"] $ toHtml @Text label
-        " "
-        toHtml @Text val
 
 
 -- =============================================================================
@@ -729,12 +731,6 @@ logPatternEmail projectName issueUrl patternText sampleMessageM logLevelM servic
       emailSignoff
       emailFallbackUrl issueUrl
   )
-  where
-    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
-      $ span_ [class_ "error-card-meta"] do
-        b_ [class_ "error-card-label"] $ toHtml @Text label
-        " "
-        toHtml @Text val
 
 
 -- =============================================================================
@@ -787,9 +783,3 @@ logPatternRateChangeEmail projectName issueUrl patternText sampleMessageM logLev
       emailSignoff
       emailFallbackUrl issueUrl
   )
-  where
-    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
-      $ span_ [class_ "error-card-meta"] do
-        b_ [class_ "error-card-label"] $ toHtml @Text label
-        " "
-        toHtml @Text val

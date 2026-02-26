@@ -182,7 +182,7 @@ data ErrorL = ErrorL
   , lastOccurredAt :: Maybe ZonedTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, NFData)
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorL
@@ -209,6 +209,7 @@ data ATError = ATError
   , endpointHash :: Maybe Text
   , userId :: Maybe Text
   , userEmail :: Maybe Text
+  , userIp :: Maybe Text
   , sessionId :: Maybe Text
   }
   deriving stock (Generic, Show)
