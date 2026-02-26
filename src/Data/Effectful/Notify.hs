@@ -32,7 +32,7 @@ module Data.Effectful.Notify (
 ) where
 
 import Control.Exception (try)
-import Control.Lens ((.~))
+import Control.Lens ((.~), (^?))
 import Control.Lens.Getter ((^.))
 import Control.Lens.Setter ((?~))
 import Control.Retry (exponentialBackoff, limitRetries, retrying)
@@ -275,7 +275,7 @@ runNotifyProduction = interpret $ \_ -> \case
           case result of
             Right re
               | statusIsSuccessful (re ^. responseStatus) ->
-                  pure $ AE.decode (re ^. responseBody) >>= (^? key "ts" . _String)
+                  pure $ (AE.decode (re ^. responseBody) :: Maybe AE.Value) >>= (^? key "ts" . _String)
             Right re -> do
               Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
               pure Nothing
@@ -299,7 +299,7 @@ runNotifyProduction = interpret $ \_ -> \case
       case result of
         Right re
           | statusIsSuccessful (re ^. responseStatus) ->
-              pure $ AE.decode (re ^. responseBody) >>= (^? key "id" . _String)
+              pure $ (AE.decode (re ^. responseBody) :: Maybe AE.Value) >>= (^? key "id" . _String)
         Right re -> do
           Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
           pure Nothing

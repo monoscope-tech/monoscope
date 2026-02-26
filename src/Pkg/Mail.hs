@@ -425,7 +425,7 @@ discordErrorAlert alertType err issTitle project projectUrl =
   [aesonQQ|{
 "embeds": [
  {
-      "title": #{err.errorType <> ": " <> issTitle},
+      "title": #{titleText},
       "description": #{msg},
       "color": 16711680,
       "fields": [
@@ -441,6 +441,7 @@ discordErrorAlert alertType err issTitle project projectUrl =
   "content": #{snd (runtimeAlertMessages alertType)}
 }|]
   where
+    titleText = err.errorType <> ": " <> issTitle
     url = projectUrl <> "/anomalies/by_hash/" <> err.hash
     msg = "```" <> err.message <> "```"
     method = fromMaybe "" err.requestMethod
@@ -593,9 +594,9 @@ sampleAlert = \case
 
 
 sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts
-sampleRuntimeAlert alertType title =
-  let RuntimeErrorAlert{..} = sampleAlert RuntimeException title
-   in RuntimeErrorAlert{runtimeAlertType = alertType, ..}
+sampleRuntimeAlert alertType title = case sampleAlert RuntimeException title of
+  r@RuntimeErrorAlert{} -> r{runtimeAlertType = alertType}
+  other -> other
 
 
 sampleAlertByIssueTypeText :: Text -> Text -> NotificationAlerts

@@ -66,7 +66,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
-import Utils (DBField (), b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
+import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
 {--

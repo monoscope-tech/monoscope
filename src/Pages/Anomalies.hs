@@ -685,7 +685,7 @@ aiChatHistoryGetH pid issueId = do
 -- | Build complete system prompt for an issue (shared between POST and GET)
 buildSystemPromptForIssue :: Projects.ProjectId -> Issues.Issue -> UTCTime -> ATAuthCtx Text
 buildSystemPromptForIssue pid issue now = do
-  errorM <- bool (pure Nothing) (Anomalies.errorByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
+  errorM <- bool (pure Nothing) (Errors.getErrorByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
   (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) fetchTrace errorM
   alertContextM <- case (issue.issueType, AE.fromJSON @Issues.QueryAlertData (getAeson issue.issueData)) of
     (Issues.QueryAlert, AE.Success alertData) -> do
@@ -703,9 +703,8 @@ buildSystemPromptForIssue pid issue now = do
       fullSystemPrompt = unlines [systemPrompt, "", "--- FACET SUMMARY ---", maybe "" formatFacetSummaryForAI facetSummaryM, "", issueContext]
   pure fullSystemPrompt
   where
-    fetchTrace errL =
+    fetchTrace err =
       fromMaybe (Nothing, V.empty) <$> runMaybeT do
-        let err = errL.base
         tId <- hoistMaybe err.recentTraceId
         trData <- MaybeT $ Telemetry.getTraceDetails pid tId (Just $ zonedTimeToUTC err.updatedAt) now
         spans <- lift $ Telemetry.getSpanRecordsByTraceId pid trData.traceId (Just trData.traceStartTime) now
@@ -720,22 +719,20 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Service**: " <> fromMaybe "unknown-service" iss.service
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
-          , errM >>= \errL ->
-              let err = errL.base
-               in Just
-                    $ unlines
-                      [ ""
-                      , "## Error Details"
-                      , "- **Error Type**: " <> err.errorType
-                      , "- **Message**: " <> err.message
-                      , "- **Stack Trace**:"
-                      , "```"
-                      , err.errorData.stackTrace
-                      , "```"
-                      , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-                      , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-                      , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-                      ]
+          , errM <&> \err ->
+              unlines
+                [ ""
+                , "## Error Details"
+                , "- **Error Type**: " <> err.errorType
+                , "- **Message**: " <> err.message
+                , "- **Stack Trace**:"
+                , "```"
+                , err.errorData.stackTrace
+                , "```"
+                , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+                , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+                , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
+                ]
           , trDataM >>= \tr ->
               Just
                 $ unlines

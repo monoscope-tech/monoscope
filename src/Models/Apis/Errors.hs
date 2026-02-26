@@ -45,6 +45,7 @@ import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
+import Database.PostgreSQL.Simple.FromRow qualified as FR
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -141,7 +142,10 @@ data ErrorL = ErrorL
   , lastOccurredAt :: Maybe ZonedTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (NFData)
+
+instance FromRow ErrorL where
+  fromRow = ErrorL <$> FR.fromRow <*> FR.field <*> FR.field <*> FR.field
 
 
 data ATError = ATError
