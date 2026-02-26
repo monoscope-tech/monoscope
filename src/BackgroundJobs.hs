@@ -750,8 +750,7 @@ notifyErrorSubscriptions pid errorHashes = do
             forM_ users \u ->
               sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
           Projects.NPagerduty -> pass
-    let errIds = V.fromList $ map (.errorId) dueErrors
-    void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ANY(?::uuid[]) |] (Only errIds)
+        void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ? |] (Only sub.errorId)
 
 
 -- Log.logInfo "Completed 1-minute error processing" ()

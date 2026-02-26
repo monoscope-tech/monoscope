@@ -47,7 +47,7 @@ import Data.UUID qualified as UUID
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
-import Database.PostgreSQL.Simple.FromField (FromField, ResultError (UnexpectedNull), fromField, returnError)
+import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (Action (Escape), ToField, toField)
@@ -114,7 +114,7 @@ instance FromField ErrorState where
       Just bs ->
         case parseErrorState bs of
           Just s -> pure s
-          Nothing -> pure ESNew
+          Nothing -> returnError ConversionFailed f $ "Unknown error state: " <> show bs
 
 
 data Error = Error
@@ -257,12 +257,12 @@ data ErrorEvent = ErrorEvent
   , errorId :: ErrorId
   , occurredAt :: ZonedTime
   , targetHash :: Text
-  , errorType :: Text
+  , exceptionType :: Text
   , message :: Text
   , stackTrace :: Text
   , serviceName :: Text
   , release :: Maybe Text
-  , platformVersion :: Maybe Text
+  , environment :: Maybe Text
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
   , endpointHash :: Maybe Text
@@ -271,9 +271,9 @@ data ErrorEvent = ErrorEvent
   , parentSpanId :: Maybe Text
   , userId :: Maybe Text
   , userEmail :: Maybe Text
+  , userIp :: Maybe Text
   , sessionId :: Maybe Text
   , sampleRate :: Double
-  , ingestionId :: Maybe UUID.UUID
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -303,7 +303,7 @@ getErrorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @Error [[field|
 
 
 getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
-getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
+getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, pid, hash)
   where
     q =
       [sql|
@@ -325,7 +325,7 @@ getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
         FROM apis.errors e
         LEFT JOIN (
           SELECT target_hash, COUNT(*) AS occurrences, COUNT(DISTINCT user_id) AS affected_users, MAX(occurred_at) AS last_occurred_at
-          FROM apis.error_events GROUP BY target_hash
+          FROM apis.error_events WHERE project_id = ? GROUP BY target_hash
         ) ev ON ev.target_hash = e.hash
         WHERE e.project_id = ? AND e.hash = ?
       |]
@@ -607,7 +607,7 @@ upsertErrorQueryAndParam pid err = (q, params)
           END
       |]
     params =
-      [ MkDBField err.projectId
+      [ MkDBField pid
       , MkDBField err.errorType
       , MkDBField err.message
       , MkDBField err.stackTrace
@@ -641,8 +641,8 @@ upsertErrorQueryAndParam pid err = (q, params)
 -- | Represents a parsed stack frame
 data StackFrame = StackFrame
   { filePath :: Text
-  , module' :: Maybe Text
-  , function' :: Text
+  , moduleName :: Maybe Text
+  , functionName :: Text
   , lineNumber :: Maybe Int
   , columnNumber :: Maybe Int
   , contextLine :: Maybe Text
@@ -657,13 +657,13 @@ data StackFrame = StackFrame
 -- >>> length $ parseStackTrace "nodejs" "at processTicksAndRejections (node:internal/process/task_queues:95:5)\nat handleRequest (/app/src/server.js:42:15)"
 -- 2
 --
--- >>> map (.function') $ parseStackTrace "python" "File \"/app/main.py\", line 10, in main\nFile \"/app/utils.py\", line 5, in helper"
+-- >>> map (.functionName) $ parseStackTrace "python" "File \"/app/main.py\", line 10, in main\nFile \"/app/utils.py\", line 5, in helper"
 -- ["main","helper"]
 --
 -- >>> map (.isInApp) $ parseStackTrace "nodejs" "at handleRequest (/app/src/server.js:42:15)\nat processTicksAndRejections (node:internal/process/task_queues:95:5)"
 -- [True,False]
 --
--- >>> map (.function') $ parseStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
+-- >>> map (.functionName) $ parseStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
 -- ["doWork","doDispatch"]
 parseStackTrace :: Text -> Text -> [StackFrame]
 parseStackTrace mSdk stackText =
@@ -699,8 +699,8 @@ parseGoFrame line
        in Just
             StackFrame
               { filePath = T.dropEnd 1 filePath -- Remove trailing ':'
-              , module' = extractGoModule filePath
-              , function' = ""
+              , moduleName = extractGoModule filePath
+              , functionName = ""
               , lineNumber = lineNum
               , columnNumber = Nothing
               , contextLine = Nothing
@@ -712,8 +712,8 @@ parseGoFrame line
        in Just
             StackFrame
               { filePath = ""
-              , module' = extractGoModuleFromFunc funcPart
-              , function' = extractGoFuncName funcPart
+              , moduleName = extractGoModuleFromFunc funcPart
+              , functionName = extractGoFuncName funcPart
               , lineNumber = Nothing
               , columnNumber = Nothing
               , contextLine = Nothing
@@ -777,8 +777,8 @@ parseJsFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , module' = extractJsModule filePath
-              , function' = cleanJsFunction funcPart
+              , moduleName = extractJsModule filePath
+              , functionName = cleanJsFunction funcPart
               , lineNumber = lineNum
               , columnNumber = colNum
               , contextLine = Nothing
@@ -791,8 +791,8 @@ parseJsFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , module' = extractJsModule filePath
-              , function' = "<anonymous>"
+              , moduleName = extractJsModule filePath
+              , functionName = "<anonymous>"
               , lineNumber = lineNum
               , columnNumber = colNum
               , contextLine = Nothing
@@ -854,8 +854,8 @@ parsePythonFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , module' = extractPythonModule filePath
-              , function' = cleanPythonFunction funcName
+              , moduleName = extractPythonModule filePath
+              , functionName = cleanPythonFunction funcName
               , lineNumber = lineNum
               , columnNumber = Nothing
               , contextLine = Nothing
@@ -894,8 +894,8 @@ parseJavaFrame line
        in Just
             StackFrame
               { filePath = fileName
-              , module' = Just moduleName
-              , function' = cleanJavaFunction funcName
+              , moduleName = Just moduleName
+              , functionName = cleanJavaFunction funcName
               , lineNumber = lineNum
               , columnNumber = Nothing
               , contextLine = Nothing
@@ -938,8 +938,8 @@ parsePhpFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , module' = extractPhpModule filePath
-              , function' = cleanPhpFunction funcName
+              , moduleName = extractPhpModule filePath
+              , functionName = cleanPhpFunction funcName
               , lineNumber = lineNum
               , columnNumber = Nothing
               , contextLine = Nothing
@@ -988,8 +988,8 @@ parseDotNetFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , module' = Just moduleName
-              , function' = cleanDotNetFunction funcName
+              , moduleName = Just moduleName
+              , functionName = cleanDotNetFunction funcName
               , lineNumber = lineNum
               , columnNumber = Nothing
               , contextLine = Nothing
@@ -1030,8 +1030,8 @@ parseGenericFrame line =
           Just
             StackFrame
               { filePath = trimmed
-              , module' = Nothing
-              , function' = extractGenericFunction trimmed
+              , moduleName = Nothing
+              , functionName = extractGenericFunction trimmed
               , lineNumber = extractGenericLineNumber trimmed
               , columnNumber = Nothing
               , contextLine = Nothing
@@ -1077,8 +1077,8 @@ normalizeStackTrace runtime stackText =
   where
     normalizeFrame :: StackFrame -> Text
     normalizeFrame frame =
-      let modulePart = fromMaybe "" frame.module'
-          funcPart = normalizeFunction frame.function'
+      let modulePart = fromMaybe "" frame.moduleName
+          funcPart = normalizeFunction frame.functionName
           -- Context line: normalize whitespace, truncate if > 120 chars
           contextPart = maybe "" normalizeContextLine frame.contextLine
        in T.intercalate "|" $ filter (not . T.null) [modulePart, funcPart, contextPart]

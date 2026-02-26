@@ -38,6 +38,7 @@ import Control.Lens.Setter ((?~))
 import Control.Retry (exponentialBackoff, limitRetries, retrying)
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEK
+import Data.Aeson.Lens (key, _String)
 import Data.Aeson.QQ (aesonQQ)
 import Data.Text.Display (Display, display)
 import Effectful
@@ -209,27 +210,8 @@ runNotifyProduction = interpret $ \_ -> \case
         Right (Just ()) -> Log.logTrace "Email sent successfully" (AE.object ["to" AE..= receiver, "via" AE..= via])
         Right Nothing -> Log.logAttention "Email send timed out after 30s" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via])
         Left ex -> Log.logAttention "Email send failed" (AE.object ["to" AE..= receiver, "subject" AE..= subject, "via" AE..= via, "error" AE..= displayException ex])
-    SlackNotification SlackData{..} -> do
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> botToken]
-      case payload of
-        AE.Object obj -> do
-          let withThread = case threadTs of
-                Just ts -> AEK.insert "thread_ts" (AE.String ts) obj
-                Nothing -> obj
-              msg = AE.Object $ AEK.insert "channel" (AE.String channelId) withThread
-          re <- liftIO $ postWith opts "https://slack.com/api/chat.postMessage" msg
-          unless (statusIsSuccessful (re ^. responseStatus))
-            $ Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
-        _ -> Log.logAttention "Slack notification message is not an object" (channelId, show payload)
-      pass
-    DiscordNotification DiscordData{..} -> do
-      appCtx <- ask @Config.AuthContext
-      let url = toString $ "https://discord.com/api/v10/channels/" <> channelId <> "/messages"
-      let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bot " <> appCtx.config.discordBotToken]
-      re <- liftIO $ postWith opts url payload
-      unless (statusIsSuccessful (re ^. responseStatus))
-        $ Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
-      pass
+    SlackNotification slackData -> void $ sendSlack slackData
+    DiscordNotification discordData -> void $ sendDiscord discordData
     WhatsAppNotification WhatsAppData{template, to, contentVariables} -> do
       appCtx <- ask @Config.AuthContext
       let from = appCtx.config.whatsappFromNumber
@@ -283,7 +265,6 @@ runNotifyProduction = interpret $ \_ -> \case
   where
     sendSlack :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => SlackData -> Eff es (Maybe Text)
     sendSlack SlackData{..} = do
-      appCtx <- ask @Config.AuthContext
       let opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> botToken]
       case payload of
         AE.Object obj -> do
@@ -294,11 +275,7 @@ runNotifyProduction = interpret $ \_ -> \case
           result <- liftIO $ try @SomeException $ postWith opts "https://slack.com/api/chat.postMessage" msg
           case result of
             Right re | statusIsSuccessful (re ^. responseStatus) ->
-              case AE.decode (re ^. responseBody) of
-                Just (AE.Object respObj) -> pure $ case AEK.lookup "ts" respObj of
-                  Just (AE.String ts) -> Just ts
-                  _ -> Nothing
-                _ -> pure Nothing
+              pure $ AE.decode (re ^. responseBody) >>= (^? key "ts" . _String)
             Right re -> do
               Log.logAttention "Slack notification failed" (channelId, show $ re ^. responseStatus)
               pure Nothing
@@ -321,11 +298,7 @@ runNotifyProduction = interpret $ \_ -> \case
       result <- liftIO $ try @SomeException $ postWith opts url payloadWithReply
       case result of
         Right re | statusIsSuccessful (re ^. responseStatus) ->
-          case AE.decode (re ^. responseBody) of
-            Just (AE.Object respObj) -> pure $ case AEK.lookup "id" respObj of
-              Just (AE.String msgId) -> Just msgId
-              _ -> Nothing
-            _ -> pure Nothing
+          pure $ AE.decode (re ^. responseBody) >>= (^? key "id" . _String)
         Right re -> do
           Log.logAttention "Discord notification failed" (channelId, show $ re ^. responseStatus)
           pure Nothing

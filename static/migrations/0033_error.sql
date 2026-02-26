@@ -40,7 +40,7 @@ CREATE TABLE apis.errors (
     stacktrace                TEXT NOT NULL,              
     hash                      TEXT NOT NULL,               
 
-    environment               TEXT NOT NULL,              
+    environment               TEXT,
     service                   TEXT,                        
     runtime                   TEXT,                       
     error_data                JSONB NOT NULL DEFAULT '{}', 
@@ -73,7 +73,9 @@ CREATE TABLE apis.errors (
     notify_every_minutes      INT NOT NULL DEFAULT 30,
     last_notified_at          TIMESTAMPTZ,
     slack_thread_ts           TEXT,
-    discord_message_id        TEXT
+    discord_message_id        TEXT,
+    first_trace_id            TEXT,
+    recent_trace_id           TEXT
 );
 SELECT manage_updated_at('apis.errors');
 
@@ -190,7 +192,4 @@ $$ LANGUAGE plpgsql;
 CREATE TRIGGER error_insert_create_event AFTER INSERT ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.create_error_event_proc();
 CREATE TRIGGER error_update_create_event AFTER UPDATE OF error_data ON apis.errors FOR EACH ROW EXECUTE PROCEDURE apis.create_error_event_proc();
 
-ALTER TABLE apis.errors
-  ADD COLUMN first_trace_id TEXT,
-  ADD COLUMN recent_trace_id TEXT;
 COMMIT;
