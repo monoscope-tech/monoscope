@@ -501,6 +501,7 @@ logsPatternExtraction scheduledTime pid = do
       (finalTree, eventMeta) <- paginateTree tfEnabled seedTree HM.empty 0 startTime
       persistSummaryPatterns tfEnabled finalTree eventMeta startTime
 
+    paginateTree :: Bool -> Drain.DrainTree -> HM.HashMap Text (Maybe Text, Maybe Text, Maybe Text) -> Int -> UTCTime -> ATBackgroundCtx (Drain.DrainTree, HM.HashMap Text (Maybe Text, Maybe Text, Maybe Text))
     paginateTree tfEnabled tree meta offset startTime = do
       otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       if null otelEvents
@@ -1713,7 +1714,7 @@ detectSpikeOrDrop zThreshold minDelta mean mad currentCount
 detectLogPatternSpikes :: Projects.ProjectId -> UTCTime -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid scheduledTime authCtx = do
   Log.logInfo "Detecting log pattern spikes" pid
-  let totalSecs = round (realToFrac (utctDayTime scheduledTime) :: Double) :: Int
+  let totalSecs = truncate (utctDayTime scheduledTime) :: Int
       minutesIntoHour = max 15 $ (totalSecs `mod` 3600) `div` 60
       scaleFactor = 60.0 / fromIntegral minutesIntoHour :: Double
   -- Re-alerting: ON CONFLICT dedup only matches open (unacknowledged) issues,

@@ -224,12 +224,7 @@ upsertLogPatternBatch ups =
 -- retries are rare and the median/MAD baseline is robust to occasional outliers.
 upsertHourlyStat :: DB es => Projects.ProjectId -> Text -> Text -> UTCTime -> Int64 -> Eff es Int64
 upsertHourlyStat pid sourceField patHash hourBucket count =
-  PG.execute
-    [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
-        VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
-        ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-    (pid, sourceField, patHash, hourBucket, count)
+  upsertHourlyStatBatch [(pid, sourceField, patHash, hourBucket, count)]
 
 
 -- | Batch version of upsertHourlyStat using executeMany.

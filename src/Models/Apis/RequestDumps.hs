@@ -574,7 +574,7 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-data PatternRow = PatternRow {logPattern :: Text, count :: Int, level :: Maybe Text, service :: Maybe Text, volume :: [Int]}
+data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int]}
 
 
 fetchLogPatterns :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (Int, [PatternRow])
@@ -591,9 +591,9 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
     $ AE.object
       ["project_id" AE..= pid, "target" AE..= target, "skip" AE..= skip, "date_range" AE..= show dateRange]
   let (dateFrom, dateTo) = dateRange
-  precomputed :: [(Text, Int, Maybe Text, Maybe Text, Text)] <-
+  precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text)] <-
     if target `elem` map fst LogPatterns.knownPatternFields
-      then PG.query [sql|SELECT log_pattern, occurrence_count::INT, log_level, service_name, pattern_hash FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?) ORDER BY occurrence_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
+      then PG.query [sql|SELECT log_pattern, occurrence_count, log_level, service_name, pattern_hash FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?) ORDER BY occurrence_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
       else pure []
   if not (null precomputed)
     then do
@@ -642,7 +642,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
           (minB, maxB) = case allBIs of [] -> (0, 0); xs -> (foldl' min maxBound xs, foldl' max minBound xs)
           buildVolume bs = let bMap = HashMap.fromListWith (+) bs in [fromMaybe 0 $ HashMap.lookup i bMap | i <- [minB .. maxB]]
       Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HashMap.size merged]
-      pure (HashMap.size merged, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = buildVolume bs} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+      pure (HashMap.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = buildVolume bs} | (pat, (cnt, lvl, svc, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.
