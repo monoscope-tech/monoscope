@@ -1160,10 +1160,11 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
     normalizedType = T.strip exceptionType
 
     -- Build fingerprint components based on priority
-    fingerprintComponents = if
-      | hasUsableStackTrace normalizedStack -> [projectIdText, normalizedType, normalizedStack]
-      | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedType, normalizedMsg]
-      | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedMsg]
+    fingerprintComponents =
+      if
+        | hasUsableStackTrace normalizedStack -> [projectIdText, normalizedType, normalizedStack]
+        | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedType, normalizedMsg]
+        | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedMsg]
 
     -- Combine and hash
     combined = T.intercalate "|" $ filter (not . T.null) fingerprintComponents
