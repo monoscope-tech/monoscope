@@ -284,89 +284,89 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               content
         case issue.issueType of
           Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
-              cardSection "code" "Stack Trace"
-                $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
-                $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
-                $ toHtml exceptionData.stackTrace
-              whenJust errM \err -> do
-                let detailItem :: (Text, Text, Text) -> HtmlT Identity ()
-                    detailItem (icon, lbl, value) = div_ [class_ "flex items-center gap-2"] do
-                      faSprite_ icon "regular" "w-3 h-3"
-                      div_ [] do
-                        span_ [class_ "text-xs text-textWeak"] $ toHtml $ lbl <> ":"
-                        span_ [class_ "ml-2 text-xs"] $ toHtml value
-                cardSection "circle-info" "Error Details" $ div_ [class_ "p-4 flex flex-col gap-4"] do
-                  whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
-                    div_ [class_ "mb-2"] do
-                      span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
-                      span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
-                  div_ [class_ "flex items-center gap-4"]
-                    $ forM_
-                      [ ("calendar" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
-                      , ("calendar" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
-                      ]
-                      detailItem
-                  div_ [class_ "flex items-center gap-4"]
-                    $ forM_
-                      [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.stack)
-                      , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
-                      ]
-                      detailItem
+            cardSection "code" "Stack Trace"
+              $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
+              $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
+              $ toHtml exceptionData.stackTrace
+            whenJust errM \err -> do
+              let detailItem :: (Text, Text, Text) -> HtmlT Identity ()
+                  detailItem (icon, lbl, value) = div_ [class_ "flex items-center gap-2"] do
+                    faSprite_ icon "regular" "w-3 h-3"
+                    div_ [] do
+                      span_ [class_ "text-xs text-textWeak"] $ toHtml $ lbl <> ":"
+                      span_ [class_ "ml-2 text-xs"] $ toHtml value
+              cardSection "circle-info" "Error Details" $ div_ [class_ "p-4 flex flex-col gap-4"] do
+                whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
+                  div_ [class_ "mb-2"] do
+                    span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
+                    span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
+                div_ [class_ "flex items-center gap-4"]
+                  $ forM_
+                    [ ("calendar" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
+                    , ("calendar" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
+                    ]
+                    detailItem
+                div_ [class_ "flex items-center gap-4"]
+                  $ forM_
+                    [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.stack)
+                    , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
+                    ]
+                    detailItem
           Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
-              div_ [class_ "mb-4"] do
-                span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-                div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+            div_ [class_ "mb-4"] do
+              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
           Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
-              div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
-                span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
-                span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
-                div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-                span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
-                  faSprite_ "server" "regular" "h-3 w-3"
-                  toHtml d.endpointHost
-              div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
-                timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
-                div_ [class_ "col-span-4"]
-                  $ Widget.widget_
-                  $ (def :: Widget.Widget)
-                    { Widget.standalone = Just True
-                    , Widget.id = Just $ issueId <> "-api-change-timeline"
-                    , Widget.naked = Just True
-                    , Widget.wType = Widget.WTTimeseries
-                    , Widget.title = Just "Request trend"
-                    , Widget.showTooltip = Just True
-                    , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
-                    , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-                    , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
-                    , Widget._projectId = Just issue.projectId
-                    , Widget.hideLegend = Just True
-                    }
+            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+              span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+                faSprite_ "server" "regular" "h-3 w-3"
+                toHtml d.endpointHost
+            div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
+              timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
+              div_ [class_ "col-span-4"]
+                $ Widget.widget_
+                $ (def :: Widget.Widget)
+                  { Widget.standalone = Just True
+                  , Widget.id = Just $ issueId <> "-api-change-timeline"
+                  , Widget.naked = Just True
+                  , Widget.wType = Widget.WTTimeseries
+                  , Widget.title = Just "Request trend"
+                  , Widget.showTooltip = Just True
+                  , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
+                  , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+                  , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
+                  , Widget._projectId = Just issue.projectId
+                  , Widget.hideLegend = Just True
+                  }
           Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
-              div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-                statBox_ (Just pid) Nothing "Log Level" "" (fromMaybe "Unknown" d.logLevel) Nothing Nothing
-                statBox_ (Just pid) Nothing "Service" "" (fromMaybe "Unknown" d.serviceName) Nothing Nothing
-                statBox_ (Just pid) Nothing "Occurrences" "" (show d.occurrenceCount) Nothing Nothing
-                timeStatBox_ "First Seen" $ prettyTimeAuto now d.firstSeenAt
+            div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
+              statBox_ (Just pid) Nothing "Log Level" "" (fromMaybe "Unknown" d.logLevel) Nothing Nothing
+              statBox_ (Just pid) Nothing "Service" "" (fromMaybe "Unknown" d.serviceName) Nothing Nothing
+              statBox_ (Just pid) Nothing "Occurrences" "" (show d.occurrenceCount) Nothing Nothing
+              timeStatBox_ "First Seen" $ prettyTimeAuto now d.firstSeenAt
+            div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
+              div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
+            whenJust d.sampleMessage \msg ->
               div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                  span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                  span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
-                div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
-              whenJust d.sampleMessage \msg ->
-                div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-                  div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
-                  div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml msg
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
+                div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml msg
           Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
-              div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-                statBox_ (Just pid) Nothing "Direction" "" (display d.changeDirection) Nothing Nothing
-                statBox_ (Just pid) Nothing "Change" "" (Issues.showPct d.changePercent) Nothing Nothing
-                statBox_ (Just pid) Nothing "Current Rate" "" (Issues.showRate d.currentRatePerHour) Nothing Nothing
-                statBox_ (Just pid) Nothing "Baseline" "" (Issues.showRate d.baselineMean) Nothing Nothing
-              div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                  span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                  span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
-                div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
+            div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
+              statBox_ (Just pid) Nothing "Direction" "" (display d.changeDirection) Nothing Nothing
+              statBox_ (Just pid) Nothing "Change" "" (Issues.showPct d.changePercent) Nothing Nothing
+              statBox_ (Just pid) Nothing "Current Rate" "" (Issues.showRate d.currentRatePerHour) Nothing Nothing
+              statBox_ (Just pid) Nothing "Baseline" "" (Issues.showRate d.baselineMean) Nothing Nothing
+            div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
+              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
+              div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
 
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
         div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
@@ -1065,30 +1065,30 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
   -- Stack trace for runtime exceptions or Query for alerts
   case issue.issueType of
     Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData ->
-        div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
-          label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
-            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
-            "Stack trace"
-            input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
-          div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm monospace text-fillError-strong"] $ pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
+      div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
+        label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
+          faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
+          "Stack trace"
+          input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
+        div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm monospace text-fillError-strong"] $ pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
     Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
-        div_ [class_ "mb-4"] do
-          span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-          div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+      div_ [class_ "mb-4"] do
+        span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+        div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
     Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
-        div_ [class_ "border border-strokeWeak rounded-lg group/lp mb-4"] do
-          label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
-            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lp-input:checked]/lp:rotate-90"
-            toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
-            input_ [class_ "lp-input w-0 h-0 opacity-0", type_ "checkbox"]
-          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
+      div_ [class_ "border border-strokeWeak rounded-lg group/lp mb-4"] do
+        label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
+          faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lp-input:checked]/lp:rotate-90"
+          toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
+          input_ [class_ "lp-input w-0 h-0 opacity-0", type_ "checkbox"]
+        div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
     Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
-        div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
-          label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
-            faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
-            toHtml $ "Rate " <> display d.changeDirection <> " (" <> Issues.showPct d.changePercent <> ")"
-            input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
-          div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
+      div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
+        label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
+          faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
+          toHtml $ "Rate " <> display d.changeDirection <> " (" <> Issues.showPct d.changePercent <> ")"
+          input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
+        div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
     _ -> pass
 
   -- Recommended action
