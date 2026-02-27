@@ -839,8 +839,8 @@ createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev 
       , service = errRate.service
       , critical = True
       , severity = "critical"
-      , title = "Error Spike: " <> errRate.errorType <> " (" <> T.pack (show (round increasePercent :: Int)) <> "% increase)"
-      , recommendedAction = "Error rate has spiked " <> T.pack (show (round zScore :: Int)) <> " standard deviations above baseline. Current: " <> T.pack (show (round currentRate :: Int)) <> "/hr, Baseline: " <> T.pack (show (round baselineMean :: Int)) <> "/hr. Investigate recent deployments or changes."
+      , title = "Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)"
+      , recommendedAction = "Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes."
       , migrationComplexity = "n/a"
       , issueData = exceptionData
       , timestamp = Nothing

@@ -27,7 +27,7 @@ module Pages.Anomalies (
 )
 where
 
-import BackgroundJobs qualified as BackgroundJobs
+import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
