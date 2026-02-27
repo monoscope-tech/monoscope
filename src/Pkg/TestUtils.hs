@@ -37,6 +37,7 @@ module Pkg.TestUtils (
   ingestLogWithHeader,
   ingestTraceWithHeader,
   ingestMetricWithHeader,
+  ingestTraceWithException,
 )
 where
 
@@ -948,6 +949,14 @@ ingestLog tr apiKey bodyText timestamp = do
 ingestTrace :: TestResources -> Text -> Text -> UTCTime -> IO ()
 ingestTrace tr apiKey spanName timestamp = do
   traceBytes <- OtlpMock.createOtelTraceAtTime apiKey spanName timestamp
+  let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
+  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
+
+
+-- | Helper to ingest a trace with an exception event
+ingestTraceWithException :: TestResources -> Text -> Text -> Text -> Text -> Text -> UTCTime -> IO ()
+ingestTraceWithException tr apiKey spanName excType excMessage excStacktrace timestamp = do
+  traceBytes <- OtlpMock.createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktrace timestamp
   let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
   void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
 

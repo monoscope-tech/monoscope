@@ -471,6 +471,7 @@ test-suite integration-tests
       Pages.BusinessFlowsSpec
       Pages.DashboardsSpec
       Pages.Endpoints.ApiCatalogSpec
+      Pages.ErrorPatternsSpec
       Pages.GitSyncSpec
       Pages.LogExplorer.LogSpec
       Pages.LogPatternsSpec

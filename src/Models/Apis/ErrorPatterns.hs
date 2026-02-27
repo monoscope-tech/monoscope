@@ -100,10 +100,10 @@ data ErrorPattern = ErrorPattern
   , subscribed :: Bool
   , notifyEveryMinutes :: Int
   , lastNotifiedAt :: Maybe ZonedTime
-  , occurrences1m :: Int
-  , occurrences5m :: Int
-  , occurrences1h :: Int
-  , occurrences24h :: Int
+  , occurrences_1m :: Int
+  , occurrences_5m :: Int
+  , occurrences_1h :: Int
+  , occurrences_24h :: Int
   , quietMinutes :: Int
   , resolutionThresholdMinutes :: Int
   , baselineState :: BaselineState
@@ -353,9 +353,9 @@ data ErrorPatternWithCurrentRate = ErrorPatternWithCurrentRate
   deriving anyclass (FromRow)
 
 
-getErrorPatternsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [ErrorPatternWithCurrentRate]
-getErrorPatternsWithCurrentRates pid =
-  PG.query q (Only pid)
+getErrorPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [ErrorPatternWithCurrentRate]
+getErrorPatternsWithCurrentRates pid now =
+  PG.query q (now, pid)
   where
     q =
       [sql|
@@ -367,7 +367,7 @@ getErrorPatternsWithCurrentRates pid =
         FROM apis.error_patterns e
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
-          AND counts.hour_bucket = date_trunc('hour', NOW())
+          AND counts.hour_bucket = date_trunc('hour', ?::timestamptz)
         WHERE e.project_id = ? AND e.state != 'resolved' AND e.is_ignored = false
       |]
 
@@ -423,17 +423,17 @@ upsertErrorPatternQueryAndParam pid err = (q, params)
 
 -- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and
 -- resolves error_id via JOIN on apis.error_patterns(project_id, hash).
-upsertErrorPatternHourlyStats :: DB es => Projects.ProjectId -> V.Vector (Text, Int, Int) -> Eff es Int64
-upsertErrorPatternHourlyStats _pid stats | V.null stats = pure 0
-upsertErrorPatternHourlyStats pid stats =
+upsertErrorPatternHourlyStats :: DB es => Projects.ProjectId -> UTCTime -> V.Vector (Text, Int, Int) -> Eff es Int64
+upsertErrorPatternHourlyStats _pid _now stats | V.null stats = pure 0
+upsertErrorPatternHourlyStats pid now stats =
   PG.execute
     [sql| INSERT INTO apis.error_hourly_stats (project_id, error_id, hour_bucket, event_count, user_count)
-          SELECT e.project_id, e.id, date_trunc('hour', NOW()), u.event_count, u.user_count
+          SELECT e.project_id, e.id, date_trunc('hour', ?::timestamptz), u.event_count, u.user_count
           FROM (SELECT unnest(?::text[]) AS hash, unnest(?::int[]) AS event_count, unnest(?::int[]) AS user_count) u
           JOIN apis.error_patterns e ON e.project_id = ? AND e.hash = u.hash
           ON CONFLICT (project_id, error_id, hour_bucket)
           DO UPDATE SET event_count = apis.error_hourly_stats.event_count + EXCLUDED.event_count,
                         user_count = apis.error_hourly_stats.user_count + EXCLUDED.user_count |]
-    (hashes, eventCounts, userCounts, pid)
+    (now, hashes, eventCounts, userCounts, pid)
   where
     (hashes, eventCounts, userCounts) = V.unzip3 stats

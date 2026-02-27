@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError) where
 
 import Control.Lens (view, (.~), _1, _2, _3)
 import Data.Aeson qualified as AE
@@ -669,7 +669,7 @@ processOneMinuteErrors scheduledTime pid = do
           addError acc e = HM.insertWith addCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc
           addCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
           rollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- hashGroups]
-      void $ ErrorPatterns.upsertErrorPatternHourlyStats pid rollupStats
+      void $ ErrorPatterns.upsertErrorPatternHourlyStats pid scheduledTime rollupStats
       -- Batch otel updates: write extracted errors JSON into spans
       let mkErrorUpdate groupedErrors = do
             (firstError, _) <- V.uncons groupedErrors
@@ -1856,10 +1856,11 @@ calculateErrorBaselines pid = do
 detectErrorSpikes :: Projects.ProjectId -> ATBackgroundCtx ()
 detectErrorSpikes pid = do
   authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+  now <- Time.currentTime
   Log.logInfo "Detecting error spikes" pid
 
   -- Get all errors with their current hour counts in one query
-  errorsWithRates <- ErrorPatterns.getErrorPatternsWithCurrentRates pid
+  errorsWithRates <- ErrorPatterns.getErrorPatternsWithCurrentRates pid now
   -- Hoist project/users lookup outside the loop (constant for all errors in this project)
   projectM <- Projects.projectById pid
   users <- Projects.usersByProjectId pid

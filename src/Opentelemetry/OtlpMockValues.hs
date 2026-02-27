@@ -2,6 +2,7 @@ module Opentelemetry.OtlpMockValues (
   createOtelLogAtTime,
   createOtelSpanAtTime,
   createOtelTraceAtTime,
+  createOtelTraceWithExceptionAtTime,
   createGaugeMetricAtTime,
 ) where
 
@@ -99,4 +100,38 @@ createGaugeMetricAtTime apiKey metricName value timestamp = do
       metric = defMessage & PMF.name .~ metricName & PMF.description .~ ("Test gauge metric: " <> metricName) & PMF.unit .~ "1" & PMF.gauge .~ gauge
       scopeMetric = defMessage & PMF.metrics .~ [metric]
       request = defMessage @MS.ExportMetricsServiceRequest & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey & PMF.scopeMetrics .~ [scopeMetric]]
+  pure $ encodeMessage request
+
+
+-- | Create OTLP trace with an exception event (matches real OTel SDK output)
+-- The span has ERROR status and an "exception" event with type/message/stacktrace attributes.
+createOtelTraceWithExceptionAtTime :: Text -> Text -> Text -> Text -> Text -> UTCTime -> IO ByteString
+createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktrace timestamp = do
+  trIdText <- UUID.toText <$> nextRandom
+  spanIdText <- UUID.toText <$> nextRandom
+  let startTime = round (utcTimeToPOSIXSeconds timestamp * 1e9) :: Word64
+      endTime = startTime + 100000000
+      traceIdBS = fromRight "" $ B16.decode $ encodeUtf8 $ T.replicate (32 - T.length trIdText) "0" <> trIdText
+      spanIdBS = fromRight "" $ B16.decode $ encodeUtf8 $ T.replicate (16 - T.length spanIdText) "0" <> spanIdText
+      mkAttr k v = defMessage & PCF.key .~ k & PCF.value .~ (defMessage & PCF.stringValue .~ v)
+      exceptionEvent =
+        defMessage
+          & PTF.name .~ "exception"
+          & PTF.timeUnixNano .~ startTime
+          & PTF.attributes .~ [mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace]
+      spanStatus = defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ excMessage
+      otelSpan =
+        defMessage
+          & PTF.traceId .~ traceIdBS & PTF.spanId .~ spanIdBS
+          & PTF.name .~ spanName & PTF.kind .~ PT.Span'SPAN_KIND_SERVER
+          & PTF.startTimeUnixNano .~ startTime & PTF.endTimeUnixNano .~ endTime
+          & PTF.status .~ spanStatus
+          & PTF.events .~ [exceptionEvent]
+          & PTF.attributes .~ [mkAttr "http.request.method" "GET", mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
+      resource =
+        defMessage
+          & PRF.attributes .~ [ mkAttr "service.name" "test-service", mkAttr "at-project-key" apiKey
+                               , mkAttr "telemetry.sdk.name" "opentelemetry", mkAttr "telemetry.sdk.language" "nodejs" ]
+      scopeSpan = defMessage & PTF.spans .~ [otelSpan]
+      request = defMessage @TS.ExportTraceServiceRequest & TSF.resourceSpans .~ [defMessage & PTF.resource .~ resource & PTF.scopeSpans .~ [scopeSpan]]
   pure $ encodeMessage request
