@@ -654,7 +654,7 @@ processOneMinuteErrors scheduledTime pid = do
                     OR attributes->>'exception.type' IS NOT NULL
                     OR attributes->>'exception.message' IS NOT NULL
                   )
-                  OFFSET ? LIMIT 30 |]
+                  OFFSET ? LIMIT 2000 |]
             (pid, oneMinuteAgo, scheduledTime, skip)
       -- Only log if there are actually errors to process (reduces noise in tests)
       Relude.when (V.length spansWithErrors > 0)
@@ -664,7 +664,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- (otel log and span, [errors])
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
       processProjectErrors pid allErrors
-      notifyErrorSubscriptions pid (V.map (.hash) allErrors)
+      notifyErrorSubscriptions pid (V.fromList . ordNub . V.toList $ V.map (.hash) allErrors)
       -- Batch all error updates into a single query using unnest (avoids N+1 pattern)
       let mkErrorUpdate groupedErrors = do
             (firstError, _) <- V.uncons groupedErrors
@@ -684,8 +684,8 @@ processOneMinuteErrors scheduledTime pid = do
             (spanIds, traceIds, errorsJson, pid)
         Relude.when (fromIntegral rowsUpdated /= V.length updates)
           $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= V.length updates, "actual" AE..= rowsUpdated])
-      Relude.when (V.length spansWithErrors == 30)
-        $ processErrorsPaginated oneMinuteAgo (skip + 30)
+      Relude.when (V.length spansWithErrors == 2000)
+        $ processErrorsPaginated oneMinuteAgo (skip + 2000)
 
 
 data ErrorSubscriptionDue = ErrorSubscriptionDue
@@ -732,7 +732,7 @@ sendAlertToChannels alert pid project users pagerdutyUrl subj html (initSlackTs,
 
 
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
-notifyErrorSubscriptions pid errorHashes = do
+notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
   ctx <- ask @Config.AuthContext
   dueErrors :: [ErrorSubscriptionDue] <-
     PG.query

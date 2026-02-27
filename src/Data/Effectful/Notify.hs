@@ -322,6 +322,11 @@ runNotifyTest ref = interpret \_ -> \case
     Log.logTrace "Notification payload" notification
     liftIO $ modifyIORef ref (notification :)
   SendNotificationWithReply notification -> do
+    notifications <- liftIO $ readIORef ref
     liftIO $ modifyIORef ref (notification :)
-    pure Nothing
+    let idx = length notifications + 1
+    pure $ case notification of
+      SlackNotification _ -> Just $ "test-slack-ts-" <> show idx
+      DiscordNotification _ -> Just $ "test-discord-id-" <> show idx
+      _ -> Nothing
   GetNotifications -> liftIO $ reverse <$> readIORef ref

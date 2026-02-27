@@ -341,7 +341,7 @@ parsePhpFrame line
     cleanPhpFunction func =
       T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::"
       where
-        splitLast sep = case T.splitOn sep func of (_ : t : ts) -> Just (last (t :| ts)); _ -> Nothing
+        splitLast sep = viaNonEmpty last $ drop 1 $ T.splitOn sep func
 
     isPhpInApp = noneInfix ["/vendor/", "/phar://"]
 

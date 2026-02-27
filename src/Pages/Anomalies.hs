@@ -192,8 +192,6 @@ anomalyDetailCore pid firstM fetchIssue = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   issueM <- fetchIssue pid
-  members <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  userPermission <- ProjectMembers.getUserPermission pid sess.user.id
   now <- Time.currentTime
   let baseBwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Anomaly Detail", config = appCtx.config}
   case issueM of
@@ -207,10 +205,14 @@ anomalyDetailCore pid firstM fetchIssue = do
         issue.issueType & \case
           Issues.RuntimeException -> Errors.getErrorLByHash pid issue.targetHash
           _ -> pure Nothing
-      let canResolve =
-            userPermission
-              == Just ProjectMembers.PAdmin
-              || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
+      (members, canResolve) <- case errorM of
+        Just _ -> do
+          userPermission <- ProjectMembers.getUserPermission pid sess.user.id
+          ms <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
+          let cr = userPermission == Just ProjectMembers.PAdmin
+                    || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
+          pure (ms, cr)
+        Nothing -> pure (V.empty, False)
       let bwconf =
             baseBwconf
               { pageActions = Just $ div_ [class_ "flex gap-2"] do
