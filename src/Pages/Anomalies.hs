@@ -514,9 +514,8 @@ newtype AssignErrorForm = AssignErrorForm
   deriving anyclass (FromForm)
 
 
-data ErrorSubscriptionForm = ErrorSubscriptionForm
+newtype ErrorSubscriptionForm = ErrorSubscriptionForm
   { notifyEveryMinutes :: Maybe Int
-  , action :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -531,7 +530,7 @@ assignErrorPostH pid errUuid form = do
   members <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   errM <- ErrorPatterns.getErrorPatternById errId
   let render eidM aidM = addRespHeaders $ errorAssigneeSection pid eidM aidM members
-      isMember = maybe True (\uid -> any (\m -> m.userId == uid) members) assigneeIdM
+      isMember = all (\uid -> any (\m -> m.userId == uid) members) assigneeIdM
   case errM of
     Nothing -> addErrorToast "Error not found" Nothing >> render Nothing Nothing
     Just err
@@ -577,13 +576,8 @@ errorSubscriptionPostH pid errUuid form = do
       | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> addRespHeaders mempty
       | otherwise -> do
           let notifyEveryRaw = fromMaybe 0 form.notifyEveryMinutes
-          let notifyEvery = clamp (1, 1440) $ if notifyEveryRaw == 0 then 30 else notifyEveryRaw
-          let action' = fromMaybe "" form.action
-          let shouldSubscribe =
-                case action' of
-                  "unsubscribe" -> False
-                  "subscribe" -> True
-                  _ -> notifyEveryRaw > 0
+              notifyEvery = clamp (1, 1440) $ if notifyEveryRaw == 0 then 30 else notifyEveryRaw
+              shouldSubscribe = notifyEveryRaw > 0
           void $ ErrorPatterns.updateErrorPatternSubscription err.id shouldSubscribe notifyEvery
           addSuccessToast (if shouldSubscribe then "Subscribed to error" else "Unsubscribed from error") Nothing
           addRespHeaders $ errorSubscriptionAction pid err{ErrorPatterns.subscribed = shouldSubscribe, ErrorPatterns.notifyEveryMinutes = notifyEvery}
@@ -1088,7 +1082,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                     Just
                       $ ZeroState
                         { icon = "empty-set"
-                        , title = "No Issues Or ErrorPatterns."
+                        , title = "No Issues Or Errors."
                         , description = "Start monitoring errors that happened during a request."
                         , actionText = "Error reporting guide"
                         , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#reporting-errors-to-monoscope"

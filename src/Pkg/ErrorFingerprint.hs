@@ -103,20 +103,8 @@ parseGoFrame :: Text -> Maybe StackFrame
 parseGoFrame line
   | "goroutine" `T.isPrefixOf` line = Nothing -- Skip goroutine headers
   | ".go:" `T.isInfixOf` line =
-      -- File path line: /path/to/file.go:123 +0x1f
-      let (pathPart, _) = T.breakOn " +" line
-          (filePath, lineCol) = T.breakOnEnd ":" pathPart
-          lineNum = readText $ T.takeWhile (/= ':') lineCol
-       in Just
-            StackFrame
-              { filePath = T.dropEnd 1 filePath -- Remove trailing ':'
-              , moduleName = extractGoModule filePath
-              , functionName = ""
-              , lineNumber = lineNum
-              , columnNumber = Nothing
-              , contextLine = Nothing
-              , isInApp = isGoInApp filePath
-              }
+      -- File path line: /path/to/file.go:123 +0x1f — skip since functionName is empty (noise in fingerprints)
+      Nothing
   | "(" `T.isInfixOf` line =
       -- Function call line: main.foo(0x1234, 0x5678)
       let (funcPart, _) = T.breakOn "(" line
@@ -132,12 +120,6 @@ parseGoFrame line
               }
   | otherwise = Nothing
   where
-    extractGoModule path =
-      let parts = T.splitOn "/" path
-       in if length parts > 2
-            then Just $ T.intercalate "/" $ take 3 parts
-            else Nothing
-
     extractGoModuleFromFunc func =
       let parts = T.splitOn "." func
        in if length parts > 1
@@ -148,7 +130,6 @@ parseGoFrame line
       let parts = T.splitOn "." func
        in fromMaybe func $ viaNonEmpty last parts
 
-    isGoInApp = noneInfix ["go/src/", "pkg/mod/", "vendor/", "/runtime/", "/net/", "/syscall/"]
     isGoFuncInApp = nonePrefix ["runtime.", "syscall.", "net.", "net/http.", "reflect."]
 
 
@@ -478,7 +459,7 @@ normalizeStackTrace runtime stackText =
 -- "Trimmed message"
 normalizeMessage :: Text -> Text
 normalizeMessage msg =
-  let lns = take 2 $ filter (not . T.null . T.strip) $ lines msg
+  let lns = take 2 $ filter (not . T.null . T.strip) $ T.splitOn "\n" $ T.replace "\r\n" "\n" msg
       combined = T.intercalate " " $ map T.strip lns
       -- Replace variable patterns with placeholders
       normalized = replaceAllFormats combined

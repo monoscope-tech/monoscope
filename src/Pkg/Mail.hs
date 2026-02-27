@@ -249,7 +249,7 @@ slackErrorAlert alertType err issTitle project channelId projectUrl =
               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
               , AE.object
                   [ "type" AE..= "context"
-                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> err.stackTrace <> "`")] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]])
+                  , "elements" AE..= AE.Array (V.fromList $ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> T.take 500 err.stackTrace <> "`")] : [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]])
                   ]
               , AE.object
                   [ "type" AE..= "context"
@@ -277,7 +277,7 @@ slackErrorAlert alertType err issTitle project channelId projectUrl =
     , "channel" AE..= channelId
     ]
   where
-    targetUrl = projectUrl <> "/anomalies/"
+    targetUrl = projectUrl <> "/anomalies/by_hash/" <> err.hash
     title = "<" <> targetUrl <> "|" <> fst (runtimeAlertMessages alertType) <> " " <> err.errorType <> ": " <> issTitle <> ">"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath

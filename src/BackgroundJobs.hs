@@ -23,6 +23,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
+import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
@@ -365,7 +366,7 @@ processBackgroundJob authCtx bgJob =
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
-    QueryMonitorsCheck -> Log.logInfo "Skipping QueryMonitorsCheck - not yet implemented" () -- TODO: re-enable checkTriggeredQueryMonitors once query monitor evaluation is implemented
+    QueryMonitorsCheck -> Log.logAttention "Skipping QueryMonitorsCheck - not yet implemented" () -- TODO: re-enable checkTriggeredQueryMonitors once query monitor evaluation is implemented
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
@@ -660,8 +661,9 @@ processOneMinuteErrors scheduledTime pid = do
       Relude.when (V.length spansWithErrors > 0)
         $ Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
       let allErrors = Telemetry.getAllATErrors spansWithErrors
-      -- Group errors by traceId within each project to avoid duplicate errors from same trace
-      let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
+      -- Group errors by (traceId, spanId) — must sort first since V.groupBy only groups consecutive elements
+      let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
+          errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
       processProjectErrors pid allErrors
       notifyErrorSubscriptions pid (V.map (.hash) allErrors)
       -- Upsert hourly rollup stats (aggregated by hash)
@@ -788,6 +790,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
 
 
 -- | Process and insert errors for a specific project
+-- TODO: batch upserts with unnest like upsertErrorPatternHourlyStats — currently N+1 (up to 2000 round-trips per window)
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> ATBackgroundCtx ()
 processProjectErrors pid errors = do
   result <- try $ V.forM_ errors \err -> uncurry PG.execute $ ErrorPatterns.upsertErrorPatternQueryAndParam pid err
@@ -1358,8 +1361,8 @@ processIssuesEnhancement scheduledTime = do
 
   Log.logInfo "Found issues to enhance with LLM" (V.length issuesToEnhance)
 
-  -- Group issues by project
-  let issuesByProject = V.groupBy (\a b -> snd a == snd b) issuesToEnhance
+  -- Group issues by project (SQL already sorts by project_id, but sort defensively for V.groupBy)
+  let issuesByProject = V.groupBy (\a b -> snd a == snd b) $ V.modify (VA.sortBy (comparing snd)) issuesToEnhance
 
   -- Create enhancement jobs for each project
   liftIO $ withResource ctx.jobsPool \conn ->
@@ -1893,7 +1896,7 @@ detectErrorSpikes pid = do
                   sendAlertToChannels spikeAlert pid project users errorsUrl subj html (errRate.slackThreadTs, errRate.discordMessageId)
                 Relude.when (finalSlackTs /= errRate.slackThreadTs || finalDiscordMsgId /= errRate.discordMessageId)
                   $ void
-                  $ ErrorPatterns.updateErrorPatternThreadIds errRate.errorId finalSlackTs finalDiscordMsgId
+                  $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errRate.errorId finalSlackTs finalDiscordMsgId
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
           else -- Transition from Escalating → Ongoing when spike subsides
             Relude.when (errRate.state == ErrorPatterns.ESEscalating)
@@ -1926,7 +1929,7 @@ processNewError pid errorHash = do
           users <- Projects.usersByProjectId pid
           let issueId = UUID.toText issue.id.unUUIDId
               runtimeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = err.errorData, runtimeAlertType}
-              errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/"
+              errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
               (subj, html) = case runtimeAlertType of
                 RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [err.errorData]
                 _ -> ET.runtimeErrorsEmail project.title errorsUrl [err.errorData]
@@ -1934,5 +1937,5 @@ processNewError pid errorHash = do
             sendAlertToChannels runtimeAlert pid project users errorsUrl subj html (err.slackThreadTs, err.discordMessageId)
           Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId)
             $ void
-            $ ErrorPatterns.updateErrorPatternThreadIds err.id finalSlackTs finalDiscordMsgId
+            $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt err.id finalSlackTs finalDiscordMsgId
         Log.logInfo "Created issue for error" (pid, err.id, issue.id, show runtimeAlertType)
