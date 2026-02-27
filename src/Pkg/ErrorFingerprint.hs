@@ -82,11 +82,9 @@ readText = readMaybe . toString
 
 -- | Split a dot-qualified name into (module, function)
 splitDotted :: Text -> (Text, Text)
-splitDotted q = case (viaNonEmpty init parts, viaNonEmpty last parts) of
-  (Just ps, Just l) | length parts > 1 -> (T.intercalate "." ps, l)
-  _ -> ("", q)
-  where
-    parts = T.splitOn "." q
+splitDotted q = case T.breakOnEnd "." q of
+  ("", _) -> ("", q)
+  (modDot, fn) -> (T.dropEnd 1 modDot, fn)
 
 
 -- | True when none of the needles appear as infixes in the haystack

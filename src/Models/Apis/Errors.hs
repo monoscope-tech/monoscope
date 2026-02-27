@@ -19,6 +19,7 @@ module Models.Apis.Errors (
   upsertErrorQueryAndParam,
   updateErrorSubscription,
   updateErrorThreadIds,
+  updateErrorThreadIdsAndNotifiedAt,
   setErrorAssignee,
   -- Error Events (for spike detection)
   ErrorWithCurrentRate (..),
@@ -341,6 +342,21 @@ updateErrorThreadIds eid slackTs discordMsgId =
         UPDATE apis.errors SET
           slack_thread_ts = COALESCE(?, slack_thread_ts),
           discord_message_id = COALESCE(?, discord_message_id),
+          updated_at = NOW()
+        WHERE id = ?
+      |]
+
+
+updateErrorThreadIdsAndNotifiedAt :: DB es => ErrorId -> Maybe Text -> Maybe Text -> Eff es Int64
+updateErrorThreadIdsAndNotifiedAt eid slackTs discordMsgId =
+  PG.execute q (slackTs, discordMsgId, eid)
+  where
+    q =
+      [sql|
+        UPDATE apis.errors SET
+          slack_thread_ts = COALESCE(?, slack_thread_ts),
+          discord_message_id = COALESCE(?, discord_message_id),
+          last_notified_at = NOW(),
           updated_at = NOW()
         WHERE id = ?
       |]

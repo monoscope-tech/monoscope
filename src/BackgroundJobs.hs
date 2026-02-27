@@ -42,6 +42,7 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Errors qualified as Errors
 import Models.Apis.Fields qualified as Fields
+import Models.Apis.Integrations (PagerdutyData (..), getPagerdutyByProjectId)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns (BaselineState (..))
@@ -724,7 +725,7 @@ sendAlertToChannels alert pid project users _errorsUrl subj html (initSlackTs, i
           pure (slackTs, discordMsgId <|> msgIdM)
         Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert alert pid project.title project.whatsappNumbers
         Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-        Projects.NPagerduty -> pure (slackTs, discordMsgId)
+        Projects.NPagerduty -> (slackTs, discordMsgId) <$ (getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title _errorsUrl)
     )
     (initSlackTs, initDiscordMsgId)
     project.notificationsChannel
@@ -761,20 +762,17 @@ notifyErrorSubscriptions pid errorHashes = do
             Errors.ESEscalating -> EscalatingErrors
             Errors.ESRegressed -> RegressedErrors
             _ -> NewRuntimeError
-          runtimeAlert ed issueId title st = RuntimeErrorAlert{issueId = Issues.issueIdText issueId, issueTitle = title, errorData = ed, runtimeAlertType = alertTypeForState st}
       forM_ dueErrors \sub -> do
-        let alert = runtimeAlert sub.errorData sub.issueId sub.issueTitle sub.errorState
+        let alertType = alertTypeForState sub.errorState
+            alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType}
             errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-            (subj, html) = case alertTypeForState sub.errorState of
+            (subj, html) = case alertType of
               EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData]
               RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData]
               _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData]
         (finalSlackTs, finalDiscordMsgId) <-
           sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
-        Relude.when (finalSlackTs /= sub.slackThreadTs || finalDiscordMsgId /= sub.discordMessageId)
-          $ void
-          $ Errors.updateErrorThreadIds sub.errorId finalSlackTs finalDiscordMsgId
-        void $ PG.execute [sql| UPDATE apis.errors SET last_notified_at = NOW(), updated_at = NOW() WHERE id = ? |] (Only sub.errorId)
+        void $ Errors.updateErrorThreadIdsAndNotifiedAt sub.errorId finalSlackTs finalDiscordMsgId
 
 
 -- | Process and insert errors for a specific project
