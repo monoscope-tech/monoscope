@@ -225,22 +225,15 @@ anomalyDetailCore pid firstM fetchIssue = do
                       errorResolveAction pid errL.base.id errL.base.state canResolve
                       errorSubscriptionAction pid errL.base
               }
-      (trItem, spanRecs) <- case errorM of
-        Just errL -> do
-          let err = errL.base
-              targetTIdM = maybe err.recentTraceId (const err.firstTraceId) firstM
-              targetTme = maybe (zonedTimeToUTC err.updatedAt) (const $ zonedTimeToUTC err.createdAt) firstM
-          case targetTIdM of
-            Just x -> do
-              trM <- Telemetry.getTraceDetails pid x (Just targetTme) now
-              case trM of
-                Just traceItem -> do
-                  spanRecords' <-
-                    Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
-                  pure (Just traceItem, V.fromList spanRecords')
-                Nothing -> pure (Nothing, V.empty)
-            Nothing -> pure (Nothing, V.empty)
-        Nothing -> pure (Nothing, V.empty)
+      (trItem, spanRecs) <- fromMaybe (Nothing, V.empty) <$> runMaybeT do
+        errL <- hoistMaybe errorM
+        let err = errL.base
+            isFirst = isJust firstM
+        tId <- hoistMaybe $ bool err.recentTraceId err.firstTraceId isFirst
+        let tme = bool (zonedTimeToUTC err.updatedAt) (zonedTimeToUTC err.createdAt) isFirst
+        traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId (Just tme) now
+        spanRecs' <- lift $ Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
+        pure (Just traceItem, V.fromList spanRecs')
       addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members
 
 
