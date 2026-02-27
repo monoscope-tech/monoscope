@@ -33,6 +33,7 @@ import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
+import Data.Ord (clamp)
 import Data.Map qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
@@ -572,7 +573,7 @@ errorSubscriptionPostH pid errUuid form = do
       | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> addRespHeaders mempty
       | otherwise -> do
           let notifyEveryRaw = fromMaybe 0 form.notifyEveryMinutes
-          let notifyEvery = max 1 $ min 1440 $ if notifyEveryRaw == 0 then 30 else notifyEveryRaw
+          let notifyEvery = clamp (1, 1440) $ if notifyEveryRaw == 0 then 30 else notifyEveryRaw
           let action' = fromMaybe "" form.action
           let shouldSubscribe =
                 case action' of
@@ -581,8 +582,7 @@ errorSubscriptionPostH pid errUuid form = do
                   _ -> notifyEveryRaw > 0
           void $ Errors.updateErrorSubscription err.id shouldSubscribe notifyEvery
           addSuccessToast (if shouldSubscribe then "Subscribed to error" else "Unsubscribed from error") Nothing
-          errM' <- Errors.getErrorById err.id
-          maybe (addRespHeaders mempty) (addRespHeaders . errorSubscriptionAction pid) errM'
+          addRespHeaders $ errorSubscriptionAction pid err{Errors.subscribed = shouldSubscribe, Errors.notifyEveryMinutes = notifyEvery}
 
 
 -- | Form for AI chat input

@@ -58,6 +58,7 @@ extra-source-files:
     static/migrations/0030_replay_event_file_count.sql
     static/migrations/0031_slack_bot_token.sql
     static/migrations/0032_log_patterns.sql
+    static/migrations/0033_error.sql
 
 source-repository head
   type: git
@@ -130,6 +131,7 @@ library
       Pkg.DeriveUtils
       Pkg.Drain
       Pkg.EmailTemplates
+      Pkg.ErrorFingerprint
       Pkg.GitHub
       Pkg.Mail
       Pkg.Parser
