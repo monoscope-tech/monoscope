@@ -106,7 +106,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
-import Models.Apis.Errors qualified as Errors
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -820,7 +820,7 @@ getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Re
 getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @Report [[field| project_id |], [field| report_type |]] <> " ORDER BY created_at DESC LIMIT 1") (pid, reportType)
 
 
-createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.ErrorWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
+createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
 createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev =
   let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
       increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
@@ -836,7 +836,7 @@ createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev 
         ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
 
 
-createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.Error -> Eff es Issue
+createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPattern -> Eff es Issue
 createNewErrorIssue projectId err =
   mkErrorIssue
     projectId

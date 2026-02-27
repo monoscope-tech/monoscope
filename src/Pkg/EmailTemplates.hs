@@ -38,7 +38,7 @@ import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
-import Models.Apis.Errors qualified as Errors
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Pkg.DeriveUtils (UUIDId (..))
@@ -300,7 +300,7 @@ projectDeletedEmail userName projectName =
 -- Runtime Errors Template
 -- =============================================================================
 
-runtimeErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
+runtimeErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
 runtimeErrorsEmail projectName errorsUrl errors =
   ( "[···] New Runtime Exception(s) Detected - " <> projectName
   , emailBody do
@@ -320,7 +320,7 @@ runtimeErrorsEmail projectName errorsUrl errors =
   )
 
 
-escalatingErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
+escalatingErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
 escalatingErrorsEmail projectName errorsUrl errors =
   runtimeErrorVariantEmail
     "Escalating Runtime Error(s)"
@@ -331,7 +331,7 @@ escalatingErrorsEmail projectName errorsUrl errors =
     "We've detected escalating runtime errors in your "
 
 
-regressedErrorsEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
+regressedErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
 regressedErrorsEmail projectName errorsUrl errors =
   runtimeErrorVariantEmail
     "Regressed Runtime Error(s)"
@@ -342,7 +342,7 @@ regressedErrorsEmail projectName errorsUrl errors =
     "We've detected regressed runtime errors in your "
 
 
-errorSpikesEmail :: Text -> Text -> [Errors.ATError] -> (Text, Html ())
+errorSpikesEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
 errorSpikesEmail projectName errorsUrl errors =
   runtimeErrorVariantEmail
     "Runtime Error Spike(s)"
@@ -353,7 +353,7 @@ errorSpikesEmail projectName errorsUrl errors =
     "We've detected a runtime error spike in your "
 
 
-runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [Errors.ATError] -> Text -> (Text, Html ())
+runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Text -> (Text, Html ())
 runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intro =
   ( subjectPrefix <> projectName
   , emailBody do
@@ -373,7 +373,7 @@ runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intr
   )
 
 
-errorCard :: Errors.ATError -> Html ()
+errorCard :: ErrorPatterns.ATError -> Html ()
 errorCard e =
   table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
     tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
@@ -602,26 +602,26 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
   where
     sampleError1 =
       def
-        { Errors.errorType = "TypeError"
-        , Errors.message = "Cannot read property 'map' of undefined"
-        , Errors.rootErrorType = "TypeError"
-        , Errors.rootErrorMessage = "Cannot read property 'map' of undefined"
-        , Errors.stackTrace = "at Array.map (<anonymous>)\n  at processItems (src/handlers/items.js:42:15)\n  at async Router.handle (node_modules/express/lib/router.js:174:12)"
-        , Errors.hash = "abc123def"
-        , Errors.requestMethod = Just "GET"
-        , Errors.requestPath = Just "/api/v1/items"
-        , Errors.technology = Just RequestDumps.JsExpress
+        { ErrorPatterns.errorType = "TypeError"
+        , ErrorPatterns.message = "Cannot read property 'map' of undefined"
+        , ErrorPatterns.rootErrorType = "TypeError"
+        , ErrorPatterns.rootErrorMessage = "Cannot read property 'map' of undefined"
+        , ErrorPatterns.stackTrace = "at Array.map (<anonymous>)\n  at processItems (src/handlers/items.js:42:15)\n  at async Router.handle (node_modules/express/lib/router.js:174:12)"
+        , ErrorPatterns.hash = "abc123def"
+        , ErrorPatterns.requestMethod = Just "GET"
+        , ErrorPatterns.requestPath = Just "/api/v1/items"
+        , ErrorPatterns.technology = Just RequestDumps.JsExpress
         }
     sampleError2 =
       def
-        { Errors.errorType = "NullPointerException"
-        , Errors.message = "Attempt to invoke method on null reference"
-        , Errors.rootErrorType = "NullPointerException"
-        , Errors.rootErrorMessage = "null reference in UserService.getUser()"
-        , Errors.stackTrace = "at com.example.UserService.getUser(UserService.java:56)\n  at com.example.ApiController.handleRequest(ApiController.java:123)"
-        , Errors.hash = "xyz789abc"
-        , Errors.requestMethod = Just "POST"
-        , Errors.requestPath = Just "/api/v1/users"
+        { ErrorPatterns.errorType = "NullPointerException"
+        , ErrorPatterns.message = "Attempt to invoke method on null reference"
+        , ErrorPatterns.rootErrorType = "NullPointerException"
+        , ErrorPatterns.rootErrorMessage = "null reference in UserService.getUser()"
+        , ErrorPatterns.stackTrace = "at com.example.UserService.getUser(UserService.java:56)\n  at com.example.ApiController.handleRequest(ApiController.java:123)"
+        , ErrorPatterns.hash = "xyz789abc"
+        , ErrorPatterns.requestMethod = Just "POST"
+        , ErrorPatterns.requestPath = Just "/api/v1/users"
         }
 
 

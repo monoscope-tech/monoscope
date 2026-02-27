@@ -49,7 +49,7 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Errors qualified as Errors
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields qualified as Fields (
   FieldCategoryEnum,
   FieldId,
@@ -327,7 +327,7 @@ data IssuesData
   | IDNewFieldIssue NewFieldIssue
   | IDNewFormatIssue NewFormatIssue
   | IDNewEndpointIssue NewEndpointIssue
-  | IDNewRuntimeExceptionIssue Errors.ATError
+  | IDNewRuntimeExceptionIssue ErrorPatterns.ATError
   | IDEmpty
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -522,13 +522,13 @@ data ATError = ATError
   , hash :: Text
   , errorType :: Text
   , message :: Text
-  , errorData :: Errors.ATError
+  , errorData :: ErrorPatterns.ATError
   , firstTraceId :: Maybe Text
   , recentTraceId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "error_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField, ToField) via Aeson ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
@@ -543,11 +543,11 @@ errorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ATError)
 errorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @ATError [[field| project_id |], [field| hash |]]) (pid, hash)
 
 
-insertErrorQueryAndParams :: Projects.ProjectId -> Errors.ATError -> (Query, [DBField])
+insertErrorQueryAndParams :: Projects.ProjectId -> ErrorPatterns.ATError -> (Query, [DBField])
 insertErrorQueryAndParams pid err = (q, params)
   where
     q =
-      [sql| insert into apis.errors (project_id, created_at, hash, error_type, message, error_data, first_trace_id, recent_trace_id) VALUES (?,?,?,?,?,?,?,?)
+      [sql| insert into apis.error_patterns (project_id, created_at, hash, error_type, message, error_data, first_trace_id, recent_trace_id) VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT (project_id, hash) DO UPDATE SET updated_at = EXCLUDED.created_at, recent_trace_id = EXCLUDED.recent_trace_id; |]
     params =
       [ MkDBField pid

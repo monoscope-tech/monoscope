@@ -58,8 +58,8 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
-import Models.Apis.Errors (ErrorId (..))
-import Models.Apis.Errors qualified as Errors
+import Models.Apis.ErrorPatterns (ErrorPatternId (..))
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
@@ -203,7 +203,7 @@ anomalyDetailCore pid firstM fetchIssue = do
     Just issue -> do
       errorM <-
         issue.issueType & \case
-          Issues.RuntimeException -> Errors.getErrorLByHash pid issue.targetHash
+          Issues.RuntimeException -> ErrorPatterns.getErrorPatternLByHash pid issue.targetHash
           _ -> pure Nothing
       (members, canResolve) <- case errorM of
         Just _ -> do
@@ -281,7 +281,7 @@ timeStatBox_ title timeStr
   | otherwise = pass
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Errors.ErrorL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
@@ -434,7 +434,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
     anomalyAIChat_ pid issue.id
 
 
-errorAssigneeSection :: Projects.ProjectId -> Maybe Errors.ErrorId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+errorAssigneeSection :: Projects.ProjectId -> Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
 errorAssigneeSection pid errIdM assigneeIdM members = do
   let isDisabled = isNothing errIdM || V.null members
   div_ [id_ "error-assignee", class_ "flex flex-col gap-2 border-t border-strokeWeak pt-3"] do
@@ -444,7 +444,7 @@ errorAssigneeSection pid errIdM assigneeIdM members = do
         select_ ([class_ "select select-sm w-full", disabled_ "true"] <> [name_ "assigneeId"]) do
           option_ [value_ ""] "Unassigned"
       Just errId -> do
-        let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorId <> "/assign"
+        let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorPatternId <> "/assign"
         form_ [hxPost_ actionUrl, hxTarget_ "#error-assignee", hxSwap_ "outerHTML", hxTrigger_ "change"] do
           select_
             ( [class_ "select select-sm w-full", name_ "assigneeId"]
@@ -465,12 +465,12 @@ errorAssigneeSection pid errIdM assigneeIdM members = do
                   $ toHtml label
 
 
-errorResolveAction :: Projects.ProjectId -> Errors.ErrorId -> Errors.ErrorState -> Bool -> Html ()
+errorResolveAction :: Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> ErrorPatterns.ErrorState -> Bool -> Html ()
 errorResolveAction pid errId errState canResolve =
   when canResolve do
-    let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorId <> "/resolve"
+    let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorPatternId <> "/resolve"
     div_ [id_ "error-resolve-action"] do
-      if errState == Errors.ESResolved
+      if errState == ErrorPatterns.ESResolved
         then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] "Resolved"
         else
           button_
@@ -482,11 +482,11 @@ errorResolveAction pid errId errState canResolve =
             "Resolve"
 
 
-errorSubscriptionAction :: (HasField "id" err Errors.ErrorId, HasField "notifyEveryMinutes" err Int, HasField "subscribed" err Bool) => Projects.ProjectId -> err -> Html ()
+errorSubscriptionAction :: (HasField "id" err ErrorPatterns.ErrorPatternId, HasField "notifyEveryMinutes" err Int, HasField "subscribed" err Bool) => Projects.ProjectId -> err -> Html ()
 errorSubscriptionAction pid err = do
   let isActive = err.subscribed
   let notifyEvery = err.notifyEveryMinutes
-  let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText err.id.unErrorId <> "/subscribe"
+  let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText err.id.unErrorPatternId <> "/subscribe"
   form_
     [ id_ "issue-subscription-action"
     , class_ "flex items-center gap-2"
@@ -526,10 +526,10 @@ assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuth
 assignErrorPostH pid errUuid form = do
   (_sess, _project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  let errId = Errors.ErrorId errUuid
+  let errId = ErrorPatterns.ErrorPatternId errUuid
       assigneeIdM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
   members <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  errM <- Errors.getErrorById errId
+  errM <- ErrorPatterns.getErrorPatternById errId
   let render eidM aidM = addRespHeaders $ errorAssigneeSection pid eidM aidM members
       isMember = maybe True (\uid -> any (\m -> m.userId == uid) members) assigneeIdM
   case errM of
@@ -539,7 +539,7 @@ assignErrorPostH pid errUuid form = do
       | not isMember -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
       | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
       | otherwise -> do
-          void $ Errors.setErrorAssignee err.id assigneeIdM
+          void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeIdM
           whenJust assigneeIdM \assigneeId ->
             void $ liftIO $ withResource appCtx.pool \conn ->
               createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
@@ -550,7 +550,7 @@ assignErrorPostH pid errUuid form = do
 resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 resolveErrorPostH pid errUuid = do
   (sess, _project) <- Sessions.sessionAndProject pid
-  errM <- Errors.getErrorById (Errors.ErrorId errUuid)
+  errM <- ErrorPatterns.getErrorPatternById (ErrorPatterns.ErrorPatternId errUuid)
   userPermission <- ProjectMembers.getUserPermission pid sess.user.id
   let canResolve err = userPermission == Just ProjectMembers.PAdmin || err.assigneeId == Just sess.user.id
   case errM of
@@ -561,16 +561,16 @@ resolveErrorPostH pid errUuid = do
           addErrorToast "You do not have permission to resolve this error" Nothing
           addRespHeaders $ errorResolveAction pid err.id err.state False
       | otherwise -> do
-          when (err.state /= Errors.ESResolved) $ void $ Errors.resolveError err.id
+          when (err.state /= ErrorPatterns.ESResolved) $ void $ ErrorPatterns.resolveErrorPattern err.id
           addSuccessToast "Error resolved" Nothing
-          addRespHeaders $ errorResolveAction pid err.id Errors.ESResolved True
+          addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
 
 
 errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (RespHeaders (Html ()))
 errorSubscriptionPostH pid errUuid form = do
   (_sess, _project) <- Sessions.sessionAndProject pid
-  let errId = Errors.ErrorId errUuid
-  errM <- Errors.getErrorById errId
+  let errId = ErrorPatterns.ErrorPatternId errUuid
+  errM <- ErrorPatterns.getErrorPatternById errId
   case errM of
     Nothing -> addErrorToast "Error not found" Nothing >> addRespHeaders mempty
     Just err
@@ -584,9 +584,9 @@ errorSubscriptionPostH pid errUuid form = do
                   "unsubscribe" -> False
                   "subscribe" -> True
                   _ -> notifyEveryRaw > 0
-          void $ Errors.updateErrorSubscription err.id shouldSubscribe notifyEvery
+          void $ ErrorPatterns.updateErrorPatternSubscription err.id shouldSubscribe notifyEvery
           addSuccessToast (if shouldSubscribe then "Subscribed to error" else "Unsubscribed from error") Nothing
-          addRespHeaders $ errorSubscriptionAction pid err{Errors.subscribed = shouldSubscribe, Errors.notifyEveryMinutes = notifyEvery}
+          addRespHeaders $ errorSubscriptionAction pid err{ErrorPatterns.subscribed = shouldSubscribe, ErrorPatterns.notifyEveryMinutes = notifyEvery}
 
 
 -- | Form for AI chat input
@@ -689,7 +689,7 @@ aiChatHistoryGetH pid issueId = do
 -- | Build complete system prompt for an issue (shared between POST and GET)
 buildSystemPromptForIssue :: Projects.ProjectId -> Issues.Issue -> UTCTime -> ATAuthCtx Text
 buildSystemPromptForIssue pid issue now = do
-  errorM <- bool (pure Nothing) (Errors.getErrorByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
+  errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
   (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) fetchTrace errorM
   alertContextM <- case (issue.issueType, AE.fromJSON @Issues.QueryAlertData (getAeson issue.issueData)) of
     (Issues.QueryAlert, AE.Success alertData) -> do
@@ -1088,7 +1088,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                     Just
                       $ ZeroState
                         { icon = "empty-set"
-                        , title = "No Issues Or Errors."
+                        , title = "No Issues Or ErrorPatterns."
                         , description = "Start monitoring errors that happened during a request."
                         , actionText = "Error reporting guide"
                         , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#reporting-errors-to-monoscope"

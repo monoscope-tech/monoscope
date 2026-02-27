@@ -86,7 +86,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified as Eff
-import Models.Apis.Errors qualified as Errors
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), unAesonTextMaybe)
@@ -1014,7 +1014,7 @@ getErrorEvents _ = []
 
 -- | Extract all runtime errors from a collection of spans
 -- This is the main entry point for error anomaly detection
-getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector Errors.ATError
+getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector ErrorPatterns.ATError
 getAllATErrors = V.concatMap extractErrorsFromSpan
   where
     extractErrorsFromSpan spanObj =
@@ -1028,7 +1028,7 @@ getAllATErrors = V.concatMap extractErrorsFromSpan
 -- - exception.message: The exception message
 -- - exception.stacktrace: The stacktrace
 -- Also extracts HTTP context (method, path) for better error tracking
-extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe Errors.ATError
+extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe ErrorPatterns.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
   AE.Object attrs <- KEM.lookup "exception" attrs'
@@ -1086,7 +1086,7 @@ extractATError spanObj (AE.Object o) = do
   -- projectId mService mEndpoint runtime exceptionType message stackTrace
 
   return
-    $ Errors.ATError
+    $ ErrorPatterns.ATError
       { projectId = pid
       , when = spanObj.timestamp
       , errorType = typ
@@ -1094,7 +1094,7 @@ extractATError spanObj (AE.Object o) = do
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = Errors.computeErrorFingerprint spanObj.project_id serviceName spanObj.name (fromMaybe "unknown" tech) typ msg stack
+      , hash = ErrorPatterns.computeErrorFingerprint spanObj.project_id serviceName spanObj.name (fromMaybe "unknown" tech) typ msg stack
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method

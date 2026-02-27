@@ -19,7 +19,7 @@ import Effectful (
  )
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
-import Models.Apis.Errors qualified as Errors
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -49,7 +49,7 @@ sendSlackMessage pid message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
-  | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: Errors.ATError, runtimeAlertType :: RuntimeAlertType}
+  | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType}
   | ShapeAlert
   | ReportAlert
       { reportType :: Text
@@ -239,7 +239,7 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* Errors-" <> toText (show errCount) <> ", Total-" <> toText (show evCount))]) breakDown
 
 
-slackErrorAlert :: RuntimeAlertType -> Errors.ATError -> Text -> Text -> Text -> Text -> AE.Value
+slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Text -> AE.Value
 slackErrorAlert alertType err issTitle project channelId projectUrl =
   AE.object
     [ "blocks"
@@ -420,7 +420,7 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
-discordErrorAlert :: RuntimeAlertType -> Errors.ATError -> Text -> Text -> Text -> AE.Value
+discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> AE.Value
 discordErrorAlert alertType err issTitle project projectUrl =
   [aesonQQ|{
 "embeds": [
@@ -572,20 +572,20 @@ sampleAlert = \case
         "test-123"
         "TEST: TypeError - Sample error"
         def
-          { Errors.when = UTCTime (fromGregorian 2025 1 1) 0
-          , Errors.errorType = "🧪 TEST: TypeError"
-          , Errors.rootErrorType = "TypeError"
-          , Errors.message = "Sample error message for testing"
-          , Errors.rootErrorMessage = "Sample error"
-          , Errors.stackTrace = "at sampleFunction (sample.js:42:15)"
-          , Errors.hash = "test-hash-xyz"
-          , Errors.technology = Just RequestDumps.JsExpress
-          , Errors.requestMethod = Just "GET"
-          , Errors.requestPath = Just "/api/test"
-          , Errors.spanId = Just "test-span-id"
-          , Errors.traceId = Just "test-trace-id"
-          , Errors.serviceName = Just "api"
-          , Errors.runtime = Just "nodejs"
+          { ErrorPatterns.when = UTCTime (fromGregorian 2025 1 1) 0
+          , ErrorPatterns.errorType = "🧪 TEST: TypeError"
+          , ErrorPatterns.rootErrorType = "TypeError"
+          , ErrorPatterns.message = "Sample error message for testing"
+          , ErrorPatterns.rootErrorMessage = "Sample error"
+          , ErrorPatterns.stackTrace = "at sampleFunction (sample.js:42:15)"
+          , ErrorPatterns.hash = "test-hash-xyz"
+          , ErrorPatterns.technology = Just RequestDumps.JsExpress
+          , ErrorPatterns.requestMethod = Just "GET"
+          , ErrorPatterns.requestPath = Just "/api/test"
+          , ErrorPatterns.spanId = Just "test-span-id"
+          , ErrorPatterns.traceId = Just "test-trace-id"
+          , ErrorPatterns.serviceName = Just "api"
+          , ErrorPatterns.runtime = Just "nodejs"
           }
         NewRuntimeError
   QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"

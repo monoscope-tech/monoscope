@@ -80,7 +80,7 @@ library
       Devel
       Models.Apis.Anomalies
       Models.Apis.Endpoints
-      Models.Apis.Errors
+      Models.Apis.ErrorPatterns
       Models.Apis.Fields
       Models.Apis.Integrations
       Models.Apis.Issues
