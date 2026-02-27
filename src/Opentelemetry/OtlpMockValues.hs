@@ -116,22 +116,38 @@ createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktr
       mkAttr k v = defMessage & PCF.key .~ k & PCF.value .~ (defMessage & PCF.stringValue .~ v)
       exceptionEvent =
         defMessage
-          & PTF.name .~ "exception"
-          & PTF.timeUnixNano .~ startTime
-          & PTF.attributes .~ [mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace]
+          & PTF.name
+          .~ "exception"
+            & PTF.timeUnixNano
+          .~ startTime
+            & PTF.attributes
+          .~ [mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace]
       spanStatus = defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ excMessage
       otelSpan =
         defMessage
-          & PTF.traceId .~ traceIdBS & PTF.spanId .~ spanIdBS
-          & PTF.name .~ spanName & PTF.kind .~ PT.Span'SPAN_KIND_SERVER
-          & PTF.startTimeUnixNano .~ startTime & PTF.endTimeUnixNano .~ endTime
-          & PTF.status .~ spanStatus
-          & PTF.events .~ [exceptionEvent]
-          & PTF.attributes .~ [mkAttr "http.request.method" "GET", mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
+          & PTF.traceId
+          .~ traceIdBS & PTF.spanId
+          .~ spanIdBS
+            & PTF.name
+          .~ spanName & PTF.kind
+          .~ PT.Span'SPAN_KIND_SERVER
+            & PTF.startTimeUnixNano
+          .~ startTime & PTF.endTimeUnixNano
+          .~ endTime
+            & PTF.status
+          .~ spanStatus
+            & PTF.events
+          .~ [exceptionEvent]
+            & PTF.attributes
+          .~ [mkAttr "http.request.method" "GET", mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
       resource =
         defMessage
-          & PRF.attributes .~ [ mkAttr "service.name" "test-service", mkAttr "at-project-key" apiKey
-                               , mkAttr "telemetry.sdk.name" "opentelemetry", mkAttr "telemetry.sdk.language" "nodejs" ]
+          & PRF.attributes
+          .~ [ mkAttr "service.name" "test-service"
+             , mkAttr "at-project-key" apiKey
+             , mkAttr "telemetry.sdk.name" "opentelemetry"
+             , mkAttr "telemetry.sdk.language" "nodejs"
+             ]
       scopeSpan = defMessage & PTF.spans .~ [otelSpan]
       request = defMessage @TS.ExportTraceServiceRequest & TSF.resourceSpans .~ [defMessage & PTF.resource .~ resource & PTF.scopeSpans .~ [scopeSpan]]
   pure $ encodeMessage request
