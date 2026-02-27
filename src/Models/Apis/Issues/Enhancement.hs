@@ -78,7 +78,7 @@ buildTitlePrompt issue =
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
             Modified fields: {V.length d.modifiedFields}
-            Service: {fromMaybe "unknown-service" issue.service}|]
+            Service: {Issues.serviceLabel issue.service}|]
             )
             "Generate a concise title for this API change."
         Issues.RuntimeException ->
@@ -88,7 +88,7 @@ buildTitlePrompt issue =
                 [fmtTrim|Generate a concise title for this runtime exception.
             Error type: {d.errorType}
             Error message: {T.take 100 d.errorMessage}
-            Service: {fromMaybe "unknown-service" issue.service}|]
+            Service: {Issues.serviceLabel issue.service}|]
             )
             "Generate a concise title for this runtime exception."
         Issues.QueryAlert ->
@@ -109,7 +109,7 @@ buildTitlePrompt issue =
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Log level: {fromMaybe "unknown" d.logLevel}
-            Service: {fromMaybe "unknown-service" d.serviceName}
+            Service: {Issues.serviceLabel d.serviceName}
             Occurrences: {d.occurrenceCount}|]
             )
             ("Generate a concise title for this log pattern. Title: " <> issue.title)
@@ -123,7 +123,7 @@ buildTitlePrompt issue =
             Current rate: {Issues.showRate d.currentRatePerHour}
             Baseline: {Issues.showRate d.baselineMean}
             Change: {Issues.showPct d.changePercent}
-            Service: {fromMaybe "unknown-service" d.serviceName}|]
+            Service: {Issues.serviceLabel d.serviceName}|]
             )
             ("Generate a concise title for this log pattern rate change. Title: " <> issue.title)
 
@@ -156,7 +156,7 @@ buildDescriptionPrompt issue =
             Deleted fields: {show $ V.toList d.deletedFields}
             Modified fields: {show $ V.toList d.modifiedFields}
             Total anomalies grouped: {V.length d.anomalyHashes}
-            Service: {fromMaybe "unknown-service" issue.service}|]
+            Service: {Issues.serviceLabel issue.service}|]
             )
             "Describe this API change and its implications."
         Issues.RuntimeException ->
@@ -191,7 +191,7 @@ buildDescriptionPrompt issue =
             Log pattern: {d.logPattern}
             Sample message: {fromMaybe "N/A" d.sampleMessage}
             Log level: {fromMaybe "unknown" d.logLevel}
-            Service: {fromMaybe "unknown-service" d.serviceName}
+            Service: {Issues.serviceLabel d.serviceName}
             Source: {d.sourceField}
             Occurrences: {d.occurrenceCount}
             First seen: {show d.firstSeenAt}|]
@@ -210,7 +210,7 @@ buildDescriptionPrompt issue =
             Baseline MAD: {Issues.showRate d.baselineMad}
             Z-score: {show (round d.zScore :: Int)} standard deviations
             Change: {Issues.showPct d.changePercent}
-            Service: {fromMaybe "unknown-service" d.serviceName}
+            Service: {Issues.serviceLabel d.serviceName}
             Log level: {fromMaybe "unknown" d.logLevel}|]
             )
             ("Describe this log pattern rate change. Title: " <> issue.title)

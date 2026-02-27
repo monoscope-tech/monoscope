@@ -37,7 +37,7 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time
 import Data.UUID qualified as UUID
-import Database.PostgreSQL.Entity (_selectWhere)
+import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
@@ -229,34 +229,12 @@ getErrorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Error)
 getErrorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @Error [[field| project_id |], [field| hash |]]) (pid, hash)
 
 
--- NOTE: Column list must match Error record fields. If Error changes, update this query.
 getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
 getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, pid, hash)
   where
-    q =
-      [sql|
-        SELECT e.id, e.project_id, e.created_at, e.updated_at,
-               e.error_type, e.message, e.stacktrace, e.hash,
-               e.environment, e.service, e.runtime, e.error_data,
-               e.first_trace_id, e.recent_trace_id, e.first_event_id, e.last_event_id,
-               e.state, e.assignee_id, e.assigned_at, e.resolved_at, e.regressed_at,
-               e.subscribed, e.notify_every_minutes, e.last_notified_at,
-               e.occurrences_1m, e.occurrences_5m, e.occurrences_1h, e.occurrences_24h,
-               e.quiet_minutes, e.resolution_threshold_minutes,
-               e.baseline_state, e.baseline_samples,
-               e.baseline_error_rate_mean, e.baseline_error_rate_stddev, e.baseline_updated_at,
-               e.is_ignored, e.ignored_until,
-               e.slack_thread_ts, e.discord_message_id,
-               COALESCE(ev.occurrences, 0)::INT,
-               COALESCE(ev.affected_users, 0)::INT,
-               ev.last_occurred_at
-        FROM apis.errors e
-        LEFT JOIN (
-          SELECT target_hash, COUNT(*) AS occurrences, COUNT(DISTINCT user_id) AS affected_users, MAX(occurred_at) AS last_occurred_at
-          FROM apis.error_events WHERE project_id = ? GROUP BY target_hash
-        ) ev ON ev.target_hash = e.hash
-        WHERE e.project_id = ? AND e.hash = ?
-      |]
+    q = "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.affected_users, 0)::INT, ev.last_occurred_at FROM ("
+      <> _select @Error
+      <> ") e LEFT JOIN (SELECT target_hash, COUNT(*) AS occurrences, COUNT(DISTINCT user_id) AS affected_users, MAX(occurred_at) AS last_occurred_at FROM apis.error_events WHERE project_id = ? GROUP BY target_hash) ev ON ev.target_hash = e.hash WHERE e.project_id = ? AND e.hash = ?"
 
 
 -- | Update occurrence counts (called periodically to decay counts)
@@ -334,32 +312,22 @@ updateErrorSubscription eid subscribed notifyEveryMinutes =
 
 
 updateErrorThreadIds :: DB es => ErrorId -> Maybe Text -> Maybe Text -> Eff es Int64
-updateErrorThreadIds eid slackTs discordMsgId =
-  PG.execute q (slackTs, discordMsgId, eid)
-  where
-    q =
-      [sql|
-        UPDATE apis.errors SET
-          slack_thread_ts = COALESCE(?, slack_thread_ts),
-          discord_message_id = COALESCE(?, discord_message_id),
-          updated_at = NOW()
-        WHERE id = ?
-      |]
+updateErrorThreadIds = updateErrorThreadIds' False
 
 
 updateErrorThreadIdsAndNotifiedAt :: DB es => ErrorId -> Maybe Text -> Maybe Text -> Eff es Int64
-updateErrorThreadIdsAndNotifiedAt eid slackTs discordMsgId =
+updateErrorThreadIdsAndNotifiedAt = updateErrorThreadIds' True
+
+
+updateErrorThreadIds' :: DB es => Bool -> ErrorId -> Maybe Text -> Maybe Text -> Eff es Int64
+updateErrorThreadIds' updateNotifiedAt eid slackTs discordMsgId =
   PG.execute q (slackTs, discordMsgId, eid)
   where
-    q =
-      [sql|
-        UPDATE apis.errors SET
+    q = [sql| UPDATE apis.errors SET
           slack_thread_ts = COALESCE(?, slack_thread_ts),
-          discord_message_id = COALESCE(?, discord_message_id),
-          last_notified_at = NOW(),
-          updated_at = NOW()
-        WHERE id = ?
-      |]
+          discord_message_id = COALESCE(?, discord_message_id), |]
+      <> (if updateNotifiedAt then "last_notified_at = NOW()," else "")
+      <> [sql| updated_at = NOW() WHERE id = ? |]
 
 
 -- | Bulk-update baselines for all active errors in a project using a single SQL CTE.

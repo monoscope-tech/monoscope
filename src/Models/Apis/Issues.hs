@@ -52,6 +52,7 @@ module Models.Apis.Issues (
   issueIdText,
   parseIssueType,
   issueTypeToText,
+  serviceLabel,
   showRate,
   showPct,
 
@@ -152,6 +153,10 @@ showRate x = show (round x :: Int) <> "/hr"
 
 showPct :: RealFrac a => a -> Text
 showPct x = show (round x :: Int) <> "%"
+
+
+serviceLabel :: Maybe Text -> Text
+serviceLabel = fromMaybe "unknown-service"
 
 
 -- | API Change issue data
@@ -816,63 +821,28 @@ getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @R
 
 
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.ErrorWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
-createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev = do
-  now <- Time.currentTime
+createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev =
   let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
       increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
-      exceptionData =
-        RuntimeExceptionData
-          { errorType = errRate.errorType
-          , errorMessage = errRate.message
-          , stackTrace = errRate.stacktrace
-          , requestPath = Nothing
-          , requestMethod = Nothing
-          , occurrenceCount = round currentRate
-          , firstSeen = now
-          , lastSeen = now
-          }
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , issueType = RuntimeException
-      , targetHash = errRate.hash
-      , service = errRate.service
-      , critical = True
-      , severity = "critical"
-      , title = "Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)"
-      , recommendedAction = "Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes."
-      , migrationComplexity = "n/a"
-      , issueData = exceptionData
-      , timestamp = Nothing
-      }
+  in mkErrorIssue projectId errRate.hash errRate.service errRate.errorType errRate.message errRate.stacktrace (round currentRate)
+      ("Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
+      ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
 
 
--- | Create issue for a new error
 createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.Error -> Eff es Issue
-createNewErrorIssue projectId err = do
+createNewErrorIssue projectId err =
+  mkErrorIssue projectId err.hash err.service err.errorType err.message err.stacktrace 1
+    ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
+    "Investigate the new error and implement a fix."
+
+
+mkErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Text -> Int -> Text -> Text -> Eff es Issue
+mkErrorIssue projectId targetHash service errType errMsg stack occurrences title recommendedAction = do
   now <- Time.currentTime
-  let exceptionData =
-        RuntimeExceptionData
-          { errorType = err.errorType
-          , errorMessage = err.message
-          , stackTrace = err.stacktrace
-          , requestPath = Nothing
-          , requestMethod = Nothing
-          , occurrenceCount = 1
-          , firstSeen = now
-          , lastSeen = now
-          }
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , issueType = RuntimeException
-      , targetHash = err.hash
-      , service = err.service
-      , critical = True
-      , severity = "critical"
-      , title = "New Error: " <> err.errorType <> " - " <> T.take 80 err.message
-      , recommendedAction = "Investigate the new error and implement a fix."
-      , migrationComplexity = "n/a"
-      , issueData = exceptionData
-      , timestamp = Nothing
-      }
+  mkIssue MkIssueOpts
+    { projectId, issueType = RuntimeException, targetHash, service, critical = True, severity = "critical"
+    , title, recommendedAction, migrationComplexity = "n/a", timestamp = Nothing
+    , issueData = RuntimeExceptionData
+        { errorType = errType, errorMessage = errMsg, stackTrace = stack
+        , requestPath = Nothing, requestMethod = Nothing, occurrenceCount = occurrences, firstSeen = now, lastSeen = now }
+    }

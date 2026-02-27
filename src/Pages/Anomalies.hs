@@ -716,7 +716,7 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Title**: " <> iss.title
           , Just $ "- **Type**: " <> show iss.issueType
           , Just $ "- **Severity**: " <> iss.severity
-          , Just $ "- **Service**: " <> fromMaybe "unknown-service" iss.service
+          , Just $ "- **Service**: " <> Issues.serviceLabel iss.service
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
           , errM <&> \err ->
@@ -1205,7 +1205,7 @@ renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue
     -- Service badge
     span_ [class_ "flex items-center gap-1"] do
       div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-      span_ [class_ "text-textStrong"] $ toHtml $ fromMaybe "unknown-service" issue.service
+      span_ [class_ "text-textStrong"] $ toHtml $ Issues.serviceLabel issue.service
     -- Time since
     span_ [class_ "text-textWeak"] $ toHtml timeSinceString
 

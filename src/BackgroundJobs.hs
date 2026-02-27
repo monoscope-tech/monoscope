@@ -714,7 +714,7 @@ sendAlertToChannels
   -> Html ()
   -> (Maybe Text, Maybe Text)
   -> ATBackgroundCtx (Maybe Text, Maybe Text)
-sendAlertToChannels alert pid project users _errorsUrl subj html (initSlackTs, initDiscordMsgId) =
+sendAlertToChannels alert pid project users pagerdutyUrl subj html (initSlackTs, initDiscordMsgId) =
   foldlM
     ( \(slackTs, discordMsgId) -> \case
         Projects.NSlack -> do
@@ -725,7 +725,7 @@ sendAlertToChannels alert pid project users _errorsUrl subj html (initSlackTs, i
           pure (slackTs, discordMsgId <|> msgIdM)
         Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert alert pid project.title project.whatsappNumbers
         Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-        Projects.NPagerduty -> (slackTs, discordMsgId) <$ (getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title _errorsUrl)
+        Projects.NPagerduty -> (slackTs, discordMsgId) <$ (getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title pagerdutyUrl)
     )
     (initSlackTs, initDiscordMsgId)
     project.notificationsChannel
@@ -1870,23 +1870,24 @@ detectErrorSpikes pid = do
           then do
             let alreadyEscalating = errRate.state == Errors.ESEscalating
             Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
-            void $ Errors.updateErrorState errRate.errorId Errors.ESEscalating
-            issue <- Issues.createErrorSpikeIssue pid errRate currentRate mean stddev
-            Issues.insertIssue issue
-            liftIO $ withResource authCtx.jobsPool \conn ->
-              void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-            -- Only notify on first spike detection (not already escalating)
-            unless alreadyEscalating $ whenJust projectM \project -> Relude.when project.errorAlerts do
-              let issueId = UUID.toText issue.id.unUUIDId
-                  spikeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = errRate.errorData, runtimeAlertType = ErrorSpike}
-                  errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
-                  (subj, html) = ET.errorSpikesEmail project.title errorsUrl [errRate.errorData]
-              (finalSlackTs, finalDiscordMsgId) <-
-                sendAlertToChannels spikeAlert pid project users errorsUrl subj html (errRate.slackThreadTs, errRate.discordMessageId)
-              Relude.when (finalSlackTs /= errRate.slackThreadTs || finalDiscordMsgId /= errRate.discordMessageId)
-                $ void
-                $ Errors.updateErrorThreadIds errRate.errorId finalSlackTs finalDiscordMsgId
-            Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
+            -- Only create issue/update state on first spike detection, not on repeated cycles
+            unless alreadyEscalating do
+              void $ Errors.updateErrorState errRate.errorId Errors.ESEscalating
+              issue <- Issues.createErrorSpikeIssue pid errRate currentRate mean stddev
+              Issues.insertIssue issue
+              liftIO $ withResource authCtx.jobsPool \conn ->
+                void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              whenJust projectM \project -> Relude.when project.errorAlerts do
+                let issueId = UUID.toText issue.id.unUUIDId
+                    spikeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = errRate.errorData, runtimeAlertType = ErrorSpike}
+                    errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
+                    (subj, html) = ET.errorSpikesEmail project.title errorsUrl [errRate.errorData]
+                (finalSlackTs, finalDiscordMsgId) <-
+                  sendAlertToChannels spikeAlert pid project users errorsUrl subj html (errRate.slackThreadTs, errRate.discordMessageId)
+                Relude.when (finalSlackTs /= errRate.slackThreadTs || finalDiscordMsgId /= errRate.discordMessageId)
+                  $ void
+                  $ Errors.updateErrorThreadIds errRate.errorId finalSlackTs finalDiscordMsgId
+              Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
           else -- Transition from Escalating → Ongoing when spike subsides
             Relude.when (errRate.state == Errors.ESEscalating)
               $ void
