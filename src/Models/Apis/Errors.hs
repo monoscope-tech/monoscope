@@ -232,9 +232,10 @@ getErrorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @Error [[field|
 getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
 getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, pid, hash)
   where
-    q = "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.affected_users, 0)::INT, ev.last_occurred_at FROM ("
-      <> _select @Error
-      <> ") e LEFT JOIN (SELECT target_hash, COUNT(*) AS occurrences, COUNT(DISTINCT user_id) AS affected_users, MAX(occurred_at) AS last_occurred_at FROM apis.error_events WHERE project_id = ? GROUP BY target_hash) ev ON ev.target_hash = e.hash WHERE e.project_id = ? AND e.hash = ?"
+    q =
+      "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.affected_users, 0)::INT, ev.last_occurred_at FROM ("
+        <> _select @Error
+        <> ") e LEFT JOIN (SELECT target_hash, COUNT(*) AS occurrences, COUNT(DISTINCT user_id) AS affected_users, MAX(occurred_at) AS last_occurred_at FROM apis.error_events WHERE project_id = ? GROUP BY target_hash) ev ON ev.target_hash = e.hash WHERE e.project_id = ? AND e.hash = ?"
 
 
 -- | Update occurrence counts (called periodically to decay counts)
@@ -323,11 +324,12 @@ updateErrorThreadIds' :: DB es => Bool -> ErrorId -> Maybe Text -> Maybe Text ->
 updateErrorThreadIds' updateNotifiedAt eid slackTs discordMsgId =
   PG.execute q (slackTs, discordMsgId, eid)
   where
-    q = [sql| UPDATE apis.errors SET
+    q =
+      [sql| UPDATE apis.errors SET
           slack_thread_ts = COALESCE(?, slack_thread_ts),
           discord_message_id = COALESCE(?, discord_message_id), |]
-      <> (if updateNotifiedAt then "last_notified_at = NOW()," else "")
-      <> [sql| updated_at = NOW() WHERE id = ? |]
+        <> (if updateNotifiedAt then "last_notified_at = NOW()," else "")
+        <> [sql| updated_at = NOW() WHERE id = ? |]
 
 
 -- | Bulk-update baselines for all active errors in a project using a single SQL CTE.

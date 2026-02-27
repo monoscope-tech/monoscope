@@ -824,14 +824,28 @@ createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Er
 createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev =
   let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
       increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
-  in mkErrorIssue projectId errRate.hash errRate.service errRate.errorType errRate.message errRate.stacktrace (round currentRate)
-      ("Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
-      ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
+   in mkErrorIssue
+        projectId
+        errRate.hash
+        errRate.service
+        errRate.errorType
+        errRate.message
+        errRate.stacktrace
+        (round currentRate)
+        ("Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
+        ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
 
 
 createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Errors.Error -> Eff es Issue
 createNewErrorIssue projectId err =
-  mkErrorIssue projectId err.hash err.service err.errorType err.message err.stacktrace 1
+  mkErrorIssue
+    projectId
+    err.hash
+    err.service
+    err.errorType
+    err.message
+    err.stacktrace
+    1
     ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
     "Investigate the new error and implement a fix."
 
@@ -839,10 +853,27 @@ createNewErrorIssue projectId err =
 mkErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Text -> Int -> Text -> Text -> Eff es Issue
 mkErrorIssue projectId targetHash service errType errMsg stack occurrences title recommendedAction = do
   now <- Time.currentTime
-  mkIssue MkIssueOpts
-    { projectId, issueType = RuntimeException, targetHash, service, critical = True, severity = "critical"
-    , title, recommendedAction, migrationComplexity = "n/a", timestamp = Nothing
-    , issueData = RuntimeExceptionData
-        { errorType = errType, errorMessage = errMsg, stackTrace = stack
-        , requestPath = Nothing, requestMethod = Nothing, occurrenceCount = occurrences, firstSeen = now, lastSeen = now }
-    }
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , issueType = RuntimeException
+      , targetHash
+      , service
+      , critical = True
+      , severity = "critical"
+      , title
+      , recommendedAction
+      , migrationComplexity = "n/a"
+      , timestamp = Nothing
+      , issueData =
+          RuntimeExceptionData
+            { errorType = errType
+            , errorMessage = errMsg
+            , stackTrace = stack
+            , requestPath = Nothing
+            , requestMethod = Nothing
+            , occurrenceCount = occurrences
+            , firstSeen = now
+            , lastSeen = now
+            }
+      }
