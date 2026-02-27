@@ -44,11 +44,11 @@ import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runTime)
-import Pkg.TestClock (TestClock, runMutableTime, runWithTimeSyncedPool)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
+import Pkg.TestClock (TestClock, runMutableTime, runWithTimeSyncedPool)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)

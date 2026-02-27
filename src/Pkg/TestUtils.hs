@@ -85,7 +85,6 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runTime)
-import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runMutableTime, runWithTimeSyncedPool, syncConnectionTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -100,6 +99,7 @@ import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
+import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runMutableTime, runWithTimeSyncedPool, syncConnectionTime)
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS

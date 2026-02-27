@@ -8,9 +8,9 @@ import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Labeled (labeled)
 import Effectful.PostgreSQL (WithConnection)
-import Effectful.Time qualified as Time
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects

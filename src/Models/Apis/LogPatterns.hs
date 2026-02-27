@@ -43,7 +43,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Entity.Types qualified as DAT
-import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.)(..))
+import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.) (..))
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)

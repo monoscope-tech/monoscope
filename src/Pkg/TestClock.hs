@@ -6,16 +6,16 @@
 --
 -- This keeps both the Haskell 'Time' effect and PostgreSQL's 'app_now()'
 -- function (via GUC sync) aligned to the same controllable clock.
-module Pkg.TestClock
-  ( TestClock (..)
-  , newTestClock
-  , advanceTime
-  , setTestTime
-  , getTestTime
-  , runMutableTime
-  , syncConnectionTime
-  , runWithTimeSyncedPool
-  ) where
+module Pkg.TestClock (
+  TestClock (..),
+  newTestClock,
+  advanceTime,
+  setTestTime,
+  getTestTime,
+  runMutableTime,
+  syncConnectionTime,
+  runWithTimeSyncedPool,
+) where
 
 import Data.IORef (IORef, modifyIORef', newIORef, readIORef, writeIORef)
 import Data.Pool qualified as Pool
