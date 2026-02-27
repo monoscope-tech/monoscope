@@ -23,13 +23,13 @@ spec = aroundAll withTestResources do
         let interaction = slackInteraction "/monoscope" "show errors" "T_WF_SLACK"
 
         -- Get immediate loading response
-        loadingResp <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        loadingResp <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
         loadingResp `shouldSatisfy` isValidJsonResponse
         let loadingText = fromMaybe "" $ extractResponseText loadingResp
         (T.isInfixOf "Analyzing" loadingText || T.isInfixOf "⏳" loadingText) `shouldBe` True
 
         -- Process background jobs that send final response
-        void $ runAllBackgroundJobs tr.trATCtx
+        void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
 
       it "Discord: handles query with signature verification" \tr -> do
         setupDiscordData tr testPid "guild_wf_discord"
@@ -38,7 +38,7 @@ spec = aroundAll withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH signedPayload (Just sig) (Just ts)
         result `shouldSatisfy` isValidJsonResponse
         getDiscordResponseType result `shouldSatisfy` isJust
 
@@ -47,13 +47,13 @@ spec = aroundAll withTestResources do
         setupWhatsappNumber tr testPid testPhone
         let msg = twilioWhatsAppPrompt tr testPhone "show me errors in the last hour"
 
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Error Handling Workflows" do
       it "Slack: handles missing team data gracefully" \tr -> do
         let interaction = slackInteraction "/monoscope" "show errors" "T_NONEXISTENT"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
         result `shouldSatisfy` isValidJsonResponse
 
       -- NOTE: Invalid signature test removed - handler correctly throws 401 for invalid signatures
@@ -62,7 +62,7 @@ spec = aroundAll withTestResources do
 
       it "WhatsApp: handles unknown phone number" \tr -> do
         let msg = twilioWhatsAppPrompt tr "+19999999999" "show errors"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Platform-Specific Commands" do
@@ -70,7 +70,7 @@ spec = aroundAll withTestResources do
         setupSlackData tr testPid "T_HERE_WF"
         let interaction = slackInteraction "/monoscope-here" "" "T_HERE_WF"
 
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
         result `shouldSatisfy` isValidJsonResponse
         hasSuccessBlock result `shouldBe` True
 
@@ -85,7 +85,7 @@ spec = aroundAll withTestResources do
         let (signedPayload, sig, ts) = signDiscordPayload discordPingPayload "1700000000"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH signedPayload (Just sig) (Just ts)
 
         result `shouldSatisfy` isValidJsonResponse
         getDiscordResponseType result `shouldBe` Just 1
@@ -95,7 +95,7 @@ spec = aroundAll withTestResources do
         setupWhatsappNumber tr testPid testPhone
         let msg = twilioWhatsAppDashboard tr testPhone
 
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Thread/Conversation Context" do
@@ -106,7 +106,7 @@ spec = aroundAll withTestResources do
         let threadedEventJson = slackThreadedEvent "T_THREAD_WF" "C_THREAD_CHANNEL" "follow up question" "1700000002.000" "1700000001.000"
         case AE.fromJSON threadedEventJson of
           AE.Success threadedEvent -> do
-            result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackEventsPostH threadedEvent
+            result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackEventsPostH threadedEvent
             result `shouldSatisfy` isValidJsonResponse
           AE.Error err -> expectationFailure $ "Failed to decode event: " <> err
 
@@ -117,7 +117,7 @@ spec = aroundAll withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH signedPayload (Just sig) (Just ts)
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Multi-Platform Integration" do
@@ -129,7 +129,7 @@ spec = aroundAll withTestResources do
 
         -- Test Slack
         let slackInt = slackInteraction "/monoscope" "show status" "T_MULTI_SLACK"
-        slackResp <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH slackInt
+        slackResp <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH slackInt
         slackResp `shouldSatisfy` isValidJsonResponse
 
         -- Test Discord
@@ -137,19 +137,19 @@ spec = aroundAll withTestResources do
             (signedPayload, sig, ts) = signDiscordPayload discordPayload "1700000000"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        discordResp <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        discordResp <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH signedPayload (Just sig) (Just ts)
         discordResp `shouldSatisfy` isValidJsonResponse
 
         -- Test WhatsApp
         let whatsappMsg = twilioWhatsAppPrompt tr testPhone "show status"
-        whatsappResp <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH whatsappMsg
+        whatsappResp <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH whatsappMsg
         whatsappResp `shouldSatisfy` isValidJsonResponse
 
     describe "Response Format Validation" do
       it "Slack responses have correct structure" \tr -> do
         setupSlackData tr testPid "T_FORMAT_SLACK"
         let interaction = slackInteraction "/monoscope-here" "" "T_FORMAT_SLACK"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         extractResponseType result `shouldSatisfy` isJust
         extractSlackBlocks result `shouldSatisfy` isJust
@@ -160,7 +160,7 @@ spec = aroundAll withTestResources do
             (signedPayload, sig, ts) = signDiscordPayload payload "1700000000"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH signedPayload (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH signedPayload (Just sig) (Just ts)
 
         getDiscordResponseType result `shouldSatisfy` isJust
 
@@ -168,6 +168,6 @@ spec = aroundAll withTestResources do
         let testPhone = getTestPhoneNumber tr
         setupWhatsappNumber tr testPid testPhone
         let msg = twilioWhatsAppPrompt tr testPhone "test query"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH msg
 
         result `shouldSatisfy` isValidJsonResponse

@@ -19,7 +19,7 @@ spec = aroundAll withTestResources do
         let (body, sig, ts) = signDiscordPayload discordPingPayload "1706745600"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         getDiscordResponseType result `shouldBe` Just 1
 
     describe "/here command" do
@@ -31,7 +31,7 @@ spec = aroundAll withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         getDiscordResponseType result `shouldBe` Just 4
 
       it "matches golden file format" \tr -> do
@@ -42,7 +42,7 @@ spec = aroundAll withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         assertJsonGolden "discord/here_response.json" result
 
     describe "/monoscope command" do
@@ -54,7 +54,7 @@ spec = aroundAll withTestResources do
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
 
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         isEmptyResponse result `shouldBe` True
 
       it "handles thread context for conversations" \tr -> do
@@ -69,7 +69,7 @@ spec = aroundAll withTestResources do
             (body, sig, ts) = signDiscordPayload payload "1706745607"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Response format" do
@@ -79,7 +79,7 @@ spec = aroundAll withTestResources do
             (body, sig, ts) = signDiscordPayload payload "1706745603"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         hasComponentsV2Flag result `shouldBe` True
 
       it "/here response has container component" \tr -> do
@@ -88,7 +88,7 @@ spec = aroundAll withTestResources do
             (body, sig, ts) = signDiscordPayload payload "1706745604"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         hasContainerComponent result `shouldBe` True
 
       it "/here response has text content components" \tr -> do
@@ -97,5 +97,5 @@ spec = aroundAll withTestResources do
             (body, sig, ts) = signDiscordPayload payload "1706745605"
             testConfig = tr.trATCtx.env{Config.discordPublicKey = testDiscordPublicKeyHex}
             testCtx = tr.trATCtx{Config.env = testConfig}
-        result <- toBaseServantResponse testCtx tr.trLogger $ discordInteractionsH body (Just sig) (Just ts)
+        result <- toBaseServantResponse testCtx tr.trLogger tr.trTestClock $ discordInteractionsH body (Just sig) (Just ts)
         countTextComponents result `shouldSatisfy` (>= 3)

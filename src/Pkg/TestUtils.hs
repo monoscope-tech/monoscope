@@ -37,6 +37,11 @@ module Pkg.TestUtils (
   ingestLogWithHeader,
   ingestTraceWithHeader,
   ingestMetricWithHeader,
+  -- Time advancement helpers
+  advanceTestTime,
+  advanceMinutes,
+  advanceHours,
+  advanceDays,
 )
 where
 
@@ -59,7 +64,7 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (NominalDiffTime, UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -79,7 +84,8 @@ import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.Reader.Static qualified
-import Effectful.Time (Time, runFrozenTime, runTime)
+import Effectful.Time (Time, runTime)
+import Pkg.TestClock (TestClock, advanceTime, getTestTime, newTestClock, runMutableTime, runWithTimeSyncedPool, syncConnectionTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -437,23 +443,23 @@ fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 
-runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
-  runTestBackgroundWithLogger logger authCtx action
+runTestBackground :: TestClock -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackground testClock authCtx action = LogBulk.withBulkStdOutLogger \logger ->
+  runTestBackgroundWithLogger logger testClock authCtx action
 
 
 -- | Run background context and return both notifications and result
-runTestBackgroundWithNotifications :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
-runTestBackgroundWithNotifications logger appCtx process = do
+runTestBackgroundWithNotifications :: Log.Logger -> TestClock -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithNotifications logger testClock appCtx process = do
   tp <- getGlobalTracerProvider
   notifRef <- newIORef []
   result <-
     process
       & Data.Effectful.Notify.runNotifyTest notifRef
       & Effectful.Reader.Static.runReader appCtx
-      & runWithConnectionPool appCtx.pool
-      & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
-      & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+      & runWithTimeSyncedPool testClock appCtx.pool
+      & runLabeled @"timefusion" (runWithTimeSyncedPool testClock appCtx.timefusionPgPool)
+      & runMutableTime testClock
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
@@ -466,9 +472,9 @@ runTestBackgroundWithNotifications logger appCtx process = do
   pure (notifications, result)
 
 
-runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackgroundWithLogger logger appCtx process = do
-  (notifications, result) <- runTestBackgroundWithNotifications logger appCtx process
+runTestBackgroundWithLogger :: Log.Logger -> TestClock -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackgroundWithLogger logger testClock appCtx process = do
+  (notifications, result) <- runTestBackgroundWithNotifications logger testClock appCtx process
   -- Log the notifications that would have been sent
   forM_ notifications \notification -> do
     let notifInfo = case notification of
@@ -508,12 +514,13 @@ runTestEffect pool logger tp action = do
 
 -- | Run a background job action using TestResources
 runTestBg :: TestResources -> ATBackgroundCtx a -> IO a
-runTestBg TestResources{..} = runTestBackgroundWithLogger trLogger trATCtx
+runTestBg TestResources{..} = runTestBackgroundWithLogger trLogger trTestClock trATCtx
 
 
 -- New type to hold all our resources
 data TestResources = TestResources
   { trPool :: Pool Connection
+  , trTestClock :: TestClock
   , trProjectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
   , trATCtx :: AuthContext
@@ -568,9 +575,11 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , openaiApiKey = bool "sk-test-key-not-real" envConfig.openaiApiKey (T.null envConfig.openaiApiKey)
               }
           )
+  testClock <- newTestClock (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
   f
     TestResources
       { trPool = pool
+      , trTestClock = testClock
       , trProjectCache = projectCache
       , trSessAndHeader = sessAndHeader
       , trATCtx = atAuthCtx
@@ -583,13 +592,14 @@ toServantResponse
   :: AuthContext
   -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
   -> Log.Logger
+  -> TestClock
   -> ATAuthCtx (RespHeaders a)
   -> IO (RespHeaders a, a)
-toServantResponse trATCtx trSessAndHeader trLogger k = do
+toServantResponse trATCtx trSessAndHeader trLogger testClock k = do
   tp <- getGlobalTracerProvider
   headersResp <-
     ( atAuthToBase trSessAndHeader k
-        & effToServantHandlerTest trATCtx trLogger tp
+        & effToServantHandlerTest trATCtx trLogger tp testClock
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -597,7 +607,7 @@ toServantResponse trATCtx trSessAndHeader trLogger k = do
 
 
 testServant :: TestResources -> ATAuthCtx (RespHeaders a) -> IO (RespHeaders a, a)
-testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger tr.trTestClock
 
 
 -- | Like testServant but also captures notifications sent during handler execution
@@ -607,7 +617,7 @@ testServantWithNotifications TestResources{..} k = do
   notifRef <- newIORef []
   headersResp <-
     ( atAuthToBaseTest notifRef trSessAndHeader k
-        & effToServantHandlerTest trATCtx trLogger tp
+        & effToServantHandlerTest trATCtx trLogger tp trTestClock
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -619,12 +629,13 @@ testServantWithNotifications TestResources{..} k = do
 toBaseServantResponse
   :: AuthContext
   -> Log.Logger
+  -> TestClock
   -> ATBaseCtx a
   -> IO a
-toBaseServantResponse trATCtx trLogger k = do
+toBaseServantResponse trATCtx trLogger testClock k = do
   tp <- getGlobalTracerProvider
   ( k
-      & effToServantHandlerTest trATCtx trLogger tp
+      & effToServantHandlerTest trATCtx trLogger tp testClock
       & ServantS.runHandler
     )
     <&> fromRightShow
@@ -632,14 +643,14 @@ toBaseServantResponse trATCtx trLogger k = do
 
 -- | Run a query effect (like Charts.queryMetrics) in test context
 -- This is for effects that return data directly (not wrapped in RespHeaders)
--- Uses frozen time to match background job context
+-- Uses mutable test clock to match background job context
 runQueryEffect :: TestResources -> (forall es. (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
 runQueryEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError
     & Effectful.Reader.Static.runReader trATCtx
-    & runWithConnectionPool trATCtx.pool
-    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+    & runWithTimeSyncedPool trTestClock trATCtx.pool
+    & runMutableTime trTestClock
     & runEff
     <&> fromRightShow
 
@@ -747,21 +758,21 @@ logBackgroundJobsInfo logger jobs = do
     $ Log.logTrace "Background Jobs Queue" (AE.object ["count" AE..= V.length jobs, "jobs" AE..= jobsList])
 
 
-runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
-runAllBackgroundJobs authCtx = do
+runAllBackgroundJobs :: TestClock -> AuthContext -> IO (V.Vector Job)
+runAllBackgroundJobs testClock authCtx = do
   jobs <- withResource authCtx.pool getBackgroundJobs
   LogBulk.withBulkStdOutLogger \logger ->
     -- Run jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
-      threads <- V.forM jobs $ \job -> Ki.fork scope $ liftIO $ testJobsRunner logger authCtx job
+      threads <- V.forM jobs $ \job -> Ki.fork scope $ liftIO $ testJobsRunner logger testClock authCtx job
       V.forM_ threads $ Ki.atomically . Ki.await
   pure jobs
 
 
 -- | Run background jobs matching a predicate
 -- Useful for running only specific job types in tests
-runBackgroundJobsWhere :: AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
-runBackgroundJobsWhere authCtx predicate = do
+runBackgroundJobsWhere :: TestClock -> AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
+runBackgroundJobsWhere testClock authCtx predicate = do
   jobs <- withResource authCtx.pool getBackgroundJobs
   jobsWithParsed <- V.forM jobs \job -> do
     bgJob <- BackgroundJobs.throwParsePayload job
@@ -770,16 +781,16 @@ runBackgroundJobsWhere authCtx predicate = do
   LogBulk.withBulkStdOutLogger \logger ->
     -- Run filtered jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
-      threads <- V.forM filteredJobs $ \(job, _) -> Ki.fork scope $ liftIO $ testJobsRunner logger authCtx job
+      threads <- V.forM filteredJobs $ \(job, _) -> Ki.fork scope $ liftIO $ testJobsRunner logger testClock authCtx job
       V.forM_ threads $ Ki.atomically . Ki.await
   pure $ V.map fst filteredJobs
 
 
 -- Test version of jobsRunner that uses the test notification runner
-testJobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
-testJobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
+testJobsRunner :: Log.Logger -> TestClock -> Config.AuthContext -> Job -> IO ()
+testJobsRunner logger testClock authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- BackgroundJobs.throwParsePayload job
-  void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx bgJob)
+  void $ runTestBackgroundWithLogger logger testClock authCtx (BackgroundJobs.processBackgroundJob authCtx bgJob)
 
 
 getBackgroundJobs :: Connection -> IO (V.Vector Job)
@@ -788,10 +799,10 @@ getBackgroundJobs conn = V.fromList <$> PGS.query conn q ()
     q = [sql|SELECT id, created_at, updated_at, run_at, status, payload,last_error, attempts, locked_at, locked_by FROM background_jobs|]
 
 
-setBjRunAtInThePast :: Connection -> IO ()
-setBjRunAtInThePast conn = void $ PGS.execute conn q ()
+setBjRunAtInThePast :: UTCTime -> Connection -> IO ()
+setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
   where
-    q = [sql|UPDATE background_jobs SET run_at = CURRENT_DATE - INTERVAL '1 day' WHERE status = 'pending'|]
+    q = [sql|UPDATE background_jobs SET run_at = ? - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
 refreshMaterializedView :: Text -> Connection -> IO Int64
@@ -803,7 +814,7 @@ refreshMaterializedView name conn = PGS.execute conn (Query $ encodeUtf8 q) ()
 -- Helper function to process messages and run background jobs
 processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO ()
 processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
-  currentTime <- getCurrentTime
+  currentTime <- getTestTime trTestClock
   let futureTime = addUTCTime 1 currentTime
   let testProjectId = UUIDId UUID.nil
 
@@ -812,7 +823,7 @@ processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
     _ <- BackgroundJobs.processOneMinuteErrors futureTime testProjectId
     BackgroundJobs.processFiveMinuteSpans futureTime testProjectId
 
-  void $ runAllBackgroundJobs trATCtx
+  void $ runAllBackgroundJobs trTestClock trATCtx
 
 
 -- Helper function to create request dumps for endpoints
@@ -831,7 +842,7 @@ createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
           (Only projectId)
         :: IO (V.Vector (Text, AE.Value, Text, Text, Text))
 
-  currentTime <- getCurrentTime
+  currentTime <- getTestTime trTestClock
   forM_ endpoints $ \(path, _, method, host, hash) -> do
     forM_ [1 .. numRequestsPerEndpoint] $ \(_ :: Int) -> do
       spanId <- nextRandom
@@ -920,7 +931,7 @@ processAllBackgroundJobsMultipleTimes TestResources{..} = go 10 -- max 10 iterat
   where
     go 0 = pass -- Safety limit reached
     go n = do
-      jobs <- runAllBackgroundJobs trATCtx
+      jobs <- runAllBackgroundJobs trTestClock trATCtx
       unless (V.null jobs) $ go (n - 1)
 
 
@@ -930,7 +941,7 @@ processAllBackgroundJobsMultipleTimes TestResources{..} = go 10 -- max 10 iterat
 -- | Helper to create an API key for testing using handler
 createTestAPIKey :: TestResources -> Projects.ProjectId -> Text -> IO Text
 createTestAPIKey tr projectId keyName = do
-  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
+  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger tr.trTestClock $ Api.apiPostH projectId (Api.GenerateAPIKeyForm keyName Nothing)
   case result of
     Api.ApiPost _ _ (Just (_, keyText)) -> pure keyText
     _ -> error "Failed to create API key via handler"
@@ -984,3 +995,23 @@ ingestMetricWithHeader tr apiKey metricName value timestamp = do
   metricBytes <- OtlpMock.createGaugeMetricAtTime "" metricName value timestamp -- Empty API key in resource
   let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
   void $ runTestBg tr $ OtlpServer.processMetricsRequest (Just apiKey) metricReq
+
+
+-- | Advance the test clock forward by given duration
+advanceTestTime :: TestResources -> NominalDiffTime -> IO ()
+advanceTestTime tr dt = advanceTime tr.trTestClock dt
+
+
+-- | Advance the test clock by N minutes
+advanceMinutes :: TestResources -> Int -> IO ()
+advanceMinutes tr n = advanceTestTime tr (fromIntegral n * 60)
+
+
+-- | Advance the test clock by N hours
+advanceHours :: TestResources -> Int -> IO ()
+advanceHours tr n = advanceTestTime tr (fromIntegral n * 3600)
+
+
+-- | Advance the test clock by N days
+advanceDays :: TestResources -> Int -> IO ()
+advanceDays tr n = advanceTestTime tr (fromIntegral n * 86400)

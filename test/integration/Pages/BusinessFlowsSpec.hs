@@ -6,7 +6,7 @@ import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, getCurrentTime, getZonedTime)
+import Data.Time (UTCTime, addUTCTime, getZonedTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
@@ -23,6 +23,7 @@ import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Settings qualified as S3
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.TestClock (getTestTime)
 import Pkg.TestUtils
 import Relude
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
@@ -41,7 +42,7 @@ data TestContext = TestContext
 -- Create a new project for testing and provide it along with test resources
 withTestProject :: (TestContext -> IO ()) -> IO ()
 withTestProject action = withTestResources $ \tr -> do
-  headers <- (atAuthToBase tr.trSessAndHeader CreateProject.projectOnboardingH & effToServantHandlerTest tr.trATCtx tr.trLogger tr.trTracerProvider & ServantS.runHandler) <&> fromRightShow
+  headers <- (atAuthToBase tr.trSessAndHeader CreateProject.projectOnboardingH & effToServantHandlerTest tr.trATCtx tr.trLogger tr.trTracerProvider tr.trTestClock & ServantS.runHandler) <&> fromRightShow
   case lookupResponseHeader @"Location" headers of
     Header location -> do
       let pidText = T.takeWhile (/= '/') $ T.drop 3 location
@@ -143,7 +144,7 @@ onboardingTests = do
     it "Step 4: Integration - should show API key after integration" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
       -- Ingest a test event to simulate integration
       apiKey <- createTestAPIKey tr testPid "integration-test-key"
-      currentTime <- liftIO getCurrentTime
+      currentTime <- getTestTime tr.trTestClock
       ingestTrace tr apiKey "test" currentTime
 
       (headers, _) <- testServant tr $ Onboarding.checkIntegrationGet testPid Nothing
@@ -251,7 +252,7 @@ lemonSqueezyWebhookTests = do
     forM_ webhookTestCases $ \(eventName, testDesc, payloadFn, testFn) ->
       it testDesc $ \TestContext{tcResources = tr, tcProjectId = testPid} -> do
         let payload = payloadFn testPid
-        let callWebhook = void $ toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing payload
+        let callWebhook = void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ LemonSqueezy.webhookPostH Nothing payload
         testFn testPid tr.trPool callWebhook
 
 
@@ -355,7 +356,7 @@ createWebhookPayload eventName pid =
 billingUsageTests :: SpecWith TestContext
 billingUsageTests = do
   it "should calculate usage within billing cycle correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    currentTime <- liftIO getCurrentTime
+    currentTime <- getTestTime tr.trTestClock
     let cycleStart = addUTCTime (-(10 * 24 * 60 * 60)) currentTime -- 10 days ago
 
     -- Configure project for billing: set payment_plan, first_sub_item_id, billing_day, and usage_last_reported
@@ -379,7 +380,7 @@ billingUsageTests = do
       LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
         totalReqs `shouldBe` 5 -- Should count the 5 spans we ingested
   it "should handle cycle boundaries correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
-    currentTime <- liftIO getCurrentTime
+    currentTime <- getTestTime tr.trTestClock
     let cycleStart = addUTCTime (-(40 * 24 * 60 * 60)) currentTime -- 40 days ago (more than a month)
         oldTime = addUTCTime (-(35 * 24 * 60 * 60)) currentTime
 
@@ -410,7 +411,7 @@ replayTests :: SpecWith TestContext
 replayTests = do
   it "should ingest replay events successfully" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     sessionId <- liftIO UUIDV4.nextRandom
-    currentTime <- liftIO getCurrentTime
+    currentTime <- getTestTime tr.trTestClock
 
     let replayData =
           Replay.ReplayPost
@@ -419,7 +420,7 @@ replayTests = do
             , timestamp = currentTime
             }
 
-    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do
@@ -433,7 +434,7 @@ replayTests = do
 
   it "should handle empty event arrays" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     sessionId <- liftIO UUIDV4.nextRandom
-    currentTime <- liftIO getCurrentTime
+    currentTime <- getTestTime tr.trTestClock
 
     let replayData =
           Replay.ReplayPost
@@ -442,7 +443,7 @@ replayTests = do
             , timestamp = currentTime
             }
 
-    result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
+    result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ Replay.replayPostH testPid replayData
 
     case result of
       AE.Object obj -> do

@@ -46,8 +46,10 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -227,23 +229,27 @@ queryMonitorsById ids
     |]
 
 
-updateQMonitorTriggeredState :: DB es => QueryMonitorId -> Bool -> Eff es Int64
-updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
+updateQMonitorTriggeredState :: (DB es, Time :> es) => QueryMonitorId -> Bool -> Eff es Int64
+updateQMonitorTriggeredState qmId isAlert = do
+  now <- Time.currentTime
+  PG.execute q (now, qmId)
   where
     q =
       if isAlert
-        then [sql|UPDATE monitors.query_monitors SET alert_last_triggered=NOW() where id=?|]
-        else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
+        then [sql|UPDATE monitors.query_monitors SET alert_last_triggered=? where id=?|]
+        else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=? where id=?|]
 
 
-monitorToggleActiveById :: DB es => QueryMonitorId -> Eff es Int64
-monitorToggleActiveById id' = PG.execute q (Only id')
+monitorToggleActiveById :: (DB es, Time :> es) => QueryMonitorId -> Eff es Int64
+monitorToggleActiveById id' = do
+  now <- Time.currentTime
+  PG.execute q (now, id')
   where
     q =
-      [sql| 
+      [sql|
         UPDATE monitors.query_monitors SET deactivated_at=CASE
             WHEN deactivated_at IS NOT NULL THEN NULL
-            ELSE NOW()
+            ELSE ?
         END
         where id=?|]
 

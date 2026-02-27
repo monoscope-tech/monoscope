@@ -81,6 +81,8 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
@@ -553,18 +555,19 @@ spanRecordByName pid trId spanName = listToMaybe <$> PG.query q (pid.toText, trI
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
 
 
-getDataPointsData :: DB es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
-getDataPointsData pid dateRange = PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
-  where
-    dateRangeStr = toText $ case dateRange of
-      (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      _ -> ""
+getDataPointsData :: (DB es, Time :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
+getDataPointsData pid dateRange = do
+  now <- Time.currentTime
+  let fmtTime = formatTime defaultTimeLocale "%F %R"
+      dateRangeStr = toText $ case dateRange of
+        (Nothing, Just b) -> "AND timestamp BETWEEN '" <> fmtTime now <> "' AND '" <> fmtTime b <> "'"
+        (Just a, Just b) -> "AND timestamp BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> ""
 
-    q =
-      [text|
+      q =
+        [text|
 WITH metrics_aggregated AS (
-    SELECT 
+    SELECT
         project_id,
         metric_name,
         COUNT(*) AS data_points
@@ -572,7 +575,7 @@ WITH metrics_aggregated AS (
     WHERE project_id = ? $dateRangeStr
     GROUP BY project_id, metric_name
 )
-SELECT 
+SELECT
     mm.metric_name,
     mm.metric_type,
     mm.metric_unit,
@@ -587,6 +590,7 @@ LEFT JOIN metrics_aggregated ma
 WHERE mm.project_id = ?
 GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, ma.data_points;
 |]
+  PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
@@ -647,25 +651,27 @@ getTotalMetricsCount pid lastReported = do
       [sql| SELECT count(*) FROM telemetry.metrics WHERE project_id=? AND timestamp > ?|]
 
 
-getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
-getMetricChartListData pid sourceM prefixM dateRange cursor = PG.query (Query $ Relude.encodeUtf8 q) pid
-  where
-    dateRangeStr = toText $ case dateRange of
-      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      _ -> ""
-    sourceFilter = case sourceM of
-      Nothing -> ""
-      Just source -> if source == "" || source == "all" then "" else "AND service_name = '" <> source <> "'"
-    prefixFilter = case prefixM of
-      Nothing -> ""
-      Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
-    cursorTxt = show cursor
-    q =
-      [text|
-        SELECT distinct metric_name, metric_type, metric_unit, metric_description
-        FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
-     |]
+getMetricChartListData :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
+getMetricChartListData pid sourceM prefixM dateRange cursor = do
+  now <- Time.currentTime
+  let fmtTime = formatTime defaultTimeLocale "%F %R"
+      dateRangeStr = toText $ case dateRange of
+        (Nothing, Just b) -> "AND created_at BETWEEN '" <> fmtTime now <> "' AND '" <> fmtTime b <> "'"
+        (Just a, Just b) -> "AND created_at BETWEEN '" <> fmtTime a <> "' AND '" <> fmtTime b <> "'"
+        _ -> ""
+      sourceFilter = case sourceM of
+        Nothing -> ""
+        Just source -> if source == "" || source == "all" then "" else "AND service_name = '" <> source <> "'"
+      prefixFilter = case prefixM of
+        Nothing -> ""
+        Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
+      cursorTxt = show cursor
+      q =
+        [text|
+          SELECT distinct metric_name, metric_type, metric_unit, metric_description
+          FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
+       |]
+  PG.query (Query $ Relude.encodeUtf8 q) pid
 
 
 getMetricLabelValues :: DB es => Projects.ProjectId -> Text -> Text -> Eff es [Text]

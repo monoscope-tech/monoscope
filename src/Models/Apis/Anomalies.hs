@@ -45,8 +45,10 @@ import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields (
   FieldCategoryEnum,
@@ -202,9 +204,10 @@ where
       |]
 
 
-countAnomalies :: DB es => Projects.ProjectId -> Text -> Eff es Int
+countAnomalies :: (DB es, Time :> es) => Projects.ProjectId -> Text -> Eff es Int
 countAnomalies pid report_type = do
-  result <- PG.query (Query $ encodeUtf8 q) (Only pid)
+  now <- Time.currentTime
+  result <- PG.query (Query $ encodeUtf8 q) (pid, now)
   case result of
     [Only countt] -> return countt
     v -> return $ length v
@@ -213,43 +216,45 @@ countAnomalies pid report_type = do
     q =
       [text|
       SELECT COUNT(*) as anomaly_count
-      FROM apis.issues iss WHERE project_id = ?  and created_at > current_timestamp - interval $report_interval
+      FROM apis.issues iss WHERE project_id = ?  and created_at > ? - interval $report_interval
      |]
 
 
-acknowledgeAnomalies :: DB es => Users.UserId -> V.Vector Text -> Eff es [Text]
+acknowledgeAnomalies :: (DB es, Time :> es) => Users.UserId -> V.Vector Text -> Eff es [Text]
 acknowledgeAnomalies uid aids
   | V.null aids = pure []
   | otherwise = do
+      now <- Time.currentTime
       -- Get anomaly hashes from the issues being acknowledged
       anomalyHashesResult :: [Only (V.Vector Text)] <- PG.query qGetHashes (Only aids)
       let allAnomalyHashes = V.concat $ coerce @[Only (V.Vector Text)] @[V.Vector Text] anomalyHashesResult
       -- Update issues
-      (_ :: [Only Text]) <- PG.query qIssues (uid, aids)
+      (_ :: [Only Text]) <- PG.query qIssues (uid, now, aids)
       -- Update anomalies - both directly referenced and those tracked by the issues
-      (_ :: [Only Text]) <- PG.query q (uid, aids)
+      (_ :: [Only Text]) <- PG.query q (uid, now, aids)
       -- Also update anomalies referenced by the issues' anomaly_hashes arrays
       unless (V.null allAnomalyHashes) $ do
-        _ <- PG.execute qAnomaliesByHash (uid, allAnomalyHashes)
+        _ <- PG.execute qAnomaliesByHash (uid, now, allAnomalyHashes)
         pass
-      coerce @[Only Text] @[Text] <$> PG.query q (uid, aids)
+      coerce @[Only Text] @[Text] <$> PG.query q (uid, now, aids)
   where
     qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
-    qIssues = [sql| update apis.issues set acknowledged_by=?, acknowledged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
-    q = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=NOW() where id=ANY(?::uuid[]) RETURNING target_hash; |]
-    qAnomaliesByHash = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=NOW() where target_hash=ANY(?) |]
+    qIssues = [sql| update apis.issues set acknowledged_by=?, acknowledged_at=? where id=ANY(?::uuid[]) RETURNING target_hash; |]
+    q = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=? where id=ANY(?::uuid[]) RETURNING target_hash; |]
+    qAnomaliesByHash = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=? where target_hash=ANY(?) |]
 
 
-acknowlegeCascade :: DB es => Users.UserId -> V.Vector Text -> Eff es Int64
+acknowlegeCascade :: (DB es, Time :> es) => Users.UserId -> V.Vector Text -> Eff es Int64
 acknowlegeCascade uid targets
   | V.null targets = pure 0
   | otherwise = do
-      _ <- PG.execute qIssues (uid, hashes)
-      PG.execute q (uid, hashes)
+      now <- Time.currentTime
+      _ <- PG.execute qIssues (uid, now, hashes)
+      PG.execute q (uid, now, hashes)
   where
     hashes = (<> "%") <$> targets
-    qIssues = [sql| UPDATE apis.issues SET acknowledged_by = ?, acknowledged_at = NOW() WHERE target_hash=ANY (?); |]
-    q = [sql| UPDATE apis.anomalies SET acknowledged_by = ?, acknowledged_at = NOW() WHERE target_hash LIKE ANY (?); |]
+    qIssues = [sql| UPDATE apis.issues SET acknowledged_by = ?, acknowledged_at = ? WHERE target_hash=ANY (?); |]
+    q = [sql| UPDATE apis.anomalies SET acknowledged_by = ?, acknowledged_at = ? WHERE target_hash LIKE ANY (?); |]
 
 
 -------------------------------------------------------------------------------------------

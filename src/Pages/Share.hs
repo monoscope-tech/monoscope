@@ -8,6 +8,7 @@ import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.Labeled (labeled)
 import Effectful.PostgreSQL (WithConnection)
+import Effectful.Time qualified as Time
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Lucid
@@ -85,8 +86,9 @@ copyLink rid = do
 shareLinkGetH :: UUID.UUID -> ATBaseCtx ShareLinkGet
 shareLinkGetH sid = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
   -- FIXME: handle errors
-  r <- listToMaybe <$> PG.query [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > current_timestamp - interval '48 hours' limit 1|] (Only sid)
+  r <- listToMaybe <$> PG.query [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > ? - interval '48 hours' limit 1|] (sid, now)
   uiM <- do
     case r of
       Just (pid, eventId, eventType, createdAt) -> do

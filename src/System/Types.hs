@@ -43,7 +43,8 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
-import Effectful.Time (Time, runFrozenTime, runTime)
+import Effectful.Time (Time, runTime)
+import Pkg.TestClock (TestClock, runMutableTime, runWithTimeSyncedPool)
 import Log qualified
 import Models.Users.Sessions qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
@@ -149,16 +150,17 @@ effToServantHandler env logger tp app =
 
 -- | `effToServantHandler` exists specifically to be used in tests,
 -- so the UUID and Time effects are fixed to constants.
-effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
-effToServantHandlerTest env logger tp app =
+-- Accepts a 'TestClock' for mutable, advanceable time in tests.
+effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> TestClock -> ATBaseCtx a -> Servant.Handler a
+effToServantHandlerTest env logger tp testClock app =
   app
     & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
     & runHTTPGolden "./tests/golden/"
-    & runWithConnectionPool env.pool
+    & runWithTimeSyncedPool testClock env.pool
     & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)
-    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+    & runMutableTime testClock
     & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
     & runConcurrent

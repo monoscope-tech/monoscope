@@ -7,7 +7,8 @@ import Data.Default (def)
 import Data.HashMap.Strict qualified as HashMap
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
-import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (defaultTimeLocale, formatTime)
+import Pkg.TestClock (getTestTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -31,7 +32,7 @@ spec :: Spec
 spec = aroundAll withTestResources do
   describe "Query Log Monitors" do
     it "should create monitor with no triggers" $ \tr -> do
-      currentTime <- getCurrentTime
+      currentTime <- getTestTime tr.trTestClock
       let queryMonitor =
             convertToQueryMonitor (UUIDId UUID.nil) currentTime (Monitors.QueryMonitorId UUID.nil)
               $ AlertUpsertForm
@@ -81,7 +82,7 @@ spec = aroundAll withTestResources do
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
 
   describe "Widget Alert Cascade Deletion" do
     it "should delete alert when widget is removed from dashboard" \tr -> do
@@ -192,7 +193,7 @@ spec = aroundAll withTestResources do
 
   describe "Monitor Hysteresis Integration" do
     it "should store and retrieve monitors with recovery thresholds" \tr -> do
-      currentTime <- getCurrentTime
+      currentTime <- getTestTime tr.trTestClock
       -- Create monitor with recovery thresholds for hysteresis
       let queryMonitor =
             convertToQueryMonitor testPid currentTime (Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "11111111-1111-1111-1111-111111111111")

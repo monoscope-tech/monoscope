@@ -41,7 +41,7 @@ testTimeRange = (toText $ iso8601Show $ addUTCTime (-3600) frozenTime, toText $ 
 queryLogs :: TestResources -> Maybe Text -> IO Log.LogsGet
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
-  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger tr.trTestClock
     $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
   pure result
 
@@ -66,7 +66,7 @@ spec = aroundAll withTestResources do
     it "Test 2.1: should ingest logs via all 3 API keys using logsServiceExport" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["log-key-1", "log-key-2", "log-key-3"]
       forM_ (zip keys ["Log from key 1", "Log from key 2", "Log from key 3"]) $ \(key, msg) -> ingestLog tr key msg frozenTime
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
       result <- queryLogs tr (Just "kind == \"log\"")
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 3)
@@ -80,7 +80,7 @@ spec = aroundAll withTestResources do
     it "Test 3.1: should ingest traces via all 3 keys using traceServiceExport" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["trace-key-1", "trace-key-2", "trace-key-3"]
       forM_ (zip keys ["GET /api/users", "POST /api/posts", "DELETE /api/comments"]) $ \(key, spanName) -> ingestTrace tr key spanName frozenTime
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
       result <- queryLogs tr (Just "kind != \"log\"")
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 3)
@@ -95,7 +95,7 @@ spec = aroundAll withTestResources do
     it "Test 4.1: should ingest metrics via all 3 keys using metricsServiceExport" $ \tr -> do
       keys <- traverse (createTestAPIKey tr pid) ["metric-key-1", "metric-key-2", "metric-key-3"]
       forM_ (zip3 keys ["cpu.usage", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1]) $ \(key, metricName, value) -> ingestMetric tr key metricName value frozenTime
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
       let (timeFrom, timeTo) = testTimeRange
       result <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length result.dataset `shouldSatisfy` (> 0)
@@ -109,7 +109,7 @@ spec = aroundAll withTestResources do
     it "Test 5.1: should query ingested logs via apiLogH handler" $ \tr -> do
       key <- createTestAPIKey tr pid "query-key-1"
       ingestLog tr key "Test log for querying" frozenTime
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
       result <- queryLogs tr (Just "kind == \"log\"")
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 1)
@@ -117,7 +117,7 @@ spec = aroundAll withTestResources do
     it "Test 6.1: should query time-series data via chart_data endpoint" $ \tr -> do
       key <- createTestAPIKey tr pid "chart-key-1"
       forM_ ([0 .. 5] :: [Int]) $ \i -> ingestLog tr key "Log entry" (addUTCTime (fromIntegral (i * 60)) frozenTime)
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
       let (timeFrom, timeTo) = testTimeRange
       result <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") []
       V.length result.dataset `shouldSatisfy` (> 0)
@@ -130,7 +130,7 @@ spec = aroundAll withTestResources do
         ingestTrace tr key "GET /api/test" frozenTime
         ingestMetric tr key "test.metric" 42.0 frozenTime
       void $ runTestBg tr $ BackgroundJobs.processFiveMinuteSpans frozenTime pid
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
       -- Verify logs and traces
       result <- queryLogs tr Nothing
       dataset <- expectLogsJson result
@@ -143,7 +143,7 @@ spec = aroundAll withTestResources do
     it "Test 8.1: should handle bulk ingestion (50+ messages)" $ \tr -> do
       key <- createTestAPIKey tr pid "Bulk Test Key"
       forM_ ([1 .. 50] :: [Int]) $ \i -> ingestLog tr key ("Bulk log " <> show i) frozenTime
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
       result <- queryLogs tr (Just "kind == \"log\"")
       dataset <- expectLogsJson result
       V.length dataset `shouldSatisfy` (>= 50)
@@ -154,7 +154,7 @@ spec = aroundAll withTestResources do
         key <- createTestAPIKey tr pid "header-log-key"
         -- Ingest using Authorization header instead of resource attributes
         ingestLogWithHeader tr key "Log via header auth" frozenTime
-        void $ runAllBackgroundJobs tr.trATCtx
+        void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
         result <- queryLogs tr (Just "kind == \"log\"")
         dataset <- expectLogsJson result
         V.length dataset `shouldSatisfy` (>= 1)
@@ -162,7 +162,7 @@ spec = aroundAll withTestResources do
       it "Test 9.2: should authenticate traces using gRPC Authorization header" $ \tr -> do
         key <- createTestAPIKey tr pid "header-trace-key"
         ingestTraceWithHeader tr key "GET /api/header-auth" frozenTime
-        void $ runAllBackgroundJobs tr.trATCtx
+        void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
         result <- queryLogs tr (Just "kind != \"log\"")
         dataset <- expectLogsJson result
         V.length dataset `shouldSatisfy` (>= 1)
@@ -170,7 +170,7 @@ spec = aroundAll withTestResources do
       it "Test 9.3: should authenticate metrics using gRPC Authorization header" $ \tr -> do
         key <- createTestAPIKey tr pid "header-metric-key"
         ingestMetricWithHeader tr key "header.metric" 123.45 frozenTime
-        void $ runAllBackgroundJobs tr.trATCtx
+        void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
         result <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
         V.length result.dataset `shouldSatisfy` (> 0)
@@ -184,7 +184,7 @@ spec = aroundAll withTestResources do
         let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
         -- Process with both keys - resource should take precedence
         void $ runTestBg tr $ OtlpServer.processLogsRequest (Just headerKey) logReq
-        void $ runAllBackgroundJobs tr.trATCtx
+        void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
 
         result <- queryLogs tr (Just "kind == \"log\"")
         dataset <- expectLogsJson result
@@ -205,7 +205,7 @@ spec = aroundAll withTestResources do
         ingestTrace tr key "Resource auth trace" frozenTime
         ingestTraceWithHeader tr key "Header auth trace" frozenTime
 
-        void $ runAllBackgroundJobs tr.trATCtx
+        void $ runAllBackgroundJobs tr.trTestClock tr.trATCtx
         result <- queryLogs tr Nothing
         dataset <- expectLogsJson result
         V.length dataset `shouldSatisfy` (>= 4)

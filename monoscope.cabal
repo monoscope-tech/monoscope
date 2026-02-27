@@ -136,6 +136,7 @@ library
       Pkg.Parser.Stats
       Pkg.QueryCache
       Pkg.Queue
+      Pkg.TestClock
       Pkg.TestUtils
       ProcessMessage
       Start

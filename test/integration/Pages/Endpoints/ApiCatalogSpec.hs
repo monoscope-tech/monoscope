@@ -8,7 +8,8 @@ import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
 import Data.List (find)
 import Data.Int (Int64)
-import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime)
+import Pkg.TestClock (getTestTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -75,13 +76,12 @@ verifyEndpointsCreated tr = do
   hash2 `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
 
 -- Helper function to prepare test messages
-prepareTestMessages :: IO [(Text, ByteString)]
-prepareTestMessages = do
-  currentTime <- getCurrentTime
+prepareTestMessages :: UTCTime -> [(Text, ByteString)]
+prepareTestMessages currentTime =
   let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
-  let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
-  let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
-  pure $ concat $ replicate 100
+      reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
+      reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
+  in concat $ replicate 100
     [ ("m1", toStrict $ AE.encode reqMsg1)
     , ("m2", toStrict $ AE.encode reqMsg2)
     ]
@@ -109,9 +109,10 @@ spec = aroundAll withTestResources do
         [Only 0] -> error $ "Demo project with ID " <> show testPid <> " does not exist in database"
         _ -> pass
       
-      msgs <- prepareTestMessages
+      currentTime <- getTestTime tr.trTestClock
+      let msgs = prepareTestMessages currentTime
       processMessagesAndBackgroundJobs tr msgs
-      
+
       -- Debug: Check if any spans were inserted at all
       allSpansCount <- withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*)
@@ -165,7 +166,7 @@ spec = aroundAll withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       -- Run only NewAnomaly jobs to create issues from anomalies
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trTestClock tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
 
@@ -267,7 +268,8 @@ spec = aroundAll withTestResources do
 
     it "creates shape and field anomalies alongside endpoint anomalies" \tr -> do
       -- First ensure endpoints are created and anomalies are generated
-      msgs <- prepareTestMessages
+      currentTime <- getTestTime tr.trTestClock
+      let msgs = prepareTestMessages currentTime
       processMessagesAndBackgroundJobs tr msgs
       
       -- Check that we have anomalies for shapes and fields too

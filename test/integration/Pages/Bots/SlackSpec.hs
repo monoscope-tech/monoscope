@@ -21,7 +21,7 @@ spec = aroundAll withTestResources do
       it "sets notification channel and saves golden response" \tr -> do
         setupSlackData tr testPid "T01HEREA9X"
         let interaction = slackInteraction "/monoscope-here" "" "T01HEREA9X"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         assertJsonGolden "slack/here_response.json" result
         extractResponseType result `shouldBe` Just "in_channel"
@@ -35,7 +35,7 @@ spec = aroundAll withTestResources do
       it "returns correct block structure" \tr -> do
         setupSlackData tr testPid "T02BLOCKB8Y"
         let interaction = slackInteraction "/monoscope-here" "" "T02BLOCKB8Y"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         case extractSlackBlocks result of
           Just (AE.Array blocks) -> do
@@ -48,7 +48,7 @@ spec = aroundAll withTestResources do
       it "returns loading message immediately" \tr -> do
         setupSlackData tr testPid "T03MONOSC0P"
         let interaction = slackInteraction "/monoscope" "show error rate" "T03MONOSC0P"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         assertJsonGolden "slack/monoscope_loading_response.json" result
         extractResponseText result `shouldSatisfy` isJust
@@ -57,14 +57,14 @@ spec = aroundAll withTestResources do
 
       it "handles missing slack data gracefully" \tr -> do
         let interaction = slackInteraction "/monoscope" "show errors" "T99NONEXIST"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
         result `shouldSatisfy` isValidJsonResponse
 
     describe "/dashboard command" do
       it "returns error when no dashboards exist" \tr -> do
         setupSlackData tr testPid "T04DASHEMTY"
         let interaction = slackInteraction "/dashboard" "" "T04DASHEMTY"
-        result <- try $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- try $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
         case result of
           Left (e :: SomeException) -> T.isInfixOf "dashboards" (toText $ show e) `shouldBe` True
           Right _ -> pass
@@ -75,14 +75,14 @@ spec = aroundAll withTestResources do
         void $ runTestBg tr $ Slack.updateSlackNotificationChannel "T05ANOMALY1" "C06ALERTSCH"
 
         -- Use existing infrastructure from TestUtils
-        (notifs, _) <- runTestBackgroundWithNotifications tr.trLogger tr.trATCtx pass
+        (notifs, _) <- runTestBackgroundWithNotifications tr.trLogger tr.trTestClock tr.trATCtx pass
         notifs `shouldBe` []
 
       it "user can ask about anomalies via /monoscope" \tr -> do
         setupSlackData tr testPid "T06ANOMQRY2"
 
         let interaction = slackInteraction "/monoscope" "show me recent anomalies" "T06ANOMQRY2"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         isValidJsonResponse result `shouldBe` True
         extractResponseText result `shouldSatisfy` isJust
@@ -91,7 +91,7 @@ spec = aroundAll withTestResources do
       it "/here command adds channel to @everyone team" \tr -> do
         setupSlackData tr testPid "T07HERETEAM"
         let interaction = slackInteraction "/monoscope-here" "" "T07HERETEAM"
-        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T07HERETEAM"
         case slackDataM of
@@ -105,8 +105,8 @@ spec = aroundAll withTestResources do
       it "/here command does not duplicate channels in @everyone team" \tr -> do
         setupSlackData tr testPid "T08HEREDUP"
         let interaction = slackInteraction "/monoscope-here" "" "T08HEREDUP"
-        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
-        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T08HEREDUP"
         case slackDataM of
@@ -122,7 +122,7 @@ spec = aroundAll withTestResources do
       it "/here updates both default channel_id and @everyone team" \tr -> do
         setupSlackData tr testPid "T09HEREBOTH"
         let interaction = slackInteraction "/monoscope-here" "" "T09HEREBOTH"
-        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T09HEREBOTH"
         case slackDataM of
@@ -138,7 +138,7 @@ spec = aroundAll withTestResources do
         setupSlackData tr testPid "T10HEREWELC"
         let interaction = slackInteraction "/monoscope-here" "" "T10HEREWELC"
         -- First call should add channel and attempt to send welcome message
-        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T10HEREWELC"
         case slackDataM of
@@ -153,9 +153,9 @@ spec = aroundAll withTestResources do
         setupSlackData tr testPid "T11HERENODUP"
         let interaction = slackInteraction "/monoscope-here" "" "T11HERENODUP"
         -- First call adds channel
-        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
         -- Second call should not send welcome message (channel already exists)
-        void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
+        void $ toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ slackInteractionsH interaction
 
         slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T11HERENODUP"
         case slackDataM of

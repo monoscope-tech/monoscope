@@ -33,7 +33,7 @@ spec = aroundAll withTestResources do
     describe "Project lookup" do
       it "handles unknown phone number gracefully" \tr -> do
         let msg = twilioWhatsAppPrompt tr "+19999999999" "show errors"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH msg
         isEmptyJsonObject result `shouldBe` True
 
       it "processes message for linked phone number" \tr -> do
@@ -41,7 +41,7 @@ spec = aroundAll withTestResources do
         setupWhatsappNumber tr testPid testPhone
 
         let msg = twilioWhatsAppPrompt tr testPhone "/dashboard"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH msg
         result `shouldSatisfy` isValidJsonResponse
 
     describe "Body type detection" do
@@ -72,5 +72,5 @@ spec = aroundAll withTestResources do
         setupWhatsappNumber tr testPid testPhone
 
         let msg = twilioWhatsAppPrompt tr testPhone "what's my error rate?"
-        result <- toBaseServantResponse tr.trATCtx tr.trLogger $ whatsappIncomingPostH msg
+        result <- toBaseServantResponse tr.trATCtx tr.trLogger tr.trTestClock $ whatsappIncomingPostH msg
         result `shouldSatisfy` isValidJsonResponse

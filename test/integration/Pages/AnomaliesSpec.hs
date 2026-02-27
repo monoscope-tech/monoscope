@@ -14,7 +14,8 @@ import Data.ByteString.Lazy qualified as BL
 import Data.HashMap.Strict qualified as HashMap
 import Data.Int (Int64)
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime)
+import Pkg.TestClock (getTestTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
@@ -71,7 +72,7 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected response"
 
     it "should create endpoint anomalies (not visible in anomaly list)" \tr -> do
-      currentTime <- getCurrentTime
+      currentTime <- getTestTime tr.trTestClock
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let msgs =
@@ -94,7 +95,7 @@ spec = aroundAll withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       -- Run only NewAnomaly jobs (which create issues from anomalies)
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trTestClock tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
       createRequestDumps tr testPid 10
@@ -124,7 +125,7 @@ spec = aroundAll withTestResources do
       pendingJobs2 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs2
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trTestClock tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
 
@@ -148,7 +149,7 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected response"
 
     it "should detect new shape anomaly after processing new messages" \tr -> do
-      currentTime <- getCurrentTime
+      currentTime <- getTestTime tr.trTestClock
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
@@ -167,7 +168,7 @@ spec = aroundAll withTestResources do
       pendingJobs3 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs3
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trTestClock tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
 
@@ -180,14 +181,14 @@ spec = aroundAll withTestResources do
       length apiChangeIssues `shouldSatisfy` (>= 1)
 
     it "should detect new format anomaly" \tr -> do
-      currentTime <- getCurrentTime
+      currentTime <- getTestTime tr.trTestClock
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" currentTime
 
       -- Get and run shape/field anomaly jobs
       pendingJobs4 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs4
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trTestClock tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
 
@@ -215,7 +216,7 @@ spec = aroundAll withTestResources do
       pendingJobs5 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs5
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere tr.trTestClock tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
         _ -> False
 
