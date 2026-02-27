@@ -443,16 +443,8 @@ issueAssignedEmail userName projectName issueTitle issueUrl errorType errorMessa
           $ td_ [style_ "padding: 10px 20px 20px 20px;"]
           $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
           $ tr_ do
-            td_ [width_ "50%", style_ "padding-bottom: 10px;"]
-              $ span_ [class_ "error-card-meta"] do
-                b_ [class_ "error-card-label"] "Issue:"
-                " "
-                toHtml @Text issueTitle
-            td_ [width_ "50%", style_ "padding-bottom: 10px;"]
-              $ span_ [class_ "error-card-meta"] do
-                b_ [class_ "error-card-label"] "Project:"
-                " "
-                toHtml @Text projectName
+            metaCell "Issue:" issueTitle
+            metaCell "Project:" projectName
       emailButton issueUrl "View Issue"
       emailDivider
       emailSignoff

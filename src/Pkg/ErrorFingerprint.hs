@@ -400,11 +400,11 @@ parseGenericFrame line =
               }
   where
     extractGenericFunction txt =
-      -- Try to find function-like patterns
+      -- Try to find function-like patterns; fall back to full line to avoid collisions
       let parts = T.words txt
        in case find (\p -> "(" `T.isInfixOf` p || "." `T.isInfixOf` p) parts of
             Just p -> T.takeWhile (/= '(') p
-            Nothing -> fromMaybe "" $ listToMaybe parts
+            Nothing -> txt
 
     extractGenericLineNumber txt =
       -- Look for :NUMBER or line NUMBER patterns
@@ -427,7 +427,7 @@ parseGenericFrame line =
 -- "com.example.MyClass|doWork\ncom.example.Service|process"
 --
 -- >>> normalizeStackTrace "unknown" "some random frame info"
--- "some"
+-- "some random frame info"
 normalizeStackTrace :: Text -> Text -> Text
 normalizeStackTrace runtime stackText =
   let frames = parseStackTrace runtime stackText

@@ -1925,8 +1925,8 @@ processNewError pid errorHash = do
                 RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [err.errorData]
                 _ -> ET.runtimeErrorsEmail project.title errorsUrl [err.errorData]
           (finalSlackTs, finalDiscordMsgId) <-
-            sendAlertToChannels runtimeAlert pid project users errorsUrl subj html (Nothing, Nothing)
-          Relude.when (isJust finalSlackTs || isJust finalDiscordMsgId)
+            sendAlertToChannels runtimeAlert pid project users errorsUrl subj html (err.slackThreadTs, err.discordMessageId)
+          Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId)
             $ void
             $ Errors.updateErrorThreadIds err.id finalSlackTs finalDiscordMsgId
         Log.logInfo "Created issue for error" (pid, err.id, issue.id, show runtimeAlertType)

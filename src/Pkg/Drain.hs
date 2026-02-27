@@ -88,7 +88,7 @@ emptyDrainTree =
 
 
 templateText :: V.Vector Text -> Text
-templateText = T.intercalate " " . V.toList
+templateText = T.unwords . V.toList
 
 
 createLogGroup :: V.Vector Text -> Text -> Text -> Maybe Text -> UTCTime -> LogGroup

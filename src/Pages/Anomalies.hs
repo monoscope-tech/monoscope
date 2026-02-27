@@ -450,9 +450,9 @@ errorAssigneeSection pid errIdM assigneeIdM members = do
               option_ ([value_ ""] <> [selected_ "true" | isNothing assigneeIdM]) "Unassigned"
               forM_ members \member -> do
                 let memberIdText = UUID.toText $ Projects.getUserId member.userId
-                let fullName = T.strip $ member.first_name <> " " <> member.last_name
-                let emailText = CI.original member.email
-                let label =
+                    fullName = T.strip $ member.first_name <> " " <> member.last_name
+                    emailText = CI.original member.email
+                    label =
                       if T.null fullName
                         then emailText
                         else fullName <> " (" <> emailText <> ")"
