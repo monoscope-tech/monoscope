@@ -1,6 +1,6 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns) where
 
-import Control.Lens ((.~))
+import Control.Lens (view, (.~), _1, _2, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
@@ -661,11 +661,16 @@ processOneMinuteErrors scheduledTime pid = do
         $ Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
       let allErrors = Telemetry.getAllATErrors spansWithErrors
       -- Group errors by traceId within each project to avoid duplicate errors from same trace
-      -- (otel log and span, [errors])
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
       processProjectErrors pid allErrors
       notifyErrorSubscriptions pid (V.fromList . ordNub . V.toList $ V.map (.hash) allErrors)
-      -- Batch all error updates into a single query using unnest (avoids N+1 pattern)
+      -- Upsert hourly rollup stats (aggregated by hash)
+      let hashGroups = HM.toList $ V.foldl' addError HM.empty allErrors
+          addError acc e = HM.insertWith addCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc
+          addCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
+          rollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- hashGroups]
+      void $ Errors.upsertErrorHourlyStats pid rollupStats
+      -- Batch otel updates: write extracted errors JSON into spans
       let mkErrorUpdate groupedErrors = do
             (firstError, _) <- V.uncons groupedErrors
             sId <- firstError.spanId
@@ -674,16 +679,23 @@ processOneMinuteErrors scheduledTime pid = do
             pure (sId, tId, AE.toJSON mappedErrors)
           updates = V.mapMaybe mkErrorUpdate (V.fromList errorsByTrace)
       unless (V.null updates) $ do
-        let (spanIds, traceIds, errorsJson) = V.unzip3 updates
+        let spanIds = V.map (view _1) updates
+            traceIds = V.map (view _2) updates
+            errorsJson = V.map (view _3) updates
         rowsUpdated <-
           PG.execute
             [sql| UPDATE otel_logs_and_spans o
                   SET errors = u.errors
-                  FROM (SELECT unnest(?::text[]) AS span_id, unnest(?::text[]) AS trace_id, unnest(?::jsonb[]) AS errors) u
+                  FROM (SELECT unnest(?::text[]) AS span_id, unnest(?::text[]) AS trace_id,
+                               unnest(?::jsonb[]) AS errors) u
                   WHERE o.project_id = ? AND o.context___span_id = u.span_id AND o.context___trace_id = u.trace_id |]
             (spanIds, traceIds, errorsJson, pid)
         Relude.when (fromIntegral rowsUpdated /= V.length updates)
           $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= V.length updates, "actual" AE..= rowsUpdated])
+      -- Append "err:<hash>" to otel hashes using array_append + guard (same pattern as pat: hashes)
+      let hashToSpans = HM.toList $ V.foldl' (\acc e -> maybe acc (\sId -> HM.insertWith (<>) ("err:" <> e.hash) [sId] acc) e.spanId) HM.empty allErrors
+      forM_ hashToSpans \(hashTag, sIds) ->
+        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, PGArray sIds, hashTag)
       Relude.when (V.length spansWithErrors == 2000)
         $ processErrorsPaginated oneMinuteAgo (skip + 2000)
 
@@ -1846,7 +1858,7 @@ calculateErrorBaselines pid = do
 
 
 -- | Detect error spikes and create issues
--- Uses error_events table for current rate calculation
+-- Uses error_hourly_stats for current rate calculation
 detectErrorSpikes :: Projects.ProjectId -> ATBackgroundCtx ()
 detectErrorSpikes pid = do
   authCtx <- Effectful.Reader.Static.ask @Config.AuthContext

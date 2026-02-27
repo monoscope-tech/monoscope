@@ -2,8 +2,6 @@ module Models.Apis.Errors (
   Error (..),
   ErrorId (..),
   ErrorState (..),
-  ErrorEvent (..),
-  ErrorEventId,
   ATError (..),
   ErrorL (..),
   -- Queries
@@ -17,11 +15,12 @@ module Models.Apis.Errors (
   bulkCalculateAndUpdateBaselines,
   resolveError,
   upsertErrorQueryAndParam,
+  upsertErrorHourlyStats,
   updateErrorSubscription,
   updateErrorThreadIds,
   updateErrorThreadIdsAndNotifiedAt,
   setErrorAssignee,
-  -- Error Events (for spike detection)
+  -- Error spike detection
   ErrorWithCurrentRate (..),
   getErrorsWithCurrentRates,
   -- Error Fingerprinting (re-exported from Pkg.ErrorFingerprint)
@@ -37,6 +36,7 @@ import Data.Aeson qualified as AE
 import Data.Default
 import Data.Time
 import Data.UUID qualified as UUID
+import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
@@ -60,11 +60,6 @@ import Utils (DBField (MkDBField))
 
 
 newtype ErrorId = ErrorId {unErrorId :: UUID.UUID}
-  deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Eq, FromField, NFData, Ord, ToField)
-
-
-newtype ErrorEventId = ErrorEventId {unErrorEventId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (AE.FromJSON, AE.ToJSON, Eq, FromField, NFData, Ord, ToField)
 
@@ -95,8 +90,8 @@ data Error = Error
   , errorData :: ATError
   , firstTraceId :: Maybe Text
   , recentTraceId :: Maybe Text
-  , firstEventId :: Maybe ErrorEventId
-  , lastEventId :: Maybe ErrorEventId
+  , firstEventId :: Maybe UUID.UUID
+  , lastEventId :: Maybe UUID.UUID
   , state :: ErrorState
   , assigneeId :: Maybe Projects.UserId
   , assignedAt :: Maybe ZonedTime
@@ -178,40 +173,6 @@ data ATError = ATError
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
-data ErrorEvent = ErrorEvent
-  { id :: ErrorEventId
-  , projectId :: Projects.ProjectId
-  , errorId :: ErrorId
-  , occurredAt :: ZonedTime
-  , targetHash :: Text
-  , exceptionType :: Text
-  , message :: Text
-  , stackTrace :: Text
-  , serviceName :: Text
-  , release :: Maybe Text
-  , environment :: Maybe Text
-  , requestMethod :: Maybe Text
-  , requestPath :: Maybe Text
-  , endpointHash :: Maybe Text
-  , traceId :: Maybe Text
-  , spanId :: Maybe Text
-  , parentSpanId :: Maybe Text
-  , userId :: Maybe Text
-  , userEmail :: Maybe Text
-  , userIp :: Maybe Text
-  , sessionId :: Maybe Text
-  , sampleRate :: Double
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "error_events", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ErrorEvent)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ErrorEvent
-
-
 -- | Get errors for a project with optional state filter
 getErrors :: DB es => Projects.ProjectId -> Maybe ErrorState -> Int -> Int -> Eff es [Error]
 getErrors pid mstate limit offset = case mstate of
@@ -235,7 +196,10 @@ getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, pid, hash)
     q =
       "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.affected_users, 0)::INT, ev.last_occurred_at FROM ("
         <> _select @Error
-        <> ") e LEFT JOIN (SELECT target_hash, COUNT(*) AS occurrences, COUNT(DISTINCT user_id) AS affected_users, MAX(occurred_at) AS last_occurred_at FROM apis.error_events WHERE project_id = ? GROUP BY target_hash) ev ON ev.target_hash = e.hash WHERE e.project_id = ? AND e.hash = ?"
+        <> [sql|) e LEFT JOIN (
+              SELECT error_id, SUM(event_count) AS occurrences, SUM(user_count) AS affected_users, MAX(hour_bucket) AS last_occurred_at
+              FROM apis.error_hourly_stats WHERE project_id = ? GROUP BY error_id
+            ) ev ON ev.error_id = e.id WHERE e.project_id = ? AND e.hash = ? |]
 
 
 -- | Update occurrence counts (called periodically to decay counts)
@@ -333,29 +297,27 @@ updateErrorThreadIds' updateNotifiedAt eid slackTs discordMsgId =
 
 
 -- | Bulk-update baselines for all active errors in a project using a single SQL CTE.
--- Computes median/MAD per error from error_events over the last 168 hours.
+-- Reads pre-bucketed data from error_hourly_stats over the last 168 hours.
 bulkCalculateAndUpdateBaselines :: DB es => Projects.ProjectId -> Eff es Int64
 bulkCalculateAndUpdateBaselines pid =
   PG.execute
     [sql|
-      WITH hourly_counts AS (
-        SELECT ee.error_id, date_trunc('hour', ee.occurred_at) AS hour_start, COUNT(*) AS event_count
-        FROM apis.error_events ee
-        JOIN apis.errors e ON e.id = ee.error_id
-        WHERE e.project_id = ? AND e.state != 'resolved' AND ee.occurred_at >= NOW() - INTERVAL '168 hours'
-        GROUP BY ee.error_id, date_trunc('hour', ee.occurred_at)
-      ),
-      stats AS (
-        SELECT error_id,
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val,
+      WITH stats AS (
+        SELECT ehs.error_id,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ehs.event_count) AS median_val,
           COUNT(*) AS total_hours
-        FROM hourly_counts GROUP BY error_id
+        FROM apis.error_hourly_stats ehs
+        JOIN apis.errors e ON e.id = ehs.error_id
+        WHERE e.project_id = ? AND e.state != 'resolved' AND ehs.hour_bucket >= NOW() - INTERVAL '168 hours'
+        GROUP BY ehs.error_id
       ),
       mad AS (
-        SELECT hc.error_id,
-          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(hc.event_count - s.median_val)) * 1.4826 AS mad_scaled
-        FROM hourly_counts hc JOIN stats s ON s.error_id = hc.error_id
-        GROUP BY hc.error_id
+        SELECT ehs.error_id,
+          PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(ehs.event_count - s.median_val)) * 1.4826 AS mad_scaled
+        FROM apis.error_hourly_stats ehs
+        JOIN stats s ON s.error_id = ehs.error_id
+        WHERE ehs.hour_bucket >= NOW() - INTERVAL '168 hours'
+        GROUP BY ehs.error_id
       )
       UPDATE apis.errors SET
         baseline_error_rate_mean = s.median_val,
@@ -393,36 +355,20 @@ data ErrorWithCurrentRate = ErrorWithCurrentRate
 
 getErrorsWithCurrentRates :: DB es => Projects.ProjectId -> Eff es [ErrorWithCurrentRate]
 getErrorsWithCurrentRates pid =
-  PG.query q (pid, pid)
+  PG.query q (Only pid)
   where
     q =
       [sql|
         SELECT
-          e.id,
-          e.project_id,
-          e.error_type,
-          e.message,
-          e.service,
-          e.state,
-          e.baseline_state,
-          e.baseline_error_rate_mean,
-          e.baseline_error_rate_stddev,
-          COALESCE(counts.current_count, 0)::INT AS current_hour_count,
-          e.error_data,
-          e.stacktrace,
-          e.hash,
-          e.slack_thread_ts,
-          e.discord_message_id
+          e.id, e.project_id, e.error_type, e.message, e.service, e.state,
+          e.baseline_state, e.baseline_error_rate_mean, e.baseline_error_rate_stddev,
+          COALESCE(counts.event_count, 0)::INT AS current_hour_count,
+          e.error_data, e.stacktrace, e.hash, e.slack_thread_ts, e.discord_message_id
         FROM apis.errors e
-        LEFT JOIN (
-          SELECT error_id, COUNT(*) AS current_count
-          FROM apis.error_events
-          WHERE project_id = ? AND occurred_at >= date_trunc('hour', NOW())
-          GROUP BY error_id
-        ) counts ON counts.error_id = e.id
-        WHERE e.project_id = ?
-          AND e.state != 'resolved'
-          AND e.is_ignored = false
+        LEFT JOIN apis.error_hourly_stats counts
+          ON counts.error_id = e.id AND counts.project_id = e.project_id
+          AND counts.hour_bucket = date_trunc('hour', NOW())
+        WHERE e.project_id = ? AND e.state != 'resolved' AND e.is_ignored = false
       |]
 
 
@@ -473,3 +419,21 @@ upsertErrorQueryAndParam pid err = (q, params)
       , MkDBField err.traceId
       , MkDBField err.traceId
       ]
+
+
+-- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and
+-- resolves error_id via JOIN on apis.errors(project_id, hash).
+upsertErrorHourlyStats :: DB es => Projects.ProjectId -> V.Vector (Text, Int, Int) -> Eff es Int64
+upsertErrorHourlyStats _pid stats | V.null stats = pure 0
+upsertErrorHourlyStats pid stats =
+  PG.execute
+    [sql| INSERT INTO apis.error_hourly_stats (project_id, error_id, hour_bucket, event_count, user_count)
+          SELECT e.project_id, e.id, date_trunc('hour', NOW()), u.event_count, u.user_count
+          FROM (SELECT unnest(?::text[]) AS hash, unnest(?::int[]) AS event_count, unnest(?::int[]) AS user_count) u
+          JOIN apis.errors e ON e.project_id = ? AND e.hash = u.hash
+          ON CONFLICT (project_id, error_id, hour_bucket)
+          DO UPDATE SET event_count = apis.error_hourly_stats.event_count + EXCLUDED.event_count,
+                        user_count = apis.error_hourly_stats.user_count + EXCLUDED.user_count |]
+    (hashes, eventCounts, userCounts, pid)
+  where
+    (hashes, eventCounts, userCounts) = V.unzip3 stats
