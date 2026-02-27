@@ -58,7 +58,7 @@ data StackFrame = StackFrame
 -- ["doWork","doDispatch"]
 parseStackTrace :: Text -> Text -> [StackFrame]
 parseStackTrace mSdk stackText =
-  let lns = filter (not . T.null . T.strip) $ T.lines stackText
+  let lns = filter (not . T.null . T.strip) $ lines stackText
    in mapMaybe (parseStackFrame mSdk) lns
 
 
@@ -303,9 +303,9 @@ parseJavaFrame line
       let (file, lineStr) = T.breakOn ":" loc
        in (file, readText $ T.drop 1 lineStr)
 
-    cleanJavaFunction func =
+    cleanJavaFunction =
       -- Remove generics: method<T> -> method
-      T.takeWhile (/= '<') func
+      T.takeWhile (/= '<')
 
     isJavaInApp = nonePrefix ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
 
@@ -374,9 +374,9 @@ parseDotNetFrame line
       let (path, lineStr) = T.breakOn ":line " loc
        in (path, readText $ T.drop 6 lineStr)
 
-    cleanDotNetFunction func =
+    cleanDotNetFunction =
       -- Remove generic arity: Method`1 -> Method
-      T.takeWhile (/= '`') func
+      T.takeWhile (/= '`')
 
     isDotNetInApp = nonePrefix ["System.", "Microsoft.", "Newtonsoft."]
 
@@ -401,7 +401,7 @@ parseGenericFrame line =
   where
     extractGenericFunction txt =
       -- Try to find function-like patterns; fall back to full line to avoid collisions
-      let parts = T.words txt
+      let parts = words txt
        in case find (\p -> "(" `T.isInfixOf` p || "." `T.isInfixOf` p) parts of
             Just p -> T.takeWhile (/= '(') p
             Nothing -> txt
@@ -451,14 +451,14 @@ normalizeStackTrace runtime stackText =
       -- 2. Remove generic type parameters
       -- 3. Remove parameter types
       -- 4. Normalize anonymous/lambda markers
-      let noAddr = T.unwords $ filter (not . ("0x" `T.isPrefixOf`)) $ T.words func
+      let noAddr = unwords $ filter (not . ("0x" `T.isPrefixOf`)) $ words func
           noGenerics = T.takeWhile (/= '<') noAddr
           noParams = T.takeWhile (/= '(') noGenerics
        in T.strip noParams
 
     normalizeContextLine :: Text -> Text
     normalizeContextLine ctx =
-      let normalized = T.unwords $ T.words ctx
+      let normalized = unwords $ words ctx
        in if T.length normalized > 120
             then "" -- Skip overly long context lines (like Sentry does)
             else normalized
@@ -480,7 +480,7 @@ normalizeStackTrace runtime stackText =
 -- "Trimmed message"
 normalizeMessage :: Text -> Text
 normalizeMessage msg =
-  let lns = take 2 $ filter (not . T.null . T.strip) $ T.lines msg
+  let lns = take 2 $ filter (not . T.null . T.strip) $ lines msg
       combined = T.intercalate " " $ map T.strip lns
       -- Replace variable patterns with placeholders
       normalized = replaceAllFormats combined

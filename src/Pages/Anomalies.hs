@@ -891,7 +891,7 @@ parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
 withIssueDataH :: (AE.FromJSON a, Applicative m) => Aeson AE.Value -> (a -> m ()) -> m ()
 withIssueDataH d f = case AE.fromJSON (getAeson d) of
   AE.Success v -> f v
-  _ -> pure ()
+  _ -> pass
 
 
 -- | Process widgets to use cached tool call data (no re-query)
