@@ -487,5 +487,3 @@ upsertErrorQueryAndParam pid err = (q, params)
       , MkDBField err.traceId
       , MkDBField err.traceId
       ]
-
-

@@ -33,8 +33,8 @@ import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
-import Data.Ord (clamp)
 import Data.Map qualified as Map
+import Data.Ord (clamp)
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)

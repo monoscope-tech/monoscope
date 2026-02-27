@@ -27,7 +27,6 @@ import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
-import Lucid (Html)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
@@ -38,6 +37,7 @@ import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
+import Lucid (Html)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Errors qualified as Errors
@@ -704,8 +704,13 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
 
 -- | Send alerts to all configured notification channels for a project, threading Slack/Discord messages.
 sendAlertToChannels
-  :: NotificationAlerts -> Projects.ProjectId -> Projects.Project -> [Projects.User]
-  -> Text -> Text -> Html ()
+  :: NotificationAlerts
+  -> Projects.ProjectId
+  -> Projects.Project
+  -> [Projects.User]
+  -> Text
+  -> Text
+  -> Html ()
   -> (Maybe Text, Maybe Text)
   -> ATBackgroundCtx (Maybe Text, Maybe Text)
 sendAlertToChannels alert pid project users _errorsUrl subj html (initSlackTs, initDiscordMsgId) =
