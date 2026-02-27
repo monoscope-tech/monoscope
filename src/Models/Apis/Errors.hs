@@ -191,15 +191,15 @@ getErrorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @Error [[field|
 
 
 getErrorLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorL)
-getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, pid, hash)
+getErrorLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
   where
     q =
       "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.affected_users, 0)::INT, ev.last_occurred_at FROM ("
         <> _select @Error
-        <> [sql|) e LEFT JOIN (
-              SELECT error_id, SUM(event_count) AS occurrences, SUM(user_count) AS affected_users, MAX(hour_bucket) AS last_occurred_at
-              FROM apis.error_hourly_stats WHERE project_id = ? GROUP BY error_id
-            ) ev ON ev.error_id = e.id WHERE e.project_id = ? AND e.hash = ? |]
+        <> [sql|) e LEFT JOIN LATERAL (
+              SELECT SUM(event_count) AS occurrences, SUM(user_count) AS affected_users, MAX(hour_bucket) AS last_occurred_at
+              FROM apis.error_hourly_stats WHERE error_id = e.id
+            ) ev ON true WHERE e.project_id = ? AND e.hash = ? |]
 
 
 -- | Update occurrence counts (called periodically to decay counts)

@@ -663,7 +663,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- Group errors by traceId within each project to avoid duplicate errors from same trace
       let errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) allErrors
       processProjectErrors pid allErrors
-      notifyErrorSubscriptions pid (V.fromList . ordNub . V.toList $ V.map (.hash) allErrors)
+      notifyErrorSubscriptions pid (V.map (.hash) allErrors)
       -- Upsert hourly rollup stats (aggregated by hash)
       let hashGroups = HM.toList $ V.foldl' addError HM.empty allErrors
           addError acc e = HM.insertWith addCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc
@@ -778,7 +778,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
         let alertType = alertTypeForState sub.errorState
             alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType}
             errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-            (subj, html) = case alertType of
+            ~(subj, html) = case alertType of
               EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData]
               RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData]
               _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData]
@@ -790,20 +790,14 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
 -- | Process and insert errors for a specific project
 processProjectErrors :: Projects.ProjectId -> V.Vector Errors.ATError -> ATBackgroundCtx ()
 processProjectErrors pid errors = do
-  let processedErrors = V.map processError errors
-
-  let (_, queries, paramsList) = V.unzip3 processedErrors
-  result <- try $ V.zipWithM_ PG.execute queries paramsList
-
+  result <- try $ V.forM_ errors \err -> uncurry PG.execute $ Errors.upsertErrorQueryAndParam pid err
   case result of
     Left (e :: SomePostgreSqlException) ->
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
     Right _ ->
-      Relude.when (V.length errors > 0)
+      unless (V.null errors)
         $ Log.logInfo "Successfully inserted errors for project"
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
-  where
-    processError err = (err, q, params) where (q, params) = Errors.upsertErrorQueryAndParam pid err
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
