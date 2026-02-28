@@ -34,7 +34,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
-import Data.Map.Strict qualified as Map
+import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -408,7 +408,7 @@ batchUpsertErrorPatterns pid errors =
     (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts)
   where
     -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
-    grouped = Map.elems $ Map.fromListWith (\(e, n) (_, m) -> (e, n + m)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
+    grouped = HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors
     (errs, counts) = V.unzip $ V.fromList grouped
     errorTypes = V.map (.errorType) errs
     messages = V.map (.message) errs

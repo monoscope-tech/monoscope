@@ -626,7 +626,7 @@ data AlertMessages = AlertMessages {slackEmoji :: Text, discordContent :: Text}
 
 runtimeAlertMessages :: RuntimeAlertType -> AlertMessages
 runtimeAlertMessages = \case
-  NewRuntimeError -> AlertMessages ":red_circle:" "**🔴 New Runtime Error**"
+  NewRuntimeError -> AlertMessages ":red_circle: New Runtime Error" "**🔴 New Runtime Error**"
   EscalatingErrors -> AlertMessages ":warning: Escalating Error" "**🧵 Escalating Error Alert**"
   RegressedErrors -> AlertMessages ":repeat: Regressed Error" "**🧵 Regressed Error Alert**"
   ErrorSpike -> AlertMessages ":chart_with_upwards_trend: Error Spike" "**🧵 Error Spike Alert**"
