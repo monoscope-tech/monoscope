@@ -171,6 +171,33 @@ spec = aroundAll withTestResources do
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
+    it "4a. Spike projection at :45 (scaleFactor=1.33) still detects spikes" \tr -> do
+      -- At :45, minutesIntoHour = 45, scaleFactor = 60/45 = 1.33
+      -- A spike must be large enough in raw count that projected = raw * 1.33 exceeds threshold
+      let timeAt45 = addUTCTime (45 * 60) frozenTime -- frozenTime + 45 minutes
+      -- Seed a fresh pattern with known baseline for deterministic testing
+      let patHash = "test-spike-at-45"
+          srcField = "summary"
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+        { projectId = pid, logPattern = "Spike at :45 test <*>", hash = patHash
+        , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "INFO"
+        , traceId = Nothing, sampleMessage = Just "Spike at 45 test", eventCount = 100
+        }
+      forM_ ([-48 .. -1] :: [Int]) \h ->
+        insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+
+      -- At :45, projected = rawCount * (60/45) ≈ rawCount * 1.33
+      -- Need projected > mean + 3*mad + 50, so rawCount > (mean + 3*mad + 50) / 1.33
+      -- Use a large enough raw count to guarantee spike at this scale factor
+      let rawCount = 600 :: Int64 -- projected = 600 * 1.33 = 800, well above baseline ~600 + 50
+      insertHourlyStat tr srcField patHash timeAt45 rawCount
+
+      issuesBefore <- countIssues tr Issues.LogPatternRateChange
+      runTestBg timeAt45 tr $ BackgroundJobs.detectLogPatternSpikes pid timeAt45 tr.trATCtx
+      issuesAfter <- countIssues tr Issues.LogPatternRateChange
+      issuesAfter `shouldSatisfy` (> issuesBefore)
+
     it "5. Process new patterns and create log_pattern issues" \tr -> do
       -- Insert patterns in 'new' state with enough volume to pass the low-volume check
       let patHashes = ["new-pat-001", "new-pat-002"] :: [Text]

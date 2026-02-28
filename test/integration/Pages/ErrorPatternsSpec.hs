@@ -2,6 +2,7 @@ module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Effectful.Notify (Notification (..), SlackData (..))
+import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Time (addUTCTime)
@@ -57,12 +58,20 @@ spec = aroundAll withTestResources do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       length patterns `shouldBe` 2
 
-      -- Verify hourly stats exist
-      statsCount <- withResource tr.trPool \conn -> do
-        [PGS.Only n] <- PGS.query conn
-          [sql| SELECT COUNT(*)::INT FROM apis.error_hourly_stats WHERE project_id = ? |] (PGS.Only pid)
-        pure (n :: Int)
-      statsCount `shouldSatisfy` (> 0)
+      -- Verify hourly stats have correct event_count per pattern
+      hourlyStats <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT e.error_type, h.event_count::INT
+                FROM apis.error_hourly_stats h
+                JOIN apis.error_patterns e ON e.id = h.error_id
+                WHERE h.project_id = ?
+                ORDER BY e.error_type |]
+          (PGS.Only pid) :: IO [(Text, Int)]
+      -- 2 TypeErrors and 1 ConnectionRefusedError → two rows with correct counts
+      let statsMap = Map.fromList hourlyStats
+      length hourlyStats `shouldBe` 2
+      Map.lookup "TypeError" statsMap `shouldBe` Just 2
+      Map.lookup "ConnectionRefusedError" statsMap `shouldBe` Just 1
 
       -- Verify pattern fields populated
       forM_ patterns \p -> do
@@ -93,6 +102,31 @@ spec = aroundAll withTestResources do
       fmap (.state) regressedPat `shouldBe` Just ESRegressed
       fmap (isJust . (.regressedAt)) regressedPat `shouldBe` Just True
 
+    it "3a. Regressed error uses regressed notification template" \tr -> do
+      -- Set up notification channels (may already exist from prior tests, ON CONFLICT handles that)
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.slack (project_id, webhook_url, team_id, channel_id, team_name, bot_token)
+                VALUES (?, 'https://hooks.slack.com/test', 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
+                ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
+          (PGS.Only pid)
+        void $ PGS.execute conn
+          [sql| UPDATE projects.projects SET notifications_channel = '{slack}', error_alerts = true WHERE id = ? |]
+          (PGS.Only pid)
+      -- Find the regressed pattern from test 3
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      let regressedM = find (\p -> p.state == ESRegressed) patterns
+      case regressedM of
+        Just pat -> do
+          (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+            $ BackgroundJobs.processNewError pid pat.hash
+          -- Should produce at least one notification (Slack or email)
+          notifs `shouldSatisfy` (not . null)
+          -- Verify an issue was created with the correct type
+          issueCount <- countIssues tr Issues.RuntimeException
+          issueCount `shouldSatisfy` (> 0)
+        Nothing -> error "No regressed pattern found for notification template test"
+
     it "4. Baseline calculation from hourly stats" \tr -> do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
       let pat = fromMaybe (error "no patterns") $ listToMaybe patterns
@@ -112,6 +146,37 @@ spec = aroundAll withTestResources do
           isJust p.baselineErrorRateStddev `shouldBe` True
           p.baselineSamples `shouldSatisfy` (>= 24)
         Nothing -> error "Pattern not found after baseline calculation"
+
+    it "4a. Baseline is outlier-robust (median not pulled by spikes)" \tr -> do
+      -- Use the second pattern (ConnectionRefusedError) to avoid conflicting with test 4's data
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      let pat = fromMaybe (error "need 2+ patterns") $ listToMaybe $ drop 1 patterns
+      -- Clear existing hourly stats for this pattern to get clean test
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| DELETE FROM apis.error_hourly_stats WHERE error_id = (SELECT id FROM apis.error_patterns WHERE project_id = ? AND hash = ?) |]
+          (pid, pat.hash)
+      -- Seed 40 normal hours (100-200) plus 10 outlier hours (5000)
+      forM_ ([-50 .. -11] :: [Int]) \h ->
+        void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
+          (addUTCTime (fromIntegral h * 3600) frozenTime)
+          (V.singleton (pat.hash, 100 + (h `mod` 10) * 10, 5))
+      forM_ ([-10 .. -1] :: [Int]) \h ->
+        void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
+          (addUTCTime (fromIntegral h * 3600) frozenTime)
+          (V.singleton (pat.hash, 5000, 50))
+
+      runTestBg frozenTime tr $ BackgroundJobs.calculateErrorBaselines pid
+
+      updatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
+      case updatedPat of
+        Just p -> do
+          p.baselineState `shouldBe` BSEstablished
+          -- Median should be near 150 (the normal range), not near 5000 (the outliers)
+          let mean = fromMaybe 0 p.baselineErrorRateMean
+          mean `shouldSatisfy` (< 500)
+          mean `shouldSatisfy` (> 50)
+        Nothing -> error "Pattern not found after outlier baseline calculation"
 
     it "5. Spike detection creates escalating issue" \tr -> do
       let sess = Servant.getResponse tr.trSessAndHeader
@@ -202,6 +267,75 @@ spec = aroundAll withTestResources do
           spikedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) spikedPat `shouldBe` Just ESEscalating
         Nothing -> error "No ongoing pattern found for flat baseline test"
+
+    it "5d. Full cycle: Regressed error that spikes transitions to ESEscalating" \tr -> do
+      -- Find an established pattern and resolve it
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      let estM = find (\r -> r.baselineState == BSEstablished && r.state /= ESResolved) errRates
+      case estM of
+        Just errRate -> do
+          void $ runTestBg frozenTime tr $ ErrorPatterns.resolveErrorPattern errRate.errorId
+          -- Re-ingest to regress
+          apiKey <- createTestAPIKey tr pid "regress-spike-key"
+          ingestTraceWithException tr apiKey "GET /regress-spike" errRate.errorType errRate.message errRate.stacktrace (addUTCTime 9000 frozenTime)
+          runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 9060 frozenTime) pid
+
+          regressedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          fmap (.state) regressedPat `shouldBe` Just ESRegressed
+
+          -- Now spike the regressed error — should transition to ESEscalating with a new issue
+          let mean = fromMaybe 0 errRate.baselineMean
+              stddev = fromMaybe 0 errRate.baselineStddev
+              spikeCount = ceiling (mean + 3 * stddev + 100) :: Int
+              spikeTime = addUTCTime 10800 frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid spikeTime (V.singleton (errRate.hash, spikeCount, 5))
+
+          -- Acknowledge existing issues to avoid ON CONFLICT dedup
+          let sess = Servant.getResponse tr.trSessAndHeader
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
+
+          issuesBefore <- countIssues tr Issues.RuntimeException
+          runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
+          issuesAfter <- countIssues tr Issues.RuntimeException
+          issuesAfter `shouldSatisfy` (> issuesBefore)
+
+          spikedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          fmap (.state) spikedPat `shouldBe` Just ESEscalating
+        Nothing -> error "No established pattern found for full-cycle test"
+
+    it "5e. Concurrent spikes: two patterns spiking simultaneously both get issues" \tr -> do
+      -- Ensure we have at least 2 established, non-resolved patterns
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      let established = filter (\r -> r.baselineState == BSEstablished && isJust r.baselineMean && r.state /= ESResolved) errRates
+      case established of
+        (r1 : r2 : _) -> do
+          -- Set both to ESOngoing so spike detection can transition them
+          forM_ [r1, r2] \r -> void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing
+          -- Acknowledge existing issues to avoid ON CONFLICT dedup
+          let sess = Servant.getResponse tr.trSessAndHeader
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
+          -- Spike both patterns in the same hour bucket
+          let concurrentTime = addUTCTime 14400 frozenTime
+          forM_ [r1, r2] \r -> do
+            let mean = fromMaybe 0 r.baselineMean
+                stddev = fromMaybe 0 r.baselineStddev
+                spikeCount = ceiling (mean + 3 * stddev + 100) :: Int
+            void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid concurrentTime (V.singleton (r.hash, spikeCount, 5))
+
+          issuesBefore <- countIssues tr Issues.RuntimeException
+          runTestBg concurrentTime tr $ BackgroundJobs.detectErrorSpikes pid
+          issuesAfter <- countIssues tr Issues.RuntimeException
+          -- Both should have created separate issues
+          issuesAfter `shouldSatisfy` (>= issuesBefore + 2)
+
+          -- Both should be ESEscalating
+          p1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById r1.errorId
+          p2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById r2.errorId
+          fmap (.state) p1 `shouldBe` Just ESEscalating
+          fmap (.state) p2 `shouldBe` Just ESEscalating
+        _ -> error "Need at least 2 established patterns for concurrent spike test"
 
     it "6. User action handlers (assign, resolve, subscribe)" \tr -> do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0

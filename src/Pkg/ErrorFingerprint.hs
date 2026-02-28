@@ -56,6 +56,27 @@ data StackFrame = StackFrame
 --
 -- >>> map (.functionName) $ parseStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)"
 -- ["doWork","doDispatch"]
+--
+-- Go: parses function call lines, skips goroutine headers and file-path lines
+-- >>> map (.functionName) $ parseStackTrace "go" "goroutine 1 [running]:\nmain.handleRequest(0xc0000b4000)\n\t/app/main.go:42 +0x1f\nmyapp/handler.ProcessData(0xc0000b2000)"
+-- ["handleRequest","ProcessData"]
+--
+-- >>> map (.isInApp) $ parseStackTrace "go" "main.handleRequest(0xc0000b4000)\nruntime.goexit()\nnet/http.ListenAndServe(...)"
+-- [True,False,False]
+--
+-- PHP: parses #N /path(line): Class->method() format
+-- >>> map (.functionName) $ parseStackTrace "php" "#0 /app/src/UserController.php(42): App\\UserController->getUser()\n#1 /app/vendor/slim/slim/Slim/Handlers/Strategies/RequestResponse.php(43): closure()"
+-- ["getUser","closure"]
+--
+-- >>> map (.isInApp) $ parseStackTrace "php" "#0 /app/src/Handler.php(10): Handler->run()\n#1 /app/vendor/lib/Router.php(50): Router->dispatch()"
+-- [True,False]
+--
+-- .NET: parses at Namespace.Class.Method() in /path:line N format
+-- >>> map (.functionName) $ parseStackTrace "dotnet" "at MyApp.Controllers.UserController.GetUser(Int32 id) in /app/Controllers/UserController.cs:line 42\nat Microsoft.AspNetCore.Mvc.Infrastructure.ActionMethodExecutor.Execute(IActionResultTypeMapper mapper)"
+-- ["GetUser","Execute"]
+--
+-- >>> map (.isInApp) $ parseStackTrace "dotnet" "at MyApp.Services.DbService.Query() in /app/Services/DbService.cs:line 15\nat System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)"
+-- [True,False]
 parseStackTrace :: Text -> Text -> [StackFrame]
 parseStackTrace mSdk stackText =
   let lns = filter (not . T.null . T.strip) $ lines stackText
