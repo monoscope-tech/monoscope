@@ -42,7 +42,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Entity.Types qualified as DAT
-import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.)(..))
+import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.) (..))
 
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -182,7 +182,7 @@ updateBaselineBatch pid rows
           mads = V.map (view _5) rows
           samples = V.map (view _6) rows
       PG.execute
-            [sql|
+        [sql|
               UPDATE apis.log_patterns lp
               SET baseline_state = v.state,
                   baseline_volume_hourly_mean = v.mean,
@@ -192,7 +192,7 @@ updateBaselineBatch pid rows
               FROM (SELECT unnest(?::text[]) AS source_field, unnest(?::text[]) AS hash, unnest(?::text[]) AS state, unnest(?::float8[]) AS mean, unnest(?::float8[]) AS mad, unnest(?::int[]) AS samples) v
               WHERE lp.project_id = ? AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash
             |]
-            (now, srcFields, hashes, states, means, mads, samples, pid)
+        (now, srcFields, hashes, states, means, mads, samples, pid)
 
 
 -- | Batch version of upsertLogPattern using executeMany.

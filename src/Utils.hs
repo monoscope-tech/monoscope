@@ -491,7 +491,7 @@ freeTierLimitExceededBanner pid =
     a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
 
 
-checkFreeTierExceeded :: (IOE :> es, WithConnection :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es Bool
+checkFreeTierExceeded :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid paymentPlan =
   if paymentPlan == "Free"
     then do
