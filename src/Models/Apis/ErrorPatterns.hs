@@ -204,9 +204,9 @@ getErrorPatternLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
 
 
 -- | Update occurrence counts (called periodically to decay counts)
-updateOccurrenceCounts :: DB es => Eff es Int64
-updateOccurrenceCounts =
-  PG.execute_ q
+updateOccurrenceCounts :: DB es => Projects.ProjectId -> Eff es Int64
+updateOccurrenceCounts pid =
+  PG.execute q (Only pid)
   where
     q =
       [sql|
@@ -215,16 +215,16 @@ updateOccurrenceCounts =
           occurrences_5m = GREATEST(0, occurrences_5m - occurrences_1m),
           occurrences_1h = GREATEST(0, occurrences_1h - occurrences_5m),
           occurrences_24h = GREATEST(0, occurrences_24h - occurrences_1h),
-          quiet_minutes = quiet_minutes + 1,
+          quiet_minutes = CASE WHEN occurrences_1m = 0 THEN quiet_minutes + 1 ELSE 0 END,
           state = CASE
-            WHEN state IN ('new', 'escalating', 'ongoing') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN 'resolved'
+            WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN 'resolved'
             ELSE state
           END,
           resolved_at = CASE
-            WHEN state IN ('new', 'escalating', 'ongoing') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN NOW()
+            WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN NOW()
             ELSE resolved_at
           END
-        WHERE state != 'resolved' OR occurrences_24h > 0
+        WHERE project_id = ? AND (state != 'resolved' OR occurrences_24h > 0)
       |]
 
 

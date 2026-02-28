@@ -22,7 +22,7 @@ import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
-import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
+import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldSatisfy)
 
 
 pid :: Projects.ProjectId
@@ -382,7 +382,7 @@ spec = aroundAll withTestResources do
                 WHERE id = ? |]
           (PGS.Only pat.id)
 
-      void $ runTestBg frozenTime tr ErrorPatterns.updateOccurrenceCounts
+      void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCounts pid
 
       updatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       case updatedPat of
@@ -476,3 +476,119 @@ spec = aroundAll withTestResources do
       runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 380 frozenTime) pid
       newCount <- length <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
       newCount `shouldSatisfy` (> prevCount)
+
+    it "7a. Decay chain: cascading subtraction across time windows" \tr -> do
+      -- Set up a pattern with known occurrence counts to verify the cascading decay formula:
+      -- occurrences_1m → 0, 5m = GREATEST(0, 5m - 1m), 1h = GREATEST(0, 1h - 5m), 24h = GREATEST(0, 24h - 1h)
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
+      case patterns of
+        [] -> expectationFailure "no patterns for decay chain test"
+        (pat : _) -> do
+          -- Set known counts: 1m=10, 5m=30, 1h=100, 24h=500
+          withResource tr.trPool \conn ->
+            void $ PGS.execute conn
+              [sql| UPDATE apis.error_patterns
+                    SET occurrences_1m = 10, occurrences_5m = 30, occurrences_1h = 100, occurrences_24h = 500,
+                        state = 'ongoing', quiet_minutes = 0
+                    WHERE id = ? |]
+              (PGS.Only pat.id)
+
+          -- First decay tick (occurrences_1m=10 > 0, so quiet_minutes resets to 0)
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCounts pid
+          p1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
+          case p1 of
+            Just p -> do
+              p.occurrences_1m `shouldBe` 0          -- reset
+              p.occurrences_5m `shouldBe` 20         -- 30 - 10
+              p.occurrences_1h `shouldBe` 70         -- 100 - 30
+              p.occurrences_24h `shouldBe` 400       -- 500 - 100
+            Nothing -> expectationFailure "Pattern not found after first decay"
+
+          -- Second decay tick (1m is already 0, so 5m subtracts 0, etc.)
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateOccurrenceCounts pid
+          p2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
+          case p2 of
+            Just p -> do
+              p.occurrences_1m `shouldBe` 0          -- still 0
+              p.occurrences_5m `shouldBe` 20         -- 20 - 0
+              p.occurrences_1h `shouldBe` 50         -- 70 - 20
+              p.occurrences_24h `shouldBe` 330       -- 400 - 70
+            Nothing -> expectationFailure "Pattern not found after second decay"
+
+    it "10. Cross-project isolation: patterns don't leak between projects" \tr -> do
+      -- Create a second project
+      let pid2 = UUIDId $ fromMaybe UUID.nil $ UUID.fromText "11111111-1111-1111-1111-111111111111" :: Projects.ProjectId
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| INSERT INTO projects.projects (id, title, payment_plan, active)
+                VALUES (?, 'Isolation Test Project', 'Startup', true)
+                ON CONFLICT (id) DO NOTHING |]
+          (PGS.Only pid2)
+
+      -- Record pid pattern count before
+      patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
+      let countBefore = length patternsBefore
+
+      -- Ingest an error for pid2
+      apiKey2 <- createTestAPIKey tr pid2 "isolation-test-key"
+      ingestTraceWithException tr apiKey2 "GET /isolated" "IsolationError" "should not appear in pid" "IsolationError\n    at test (/app/test.js:1:1)" (addUTCTime (-30) frozenTime)
+      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid2
+
+      -- Verify pid2 got its own patterns
+      pid2Patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid2 Nothing 100 0
+      length pid2Patterns `shouldSatisfy` (> 0)
+
+      -- Verify pid patterns unchanged
+      patternsAfter <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
+      length patternsAfter `shouldBe` countBefore
+
+    it "10a. is_ignored patterns excluded from spike detection" \tr -> do
+      -- Find an established pattern and mark it as ignored
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      let establishedM = find (\r -> r.baselineState == BSEstablished && isJust r.baselineMean) errRates
+      case establishedM of
+        Nothing -> expectationFailure "No established pattern found for is_ignored test"
+        Just errRate -> do
+          -- Mark as ignored
+          withResource tr.trPool \conn ->
+            void $ PGS.execute conn
+              [sql| UPDATE apis.error_patterns SET is_ignored = true, state = 'ongoing' WHERE id = ? |]
+              (PGS.Only errRate.errorId)
+
+          -- Insert a spike that would normally trigger detection
+          let mean = fromMaybe 0 errRate.baselineMean
+              stddev = fromMaybe 1 errRate.baselineStddev
+              spikeCount = ceiling (mean + 3 * stddev + 200) :: Int
+              spikeTime = addUTCTime 18000 frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid spikeTime (V.singleton (errRate.hash, spikeCount, 5))
+
+          -- Run spike detection — ignored pattern should NOT be returned by getErrorPatternsWithCurrentRates
+          issuesBefore <- countIssues tr Issues.RuntimeException
+          runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
+          issuesAfter <- countIssues tr Issues.RuntimeException
+
+          -- State should NOT have changed to ESEscalating (still ongoing, since it was filtered out)
+          ignoredPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          fmap (.state) ignoredPat `shouldBe` Just ESOngoing
+          issuesAfter `shouldBe` issuesBefore
+
+          -- Restore: un-ignore for subsequent tests
+          withResource tr.trPool \conn ->
+            void $ PGS.execute conn
+              [sql| UPDATE apis.error_patterns SET is_ignored = false WHERE id = ? |]
+              (PGS.Only errRate.errorId)
+
+    it "11. HourlyJob schedules ErrorBaselineCalculation and ErrorSpikeDetection" \tr -> do
+      -- Run hourly job which should schedule baseline + spike detection for active projects
+      runTestBg frozenTime tr $ BackgroundJobs.runHourlyJob frozenTime 0
+
+      -- Check that the expected jobs were enqueued
+      pendingJobs <- getPendingBackgroundJobs tr.trATCtx
+      let bgJobTypes = V.toList $ fmap snd pendingJobs
+          hasBaselineCalc = any (\case BackgroundJobs.ErrorBaselineCalculation _ -> True; _ -> False) bgJobTypes
+          hasSpikeDetection = any (\case BackgroundJobs.ErrorSpikeDetection _ -> True; _ -> False) bgJobTypes
+      hasBaselineCalc `shouldBe` True
+      hasSpikeDetection `shouldBe` True
+
+      -- Run all background jobs to verify they execute successfully
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
