@@ -34,8 +34,8 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
-import Data.HashMap.Strict qualified as HM
-import Data.Time
+import Data.Map.Strict qualified as Map
+import Data.Time (UTCTime (..), ZonedTime, secondsToDiffTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
@@ -354,7 +354,7 @@ data ErrorPatternWithCurrentRate = ErrorPatternWithCurrentRate
 
 getErrorPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [ErrorPatternWithCurrentRate]
 getErrorPatternsWithCurrentRates pid now =
-  PG.query q (now, pid)
+  PG.query q (truncateHour now, pid)
   where
     q =
       [sql|
@@ -366,7 +366,7 @@ getErrorPatternsWithCurrentRates pid now =
         FROM apis.error_patterns e
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
-          AND counts.hour_bucket = date_trunc('hour', ?::timestamptz)
+          AND counts.hour_bucket = ?
         WHERE e.project_id = ? AND e.state != 'resolved' AND e.is_ignored = false
       |]
 
@@ -405,7 +405,7 @@ batchUpsertErrorPatterns pid errors =
     (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts)
   where
     -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
-    grouped = HM.elems $ V.foldl' (\acc e -> HM.insertWith (\(newE, n) (_, m) -> (newE, n + m)) e.hash (e, 1 :: Int) acc) HM.empty errors
+    grouped = Map.elems $ Map.fromListWith (\(e, n) (_, m) -> (e, n + m)) [(e.hash, (e, 1 :: Int)) | e <- V.toList errors]
     (errs, counts) = V.unzip $ V.fromList grouped
     errorTypes = V.map (.errorType) errs
     messages = V.map (.message) errs
@@ -425,12 +425,17 @@ upsertErrorPatternHourlyStats _pid _now stats | V.null stats = pure 0
 upsertErrorPatternHourlyStats pid now stats =
   PG.execute
     [sql| INSERT INTO apis.error_hourly_stats (project_id, error_id, hour_bucket, event_count, user_count)
-          SELECT e.project_id, e.id, date_trunc('hour', ?::timestamptz), u.event_count, u.user_count
+          SELECT e.project_id, e.id, ?, u.event_count, u.user_count
           FROM (SELECT unnest(?::text[]) AS hash, unnest(?::int[]) AS event_count, unnest(?::int[]) AS user_count) u
           JOIN apis.error_patterns e ON e.project_id = ? AND e.hash = u.hash
           ON CONFLICT (project_id, error_id, hour_bucket)
           DO UPDATE SET event_count = apis.error_hourly_stats.event_count + EXCLUDED.event_count,
                         user_count = apis.error_hourly_stats.user_count + EXCLUDED.user_count |]
-    (now, hashes, eventCounts, userCounts, pid)
+    (truncateHour now, hashes, eventCounts, userCounts, pid)
   where
     (hashes, eventCounts, userCounts) = V.unzip3 stats
+
+
+-- | Truncate UTCTime to the start of its hour (fixes frozen-time effect not propagating into SQL date_trunc)
+truncateHour :: UTCTime -> UTCTime
+truncateHour (UTCTime day dt) = UTCTime day (secondsToDiffTime $ floor dt `div` 3600 * 3600)

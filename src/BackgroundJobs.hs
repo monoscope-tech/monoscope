@@ -1832,9 +1832,6 @@ detectErrorSpikes pid = do
 
   -- Get all errors with their current hour counts in one query
   errorsWithRates <- ErrorPatterns.getErrorPatternsWithCurrentRates pid now
-  -- Hoist project/users lookup outside the loop (constant for all errors in this project)
-  projectM <- Projects.projectById pid
-  users <- Projects.usersByProjectId pid
 
   forM_ errorsWithRates \errRate -> do
     -- Only check errors with established baselines
@@ -1856,7 +1853,9 @@ detectErrorSpikes pid = do
               Issues.insertIssue issue
               liftIO $ withResource authCtx.jobsPool \conn ->
                 void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              projectM <- Projects.projectById pid
               whenJust projectM \project -> Relude.when project.errorAlerts do
+                users <- Projects.usersByProjectId pid
                 let issueId = UUID.toText issue.id.unUUIDId
                     spikeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = errRate.errorData, runtimeAlertType = ErrorSpike}
                     errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
