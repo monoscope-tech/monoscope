@@ -18,15 +18,10 @@ import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
-import Text.Read (read)
 
 
 pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
-
-
-frozenTime :: UTCTime
-frozenTime = read "2025-01-01 00:00:00 UTC"
 
 
 -- | Insert a synthetic log row for pattern extraction to pick up
@@ -45,7 +40,7 @@ insertTestLog tr body serviceName ts = do
 -- | Insert pre-aggregated hourly stats for a pattern to build baselines quickly
 insertHourlyStat :: TestResources -> Text -> Text -> UTCTime -> Int64 -> IO ()
 insertHourlyStat tr sourceField patternHash hourBucket count =
-  void $ runTestBg tr $ LogPatterns.upsertHourlyStat pid sourceField patternHash hourBucket count
+  void $ runTestBg frozenTime tr $ LogPatterns.upsertHourlyStat pid sourceField patternHash hourBucket count
 
 
 -- | Count log patterns in the database for the test project
@@ -82,7 +77,7 @@ spec = aroundAll withTestResources do
         insertTestLog tr body "test-service" (addUTCTime (fromIntegral (i :: Int) - 60) frozenTime)
 
       -- Window is [frozenTime-5min, frozenTime], derived from scheduledTime
-      runTestBg tr $ BackgroundJobs.logsPatternExtraction frozenTime pid
+      runTestBg frozenTime tr $ BackgroundJobs.logsPatternExtraction frozenTime pid
 
       -- Verify patterns were created
       patternCount <- countPatterns tr
@@ -99,7 +94,7 @@ spec = aroundAll withTestResources do
       -- Insert a pattern directly to control the test
       let patHash = "test-baseline-hash-001"
           sourceField = "summary"
-      void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
         { projectId = pid, logPattern = "Test <*> pattern for baseline", hash = patHash
         , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
         , traceId = Nothing, sampleMessage = Just "Test pattern baseline", eventCount = 100
@@ -112,10 +107,10 @@ spec = aroundAll withTestResources do
         insertHourlyStat tr sourceField patHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
 
       -- Run baseline calculation
-      runTestBg tr $ BackgroundJobs.calculateLogPatternBaselines pid
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
 
       -- Verify the pattern got established baseline
-      patternM <- runTestBg tr $ LogPatterns.getLogPatternByHash pid sourceField patHash
+      patternM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid sourceField patHash
       case patternM of
         Just p -> do
           p.baselineState `shouldBe` BSEstablished
@@ -124,10 +119,10 @@ spec = aroundAll withTestResources do
         Nothing -> error "Pattern not found after baseline calculation"
 
     it "3. getLogPatternsByIds returns correct patterns (exercises PGArray fix)" \tr -> do
-      allPatterns <- runTestBg tr $ LogPatterns.getLogPatterns pid 100 0
+      allPatterns <- runTestBg frozenTime tr $ LogPatterns.getLogPatterns pid 100 0
       allPatterns `shouldSatisfy` (not . null)
       let ids = V.fromList $ map (.id) $ take 3 allPatterns
-      fetched <- runTestBg tr $ LogPatterns.getLogPatternsByIds ids
+      fetched <- runTestBg frozenTime tr $ LogPatterns.getLogPatternsByIds ids
       V.length fetched `shouldBe` V.length ids
 
     it "4. Detect spike and create rate-change issue" \tr -> do
@@ -151,7 +146,7 @@ spec = aroundAll withTestResources do
           insertHourlyStat tr srcField patHash frozenTime rawCount
 
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
-          runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
@@ -159,7 +154,7 @@ spec = aroundAll withTestResources do
           -- No established pattern with positive MAD — seed one manually
           let patHash = "test-spike-hash-002"
               srcField = "summary"
-          void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+          void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
             { projectId = pid, logPattern = "Spike test <*> pattern", hash = patHash
             , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "INFO"
             , traceId = Nothing, sampleMessage = Just "Spike test", eventCount = 50
@@ -168,11 +163,11 @@ spec = aroundAll withTestResources do
           forM_ ([-48 .. -1] :: [Int]) \h ->
             insertHourlyStat tr srcField patHash (addUTCTime (fromIntegral h * 3600) frozenTime)
               (600 + fromIntegral (h `mod` 5))
-          runTestBg tr $ BackgroundJobs.calculateLogPatternBaselines pid
+          runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
           -- Spike in current hour; projected = 200 * 4 = 800 >> baseline ~600
           insertHourlyStat tr srcField patHash frozenTime 200
           issuesBefore <- countIssues tr Issues.LogPatternRateChange
-          runTestBg tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
+          runTestBg frozenTime tr $ BackgroundJobs.detectLogPatternSpikes pid frozenTime tr.trATCtx
           issuesAfter <- countIssues tr Issues.LogPatternRateChange
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
@@ -180,7 +175,7 @@ spec = aroundAll withTestResources do
       -- Insert patterns in 'new' state with enough volume to pass the low-volume check
       let patHashes = ["new-pat-001", "new-pat-002"] :: [Text]
       forM_ patHashes \h -> do
-        void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+        void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
           { projectId = pid, logPattern = "New pattern " <> h <> " <*>", hash = h
           , sourceField = "summary", serviceName = Just "test-svc", logLevel = Just "WARN"
           , traceId = Nothing, sampleMessage = Just ("Sample " <> h), eventCount = 10
@@ -189,7 +184,7 @@ spec = aroundAll withTestResources do
 
       -- Also insert a url_path pattern — should be acknowledged but NO issue created
       let urlPathHash = "url-path-pat-001"
-      void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
         { projectId = pid, logPattern = "/api/users/<*>", hash = urlPathHash
         , sourceField = "url_path", serviceName = Just "test-svc", logLevel = Nothing
         , traceId = Nothing, sampleMessage = Just "/api/users/123", eventCount = 50
@@ -197,18 +192,18 @@ spec = aroundAll withTestResources do
       insertHourlyStat tr "url_path" urlPathHash frozenTime 1500
 
       issuesBefore <- countIssues tr Issues.LogPattern
-      runTestBg tr $ BackgroundJobs.processNewLogPatterns pid tr.trATCtx
+      runTestBg frozenTime tr $ BackgroundJobs.processNewLogPatterns pid tr.trATCtx
       issuesAfter <- countIssues tr Issues.LogPattern
       -- Only summary patterns create issues, not url_path
       issuesAfter `shouldSatisfy` (>= issuesBefore + length patHashes)
 
       -- Verify ALL patterns (including url_path) were auto-acknowledged
       forM_ patHashes \h -> do
-        patM <- runTestBg tr $ LogPatterns.getLogPatternByHash pid "summary" h
+        patM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "summary" h
         case patM of
           Just p -> p.state `shouldBe` LPSAcknowledged
           Nothing -> error $ "Pattern " <> h <> " not found after processNewLogPatterns"
-      urlPathPat <- runTestBg tr $ LogPatterns.getLogPatternByHash pid "url_path" urlPathHash
+      urlPathPat <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid "url_path" urlPathHash
       case urlPathPat of
         Just p -> p.state `shouldBe` LPSAcknowledged
         Nothing -> error "url_path pattern not found after processNewLogPatterns"
@@ -218,7 +213,7 @@ spec = aroundAll withTestResources do
       let ackHashes = ["ack-test-001", "ack-test-002"] :: [Text]
           sourceField = "summary"
       forM_ ackHashes \h ->
-        void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+        void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
           { projectId = pid, logPattern = "Ack test " <> h <> " <*>", hash = h
           , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
           , traceId = Nothing, sampleMessage = Just ("Ack sample " <> h), eventCount = 5
@@ -226,12 +221,12 @@ spec = aroundAll withTestResources do
 
       let fieldHashPairs = V.fromList $ map (sourceField,) ackHashes
           sess = Servant.getResponse tr.trSessAndHeader
-      updated <- runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid (Just sess.user.id) fieldHashPairs
+      updated <- runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns pid (Just sess.user.id) fieldHashPairs
       updated `shouldBe` fromIntegral (V.length fieldHashPairs)
 
       -- Verify state change
       forM_ ackHashes \h -> do
-        patM <- runTestBg tr $ LogPatterns.getLogPatternByHash pid sourceField h
+        patM <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid sourceField h
         case patM of
           Just p -> p.state `shouldBe` LPSAcknowledged
           Nothing -> error $ "Pattern " <> h <> " not found after acknowledge"
@@ -239,13 +234,13 @@ spec = aroundAll withTestResources do
     it "7. Prune stale acknowledged patterns" \tr -> do
       let staleHash = "stale-prune-001"
           sourceField = "summary"
-      void $ runTestBg tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
         { projectId = pid, logPattern = "Stale pattern <*>", hash = staleHash
         , sourceField, serviceName = Just "test-svc", logLevel = Just "INFO"
         , traceId = Nothing, sampleMessage = Just "Stale test", eventCount = 5
         }
       -- Acknowledge it so it's eligible for pruning
-      void $ runTestBg tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton (sourceField, staleHash))
+      void $ runTestBg frozenTime tr $ LogPatterns.acknowledgeLogPatterns pid Nothing (V.singleton (sourceField, staleHash))
       -- Backdate last_seen_at to 60 days ago (exceeds stalePatternDays=30)
       withResource tr.trPool \conn ->
         void $ PGS.execute conn
@@ -257,12 +252,12 @@ spec = aroundAll withTestResources do
       insertHourlyStat tr sourceField staleHash (addUTCTime (-100 * 3600) frozenTime) 100
 
       beforeCount <- countPatterns tr
-      pruned <- runTestBg tr $ LogPatterns.pruneStalePatterns pid frozenTime 30
+      pruned <- runTestBg frozenTime tr $ LogPatterns.pruneStalePatterns pid frozenTime 30
       pruned `shouldSatisfy` (>= 1)
 
       afterCount <- countPatterns tr
       afterCount `shouldSatisfy` (< beforeCount)
 
       -- Verify stale hourly stats are also prunable
-      statsPruned <- runTestBg tr $ LogPatterns.pruneOldHourlyStats pid frozenTime 72
+      statsPruned <- runTestBg frozenTime tr $ LogPatterns.pruneOldHourlyStats pid frozenTime 72
       statsPruned `shouldSatisfy` (>= 1)

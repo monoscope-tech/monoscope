@@ -55,7 +55,7 @@ spec = aroundAll withTestResources do
         testServant tr $ PageReports.reportsPostH testPid "weekly"
 
       -- Check final state - fetch project from DB to avoid cache
-      projectM <- runTestBg tr $ Projects.projectById testPid
+      projectM <- runTestBg frozenTime tr $ Projects.projectById testPid
       case projectM of
         Just project -> do
           project.dailyNotif `shouldBe` True -- toggled from True to False

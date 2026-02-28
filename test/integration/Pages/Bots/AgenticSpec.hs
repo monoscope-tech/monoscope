@@ -77,7 +77,7 @@ spec = aroundAll withTestResources do
       it "processes error trend query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -88,7 +88,7 @@ spec = aroundAll withTestResources do
       it "processes service breakdown query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -98,7 +98,7 @@ spec = aroundAll withTestResources do
       it "processes explanation-only query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg tr $ processAIQuery testPid "what services have the most errors?" Nothing (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "what services have the most errors?" Nothing (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -107,7 +107,7 @@ spec = aroundAll withTestResources do
             isJust agenticResp.explanation || not (null agenticResp.widgets) `shouldBe` True
 
       it "handles empty API key gracefully" \tr -> do
-        result <- runTestBg tr $ processAIQuery testPid "show errors" Nothing ""
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "show errors" Nothing ""
         case result of
           Left err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err) `shouldBe` True
           Right _ -> pass

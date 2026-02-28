@@ -71,7 +71,7 @@ spec = aroundAll withTestResources do
       clearAllTestData tr
       key <- createTestAPIKey tr pid "cache-key-1"
       forM_ [0 .. 19] \i -> ingestLog tr key ("Log " <> show i) (addUTCTime (fromIntegral $ i * 60) baseTime)
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       let (query, from, to) = ("summarize count(*) by bin_auto(timestamp)", timeAt (-1800), timeAt 1800)
       result1 <- queryMetrics tr query from to
@@ -89,13 +89,13 @@ spec = aroundAll withTestResources do
 
       -- Phase 1: initial data, populate cache
       forM_ [0 .. 9] \i -> ingestLog tr key ("Log1 " <> show i) (addUTCTime (fromIntegral $ i * 60 - 600) baseTime)
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
       let query = "summarize count(*) by bin_auto(timestamp)"
       _ <- queryMetrics tr query (timeAt (-900)) (timeAt 0)
 
       -- Phase 2: add more data, query extended range (triggers partial hit)
       forM_ [0 .. 9] \i -> ingestLog tr key ("Log2 " <> show i) (addUTCTime (fromIntegral $ i * 60) baseTime)
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
       resultMerged <- queryMetrics tr query (timeAt (-900)) (timeAt 900)
 
       clearCache tr
@@ -115,7 +115,7 @@ spec = aroundAll withTestResources do
         let ts = addUTCTime (fromIntegral $ i * 60 - 300) baseTime
         replicateM_ 3 $ ingestLog tr key ("Log " <> show i) ts
         replicateM_ 2 $ ingestTrace tr key ("GET /api/" <> show i) ts
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       let query = "summarize count(*) by bin_auto(timestamp), kind"
       _ <- queryMetrics tr query (timeAt (-600)) (timeAt 0)
@@ -125,7 +125,7 @@ spec = aroundAll withTestResources do
         let ts = addUTCTime (fromIntegral $ i * 60) baseTime
         replicateM_ 4 $ ingestLog tr key ("Log2 " <> show i) ts
         replicateM_ 3 $ ingestTrace tr key ("GET /api2/" <> show i) ts
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       resultMerged <- queryMetrics tr query (timeAt (-600)) (timeAt 600)
       clearCache tr

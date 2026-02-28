@@ -38,7 +38,7 @@ import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Data.Aeson qualified as AE
 import Data.Default (Default)
 import Data.List (lookup)
-import Data.Time (UTCTime, ZonedTime)
+import Data.Time (UTCTime (..), ZonedTime, secondsToDiffTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
@@ -229,10 +229,12 @@ upsertHourlyStatBatch [] = pure 0
 upsertHourlyStatBatch rows =
   PG.executeMany
     [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
-        VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
         DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-    rows
+    [(pid, sf, ph, truncateHour hb, ec) | (pid, sf, ph, hb, ec) <- rows]
+  where
+    truncateHour (UTCTime day dt) = UTCTime day (secondsToDiffTime $ floor dt `div` 3600 * 3600)
 
 
 -- | Batch: computes median + MAD for all patterns in one query.

@@ -25,6 +25,7 @@ module Pkg.TestUtils (
   atAuthToBase,
   effToServantHandlerTest,
   runQueryEffect,
+  frozenTime,
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
   createRequestDumps,
@@ -244,8 +245,10 @@ ensureTemplateDatabase masterConnStr templateDbName = do
       (Only templateDbName)
 
   -- Get current migration directory checksum for cache invalidation
-  dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
-  let migrationChecksum = show dirSize
+  -- Use per-file sizes (sorted by name) so content changes that preserve total size are detected
+  files <- sort <$> listDirectory migrationsDirr
+  sizes <- mapM (getFileSize . (migrationsDirr <>)) files
+  let migrationChecksum = show (zip files sizes)
 
   -- Check if template needs updating
   needsUpdate <-
@@ -438,14 +441,19 @@ fromRightShow (Right b) = b
 fromRightShow (Left a) = error $ "Unexpected Left value: " <> show a
 
 
-runTestBackground :: Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackground authCtx action = LogBulk.withBulkStdOutLogger \logger ->
-  runTestBackgroundWithLogger logger authCtx action
+-- | Default frozen time used in tests
+frozenTime :: UTCTime
+frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC"
+
+
+runTestBackground :: UTCTime -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackground t authCtx action = LogBulk.withBulkStdOutLogger \logger ->
+  runTestBackgroundWithLogger t logger authCtx action
 
 
 -- | Run background context and return both notifications and result
-runTestBackgroundWithNotifications :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
-runTestBackgroundWithNotifications logger appCtx process = do
+runTestBackgroundWithNotifications :: UTCTime -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO ([Data.Effectful.Notify.Notification], a)
+runTestBackgroundWithNotifications t logger appCtx process = do
   tp <- getGlobalTracerProvider
   notifRef <- newIORef []
   result <-
@@ -454,7 +462,7 @@ runTestBackgroundWithNotifications logger appCtx process = do
       & Effectful.Reader.Static.runReader appCtx
       & runWithConnectionPool appCtx.pool
       & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
-      & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+      & runFrozenTime t
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
       & runUUID
@@ -467,9 +475,9 @@ runTestBackgroundWithNotifications logger appCtx process = do
   pure (notifications, result)
 
 
-runTestBackgroundWithLogger :: Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
-runTestBackgroundWithLogger logger appCtx process = do
-  (notifications, result) <- runTestBackgroundWithNotifications logger appCtx process
+runTestBackgroundWithLogger :: UTCTime -> Log.Logger -> Config.AuthContext -> ATBackgroundCtx a -> IO a
+runTestBackgroundWithLogger t logger appCtx process = do
+  (notifications, result) <- runTestBackgroundWithNotifications t logger appCtx process
   -- Log the notifications that would have been sent
   forM_ notifications \notification -> do
     let notifInfo = case notification of
@@ -508,8 +516,8 @@ runTestEffect pool logger tp action = do
 
 
 -- | Run a background job action using TestResources
-runTestBg :: TestResources -> ATBackgroundCtx a -> IO a
-runTestBg TestResources{..} = runTestBackgroundWithLogger trLogger trATCtx
+runTestBg :: UTCTime -> TestResources -> ATBackgroundCtx a -> IO a
+runTestBg t TestResources{..} = runTestBackgroundWithLogger t trLogger trATCtx
 
 
 -- New type to hold all our resources
@@ -748,21 +756,21 @@ logBackgroundJobsInfo logger jobs = do
     $ Log.logTrace "Background Jobs Queue" (AE.object ["count" AE..= V.length jobs, "jobs" AE..= jobsList])
 
 
-runAllBackgroundJobs :: AuthContext -> IO (V.Vector Job)
-runAllBackgroundJobs authCtx = do
+runAllBackgroundJobs :: UTCTime -> AuthContext -> IO (V.Vector Job)
+runAllBackgroundJobs t authCtx = do
   jobs <- withResource authCtx.pool getBackgroundJobs
   LogBulk.withBulkStdOutLogger \logger ->
     -- Run jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
-      threads <- V.forM jobs $ \job -> Ki.fork scope $ liftIO $ testJobsRunner logger authCtx job
+      threads <- V.forM jobs $ \job -> Ki.fork scope $ liftIO $ testJobsRunner t logger authCtx job
       V.forM_ threads $ Ki.atomically . Ki.await
   pure jobs
 
 
 -- | Run background jobs matching a predicate
 -- Useful for running only specific job types in tests
-runBackgroundJobsWhere :: AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
-runBackgroundJobsWhere authCtx predicate = do
+runBackgroundJobsWhere :: UTCTime -> AuthContext -> (BackgroundJobs.BgJobs -> Bool) -> IO (V.Vector Job)
+runBackgroundJobsWhere t authCtx predicate = do
   jobs <- withResource authCtx.pool getBackgroundJobs
   jobsWithParsed <- V.forM jobs \job -> do
     bgJob <- BackgroundJobs.throwParsePayload job
@@ -771,16 +779,16 @@ runBackgroundJobsWhere authCtx predicate = do
   LogBulk.withBulkStdOutLogger \logger ->
     -- Run filtered jobs concurrently using Ki structured concurrency
     runEff $ runConcurrent $ Ki.runStructuredConcurrency $ Ki.scoped \scope -> do
-      threads <- V.forM filteredJobs $ \(job, _) -> Ki.fork scope $ liftIO $ testJobsRunner logger authCtx job
+      threads <- V.forM filteredJobs $ \(job, _) -> Ki.fork scope $ liftIO $ testJobsRunner t logger authCtx job
       V.forM_ threads $ Ki.atomically . Ki.await
   pure $ V.map fst filteredJobs
 
 
 -- Test version of jobsRunner that uses the test notification runner
-testJobsRunner :: Log.Logger -> Config.AuthContext -> Job -> IO ()
-testJobsRunner logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
+testJobsRunner :: UTCTime -> Log.Logger -> Config.AuthContext -> Job -> IO ()
+testJobsRunner t logger authCtx job = Relude.when authCtx.config.enableBackgroundJobs $ do
   bgJob <- BackgroundJobs.throwParsePayload job
-  void $ runTestBackgroundWithLogger logger authCtx (BackgroundJobs.processBackgroundJob authCtx bgJob)
+  void $ runTestBackgroundWithLogger t logger authCtx (BackgroundJobs.processBackgroundJob authCtx bgJob)
 
 
 getBackgroundJobs :: Connection -> IO (V.Vector Job)
@@ -808,12 +816,12 @@ processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
   let futureTime = addUTCTime 1 currentTime
   let testProjectId = UUIDId UUID.nil
 
-  _ <- runTestBg tr do
+  _ <- runTestBg frozenTime tr do
     _ <- ProcessMessage.processMessages msgs HashMap.empty
     _ <- BackgroundJobs.processOneMinuteErrors futureTime testProjectId
     BackgroundJobs.processFiveMinuteSpans futureTime testProjectId
 
-  void $ runAllBackgroundJobs trATCtx
+  void $ runAllBackgroundJobs frozenTime trATCtx
 
 
 -- Helper function to create request dumps for endpoints
@@ -921,7 +929,7 @@ processAllBackgroundJobsMultipleTimes TestResources{..} = go 10 -- max 10 iterat
   where
     go 0 = pass -- Safety limit reached
     go n = do
-      jobs <- runAllBackgroundJobs trATCtx
+      jobs <- runAllBackgroundJobs frozenTime trATCtx
       unless (V.null jobs) $ go (n - 1)
 
 
@@ -976,7 +984,7 @@ ingestLogWithHeader tr apiKey bodyText timestamp = do
   logBytes <- OtlpMock.createOtelLogAtTime "" bodyText timestamp -- Empty API key in resource
   let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
   -- Call processLogsRequest directly with the API key from "Authorization header"
-  void $ runTestBg tr $ OtlpServer.processLogsRequest (Just apiKey) logReq
+  void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) logReq
 
 
 -- | Helper to ingest a trace using gRPC Authorization header
@@ -984,7 +992,7 @@ ingestTraceWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
 ingestTraceWithHeader tr apiKey spanName timestamp = do
   traceBytes <- OtlpMock.createOtelTraceAtTime "" spanName timestamp -- Empty API key in resource
   let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
-  void $ runTestBg tr $ OtlpServer.processTraceRequest (Just apiKey) traceReq
+  void $ runTestBg frozenTime tr $ OtlpServer.processTraceRequest (Just apiKey) traceReq
 
 
 -- | Helper to ingest a metric using gRPC Authorization header
@@ -992,4 +1000,4 @@ ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> 
 ingestMetricWithHeader tr apiKey metricName value timestamp = do
   metricBytes <- OtlpMock.createGaugeMetricAtTime "" metricName value timestamp -- Empty API key in resource
   let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
-  void $ runTestBg tr $ OtlpServer.processMetricsRequest (Just apiKey) metricReq
+  void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) metricReq

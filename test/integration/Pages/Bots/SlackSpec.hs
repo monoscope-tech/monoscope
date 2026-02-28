@@ -27,7 +27,7 @@ spec = aroundAll withTestResources do
         extractResponseType result `shouldBe` Just "in_channel"
         hasSuccessBlock result `shouldBe` True
 
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T01HEREA9X"
+        slackDataM <- runTestBg frozenTime tr $ Slack.getSlackDataByTeamId "T01HEREA9X"
         case slackDataM of
           Just slackData -> slackData.channelId `shouldBe` "C0123ABCDEF"
           Nothing -> expectationFailure "Slack data not found"
@@ -72,10 +72,10 @@ spec = aroundAll withTestResources do
     describe "Anomaly Notifications" do
       it "captures Slack notification when anomaly occurs" \tr -> do
         setupSlackData tr testPid "T05ANOMALY1"
-        void $ runTestBg tr $ Slack.updateSlackNotificationChannel "T05ANOMALY1" "C06ALERTSCH"
+        void $ runTestBg frozenTime tr $ Slack.updateSlackNotificationChannel "T05ANOMALY1" "C06ALERTSCH"
 
         -- Use existing infrastructure from TestUtils
-        (notifs, _) <- runTestBackgroundWithNotifications tr.trLogger tr.trATCtx pass
+        (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx pass
         notifs `shouldBe` []
 
       it "user can ask about anomalies via /monoscope" \tr -> do
@@ -93,10 +93,10 @@ spec = aroundAll withTestResources do
         let interaction = slackInteraction "/monoscope-here" "" "T07HERETEAM"
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T07HERETEAM"
+        slackDataM <- runTestBg frozenTime tr $ Slack.getSlackDataByTeamId "T07HERETEAM"
         case slackDataM of
           Just slackData -> do
-            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            everyoneTeamM <- runTestBg frozenTime tr $ ProjectMembers.getEveryoneTeam slackData.projectId
             case everyoneTeamM of
               Just team -> V.elem "C0123ABCDEF" team.slack_channels `shouldBe` True
               Nothing -> expectationFailure "@everyone team not found"
@@ -108,10 +108,10 @@ spec = aroundAll withTestResources do
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T08HEREDUP"
+        slackDataM <- runTestBg frozenTime tr $ Slack.getSlackDataByTeamId "T08HEREDUP"
         case slackDataM of
           Just slackData -> do
-            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            everyoneTeamM <- runTestBg frozenTime tr $ ProjectMembers.getEveryoneTeam slackData.projectId
             case everyoneTeamM of
               Just team -> do
                 let channelCount = V.length $ V.filter (== "C0123ABCDEF") team.slack_channels
@@ -124,11 +124,11 @@ spec = aroundAll withTestResources do
         let interaction = slackInteraction "/monoscope-here" "" "T09HEREBOTH"
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T09HEREBOTH"
+        slackDataM <- runTestBg frozenTime tr $ Slack.getSlackDataByTeamId "T09HEREBOTH"
         case slackDataM of
           Just slackData -> do
             slackData.channelId `shouldBe` "C0123ABCDEF"
-            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            everyoneTeamM <- runTestBg frozenTime tr $ ProjectMembers.getEveryoneTeam slackData.projectId
             case everyoneTeamM of
               Just team -> V.elem "C0123ABCDEF" team.slack_channels `shouldBe` True
               Nothing -> expectationFailure "@everyone team not found"
@@ -140,10 +140,10 @@ spec = aroundAll withTestResources do
         -- First call should add channel and attempt to send welcome message
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T10HEREWELC"
+        slackDataM <- runTestBg frozenTime tr $ Slack.getSlackDataByTeamId "T10HEREWELC"
         case slackDataM of
           Just slackData -> do
-            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            everyoneTeamM <- runTestBg frozenTime tr $ ProjectMembers.getEveryoneTeam slackData.projectId
             case everyoneTeamM of
               Just team -> V.elem "C0123ABCDEF" team.slack_channels `shouldBe` True
               Nothing -> expectationFailure "@everyone team not found"
@@ -157,10 +157,10 @@ spec = aroundAll withTestResources do
         -- Second call should not send welcome message (channel already exists)
         void $ toBaseServantResponse tr.trATCtx tr.trLogger $ slackInteractionsH interaction
 
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T11HERENODUP"
+        slackDataM <- runTestBg frozenTime tr $ Slack.getSlackDataByTeamId "T11HERENODUP"
         case slackDataM of
           Just slackData -> do
-            everyoneTeamM <- runTestBg tr $ ProjectMembers.getEveryoneTeam slackData.projectId
+            everyoneTeamM <- runTestBg frozenTime tr $ ProjectMembers.getEveryoneTeam slackData.projectId
             case everyoneTeamM of
               Just team -> do
                 -- Channel should exist only once

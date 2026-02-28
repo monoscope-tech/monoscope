@@ -2,7 +2,7 @@ module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Pool (withResource)
-import Data.Time (UTCTime, addUTCTime)
+import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -20,15 +20,10 @@ import Pkg.TestUtils
 import Relude
 import Servant qualified
 import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
-import Text.Read (read)
 
 
 pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
-
-
-frozenTime :: UTCTime
-frozenTime = read "2025-01-01 00:00:00 UTC"
 
 
 countIssues :: TestResources -> Issues.IssueType -> IO Int
@@ -55,9 +50,9 @@ spec = aroundAll withTestResources do
       ingestTraceWithException tr apiKey "GET /api/users/:id" "ConnectionRefusedError" "connect ECONNREFUSED 127.0.0.1:5432" connStack (addUTCTime (-10) frozenTime)
 
       -- Process errors in the [frozenTime-2min, frozenTime) window
-      runTestBg tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid
+      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid
 
-      patterns <- runTestBg tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       length patterns `shouldBe` 2
 
       -- Verify hourly stats exist
@@ -75,39 +70,39 @@ spec = aroundAll withTestResources do
 
     it "2. NewErrorDetected creates RuntimeException issues" \tr -> do
       -- DB trigger on INSERT already fired during test 1
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
       issueCount <- countIssues tr Issues.RuntimeException
       issueCount `shouldSatisfy` (> 0)
 
     it "3. Resolved → Regressed on new occurrence" \tr -> do
       apiKey <- createTestAPIKey tr pid "error-regression-key"
       -- Find a pattern to resolve
-      patterns <- runTestBg tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       let pat = fromMaybe (error "no patterns") $ listToMaybe patterns
-      void $ runTestBg tr $ ErrorPatterns.resolveErrorPattern pat.id
-      resolvedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      void $ runTestBg frozenTime tr $ ErrorPatterns.resolveErrorPattern pat.id
+      resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.state) resolvedPat `shouldBe` Just ESResolved
 
       -- Ingest same error again → should regress
       ingestTraceWithException tr apiKey "GET /api/users/:id" pat.errorType pat.message pat.stacktrace (addUTCTime 60 frozenTime)
-      runTestBg tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 120 frozenTime) pid
+      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 120 frozenTime) pid
 
-      regressedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      regressedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.state) regressedPat `shouldBe` Just ESRegressed
       fmap (isJust . (.regressedAt)) regressedPat `shouldBe` Just True
 
     it "4. Baseline calculation from hourly stats" \tr -> do
-      patterns <- runTestBg tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
       let pat = fromMaybe (error "no patterns") $ listToMaybe patterns
       -- Seed 50 hours of stats (exceeds 24h minimum) with variance so stddev > 0
       forM_ ([-50 .. -1] :: [Int]) \h ->
-        void $ runTestBg tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
+        void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
           (addUTCTime (fromIntegral h * 3600) frozenTime)
           (V.singleton (pat.hash, 600 + (h `mod` 7) * 10, 10))
 
-      runTestBg tr $ BackgroundJobs.calculateErrorBaselines pid
+      runTestBg frozenTime tr $ BackgroundJobs.calculateErrorBaselines pid
 
-      updatedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      updatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       case updatedPat of
         Just p -> do
           p.baselineState `shouldBe` BSEstablished
@@ -119,17 +114,17 @@ spec = aroundAll withTestResources do
     it "5. Spike detection creates escalating issue" \tr -> do
       let sess = Servant.getResponse tr.trSessAndHeader
       -- Un-resolve established patterns (test 3 resolved them)
-      errRates <- runTestBg tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
       forM_ errRates \r ->
         when (r.baselineState == BSEstablished && r.state == ESResolved) $
-          void $ runTestBg tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing
+          void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing
 
       -- Acknowledge existing issues so ON CONFLICT doesn't deduplicate the new spike issue
-      (issues, _) <- runTestBg tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
-      forM_ issues \issue -> runTestBg tr $ Issues.acknowledgeIssue issue.id sess.user.id
+      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+      forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
 
       -- Find an established pattern with stddev > 0
-      errRates' <- runTestBg tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      errRates' <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
       let established = find (\r -> r.baselineState == BSEstablished && isJust r.baselineMean && maybe False (> 0) r.baselineStddev && r.state /= ESResolved) errRates'
 
       case established of
@@ -138,55 +133,55 @@ spec = aroundAll withTestResources do
               stddev = fromMaybe 0 errRate.baselineStddev
               spikeCount = ceiling (mean + 3 * stddev + 50) :: Int
           -- Insert spike at frozenTime (Time effect controls the hour bucket)
-          void $ runTestBg tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid frozenTime (V.singleton (errRate.hash, spikeCount, 5))
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid frozenTime (V.singleton (errRate.hash, spikeCount, 5))
 
           issuesBefore <- countIssues tr Issues.RuntimeException
-          runTestBg tr $ BackgroundJobs.detectErrorSpikes pid
+          runTestBg frozenTime tr $ BackgroundJobs.detectErrorSpikes pid
           issuesAfter <- countIssues tr Issues.RuntimeException
           issuesAfter `shouldSatisfy` (> issuesBefore)
 
           -- Verify state is escalating
-          spikedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          spikedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) spikedPat `shouldBe` Just ESEscalating
 
         Nothing -> error "No established pattern found for spike test"
 
     it "6. User action handlers (assign, resolve, subscribe)" \tr -> do
-      patterns <- runTestBg tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
       let pat = fromMaybe (error "no patterns") $ listToMaybe patterns
           errUuid = pat.id.unErrorPatternId
 
       -- Test assign
       let sess = Servant.getResponse tr.trSessAndHeader
       void $ testServant tr $ Pages.Anomalies.assignErrorPostH pid errUuid (Pages.Anomalies.AssignErrorForm (Just $ UUID.toText sess.user.id.getUserId))
-      assignedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      assignedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.assigneeId) assignedPat `shouldBe` Just (Just sess.user.id)
 
       -- Test resolve
       void $ testServant tr $ Pages.Anomalies.resolveErrorPostH pid errUuid
-      resolvedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      resolvedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.state) resolvedPat `shouldBe` Just ESResolved
 
       -- Test subscribe
       void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
-      subscribedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      subscribedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.subscribed) subscribedPat `shouldBe` Just True
 
       -- Test unsubscribe
       void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm Nothing)
-      unsubPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      unsubPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.subscribed) unsubPat `shouldBe` Just False
 
     it "7. Occurrence count decay and auto-resolution" \tr -> do
-      patterns <- runTestBg tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       -- Find or create a non-resolved pattern
       let activePatM = find (\p -> p.state /= ESResolved) patterns
       pat <- case activePatM of
         Just p -> pure p
         Nothing -> case patterns of
           (p1 : _) -> do
-            void $ runTestBg tr $ ErrorPatterns.updateErrorPatternState p1.id ESOngoing
-            fromMaybe (error "no pattern") <$> runTestBg tr (ErrorPatterns.getErrorPatternById p1.id)
+            void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState p1.id ESOngoing
+            fromMaybe (error "no pattern") <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById p1.id)
           [] -> error "no patterns available for decay test"
 
       -- Set quiet_minutes just below threshold (no production function for this test-specific state setup)
@@ -196,9 +191,9 @@ spec = aroundAll withTestResources do
                 WHERE id = ? |]
           (PGS.Only pat.id)
 
-      void $ runTestBg tr ErrorPatterns.updateOccurrenceCounts
+      void $ runTestBg frozenTime tr ErrorPatterns.updateOccurrenceCounts
 
-      updatedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      updatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       case updatedPat of
         Just p -> do
           p.state `shouldBe` ESResolved
@@ -222,17 +217,23 @@ spec = aroundAll withTestResources do
           [sql| UPDATE projects.projects SET notifications_channel = '{slack,discord}', error_alerts = true WHERE id = ? |]
           (PGS.Only pid)
 
-      -- Find a subscribed, non-resolved pattern with a matching issue
-      patterns <- runTestBg tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
-      let pat = fromMaybe (error "no patterns") $ find (\p -> p.state /= ESResolved) patterns
+      -- Find a non-resolved pattern (test 7 may have resolved all, so re-open one if needed)
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      pat <- case find (\p -> p.state /= ESResolved) patterns of
+        Just p -> pure p
+        Nothing -> case patterns of
+          (p1 : _) -> do
+            void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState p1.id ESOngoing
+            fromMaybe (error "no pattern") <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatternById p1.id)
+          [] -> error "no patterns available"
       -- Ensure it's subscribed
       void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
       -- Ensure matching issue exists
-      void $ runAllBackgroundJobs tr.trATCtx
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       -- First notification: should create thread IDs
-      runTestBg tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
-      pat1 <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      runTestBg frozenTime tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      pat1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       let slackTs1 = pat1 >>= (.slackThreadTs)
           discordId1 = pat1 >>= (.discordMessageId)
       isJust slackTs1 `shouldBe` True
@@ -245,8 +246,8 @@ spec = aroundAll withTestResources do
           (PGS.Only pat.id)
 
       -- Second notification: should reuse same thread IDs (threading preserved)
-      runTestBg tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
-      pat2 <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      runTestBg frozenTime tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      pat2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       (pat2 >>= (.slackThreadTs)) `shouldBe` slackTs1
       (pat2 >>= (.discordMessageId)) `shouldBe` discordId1
 
@@ -257,16 +258,16 @@ spec = aroundAll withTestResources do
       -- Same error with different IPs in message and different timestamps → same fingerprint
       ingestTraceWithException tr apiKey "POST /api/data" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack (addUTCTime 300 frozenTime)
       ingestTraceWithException tr apiKey "POST /api/data" "ConnectionError" "connect ECONNREFUSED 192.168.1.100:5432" stack (addUTCTime 310 frozenTime)
-      runTestBg tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 360 frozenTime) pid
+      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 360 frozenTime) pid
 
       -- Both should have matched the same pattern (IP normalized to {ipv4})
-      patM <- runTestBg tr $ ErrorPatterns.getErrorPatternByHash pid
-        (EF.computeErrorFingerprint (UUID.toText UUID.nil) Nothing (Just "POST /api/data") "unknown" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack)
+      patM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid
+        (EF.computeErrorFingerprint (UUID.toText UUID.nil) Nothing (Just "POST /api/data") "nodejs" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack)
       isJust patM `shouldBe` True
 
       -- Different error type → different fingerprint (separate pattern)
-      prevCount <- length <$> runTestBg tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
+      prevCount <- length <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
       ingestTraceWithException tr apiKey "POST /api/data" "TimeoutError" "request timed out after 30000ms" stack (addUTCTime 320 frozenTime)
-      runTestBg tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 380 frozenTime) pid
-      newCount <- length <$> runTestBg tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
+      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 380 frozenTime) pid
+      newCount <- length <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
       newCount `shouldSatisfy` (> prevCount)

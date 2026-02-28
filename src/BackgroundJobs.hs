@@ -17,7 +17,7 @@ import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
-import Data.Time.Clock (diffUTCTime)
+import Data.Time.Clock (NominalDiffTime, diffUTCTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -106,7 +106,6 @@ data BgJobs
   | HourlyJob UTCTime Int
   | ReportUsage Projects.ProjectId
   | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
-  | QueryMonitorsTriggered (V.Vector Monitors.QueryMonitorId)
   | QueryMonitorsCheck
   | DeletedProject Projects.ProjectId
   | CleanupDemoProject
@@ -179,7 +178,6 @@ processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
 processBackgroundJob authCtx bgJob =
   case bgJob of
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
-    QueryMonitorsTriggered queryMonitorIds -> queryMonitorsTriggered queryMonitorIds authCtx
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' -> do
       userM <- Users.userById userId
@@ -918,86 +916,29 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
   pass
 
 
-queryMonitorsTriggered :: V.Vector Monitors.QueryMonitorId -> Config.AuthContext -> ATBackgroundCtx ()
-queryMonitorsTriggered queryMonitorIds authCtx = do
-  monitorsEvaled <- Monitors.queryMonitorsById queryMonitorIds
-  forM_ monitorsEvaled \monitorE ->
-    if (monitorE.triggerLessThan && monitorE.evalResult >= monitorE.alertThreshold)
-      || (not monitorE.triggerLessThan && monitorE.evalResult <= monitorE.alertThreshold)
-      then handleQueryMonitorThreshold monitorE True authCtx.config.hostUrl
-      else do
-        if Just True
-          == ( monitorE.warningThreshold <&> \warningThreshold ->
-                 (monitorE.triggerLessThan && monitorE.evalResult >= warningThreshold)
-                   || (not monitorE.triggerLessThan && monitorE.evalResult <= warningThreshold)
-             )
-          then handleQueryMonitorThreshold monitorE False authCtx.config.hostUrl
-          else pass
-
-
-handleQueryMonitorThreshold :: Monitors.QueryMonitorEvaled -> Bool -> Text -> ATBackgroundCtx ()
-handleQueryMonitorThreshold monitorE isAlert hostUrl = do
-  Log.logTrace "Query Monitors Triggered " monitorE
-  _ <- Monitors.updateQMonitorTriggeredState monitorE.id isAlert
-  whenJustM (Projects.projectById monitorE.projectId) \p -> do
-    teams <- ProjectMembers.getTeamsById monitorE.projectId monitorE.teams
-    logMissingTeams monitorE teams
-    issue <- createAndInsertIssue monitorE hostUrl
-    let alert = buildMonitorAlert monitorE issue hostUrl
-    sendNotifications monitorE teams p alert
-
-
-logMissingTeams :: Monitors.QueryMonitorEvaled -> [ProjectMembers.Team] -> ATBackgroundCtx ()
-logMissingTeams monitorE teams = do
-  Relude.when (not (V.null monitorE.teams) && null teams)
-    $ Log.logAttention
-      "Monitor configured with teams but none found (possibly deleted)"
-      (monitorE.id, monitorE.projectId, V.length monitorE.teams)
-  Relude.when (not (V.null monitorE.teams) && length teams < V.length monitorE.teams)
-    $ Log.logAttention
-      "Some monitor teams not found (possibly deleted)"
-      (monitorE.id, monitorE.projectId, "expected" :: Text, V.length monitorE.teams, "found" :: Text, length teams)
-
-
-createAndInsertIssue :: Monitors.QueryMonitorEvaled -> Text -> ATBackgroundCtx Issues.Issue
-createAndInsertIssue monitorE hostUrl = do
-  let (thresholdType, threshold) = calculateThreshold monitorE
-  issue <-
-    Issues.createQueryAlertIssue
-      monitorE.projectId
-      (show monitorE.id)
-      monitorE.alertConfig.title
-      monitorE.logQuery
-      threshold
-      monitorE.evalResult
-      thresholdType
-  Issues.insertIssue issue
-  pure issue
-
-
-calculateThreshold :: Monitors.QueryMonitorEvaled -> (Text, Double)
-calculateThreshold monitorE =
-  ( if monitorE.triggerLessThan then "below" else "above"
-  , monitorE.alertThreshold
-  )
-
-
-buildMonitorAlert :: Monitors.QueryMonitorEvaled -> Issues.Issue -> Text -> Pkg.Mail.NotificationAlerts
-buildMonitorAlert monitorE issue hostUrl =
-  MonitorsAlert
-    { monitorTitle = monitorE.alertConfig.title
-    , monitorUrl = hostUrl <> "/p/" <> monitorE.projectId.toText <> "/anomalies/" <> issue.id.toText
-    }
-
-
-sendNotifications :: Monitors.QueryMonitorEvaled -> [ProjectMembers.Team] -> Projects.Project -> Pkg.Mail.NotificationAlerts -> ATBackgroundCtx ()
-sendNotifications monitorE teams p alert@MonitorsAlert{monitorUrl} = do
-  targetTeams <-
-    if null teams
-      then maybeToList <$> ProjectMembers.getEveryoneTeam monitorE.projectId
-      else pure teams
-  for_ targetTeams \team -> dispatchTeamNotifications team alert monitorE.projectId p.title monitorUrl (emailQueryMonitorAlert monitorE)
-sendNotifications _ _ _ _ = pass
+-- | Send notifications for a query monitor status change (inline, no separate job)
+notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> Bool -> ATBackgroundCtx ()
+notifyQueryMonitorStatusChange monitor value newStatus isRecovery = do
+  appCtx <- ask @Config.AuthContext
+  whenJustM (Projects.projectById monitor.projectId) \p -> do
+    teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
+    Relude.when (not (V.null monitor.teams) && null teams)
+      $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
+    let hostUrl = appCtx.env.hostUrl
+        monitorUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
+    alert <-
+      if isRecovery
+        then pure $ MonitorsRecoveryAlert{monitorTitle = monitor.alertConfig.title, monitorUrl}
+        else do
+          let thresholdType = if monitor.triggerLessThan then "below" else "above"
+          issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdType
+          Issues.insertIssue issue
+          pure $ MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/anomalies/" <> issue.id.toText}
+    targetTeams <-
+      if null teams
+        then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId
+        else pure teams
+    for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title monitorUrl (const . const pass)
 
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
@@ -1201,12 +1142,7 @@ sendReportForProject pid rType = do
       Log.logInfo "Completed sending report notifications for" pid
 
 
-emailQueryMonitorAlert :: Monitors.QueryMonitorEvaled -> CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()
-emailQueryMonitorAlert monitorE@Monitors.QueryMonitorEvaled{alertConfig} email userM = whenJust userM (const pass)
-
-
--- FIXME: implement query alert email using postmark
--- sendEmail
+-- TODO: implement query alert email using postmark
 --   (CI.original email)
 --   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
 --   [fmtTrim|
@@ -1617,6 +1553,7 @@ evaluateQueryMonitor monitor startWall = do
   let total = sum [v | Only v <- results]
       durationNs = toNanoSecs (diffTimeSpec end start)
       title = monitor.alertConfig.title
+      prevStatus = monitor.currentStatus
       status =
         monitorStatus
           monitor.triggerLessThan
@@ -1624,8 +1561,8 @@ evaluateQueryMonitor monitor startWall = do
           monitor.alertThreshold
           monitor.alertRecoveryThreshold
           monitor.warningRecoveryThreshold
-          (monitor.currentStatus == Monitors.MSAlerting)
-          (monitor.currentStatus == Monitors.MSWarning)
+          (prevStatus == Monitors.MSAlerting)
+          (prevStatus == Monitors.MSWarning)
           total
       severity = case status of Monitors.MSAlerting -> SLError; Monitors.MSWarning -> SLWarn; _ -> SLInfo
       attrs =
@@ -1641,17 +1578,33 @@ evaluateQueryMonitor monitor startWall = do
           ]
       otelLog = mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall
   insertSystemLog otelLog{Telemetry.summary = generateSummary otelLog}
-  void $ PG.execute [sql| UPDATE monitors.query_monitors SET current_status = ?, current_value = ? WHERE id = ? |] (status, total, monitor.id)
-  Relude.when (status /= Monitors.MSNormal) do
-    Log.logInfo "Query monitor triggered alert" (monitor.id, title, status, total)
-    let warningAt = if status == Monitors.MSWarning then Just startWall else Nothing
-        alertAt = if status == Monitors.MSAlerting then Just startWall else Nothing
-    void $ PG.execute [sql| UPDATE monitors.query_monitors SET warning_last_triggered = ?, alert_last_triggered = ? WHERE id = ? |] (warningAt, alertAt, monitor.id)
-    void
-      $ PG.execute
-        [sql| INSERT INTO background_jobs (run_at, status, payload) VALUES (NOW(), 'queued', ?) |]
-        (Only $ AE.object ["tag" AE..= "QueryMonitorAlert", "contents" AE..= V.singleton monitor.id])
-  void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+
+  -- Determine notification intent before UPDATE so we can set timestamps correctly
+  let isRecovery = status == Monitors.MSNormal && prevStatus /= Monitors.MSNormal
+      statusChanged = status /= prevStatus
+      reminderIntervalSecs = 3600 :: NominalDiffTime -- 1 hour
+      lastTriggered = monitor.alertLastTriggered <|> monitor.warningLastTriggered
+      pastReminderWindow = maybe True (\lt -> diffUTCTime startWall lt >= reminderIntervalSecs) lastTriggered
+      shouldNotify
+        | isRecovery = True
+        | statusChanged && status /= Monitors.MSNormal = True
+        | not statusChanged && status /= Monitors.MSNormal && pastReminderWindow = True
+        | otherwise = False
+      -- Update timestamps on transitions OR reminders (prevents spam after 1h window)
+      warningAt = if status == Monitors.MSWarning && (statusChanged || shouldNotify) then Just startWall else monitor.warningLastTriggered
+      alertAt = if status == Monitors.MSAlerting && (statusChanged || shouldNotify) then Just startWall else monitor.alertLastTriggered
+      (finalWarningAt, finalAlertAt) = if isRecovery then (Nothing, Nothing) else (warningAt, alertAt)
+
+  void $ PG.execute
+    [sql| UPDATE monitors.query_monitors
+          SET current_status = ?, current_value = ?, last_evaluated = ?,
+              warning_last_triggered = ?, alert_last_triggered = ?
+          WHERE id = ? |]
+    (status, total, startWall, finalWarningAt, finalAlertAt, monitor.id)
+
+  Relude.when shouldNotify do
+    Log.logInfo "Query monitor notification" (monitor.id, title, status, total, "recovery" :: Text, isRecovery)
+    notifyQueryMonitorStatusChange monitor total status isRecovery
 
 
 -- | Determine monitor status with hysteresis support.

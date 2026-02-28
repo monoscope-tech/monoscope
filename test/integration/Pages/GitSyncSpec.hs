@@ -199,13 +199,13 @@ createDash tr title tags = do
         , Dashboards.filePath = Nothing
         , Dashboards.fileSha = Nothing
         }
-  _ <- runTestBg tr $ Dashboards.insert dash
+  _ <- runTestBg frozenTime tr $ Dashboards.insert dash
   pure dashId
 
 runSyncJobs :: TestResources -> IO ()
 runSyncJobs tr = do
   withResource tr.trPool setBjRunAtInThePast
-  void $ runBackgroundJobsWhere tr.trATCtx isGitSyncJob
+  void $ runBackgroundJobsWhere frozenTime tr.trATCtx isGitSyncJob
   where
     isGitSyncJob BackgroundJobs.GitSyncPushDashboard{} = True
     isGitSyncJob BackgroundJobs.GitSyncFromRepo{} = True
@@ -230,7 +230,7 @@ spec = do
       it "creates sync config with PAT" \tr -> do
         let form = GitSyncForm{owner = "test-owner", repo = "test-repo", branch = "main", accessToken = "ghp_test", pathPrefix = Nothing}
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
-        syncM <- runTestBg tr $ GitSync.getGitHubSync testPid
+        syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
         syncM `shouldSatisfy` isJust
         let sync = fromJust syncM
         (sync.owner, sync.repo, sync.branch, sync.syncEnabled) `shouldBe` ("test-owner", "test-repo", "main", True)
@@ -238,12 +238,12 @@ spec = do
       it "updates sync config" \tr -> do
         let form = GitSyncForm{owner = "updated", repo = "updated-repo", branch = "dev", accessToken = "ghp_new", pathPrefix = Nothing}
         void $ testServant tr $ GitSyncPage.gitSyncSettingsPostH testPid form
-        syncM <- runTestBg tr $ GitSync.getGitHubSync testPid
+        syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
         (fromJust syncM).owner `shouldBe` "updated"
 
       it "deletes sync config" \tr -> do
         void $ testServant tr $ GitSyncPage.gitSyncSettingsDeleteH testPid
-        syncM <- runTestBg tr $ GitSync.getGitHubSync testPid
+        syncM <- runTestBg frozenTime tr $ GitSync.getGitHubSync testPid
         syncM `shouldSatisfy` isNothing
 
     describe "Sync Plan Building" do
@@ -316,17 +316,17 @@ spec = do
     describe "Dashboard Git Info" do
       it "updates filePath and fileSha" \tr -> do
         dashId <- createDash tr "Git Info Test" []
-        _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId "dashboards/test.yaml" "abc123"
-        dashM <- runTestBg tr $ Dashboards.getDashboardById dashId
+        _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId "dashboards/test.yaml" "abc123"
+        dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardById dashId
         (fromJust dashM).filePath `shouldBe` Just "dashboards/test.yaml"
         (fromJust dashM).fileSha `shouldBe` Just "abc123"
 
       it "gets git state for project" \tr -> do
         d1 <- createDash tr "State A" []
         d2 <- createDash tr "State B" []
-        _ <- runTestBg tr $ GitSync.updateDashboardGitInfo d1 "dashboards/a.yaml" "sha-a"
-        _ <- runTestBg tr $ GitSync.updateDashboardGitInfo d2 "dashboards/b.yaml" "sha-b"
-        gitState <- runTestBg tr $ GitSync.getDashboardGitState testPid
+        _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d1 "dashboards/a.yaml" "sha-a"
+        _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo d2 "dashboards/b.yaml" "sha-b"
+        gitState <- runTestBg frozenTime tr $ GitSync.getDashboardGitState testPid
         M.lookup "dashboards/a.yaml" gitState `shouldBe` Just (d1, "sha-a")
         M.lookup "dashboards/b.yaml" gitState `shouldBe` Just (d2, "sha-b")
 
@@ -390,7 +390,7 @@ spec = do
             setupSync tr cfg Nothing
             path <- uniquePath "push-create"
             dashId <- createDash tr "Push Create Test" ["e2e"]
-            _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path, empty sha = new file
+            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path, empty sha = new file
             _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             exists <- ghFileExists cfg path
@@ -407,7 +407,7 @@ spec = do
             (_, sha1) <- fromRightShow <$> ghGetFile cfg path
             -- Create dashboard with that path
             dashId <- createDash tr "Updated Title" ["updated"]
-            _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path sha1
+            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path sha1
             clearJobs tr
             _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
@@ -421,7 +421,7 @@ spec = do
             let expectedPath = "dashboards/sha-test.yaml"
             _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
-            dashM <- runTestBg tr $ Dashboards.getDashboardById dashId
+            dashM <- runTestBg frozenTime tr $ Dashboards.getDashboardById dashId
             let dash = fromJust dashM
             dash.filePath `shouldBe` Just expectedPath
             dash.fileSha `shouldSatisfy` isJust
@@ -437,7 +437,7 @@ spec = do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashes <- runTestBg tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
             case filter (\d -> d.title == "Created In GitHub") dashes of
               (d:_) -> d.filePath `shouldBe` Just path
               [] -> fail "Expected dashboard not found"
@@ -462,7 +462,7 @@ spec = do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashes <- runTestBg tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
             any (\d -> d.title == "V2 Updated") dashes `shouldBe` True
 
           it "deletes local dashboard when GitHub file removed" \tr -> do
@@ -476,7 +476,7 @@ spec = do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashesBefore <- runTestBg tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashesBefore <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
             let beforeCount = length $ filter (\d -> d.filePath == Just path) dashesBefore
             beforeCount `shouldBe` 1
             -- Delete from GitHub
@@ -487,7 +487,7 @@ spec = do
             liftIO $ withResource tr.trPool \conn ->
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
-            dashesAfter <- runTestBg tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashesAfter <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
             let afterCount = length $ filter (\d -> d.filePath == Just path) dashesAfter
             afterCount `shouldBe` 0
 
@@ -498,7 +498,7 @@ spec = do
             path <- uniquePath "roundtrip"
             -- Create and push
             dashId <- createDash tr "Round Trip Original" ["local"]
-            _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path for push
+            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path ""  -- set path for push
             _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             runSyncJobs tr
             -- Verify in GitHub
@@ -513,7 +513,7 @@ spec = do
               void $ createJob conn "background_jobs" $ BackgroundJobs.GitSyncFromRepo testPid
             runSyncJobs tr
             -- Verify local updated - use filePath matching since dashboard is updated in place
-            dashes <- runTestBg tr $ Dashboards.selectDashboardsSortedBy testPid "title"
+            dashes <- runTestBg frozenTime tr $ Dashboards.selectDashboardsSortedBy testPid "title"
             case filter (\d -> d.filePath == Just path) dashes of
               (dash:_) -> do
                 dash.title `shouldBe` "Round Trip Modified"
@@ -561,7 +561,7 @@ spec = do
             _ <- ghPutFile cfg path "title: Original\n" Nothing
             -- Create dashboard with wrong SHA
             dashId <- createDash tr "Conflict Test" []
-            _ <- runTestBg tr $ GitSync.updateDashboardGitInfo dashId path "wrong-sha-12345"
+            _ <- runTestBg frozenTime tr $ GitSync.updateDashboardGitInfo dashId path "wrong-sha-12345"
             _ <- toBaseServantResponse tr.trATCtx tr.trLogger $ atAuthToBase tr.trSessAndHeader $ GitSyncPage.queueGitSyncPush testPid dashId
             -- Should not crash, just log error
             runSyncJobs tr

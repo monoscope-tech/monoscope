@@ -29,7 +29,7 @@ spec = aroundAll withTestResources do
         (T.isInfixOf "Analyzing" loadingText || T.isInfixOf "⏳" loadingText) `shouldBe` True
 
         -- Process background jobs that send final response
-        void $ runAllBackgroundJobs tr.trATCtx
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       it "Discord: handles query with signature verification" \tr -> do
         setupDiscordData tr testPid "guild_wf_discord"
@@ -75,7 +75,7 @@ spec = aroundAll withTestResources do
         hasSuccessBlock result `shouldBe` True
 
         -- Verify channel was updated (from slackInteraction fixture which uses "C0123ABCDEF")
-        slackDataM <- runTestBg tr $ Slack.getSlackDataByTeamId "T_HERE_WF"
+        slackDataM <- runTestBg frozenTime tr $ Slack.getSlackDataByTeamId "T_HERE_WF"
         slackDataM `shouldSatisfy` isJust
         case slackDataM of
           Just slackData -> slackData.channelId `shouldBe` "C0123ABCDEF"
@@ -101,7 +101,7 @@ spec = aroundAll withTestResources do
     describe "Thread/Conversation Context" do
       it "Slack: handles threaded messages" \tr -> do
         setupSlackData tr testPid "T_THREAD_WF"
-        void $ runTestBg tr $ Slack.updateSlackNotificationChannel "T_THREAD_WF" "C_THREAD_CHANNEL"
+        void $ runTestBg frozenTime tr $ Slack.updateSlackNotificationChannel "T_THREAD_WF" "C_THREAD_CHANNEL"
 
         let threadedEventJson = slackThreadedEvent "T_THREAD_WF" "C_THREAD_CHANNEL" "follow up question" "1700000002.000" "1700000001.000"
         case AE.fromJSON threadedEventJson of

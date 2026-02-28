@@ -86,6 +86,10 @@ data NotificationAlerts
       , baselineMean :: Double
       , changePercent :: Double
       }
+  | MonitorsRecoveryAlert
+      { monitorTitle :: Text
+      , monitorUrl :: Text
+      }
 
 
 data RuntimeAlertType
@@ -116,6 +120,7 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
             EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ AE.object ["text" AE..= ("🤖 *Log Alert triggered for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
+            MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
             LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle
             LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle
             ShapeAlert -> Nothing
@@ -145,6 +150,7 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
             EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
             MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]])]
+            MonitorsRecoveryAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array (V.fromList [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("✅ Alert resolved for " <> monitorTitle)]]])]
             LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount pTitle cid
             LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid
             ShapeAlert -> Nothing
@@ -189,6 +195,7 @@ sendWhatsAppAlert alert pid pTitle tos = do
       pass
     ShapeAlert -> pass
     MonitorsAlert{} -> pass
+    MonitorsRecoveryAlert{} -> pass
     LogPatternAlert{} -> pass
     LogPatternRateChangeAlert{} -> pass
   where
@@ -548,6 +555,8 @@ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName d
 sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
 sendPagerdutyAlertToService integrationKey (MonitorsAlert monitorTitle monitorUrl) projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": " <> monitorTitle) Notify.PDCritical (AE.object ["url" AE..= monitorUrl]) monitorUrl
+sendPagerdutyAlertToService integrationKey (MonitorsRecoveryAlert monitorTitle monitorUrl) projectTitle _ =
+  Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDResolve ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": Resolved - " <> monitorTitle) Notify.PDInfo (AE.object ["url" AE..= monitorUrl]) monitorUrl
 sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
   let endpointUrl = projectUrl <> "/anomalies/by_hash/" <> hash
       endpointNames = T.intercalate ", " $ V.toList endpoints

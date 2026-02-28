@@ -9,7 +9,6 @@ module Models.Apis.Monitors (
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   MonitorStatus (..),
-  updateQMonitorTriggeredState,
   getAlertsByTeamHandle,
   monitorRemoveTeam,
   getActiveQueryMonitors,
@@ -224,15 +223,6 @@ queryMonitorsById ids
         eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
-
-
-updateQMonitorTriggeredState :: DB es => QueryMonitorId -> Bool -> Eff es Int64
-updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
-  where
-    q =
-      if isAlert
-        then [sql|UPDATE monitors.query_monitors SET alert_last_triggered=NOW() where id=?|]
-        else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
 
 
 monitorToggleActiveById :: DB es => QueryMonitorId -> Eff es Int64
