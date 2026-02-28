@@ -9,7 +9,6 @@ module Models.Apis.Monitors (
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   MonitorStatus (..),
-  updateQMonitorTriggeredState,
   getAlertsByTeamHandle,
   monitorRemoveTeam,
   getActiveQueryMonitors,
@@ -68,8 +67,7 @@ instance HasField "toText" QueryMonitorId Text where
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "MS", DAE.CamelToSnake]] MonitorStatus
-  deriving (Display, FromField, ToField) via WrappedEnumSC "MS" MonitorStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "MS" MonitorStatus
 
 
 data MonitorAlertConfig = MonitorAlertConfig
@@ -225,15 +223,6 @@ queryMonitorsById ids
         eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
-
-
-updateQMonitorTriggeredState :: DB es => QueryMonitorId -> Bool -> Eff es Int64
-updateQMonitorTriggeredState qmId isAlert = PG.execute q (Only qmId)
-  where
-    q =
-      if isAlert
-        then [sql|UPDATE monitors.query_monitors SET alert_last_triggered=NOW() where id=?|]
-        else [sql|UPDATE monitors.query_monitors SET warning_last_triggered=NOW() where id=?|]
 
 
 monitorToggleActiveById :: DB es => QueryMonitorId -> Eff es Int64

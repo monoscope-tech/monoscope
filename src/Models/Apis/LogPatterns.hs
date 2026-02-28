@@ -36,7 +36,6 @@ where
 
 import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Data.Aeson qualified as AE
-import Data.Default (Default)
 import Data.List (lookup)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
@@ -52,16 +51,10 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
-
-
-data BaselineState = BSLearning | BSEstablished
-  deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "BS", DAE.CamelToSnake]] BaselineState
-  deriving (FromField, ToField) via WrappedEnumSC "BS" BaselineState
+import Utils (truncateHour)
 
 
 newtype LogPatternId = LogPatternId {unLogPatternId :: Int64}
@@ -75,10 +68,7 @@ data LogPatternState
   | LPSIgnored
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving
-    (AE.FromJSON, AE.ToJSON)
-    via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "LPS", DAE.CamelToSnake]] LogPatternState
-  deriving (FromField, ToField) via WrappedEnumSC "LPS" LogPatternState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "LPS" LogPatternState
 
 
 data LogPattern = LogPattern
@@ -233,10 +223,10 @@ upsertHourlyStatBatch [] = pure 0
 upsertHourlyStatBatch rows =
   PG.executeMany
     [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
-        VALUES (?, ?, ?, date_trunc('hour', ?::timestamptz), ?)
+        VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
         DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-    rows
+    [(pid, sf, ph, truncateHour hb, ec) | (pid, sf, ph, hb, ec) <- rows]
 
 
 -- | Batch: computes median + MAD for all patterns in one query.

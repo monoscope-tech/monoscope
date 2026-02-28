@@ -94,7 +94,7 @@ spec = aroundAll withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       -- Run only NewAnomaly jobs (which create issues from anomalies)
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
       createRequestDumps tr testPid 10
@@ -124,16 +124,16 @@ spec = aroundAll withTestResources do
       pendingJobs2 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs2
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
 
       -- Acknowledge the endpoint anomaly directly using Issues module
       let sess = Servant.getResponse tr.trSessAndHeader
-      runTestBg tr $ Issues.acknowledgeIssue issueId sess.user.id
+      runTestBg frozenTime tr $ Issues.acknowledgeIssue issueId sess.user.id
 
       -- Verify it was acknowledged
-      acknowledgedIssue <- runTestBg tr $ Issues.selectIssueById issueId
+      acknowledgedIssue <- runTestBg frozenTime tr $ Issues.selectIssueById issueId
       case acknowledgedIssue of
         Just issue -> isJust issue.acknowledgedAt `shouldBe` True
         Nothing -> error "Issue not found after acknowledgment"
@@ -167,7 +167,7 @@ spec = aroundAll withTestResources do
       pendingJobs3 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs3
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
 
@@ -187,7 +187,7 @@ spec = aroundAll withTestResources do
       pendingJobs4 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs4
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = aType} -> aType == "shape" || aType == "field"
         _ -> False
 
@@ -203,7 +203,7 @@ spec = aroundAll withTestResources do
         Just (Only issueId) -> do
           -- Acknowledge directly using Issues module
           let sess = Servant.getResponse tr.trSessAndHeader
-          runTestBg tr $ Issues.acknowledgeIssue issueId sess.user.id
+          runTestBg frozenTime tr $ Issues.acknowledgeIssue issueId sess.user.id
         Nothing -> error "No API change issue found"
 
       -- Now send a message with different format
@@ -215,7 +215,7 @@ spec = aroundAll withTestResources do
       pendingJobs5 <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs5
 
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{anomalyType = "format"} -> True
         _ -> False
 

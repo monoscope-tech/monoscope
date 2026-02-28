@@ -304,6 +304,9 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
   , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
+  , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
+  , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatPost :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
   }
@@ -532,6 +535,9 @@ anomaliesServer pid =
     , listGet = AnomalyList.anomalyListGetH pid
     , anomalyGet = AnomalyList.anomalyDetailGetH pid
     , anomalyHashGet = AnomalyList.anomalyDetailHashGetH pid
+    , assignErrorPost = AnomalyList.assignErrorPostH pid
+    , resolveErrorPost = AnomalyList.resolveErrorPostH pid
+    , errorSubscriptionPost = AnomalyList.errorSubscriptionPostH pid
     , aiChatPost = AnomalyList.aiChatPostH pid
     , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
     }
@@ -785,6 +791,7 @@ emailPreviewH templateName = do
         "weekly-report" -> ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
         "runtime-errors" -> ET.sampleRuntimeErrors
         "anomaly-endpoint" -> ET.sampleAnomalyEndpoint
+        "issue-assigned" -> ET.sampleIssueAssigned
         _ -> ("Unknown", p_ "Template not found")
   addRespHeaders $ ET.emailWrapper subject content
 

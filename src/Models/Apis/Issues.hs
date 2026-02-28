@@ -44,6 +44,8 @@ module Models.Apis.Issues (
   createQueryAlertIssue,
   createLogPatternIssue,
   createLogPatternRateChangeIssue,
+  createNewErrorIssue,
+  createErrorSpikeIssue,
   SpikeResult (..),
 
   -- * Utilities
@@ -104,6 +106,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
@@ -132,8 +135,7 @@ data IssueType
   | LogPatternRateChange
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] IssueType
-  deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "" IssueType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "" IssueType
 
 
 issueTypeToText :: IssueType -> Text
@@ -144,16 +146,16 @@ parseIssueType :: Text -> Maybe IssueType
 parseIssueType = rightToMaybe . parseUrlPiece
 
 
-serviceLabel :: Maybe Text -> Text
-serviceLabel = fromMaybe "unknown-service"
-
-
 showRate :: Double -> Text
 showRate x = show (round x :: Int) <> "/hr"
 
 
 showPct :: RealFrac a => a -> Text
 showPct x = show (round x :: Int) <> "%"
+
+
+serviceLabel :: Maybe Text -> Text
+serviceLabel = fromMaybe "unknown-service"
 
 
 -- | API Change issue data
@@ -362,7 +364,6 @@ updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, 
     |]
 
 
--- | Update issue enhancement
 updateIssueEnhancement :: DB es => IssueId -> Text -> Text -> Text -> Eff es ()
 updateIssueEnhancement issueId title action complexity = void $ PG.execute q params
   where
@@ -687,10 +688,9 @@ data LogPatternData = LogPatternData
 
 
 data RateChangeDirection = Spike | Drop
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] RateChangeDirection
-  deriving (Display) via WrappedEnumSC "" RateChangeDirection
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC "" RateChangeDirection
 
 
 data SpikeResult = SpikeResult
@@ -811,13 +811,66 @@ getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |
 
 
 reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
-reportHistoryByProject pid page = PG.query q (pid, offset)
-  where
-    offset = page * 20
-    q = [sql| SELECT id, created_at, project_id, report_type FROM apis.reports WHERE project_id = ? ORDER BY created_at DESC LIMIT 20 OFFSET ?; |]
+reportHistoryByProject pid page = PG.query (_selectWhere @ReportListItem [[field| project_id |]] <> " ORDER BY created_at DESC LIMIT 20 OFFSET ?") (pid, page * 20)
 
 
 getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
-getLatestReportByType pid reportType = listToMaybe <$> PG.query q (pid, reportType)
-  where
-    q = [sql| SELECT id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time FROM apis.reports WHERE project_id = ? AND report_type = ? ORDER BY created_at DESC LIMIT 1 |]
+getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @Report [[field| project_id |], [field| report_type |]] <> " ORDER BY created_at DESC LIMIT 1") (pid, reportType)
+
+
+createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
+createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
+  let increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
+   in mkErrorIssue
+        projectId
+        errRate.hash
+        errRate.service
+        errRate.errorType
+        errRate.message
+        errRate.stacktrace
+        (round currentRate)
+        ("Error Spike: " <> errRate.errorType <> " (" <> show (round increasePercent :: Int) <> "% increase)")
+        ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
+
+
+createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPattern -> Eff es Issue
+createNewErrorIssue projectId err =
+  mkErrorIssue
+    projectId
+    err.hash
+    err.service
+    err.errorType
+    err.message
+    err.stacktrace
+    1
+    ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
+    "Investigate the new error and implement a fix."
+
+
+mkErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Text -> Int -> Text -> Text -> Eff es Issue
+mkErrorIssue projectId targetHash service errType errMsg stack occurrences title recommendedAction = do
+  now <- Time.currentTime
+  mkIssue
+    MkIssueOpts
+      { projectId
+      , issueType = RuntimeException
+      , targetHash
+      , service
+      , critical = True
+      , severity = "critical"
+      , title
+      , recommendedAction
+      , migrationComplexity = "n/a"
+      , timestamp = Nothing
+      , issueData =
+          RuntimeExceptionData
+            { errorType = errType
+            , errorMessage = errMsg
+            , stackTrace = stack
+            , requestPath = Nothing
+            , requestMethod = Nothing
+            , occurrenceCount = occurrences
+            , firstSeen = now
+            , lastSeen = now
+            }
+      }

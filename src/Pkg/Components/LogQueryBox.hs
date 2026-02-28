@@ -105,7 +105,7 @@ logQueryBox_ config = do
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
             faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
             input_
-              [ class_ "border-0 w-full flex-1 p-1 outline-none peer"
+              [ class_ "border-0 w-full flex-1 p-1 no-focus-ring peer"
               , placeholder_ "Ask. Eg: Logs with errors. Hit Enter to submit"
               , id_ "ai-search-input"
               , required_ "required"

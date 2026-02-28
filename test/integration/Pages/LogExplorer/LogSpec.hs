@@ -41,7 +41,7 @@ spec = aroundAll withTestResources do
 
     it "should return log items" \tr -> do
       -- Use fixed frozen time: January 1, 2025
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       let yesterdayTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-86400) frozenTime
       let twoDaysAgoTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-172800) frozenTime
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
@@ -54,7 +54,7 @@ spec = aroundAll withTestResources do
       let reqMsg4 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 twoDaysAgoTxt
 
       let msgs = concat (replicate 100 [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]) ++ [("m3", toStrict $ AE.encode reqMsg3), ("m4", toStrict $ AE.encode reqMsg4)]
-      res <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 202
       
       -- Get time range that includes all messages (3 days ago to 1 day from now)
@@ -82,14 +82,14 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response but got something else"
 
     it "should handle query filters correctly" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       let reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
 
       -- Process some test messages
       let msgs = [("m1", toStrict $ AE.encode reqMsg1), ("m2", toStrict $ AE.encode reqMsg2)]
-      res <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 2
       
       -- Get time range that includes the messages we just processed
@@ -109,13 +109,13 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response but got something else"
 
     it "should paginate results correctly" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
 
       -- Create many messages to test pagination
       let msgs = take 200 $ map ((, toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1..]
-      res <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      res <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       length res `shouldBe` 200
       
       -- Get time range that includes the messages we just processed
@@ -135,12 +135,12 @@ spec = aroundAll withTestResources do
 
   describe "Column Selection" do
     it "should return only requested columns" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
       
       let msgs = [("m1", toStrict $ AE.encode reqMsg)]
-      _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
@@ -186,13 +186,13 @@ spec = aroundAll withTestResources do
 
   describe "Pagination" do
     it "should paginate through multiple pages using cursor" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
 
       -- Create 1000 messages to ensure multiple pages (limit is 500)
       let msgs = take 1000 $ map ((, toStrict $ AE.encode reqMsg) . (\i -> "m" <> show i)) [1..]
-      _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
@@ -220,7 +220,7 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response but got something else"
 
     it "should return consistent results when using cursor" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       
       -- Create messages with different timestamps
@@ -229,7 +229,7 @@ spec = aroundAll withTestResources do
       let msg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 msg2Time
       
       let msgs = [("m1", toStrict $ AE.encode msg1), ("m2", toStrict $ AE.encode msg2)]
-      _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-120) frozenTime
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
@@ -246,7 +246,7 @@ spec = aroundAll withTestResources do
 
   describe "Time Range Selection" do
     it "should respect exact time boundaries" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       
       -- Create messages at specific times
       let oneHourAgo = addUTCTime (-3600) frozenTime
@@ -262,7 +262,7 @@ spec = aroundAll withTestResources do
       let msg3 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 msg3Txt
       
       let msgs = [("m1", toStrict $ AE.encode msg1), ("m2", toStrict $ AE.encode msg2), ("m3", toStrict $ AE.encode msg3)]
-      _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       
       -- Query for messages between 2.5 and 1.5 hours ago (should only get msg2)
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-9000) frozenTime  -- 2.5 hours ago
@@ -280,7 +280,7 @@ spec = aroundAll withTestResources do
 
     it "should handle 'since' parameter correctly" \tr -> do
       -- Using frozen time: January 1, 2025
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
+
       let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
       let oneHourBefore = toText $ formatTime defaultTimeLocale "%FT%T%QZ" (addUTCTime (-3600) frozenTime)
       let twoDaysBefore = toText $ formatTime defaultTimeLocale "%FT%T%QZ" (addUTCTime (-172800) frozenTime)
@@ -294,7 +294,7 @@ spec = aroundAll withTestResources do
                   ("m2", toStrict $ AE.encode msgHourBeforeMsg),
                   ("m3", toStrict $ AE.encode msgTwoDaysBeforeMsg)]
       
-      _ <- runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      _ <- runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
       
       -- Test "1H" - should get messages from last hour (msgNow and msgHourBefore)
       (_, pg1) <- testServant tr $ 
@@ -331,11 +331,10 @@ spec = aroundAll withTestResources do
 
   describe "Trace Tree" do
     it "should include traces field with tree structure" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
-          nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
           reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
           msgs = map (\i -> ("tm" <> show i, toStrict $ AE.encode reqMsg)) ([1 .. 5] :: [Int])
-      void $ runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      void $ runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
@@ -353,12 +352,11 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response"
 
     it "traces should match request vecs trace IDs" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
-          nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
           reqMsg1 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
           reqMsg2 = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg2 nowTxt
           msgs = [("tt1", toStrict $ AE.encode reqMsg1), ("tt2", toStrict $ AE.encode reqMsg2)]
-      void $ runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      void $ runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
@@ -376,11 +374,10 @@ spec = aroundAll withTestResources do
         _ -> error "Expected JSON response"
 
     it "children map values reference valid span IDs" \tr -> do
-      let frozenTime = Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime
-          nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
+      let nowTxt = toText $ formatTime defaultTimeLocale "%FT%T%QZ" frozenTime
           reqMsg = Unsafe.fromJust $ convert $ testRequestMsgs.reqMsg1 nowTxt
           msgs = map (\i -> ("cv" <> show i, toStrict $ AE.encode reqMsg)) ([1 .. 10] :: [Int])
-      void $ runTestBackground tr.trATCtx $ processMessages msgs HashMap.empty
+      void $ runTestBackground frozenTime tr.trATCtx $ processMessages msgs HashMap.empty
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime

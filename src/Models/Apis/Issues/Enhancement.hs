@@ -128,17 +128,17 @@ buildTitlePrompt issue =
             ("Generate a concise title for this log pattern rate change. Title: " <> issue.title)
 
       systemPrompt =
-        unlines
-          [ "You are an API monitoring assistant. Generate clear, actionable titles for API issues."
-          , "Keep titles under 80 characters."
-          , "Focus on the impact and what changed."
-          , "Use present tense and active voice."
-          , "Examples:"
-          , "- 'New User Authentication Endpoint Added to Auth Service'"
-          , "- 'Breaking Change: 5 Required Fields Removed from Order Response'"
-          , "- 'Payment Service Schema Updated with 3 New Optional Fields'"
-          , "- 'Critical: NullPointerException in Cart Service Checkout Flow'"
-          ]
+        [text|
+          You are an API monitoring assistant. Generate clear, actionable titles for API issues.
+          Keep titles under 80 characters.
+          Focus on the impact and what changed.
+          Use present tense and active voice.
+          Examples:
+          - 'New User Authentication Endpoint Added to Auth Service'
+          - 'Breaking Change: 5 Required Fields Removed from Order Response'
+          - 'Payment Service Schema Updated with 3 New Optional Fields'
+          - 'Critical: NullPointerException in Cart Service Checkout Flow'
+          |]
    in systemPrompt <> "\n\n" <> baseContext
 
 

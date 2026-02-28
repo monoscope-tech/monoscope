@@ -30,6 +30,6 @@ dev2 = do
   now <- getCurrentTime
   -- _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18
   let pids = V.singleton $ UUIDId $ Unsafe.fromJust $ UUID.fromString "00000000-0000-0000-0000-000000000000"
-  _ <- runTestBackground ctx $ BackgroundJobs.generateOtelFacetsBatch pids now
+  _ <- runTestBackground now ctx $ BackgroundJobs.generateOtelFacetsBatch pids now
 
   pass

@@ -186,8 +186,7 @@ data NotificationChannel
   | NPagerduty
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "N", DAE.CamelToSnake]] NotificationChannel
-  deriving (FromField, ToField) via WrappedEnumSC "N" NotificationChannel
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "N" NotificationChannel
 
 
 instance HasField "toText" NotificationChannel Text where
@@ -468,8 +467,7 @@ type QueryLibItemId = UUIDId "querylib"
 
 data QueryLibType = QLTHistory | QLTSaved
   deriving (Eq, Generic, NFData, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.StripPrefix "QLT", DAE.CamelToSnake]] QueryLibType
-  deriving (FromField, ToField) via WrappedEnumSC "QLT" QueryLibType
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "QLT" QueryLibType
 
 
 data QueryLibItem = QueryLibItem

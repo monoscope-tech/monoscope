@@ -165,7 +165,7 @@ spec = aroundAll withTestResources do
       logBackgroundJobsInfo tr.trLogger pendingJobs
 
       -- Run only NewAnomaly jobs to create issues from anomalies
-      _ <- runBackgroundJobsWhere tr.trATCtx $ \case
+      _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
 

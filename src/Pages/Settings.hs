@@ -54,7 +54,6 @@ import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (DiscordData (..), PagerdutyData (..), SlackData (..), getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData)
-import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.Projects qualified as Projects
@@ -66,7 +65,7 @@ import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCf
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
-import Pkg.Mail (sampleAlert, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
+import Pkg.Mail (sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Relude hiding (ask, asks)
 import Servant (err400, err404, errBody)
 import System.Config
@@ -467,7 +466,7 @@ notificationsTestPostH pid TestForm{..} = do
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
   project <- Projects.projectById pid >>= maybe (throwError err404) pure
-  let alert = bool (sampleAlert (fromMaybe ApiChange $ parseIssueType issueType) project.title) (sampleReport project.title) (issueType == "report")
+  let alert = bool (sampleAlertByIssueTypeText issueType project.title) (sampleReport project.title) (issueType == "report")
       getTeam tid = listToMaybe <$> getTeamsById pid (V.singleton tid)
 
   Log.logTrace "Sending test notification" (channel, pid, issueType)
@@ -477,6 +476,9 @@ notificationsTestPostH pid TestForm{..} = do
       fullProjectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
       testTemplate = case issueType of
         "runtime_exception" -> ET.runtimeErrorsEmail project.title (fullProjectUrl <> "/issues/") []
+        "escalating_errors" -> ET.escalatingErrorsEmail project.title (fullProjectUrl <> "/issues/") []
+        "regressed_errors" -> ET.regressedErrorsEmail project.title (fullProjectUrl <> "/issues/") []
+        "error_spike" -> ET.errorSpikesEmail project.title (fullProjectUrl <> "/issues/") []
         "report" -> ET.sampleWeeklyReport "" ""
         _ -> ET.anomalyEndpointEmail "Test User" project.title (fullProjectUrl <> "/issues") ["GET /api/v1/test"]
       sendTestEmail email = let (subj, html) = testTemplate; subj' = "[Test] " <> subj in sendRenderedEmail email subj' (ET.renderEmail subj' html)
@@ -487,16 +489,16 @@ notificationsTestPostH pid TestForm{..} = do
     ("all", Just tid) ->
       getTeam tid >>= traverse_ \t -> do
         resolveEmails t >>= mapM_ sendTestEmail
-        forM_ t.slack_channels $ sendSlackAlert alert pid project.title . Just
-        forM_ t.discord_channels $ sendDiscordAlert alert pid project.title . Just
+        forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just)
+        forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just)
         unless (V.null t.phone_numbers) $ sendWhatsAppAlert alert pid project.title t.phone_numbers
         forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
     ("email", Just tid) -> getTeam tid >>= traverse_ (resolveEmails >=> mapM_ sendTestEmail)
     ("email", Nothing) -> forM_ project.notifyEmails sendTestEmail
-    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels $ sendSlackAlert alert pid project.title . Just
-    ("slack", Nothing) -> getProjectSlackData pid >>= traverse_ \s -> sendSlackAlert alert pid project.title (Just s.channelId)
-    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels $ sendDiscordAlert alert pid project.title . Just
-    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId $ sendDiscordAlert alert pid project.title . Just
+    ("slack", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.slack_channels (sendSlackAlert alert pid project.title . Just)
+    ("slack", Nothing) -> getProjectSlackData pid >>= traverse_ \s -> void $ sendSlackAlert alert pid project.title (Just s.channelId)
+    ("discord", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.discord_channels (sendDiscordAlert alert pid project.title . Just)
+    ("discord", Nothing) -> getDiscordDataByProjectId pid >>= traverse_ \d -> forM_ d.notifsChannelId (sendDiscordAlert alert pid project.title . Just)
     ("whatsapp", _) -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
     ("pagerduty", Just tid) -> getTeam tid >>= traverse_ \t -> forM_ t.pagerduty_services \k -> sendPagerdutyAlertToService k alert project.title projectUrl
     ("pagerduty", Nothing) -> getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title projectUrl

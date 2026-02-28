@@ -167,7 +167,7 @@ isPagerdutyNotification = isNotificationType \case PagerdutyNotification n -> Ju
 createTestTeam :: TestResources -> Projects.ProjectId -> [Text] -> IO UUID.UUID
 createTestTeam tr pid slackChannels = do
   teamId <- runQueryEffect tr $ DB.query_ [sql|SELECT gen_random_uuid()|] <&> fromMaybe UUID.nil . listToMaybe . fmap fromOnly
-  runTestBg tr $ void $ DB.execute
+  runTestBg frozenTime tr $ void $ DB.execute
     [sql|INSERT INTO projects.teams (id, project_id, name, description, handle, members, slack_channels, discord_channels, phone_numbers, pagerduty_services)
          VALUES (?, ?, 'Test Team', 'Test team', 'test-team', '{}', ?, '{}', '{}', '{}')
          ON CONFLICT (id) DO UPDATE SET slack_channels = EXCLUDED.slack_channels|]
@@ -178,7 +178,7 @@ createTestTeam tr pid slackChannels = do
 createTestTeamWithPagerduty :: TestResources -> Projects.ProjectId -> [Text] -> IO UUID.UUID
 createTestTeamWithPagerduty tr pid pagerdutyServices = do
   teamId <- runQueryEffect tr $ DB.query_ [sql|SELECT gen_random_uuid()|] <&> fromMaybe UUID.nil . listToMaybe . fmap fromOnly
-  runTestBg tr $ void $ DB.execute
+  runTestBg frozenTime tr $ void $ DB.execute
     [sql|INSERT INTO projects.teams (id, project_id, name, description, handle, members, slack_channels, discord_channels, phone_numbers, pagerduty_services)
          VALUES (?, ?, 'PD Test Team', 'PagerDuty test team', 'pd-test-team', '{}', '{}', '{}', '{}', ?)
          ON CONFLICT (id) DO UPDATE SET pagerduty_services = EXCLUDED.pagerduty_services|]
@@ -192,20 +192,20 @@ setupWhatsappNumber tr pid number = void $ withResource tr.trPool \conn ->
 
 
 setupPagerdutyData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupPagerdutyData tr pid integrationKey = runTestBg tr $ void $ DB.execute
+setupPagerdutyData tr pid integrationKey = runTestBg frozenTime tr $ void $ DB.execute
   [sql|INSERT INTO apis.pagerduty (project_id, integration_key) VALUES (?, ?) ON CONFLICT (project_id) DO UPDATE SET integration_key = EXCLUDED.integration_key|]
   (pid, integrationKey)
 
 
 setupDiscordDataWithChannel :: TestResources -> Projects.ProjectId -> Text -> Text -> IO ()
-setupDiscordDataWithChannel tr pid guildId channelId = runTestBg tr $ void $ DB.execute
+setupDiscordDataWithChannel tr pid guildId channelId = runTestBg frozenTime tr $ void $ DB.execute
   [sql|INSERT INTO apis.discord (project_id, guild_id, notifs_channel_id) VALUES (?, ?, ?)
        ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id, notifs_channel_id = EXCLUDED.notifs_channel_id|]
   (pid, guildId, channelId)
 
 
 clearTestHistory :: TestResources -> Projects.ProjectId -> IO ()
-clearTestHistory tr pid = runTestBg tr $ void $ DB.execute
+clearTestHistory tr pid = runTestBg frozenTime tr $ void $ DB.execute
   [sql|DELETE FROM apis.notification_test_history WHERE project_id = ?|] (Only pid)
 
 

@@ -9,9 +9,15 @@ module Pkg.EmailTemplates (
   projectCreatedEmail,
   projectDeletedEmail,
   runtimeErrorsEmail,
+  escalatingErrorsEmail,
+  regressedErrorsEmail,
+  errorSpikesEmail,
   anomalyEndpointEmail,
+  issueAssignedEmail,
   weeklyReportEmail,
   WeeklyReportData (..),
+  logPatternEmail,
+  logPatternRateChangeEmail,
 
   -- * Sample data for previews
   sampleProjectInvite,
@@ -19,15 +25,20 @@ module Pkg.EmailTemplates (
   sampleProjectDeleted,
   sampleRuntimeErrors,
   sampleAnomalyEndpoint,
+  sampleIssueAssigned,
   sampleWeeklyReport,
+  sampleLogPattern,
+  sampleLogPatternRateChange,
 ) where
 
 import Data.Default (def)
+import Data.Text qualified as T
 import Data.Time (formatTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Lucid
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Pkg.DeriveUtils (UUIDId (..))
@@ -207,6 +218,14 @@ emailDivider :: Html ()
 emailDivider = hr_ [class_ "divider"]
 
 
+metaCell :: Text -> Text -> Html ()
+metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
+  $ span_ [class_ "error-card-meta"] do
+    b_ [class_ "error-card-label"] $ toHtml @Text label
+    " "
+    toHtml @Text val
+
+
 emailHelpLinks :: Html ()
 emailHelpLinks = p_ do
   "Need help getting started? Check out our "
@@ -281,13 +300,57 @@ projectDeletedEmail userName projectName =
 -- Runtime Errors Template
 -- =============================================================================
 
-runtimeErrorsEmail :: Text -> Text -> [RequestDumps.ATError] -> (Text, Html ())
+runtimeErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
 runtimeErrorsEmail projectName errorsUrl errors =
-  ( "[···] New Runtime Exception(s) Detected - " <> projectName
+  runtimeErrorVariantEmail
+    "New Runtime Error(s)"
+    "[···] New Runtime Exception(s) Detected - "
+    projectName
+    errorsUrl
+    errors
+    "We've detected a new runtime error in your "
+
+
+escalatingErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
+escalatingErrorsEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail
+    "Escalating Runtime Error(s)"
+    "[···] Escalating Runtime Error(s) Detected - "
+    projectName
+    errorsUrl
+    errors
+    "We've detected escalating runtime errors in your "
+
+
+regressedErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
+regressedErrorsEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail
+    "Regressed Runtime Error(s)"
+    "[···] Regressed Runtime Error(s) Detected - "
+    projectName
+    errorsUrl
+    errors
+    "We've detected regressed runtime errors in your "
+
+
+errorSpikesEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
+errorSpikesEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail
+    "Runtime Error Spike(s)"
+    "[···] Runtime Error Spike(s) Detected - "
+    projectName
+    errorsUrl
+    errors
+    "We've detected a runtime error spike in your "
+
+
+runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Text -> (Text, Html ())
+runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intro =
+  ( subjectPrefix <> projectName
   , emailBody do
-      h1_ "New Runtime Error(s)"
+      h1_ $ toHtml heading
       p_ do
-        "We've detected a new runtime error in your "
+        toHtml intro
         b_ $ toHtml projectName
         " project. A copy of this email was sent to all members of the project."
       emailDivider
@@ -301,7 +364,7 @@ runtimeErrorsEmail projectName errorsUrl errors =
   )
 
 
-errorCard :: RequestDumps.ATError -> Html ()
+errorCard :: ErrorPatterns.ATError -> Html ()
 errorCard e =
   table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
     tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
@@ -314,17 +377,11 @@ errorCard e =
           metaCell "When:" $ toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
           metaCell "Technology:" $ maybe "" (toText . show) e.technology
         tr_ do
-          metaCell "Hash:" $ fromMaybe "" e.hash
+          metaCell "Hash:" e.hash
           metaCell "Request:" $ fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath
     tr_ $ td_ [style_ "padding: 10px 20px 20px 20px;"] do
       h3_ [style_ "margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"] "Stack Trace"
       div_ [class_ "error-card-stack"] $ toHtml e.stackTrace
-  where
-    metaCell label val = td_ [width_ "50%", style_ "padding-bottom: 10px;"]
-      $ span_ [class_ "error-card-meta"] do
-        b_ [class_ "error-card-label"] $ toHtml @Text label
-        " "
-        toHtml @Text val
 
 
 -- =============================================================================
@@ -353,6 +410,36 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
       br_ []
       emailSignoff
       emailFallbackUrl anomalyUrl
+  )
+
+
+-- =============================================================================
+-- Issue Assigned Template
+-- =============================================================================
+
+issueAssignedEmail :: Text -> Text -> Text -> Text -> Text -> Text -> (Text, Html ())
+issueAssignedEmail userName projectName issueTitle issueUrl errorType errorMessage =
+  ( "[···] Issue Assigned: " <> issueTitle
+  , emailBody do
+      emailGreeting (Just userName)
+      p_ do
+        "You have been assigned to an issue in the "
+        b_ $ toHtml projectName
+        " project."
+      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+        tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
+          p_ [class_ "error-card-header"] $ toHtml errorType
+          p_ [class_ "error-card-sub"] $ toHtml errorMessage
+        tr_
+          $ td_ [style_ "padding: 10px 20px 20px 20px;"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+          $ tr_ do
+            metaCell "Issue:" issueTitle
+            metaCell "Project:" projectName
+      emailButton issueUrl "View Issue"
+      emailDivider
+      emailSignoff
+      emailFallbackUrl issueUrl
   )
 
 
@@ -506,31 +593,35 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
   where
     sampleError1 =
       def
-        { RequestDumps.errorType = "TypeError"
-        , RequestDumps.message = "Cannot read property 'map' of undefined"
-        , RequestDumps.rootErrorType = "TypeError"
-        , RequestDumps.rootErrorMessage = "Cannot read property 'map' of undefined"
-        , RequestDumps.stackTrace = "at Array.map (<anonymous>)\n  at processItems (src/handlers/items.js:42:15)\n  at async Router.handle (node_modules/express/lib/router.js:174:12)"
-        , RequestDumps.hash = Just "abc123def"
-        , RequestDumps.requestMethod = Just "GET"
-        , RequestDumps.requestPath = Just "/api/v1/items"
-        , RequestDumps.technology = Just RequestDumps.JsExpress
+        { ErrorPatterns.errorType = "TypeError"
+        , ErrorPatterns.message = "Cannot read property 'map' of undefined"
+        , ErrorPatterns.rootErrorType = "TypeError"
+        , ErrorPatterns.rootErrorMessage = "Cannot read property 'map' of undefined"
+        , ErrorPatterns.stackTrace = "at Array.map (<anonymous>)\n  at processItems (src/handlers/items.js:42:15)\n  at async Router.handle (node_modules/express/lib/router.js:174:12)"
+        , ErrorPatterns.hash = "abc123def"
+        , ErrorPatterns.requestMethod = Just "GET"
+        , ErrorPatterns.requestPath = Just "/api/v1/items"
+        , ErrorPatterns.technology = Just RequestDumps.JsExpress
         }
     sampleError2 =
       def
-        { RequestDumps.errorType = "NullPointerException"
-        , RequestDumps.message = "Attempt to invoke method on null reference"
-        , RequestDumps.rootErrorType = "NullPointerException"
-        , RequestDumps.rootErrorMessage = "null reference in UserService.getUser()"
-        , RequestDumps.stackTrace = "at com.example.UserService.getUser(UserService.java:56)\n  at com.example.ApiController.handleRequest(ApiController.java:123)"
-        , RequestDumps.hash = Just "xyz789abc"
-        , RequestDumps.requestMethod = Just "POST"
-        , RequestDumps.requestPath = Just "/api/v1/users"
+        { ErrorPatterns.errorType = "NullPointerException"
+        , ErrorPatterns.message = "Attempt to invoke method on null reference"
+        , ErrorPatterns.rootErrorType = "NullPointerException"
+        , ErrorPatterns.rootErrorMessage = "null reference in UserService.getUser()"
+        , ErrorPatterns.stackTrace = "at com.example.UserService.getUser(UserService.java:56)\n  at com.example.ApiController.handleRequest(ApiController.java:123)"
+        , ErrorPatterns.hash = "xyz789abc"
+        , ErrorPatterns.requestMethod = Just "POST"
+        , ErrorPatterns.requestPath = Just "/api/v1/users"
         }
 
 
 sampleAnomalyEndpoint :: (Text, Html ())
 sampleAnomalyEndpoint = anomalyEndpointEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id/issues" ["POST /api/v1/orders", "GET /api/v1/orders/:id"]
+
+
+sampleIssueAssigned :: (Text, Html ())
+sampleIssueAssigned = issueAssignedEmail "Jane Doe" "My API Project" "TypeError: Cannot read property 'map' of undefined" "https://app.monoscope.tech/p/sample-id/anomalies/by_hash/abc123" "TypeError" "Cannot read property 'map' of undefined"
 
 
 sampleWeeklyReport :: Text -> Text -> (Text, Html ())
@@ -555,3 +646,123 @@ sampleWeeklyReport eventsChart errorsChart =
       , slowQueries = V.fromList [("SELECT * FROM users WHERE email = $1", 3400, 1250 :: Int)]
       , freeTierExceeded = False
       }
+
+
+sampleLogPattern :: (Text, Html ())
+sampleLogPattern =
+  logPatternEmail
+    "My API Project"
+    "https://app.monoscope.tech/p/sample-id/anomalies/sample-issue"
+    "Failed to connect to database: connection refused at <*>"
+    (Just "Failed to connect to database: connection refused at 10.0.0.1:5432")
+    (Just "error")
+    (Just "api-server")
+    "body"
+    42
+
+
+sampleLogPatternRateChange :: (Text, Html ())
+sampleLogPatternRateChange =
+  logPatternRateChangeEmail
+    "My API Project"
+    "https://app.monoscope.tech/p/sample-id/anomalies/sample-issue"
+    "Request timeout after <*> ms for endpoint <*>"
+    (Just "Request timeout after 30000 ms for endpoint /api/users")
+    (Just "warning")
+    (Just "api-gateway")
+    "spike"
+    150.0
+    12.0
+    1150.0
+
+
+-- =============================================================================
+-- Log Pattern Template
+-- =============================================================================
+
+logPatternEmail :: Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Int -> (Text, Html ())
+logPatternEmail projectName issueUrl patternText sampleMessageM logLevelM serviceNameM sourceField occurrenceCount =
+  ( "[···] New Log Pattern Detected - " <> projectName
+  , emailBody do
+      h1_ "New Log Pattern Detected"
+      p_ do
+        "A new log pattern has been detected in your "
+        b_ $ toHtml projectName
+        " project."
+      emailDivider
+      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+        tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
+          p_ [class_ "error-card-header", style_ "color: #377cfb;"] "Pattern"
+          div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 patternText
+        whenJust sampleMessageM \msg ->
+          tr_ $ td_ [style_ "padding: 10px 20px;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #57606a;"] "Sample Message"
+            div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 msg
+        tr_
+          $ td_ [style_ "padding: 10px 20px 15px 20px;"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+            tr_ do
+              metaCell "Level:" $ fromMaybe "—" logLevelM
+              metaCell "Service:" $ fromMaybe "—" serviceNameM
+            tr_ do
+              metaCell "Source:" sourceField
+              metaCell "Occurrences:" $ show occurrenceCount
+      emailButton issueUrl "View Log Pattern"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl issueUrl
+  )
+
+
+-- =============================================================================
+-- Log Pattern Rate Change Template
+-- =============================================================================
+
+logPatternRateChangeEmail :: Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> (Text, Html ())
+logPatternRateChangeEmail projectName issueUrl patternText sampleMessageM logLevelM serviceNameM direction currentRate baselineMean changePercent =
+  ( "[···] Log Pattern Volume " <> T.toTitle direction <> " - " <> projectName
+  , emailBody do
+      h1_ $ toHtml $ "Log Pattern Volume " <> T.toTitle direction
+      p_ do
+        "A log pattern volume "
+        b_ $ toHtml direction
+        " has been detected in your "
+        b_ $ toHtml projectName
+        " project."
+      emailDivider
+      -- Rate change stats
+      div_ [class_ "highlight-box"] do
+        table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ do
+          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Current Rate"
+            p_ [style_ "margin: 0; font-size: 22px; font-weight: 700;"] $ toHtml $ show (round currentRate :: Int) <> "/hr"
+          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0; border-left: 1px solid #dee2e7;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Baseline"
+            p_ [style_ "margin: 0; font-size: 22px; font-weight: 700;"] $ toHtml $ show (round baselineMean :: Int) <> "/hr"
+          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0; border-left: 1px solid #dee2e7;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Change"
+            p_ [style_ $ "margin: 0; font-size: 22px; font-weight: 700; color: " <> if direction == "spike" then "#cf222e" else "#1a7f37"] $ toHtml $ show (round changePercent :: Int) <> "%"
+      -- Pattern card
+      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
+        tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
+          p_ [class_ "error-card-header", style_ $ "color: " <> if direction == "spike" then "#cf222e" else "#bf8700"] "Pattern"
+          div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 patternText
+        whenJust sampleMessageM \msg ->
+          tr_ $ td_ [style_ "padding: 10px 20px;"] do
+            p_ [style_ "margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #57606a;"] "Sample Message"
+            div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 msg
+        tr_
+          $ td_ [style_ "padding: 10px 20px 15px 20px;"]
+          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+          $ tr_ do
+            metaCell "Level:" $ fromMaybe "—" logLevelM
+            metaCell "Service:" $ fromMaybe "—" serviceNameM
+      emailButton issueUrl "View Log Pattern"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl issueUrl
+  )

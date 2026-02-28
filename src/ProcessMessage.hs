@@ -12,7 +12,6 @@ module ProcessMessage (
   fieldsToFieldDTO,
   sortVector,
   ensureUrlParams,
-  processErrors,
   dedupFields,
 )
 where
@@ -44,7 +43,6 @@ import Data.Time.LocalTime (ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple (Query)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent)
@@ -52,7 +50,6 @@ import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -69,7 +66,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
-import Utils (DBField (), b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
+import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
 {--
@@ -591,23 +588,6 @@ redactJSON paths' = redactJSON' (V.map stripPrefixDot paths')
 
 replaceNullChars :: Text -> Text
 replaceNullChars = T.replace "\\u0000" ""
-
-
--- | Process errors with optional HTTP-specific fields
--- If HTTP fields are not provided, they remain as Nothing in the error record
-processErrors :: Projects.ProjectId -> Maybe RequestDumps.SDKTypes -> Maybe Text -> Maybe Text -> RequestDumps.ATError -> (RequestDumps.ATError, Query, [DBField])
-processErrors pid maybeSdkType maybeMethod maybePath err = (normalizedError, q, params)
-  where
-    (q, params) = Anomalies.insertErrorQueryAndParams pid normalizedError
-    normalizedError =
-      err
-        { RequestDumps.projectId = Just pid
-        , RequestDumps.hash = Just $ fromMaybe defaultHash err.hash
-        , RequestDumps.technology = maybeSdkType <|> err.technology
-        , RequestDumps.requestMethod = maybeMethod <|> err.requestMethod
-        , RequestDumps.requestPath = maybePath <|> err.requestPath
-        }
-    defaultHash = toXXHash (pid.toText <> fromMaybe "" err.serviceName <> err.errorType <> replaceAllFormats (err.message <> err.stackTrace) <> maybe "" show maybeSdkType)
 
 
 sortVector :: Ord a => V.Vector a -> V.Vector a

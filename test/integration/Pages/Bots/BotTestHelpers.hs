@@ -74,7 +74,6 @@ import Data.Effectful.UUID (runUUID)
 import Data.Effectful.Wreq (runHTTPWreq)
 import Data.Pool (withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
@@ -116,7 +115,7 @@ getOpenAIKey tr = tr.trATCtx.env.openaiApiKey
 
 
 setupSlackData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupSlackData tr pid teamId = void $ runTestBg tr $ Slack.insertAccessToken pid ("https://hooks.slack.com/test/" <> teamId) teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token"
+setupSlackData tr pid teamId = void $ runTestBg frozenTime tr $ Slack.insertAccessToken pid ("https://hooks.slack.com/test/" <> teamId) teamId "C_NOTIF_CHANNEL" ("Test Workspace " <> teamId) "x-bot-token"
 
 
 setupDiscordData :: TestResources -> Projects.ProjectId -> Text -> IO ()

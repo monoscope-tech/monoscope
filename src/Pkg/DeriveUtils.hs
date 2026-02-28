@@ -2,6 +2,7 @@
 
 module Pkg.DeriveUtils (
   AesonText (..),
+  BaselineState (..),
   DB,
   PGTextArray (..),
   UUIDId (..),
@@ -151,29 +152,41 @@ newtype WrappedEnumSC (prefix :: Symbol) a = WrappedEnumSC a
   deriving (Generic)
 
 
+encodeEnumSC :: forall prefix a. (KnownSymbol prefix, Show a) => a -> String
+encodeEnumSC = quietSnake . fromString . drop (length $ symbolVal (Proxy @prefix)) . show
+
+
+decodeEnumSC :: forall prefix a. (KnownSymbol prefix, Read a) => String -> Maybe a
+decodeEnumSC s = readMaybe $ symbolVal (Proxy @prefix) <> toPascal (fromSnake s)
+
+
 instance (KnownSymbol prefix, Show a) => ToField (WrappedEnumSC prefix a) where
-  toField (WrappedEnumSC a) = toField . quietSnake . fromString . drop (length $ symbolVal (Proxy @prefix)) . show $ a
+  toField (WrappedEnumSC a) = toField $ encodeEnumSC @prefix a
 
 
 instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC prefix a) where
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
-    Just bss ->
-      let str = symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text (decodeUtf8 bss))
-       in case readMaybe str of
-            Just a -> pure $ WrappedEnumSC a
-            Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
+    Just bss -> maybe (returnError ConversionFailed f $ "Cannot parse: " <> str) (pure . WrappedEnumSC) $ decodeEnumSC @prefix str
+      where
+        str = toString @Text (decodeUtf8 bss)
 
 
 instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC prefix a) where
-  displayBuilder (WrappedEnumSC a) = fromString . quietSnake . drop (length $ symbolVal (Proxy @prefix)) . show $ a
+  displayBuilder (WrappedEnumSC a) = fromString $ encodeEnumSC @prefix a
+
+
+instance (KnownSymbol prefix, Show a) => AE.ToJSON (WrappedEnumSC prefix a) where
+  toJSON (WrappedEnumSC a) = AE.String . toText $ encodeEnumSC @prefix a
+
+
+instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC prefix a) where
+  parseJSON = AE.withText "WrappedEnumSC" \t ->
+    maybe (fail $ "Invalid value: " <> toString t) (pure . WrappedEnumSC) $ decodeEnumSC @prefix (toString t)
 
 
 instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC prefix a) where
-  parseUrlPiece t =
-    case readMaybe (symbolVal (Proxy @prefix) <> toPascal (fromSnake $ toString @Text t)) of
-      Just a -> Right $ WrappedEnumSC a
-      Nothing -> Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t
+  parseUrlPiece t = maybe (Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
 
 
 newtype WrappedEnumShow a = WrappedEnumShow a
@@ -192,6 +205,12 @@ instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
        in case readMaybe str of
             Just a -> pure $ WrappedEnumShow a
             Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
+
+
+data BaselineState = BSLearning | BSEstablished
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Default, NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "BS" BaselineState
 
 
 connectPostgreSQL :: ByteString -> IO Connection

@@ -67,10 +67,10 @@ import System.Types (DB)
 
 
 data Permissions
-  = PAdmin
-  | PView
+  = PView
   | PEdit
-  deriving stock (Eq, Generic, Read, Show)
+  | PAdmin
+  deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "P" Permissions
 

@@ -15,6 +15,11 @@ module Pages.Anomalies (
   AnomalyAction (..),
   IssueVM (..),
   issueColumns,
+  AssignErrorForm (..),
+  assignErrorPostH,
+  resolveErrorPostH,
+  ErrorSubscriptionForm (..),
+  errorSubscriptionPostH,
   -- AI Chat
   AIChatForm (..),
   aiChatPostH,
@@ -22,12 +27,15 @@ module Pages.Anomalies (
 )
 where
 
+import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
+import Data.Ord (clamp)
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
@@ -42,6 +50,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import GHC.Records (HasField)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -49,16 +58,20 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_
 import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.ErrorPatterns (ErrorPatternId (..))
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.RequestDumps qualified as RequestDump
+import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
+import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (BadgeColor (..), PanelCfg (..), emptyState_, iconBadgeSq_, panel_, resizer_, statBox_)
@@ -181,24 +194,48 @@ anomalyDetailCore pid firstM fetchIssue = do
   issueM <- fetchIssue pid
   now <- Time.currentTime
   let baseBwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Anomaly Detail", config = appCtx.config}
-  issueM & maybe (addErrorToast "Issue not found" Nothing >> addRespHeaders (PageCtx baseBwconf $ toHtml ("Issue not found" :: Text))) \issue -> do
-    let bwconf =
-          baseBwconf
-            { pageActions = Just $ div_ [class_ "flex gap-2"] do
-                anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
-                anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
-            }
-    errorM <- bool (pure Nothing) (Anomalies.errorByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
-    (trItem, spanRecs) <-
-      errorM & maybe (pure (Nothing, V.empty)) \err ->
-        let targetTIdM = bool err.recentTraceId err.firstTraceId (isJust firstM)
-            targetTme = bool (zonedTimeToUTC err.updatedAt) (zonedTimeToUTC err.createdAt) (isJust firstM)
-         in targetTIdM & maybe (pure (Nothing, V.empty)) \tid -> do
-              trM <- Telemetry.getTraceDetails pid tid (Just targetTme) now
-              trM & maybe (pure (Nothing, V.empty)) \traceItem -> do
-                spanRecords' <- Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
-                pure (Just traceItem, V.fromList spanRecords')
-    addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM)
+  case issueM of
+    Nothing -> do
+      addErrorToast "Issue not found" Nothing
+      addRespHeaders
+        $ PageCtx baseBwconf
+        $ toHtml ("Issue not found" :: Text)
+    Just issue -> do
+      errorM <-
+        issue.issueType & \case
+          Issues.RuntimeException -> ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now
+          _ -> pure Nothing
+      (members, canResolve) <- case errorM of
+        Just _ -> do
+          userPermission <- ProjectMembers.getUserPermission pid sess.user.id
+          ms <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
+          let cr =
+                userPermission
+                  >= Just ProjectMembers.PEdit
+                  || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
+          pure (ms, cr)
+        Nothing -> pure (V.empty, False)
+      let bwconf =
+            baseBwconf
+              { pageActions = Just $ div_ [class_ "flex gap-2"] do
+                  anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
+                  anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
+                  when (issue.issueType == Issues.RuntimeException) do
+                    whenJust errorM \errL -> do
+                      errorResolveAction pid errL.base.id errL.base.state canResolve
+                      errorSubscriptionAction pid errL.base
+              }
+      (trItem, spanRecs) <-
+        fromMaybe (Nothing, V.empty) <$> runMaybeT do
+          errL <- hoistMaybe errorM
+          let err = errL.base
+              isFirst = isJust firstM
+          tId <- hoistMaybe $ bool err.recentTraceId err.firstTraceId isFirst
+          let tme = bool (zonedTimeToUTC err.updatedAt) (zonedTimeToUTC err.createdAt) isFirst
+          traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId (Just tme) now
+          spanRecs' <- lift $ Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
+          pure (Just traceItem, V.fromList spanRecs')
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members
 
 
 -- | Abbreviate time unit (e.g., "hours" → "hrs")
@@ -238,14 +275,14 @@ timeStatBox_ title timeStr
   | otherwise = pass
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe Anomalies.ATError -> UTCTime -> Bool -> Html ()
-anomalyDetailPage pid issue tr otellogs errM now isFirst = do
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
       severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
       severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
       severityBadge _ = pass
-  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 pb-32"] do
+  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 overflow-auto pb-32"] do
     -- Header
     div_ [class_ "flex flex-col gap-3"] do
       div_ [class_ "flex gap-2 flex-wrap items-center"] do
@@ -253,27 +290,6 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
         severityBadge issue.severity
       h3_ [class_ "text-textStrong text-2xl font-semibold"] $ toHtml issue.title
       p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
-
-    -- Metrics & Timeline Row
-    div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4"] do
-      whenJust errM \err -> do
-        timeStatBox_ "First Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.createdAt
-        timeStatBox_ "Last Seen" $ prettyTimeAuto now $ zonedTimeToUTC err.updatedAt
-      -- Timeline (4 columns)
-      div_ [class_ "col-span-4"]
-        $ Widget.widget_
-        $ (def :: Widget.Widget)
-          { Widget.standalone = Just True
-          , Widget.id = Just $ issueId <> "-timeline"
-          , Widget.wType = Widget.WTTimeseries
-          , Widget.title = Just "Error trends"
-          , Widget.showTooltip = Just True
-          , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
-          , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-          , Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code"
-          , Widget._projectId = Just issue.projectId
-          , Widget.hideLegend = Just True
-          }
     -- Two Column Layout
     div_ [class_ "flex flex-col gap-4"] do
       div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
@@ -288,8 +304,9 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
               $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
               $ toHtml exceptionData.stackTrace
-            whenJust errM \err -> do
-              let detailItem :: (Text, Text, Text) -> HtmlT Identity ()
+            whenJust errM \errL -> do
+              let err = errL.base
+                  detailItem :: (Text, Text, Text) -> HtmlT Identity ()
                   detailItem (icon, lbl, value) = div_ [class_ "flex items-center gap-2"] do
                     faSprite_ icon "regular" "w-3 h-3"
                     div_ [] do
@@ -308,7 +325,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
                     detailItem
                 div_ [class_ "flex items-center gap-4"]
                   $ forM_
-                    [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.stack)
+                    [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
                     , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
                     ]
                     detailItem
@@ -396,9 +413,9 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
               whenJust (spanRecs V.!? 0) \sr ->
                 div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
-          div_ [id_ "log-content", class_ "hidden err-tab-content"]
-            $ div_ [class_ "flex flex-col gap-4"]
-            $ virtualTable pid (Just $ "/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.recentTraceId)) <> "\"")) Nothing
+        div_ [id_ "log-content", class_ "hidden err-tab-content"] do
+          div_ [class_ "flex flex-col gap-4"] do
+            virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.base.recentTraceId)) <> "\""))) Nothing
 
           div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
             let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
@@ -409,6 +426,159 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst = do
 
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
+
+
+errorAssigneeSection :: Projects.ProjectId -> Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
+errorAssigneeSection pid errIdM assigneeIdM members = do
+  let isDisabled = isNothing errIdM || V.null members
+  div_ [id_ "error-assignee", class_ "flex flex-col gap-2 border-t border-strokeWeak pt-3"] do
+    span_ [class_ "text-xs text-textWeak"] "Assignee"
+    case errIdM of
+      Nothing ->
+        select_ ([class_ "select select-sm w-full", disabled_ "true"] <> [name_ "assigneeId"]) do
+          option_ [value_ ""] "Unassigned"
+      Just errId -> do
+        let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorPatternId <> "/assign"
+        form_ [hxPost_ actionUrl, hxTarget_ "#error-assignee", hxSwap_ "outerHTML", hxTrigger_ "change"] do
+          select_
+            ( [class_ "select select-sm w-full", name_ "assigneeId"]
+                <> [disabled_ "true" | isDisabled]
+            )
+            $ do
+              option_ ([value_ ""] <> [selected_ "true" | isNothing assigneeIdM]) "Unassigned"
+              forM_ members \member -> do
+                let memberIdText = UUID.toText $ Projects.getUserId member.userId
+                    fullName = T.strip $ member.first_name <> " " <> member.last_name
+                    emailText = CI.original member.email
+                    label =
+                      if T.null fullName
+                        then emailText
+                        else fullName <> " (" <> emailText <> ")"
+                option_
+                  ([value_ memberIdText] <> [selected_ "true" | assigneeIdM == Just member.userId])
+                  $ toHtml label
+
+
+errorResolveAction :: Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> ErrorPatterns.ErrorState -> Bool -> Html ()
+errorResolveAction pid errId errState canResolve =
+  when canResolve do
+    let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText errId.unErrorPatternId <> "/resolve"
+    div_ [id_ "error-resolve-action"] do
+      if errState == ErrorPatterns.ESResolved
+        then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] "Resolved"
+        else
+          button_
+            [ class_ "btn btn-sm btn-ghost text-textSuccess hover:bg-fillSuccess-weak"
+            , hxPost_ actionUrl
+            , hxTarget_ "#error-resolve-action"
+            , hxSwap_ "outerHTML"
+            ]
+            "Resolve"
+
+
+errorSubscriptionAction :: (HasField "id" err ErrorPatterns.ErrorPatternId, HasField "notifyEveryMinutes" err Int, HasField "subscribed" err Bool) => Projects.ProjectId -> err -> Html ()
+errorSubscriptionAction pid err = do
+  let isActive = err.subscribed
+  let notifyEvery = err.notifyEveryMinutes
+  let actionUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> UUID.toText err.id.unErrorPatternId <> "/subscribe"
+  form_
+    [ id_ "issue-subscription-action"
+    , class_ "flex items-center gap-2"
+    , hxPost_ actionUrl
+    , hxTarget_ "#issue-subscription-action"
+    , hxSwap_ "outerHTML"
+    , hxTrigger_ "change"
+    ]
+    do
+      span_ [class_ "text-xs text-textWeak flex items-center gap-1"] do
+        faSprite_ "bell" "regular" "w-3 h-3"
+        "Subscribe"
+      select_ [class_ "select select-sm w-32", name_ "notifyEveryMinutes"] do
+        option_ ([value_ "0"] <> [selected_ "true" | not isActive]) "Off"
+        let opts :: [(Int, Text)]
+            opts = [(10, "10 mins"), (20, "20 mins"), (30, "30 mins"), (60, "1 hour"), (360, "6 hours"), (1440, "24 hours")]
+        forM_ opts \(val, label) ->
+          option_ ([value_ (show val)] <> [selected_ "true" | isActive && val == notifyEvery]) (toHtml label)
+
+
+newtype AssignErrorForm = AssignErrorForm
+  { assigneeId :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+newtype ErrorSubscriptionForm = ErrorSubscriptionForm
+  { notifyEveryMinutes :: Maybe Int
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuthCtx (RespHeaders (Html ()))
+assignErrorPostH pid errUuid form = do
+  (_sess, _project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  let errId = ErrorPatterns.ErrorPatternId errUuid
+      assigneeIdM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
+  members <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
+  errM <- ErrorPatterns.getErrorPatternById errId
+  let render eidM aidM = addRespHeaders $ errorAssigneeSection pid eidM aidM members
+      isMember = all (\uid -> any (\m -> m.userId == uid) members) assigneeIdM
+  case errM of
+    Nothing -> addErrorToast "Error not found" Nothing >> render Nothing Nothing
+    Just err
+      | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> render (Just err.id) err.assigneeId
+      | not isMember -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
+      | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
+      | otherwise -> do
+          now <- Time.currentTime
+          void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeIdM now
+          whenJust assigneeIdM \assigneeId ->
+            void $ liftIO $ withResource appCtx.pool \conn ->
+              createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
+          addSuccessToast "Assignee updated" Nothing
+          render (Just err.id) assigneeIdM
+
+
+resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+resolveErrorPostH pid errUuid = do
+  (sess, _project) <- Sessions.sessionAndProject pid
+  errM <- ErrorPatterns.getErrorPatternById (ErrorPatterns.ErrorPatternId errUuid)
+  userPermission <- ProjectMembers.getUserPermission pid sess.user.id
+  let canResolve err = userPermission >= Just ProjectMembers.PEdit || err.assigneeId == Just sess.user.id
+  case errM of
+    Nothing -> addErrorToast "Error not found" Nothing >> addRespHeaders mempty
+    Just err
+      | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> addRespHeaders mempty
+      | not (canResolve err) -> do
+          addErrorToast "You do not have permission to resolve this error" Nothing
+          addRespHeaders $ errorResolveAction pid err.id err.state False
+      | otherwise -> do
+          when (err.state /= ErrorPatterns.ESResolved) do
+            now <- Time.currentTime
+            void $ ErrorPatterns.resolveErrorPattern err.id now
+          addSuccessToast "Error resolved" Nothing
+          addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
+
+
+errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (RespHeaders (Html ()))
+errorSubscriptionPostH pid errUuid form = do
+  (_sess, _project) <- Sessions.sessionAndProject pid
+  let errId = ErrorPatterns.ErrorPatternId errUuid
+  errM <- ErrorPatterns.getErrorPatternById errId
+  case errM of
+    Nothing -> addErrorToast "Error not found" Nothing >> addRespHeaders mempty
+    Just err
+      | err.projectId /= pid -> addErrorToast "Error not found for this project" Nothing >> addRespHeaders mempty
+      | otherwise -> do
+          let notifyEveryRaw = fromMaybe 0 form.notifyEveryMinutes
+              notifyEvery = clamp (1, 1440) $ if notifyEveryRaw == 0 then 30 else notifyEveryRaw
+              shouldSubscribe = notifyEveryRaw > 0
+          now <- Time.currentTime
+          void $ ErrorPatterns.updateErrorPatternSubscription err.id shouldSubscribe notifyEvery now
+          addSuccessToast (if shouldSubscribe then "Subscribed to error" else "Unsubscribed from error") Nothing
+          addRespHeaders $ errorSubscriptionAction pid err{ErrorPatterns.subscribed = shouldSubscribe, ErrorPatterns.notifyEveryMinutes = notifyEvery}
 
 
 -- | Form for AI chat input
@@ -511,7 +681,7 @@ aiChatHistoryGetH pid issueId = do
 -- | Build complete system prompt for an issue (shared between POST and GET)
 buildSystemPromptForIssue :: Projects.ProjectId -> Issues.Issue -> UTCTime -> ATAuthCtx Text
 buildSystemPromptForIssue pid issue now = do
-  errorM <- bool (pure Nothing) (Anomalies.errorByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
+  errorM <- bool (pure Nothing) (ErrorPatterns.getErrorPatternByHash pid issue.endpointHash) (issue.issueType == Issues.RuntimeException)
   (traceDataM, spans) <- maybe (pure (Nothing, V.empty)) fetchTrace errorM
   alertContextM <- case (issue.issueType, AE.fromJSON @Issues.QueryAlertData (getAeson issue.issueData)) of
     (Issues.QueryAlert, AE.Success alertData) -> do
@@ -545,21 +715,20 @@ buildSystemPromptForIssue pid issue now = do
           , Just $ "- **Service**: " <> Issues.serviceLabel iss.service
           , Just $ "- **Recommended Action**: " <> iss.recommendedAction
           , alertContextM <&> \(alertData, monitorM, metricsData) -> formatCompleteAlertContext alertData monitorM metricsData
-          , errM >>= \err ->
-              Just
-                $ unlines
-                  [ ""
-                  , "## Error Details"
-                  , "- **Error Type**: " <> err.errorType
-                  , "- **Message**: " <> err.message
-                  , "- **Stack Trace**:"
-                  , "```"
-                  , err.errorData.stackTrace
-                  , "```"
-                  , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
-                  , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
-                  , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
-                  ]
+          , errM <&> \err ->
+              unlines
+                [ ""
+                , "## Error Details"
+                , "- **Error Type**: " <> err.errorType
+                , "- **Message**: " <> err.message
+                , "- **Stack Trace**:"
+                , "```"
+                , err.errorData.stackTrace
+                , "```"
+                , maybe "" ("- **Service Name**: " <>) err.errorData.serviceName
+                , maybe "" ("- **Request Method**: " <>) err.errorData.requestMethod
+                , maybe "" ("- **Request Path**: " <>) err.errorData.requestPath
+                ]
           , trDataM >>= \tr ->
               Just
                 $ unlines
@@ -718,7 +887,7 @@ parseStoredJSON = (>>= parseMaybe AE.parseJSON . getAeson)
 withIssueDataH :: (AE.FromJSON a, Applicative m) => Aeson AE.Value -> (a -> m ()) -> m ()
 withIssueDataH d f = case AE.fromJSON (getAeson d) of
   AE.Success v -> f v
-  _ -> pure ()
+  _ -> pass
 
 
 -- | Process widgets to use cached tool call data (no re-query)

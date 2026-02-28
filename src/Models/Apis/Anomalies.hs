@@ -36,7 +36,8 @@ import Data.Text.Display (Display)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity (_select, _selectWhere)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -48,20 +49,19 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.Endpoints qualified as Endpoints
+import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields qualified as Fields (
   FieldCategoryEnum,
   FieldId,
   FieldTypes,
   FormatId,
  )
-import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)
-import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import System.Types (DB)
 import Text.Megaparsec
@@ -206,8 +206,8 @@ countAnomalies :: DB es => Projects.ProjectId -> Text -> Eff es Int
 countAnomalies pid report_type = do
   result <- PG.query (Query $ encodeUtf8 q) (Only pid)
   case result of
-    [Only countt] -> return countt
-    v -> return $ length v
+    [Only countt] -> pure countt
+    v -> pure $ length v
   where
     report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
     q =
@@ -327,7 +327,7 @@ data IssuesData
   | IDNewFieldIssue NewFieldIssue
   | IDNewFormatIssue NewFormatIssue
   | IDNewEndpointIssue NewEndpointIssue
-  | IDNewRuntimeExceptionIssue RequestDumps.ATError
+  | IDNewRuntimeExceptionIssue ErrorPatterns.ATError
   | IDEmpty
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -390,7 +390,7 @@ instance FromField IssueEventAgg where
     Nothing -> returnError UnexpectedNull f ""
     Just bs -> case parseMaybe parseIssueEventAgg (BSC.unpack bs) of
       Nothing -> returnError ConversionFailed f "Failed to parse IssueEventAgg"
-      Just result -> return result
+      Just result -> pure result
 
 
 type Parser = Parsec Void String
@@ -405,7 +405,7 @@ parseIssueEventAgg = do
   str <- char '"' *> manyTill L.charLiteral (char '"')
   utcTime <- case parseUTCTime (encodeUtf8 str) of
     Left err -> fail err
-    Right time -> return time
+    Right time -> pure time
   _ <- char ')'
   pure $ IssueEventAgg cnt utcTime
 
@@ -522,13 +522,13 @@ data ATError = ATError
   , hash :: Text
   , errorType :: Text
   , message :: Text
-  , errorData :: RequestDumps.ATError
+  , errorData :: ErrorPatterns.ATError
   , firstTraceId :: Maybe Text
   , recentTraceId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "errors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
+  deriving (Entity) via (GenericEntity '[Schema "apis", TableName "error_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField, ToField) via Aeson ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
@@ -536,33 +536,23 @@ data ATError = ATError
 errorsByHashes :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [ATError]
 errorsByHashes pid hashes
   | V.null hashes = pure []
-  | otherwise = PG.query q (pid, hashes)
-  where
-    q =
-      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id
-            FROM apis.errors WHERE project_id=? AND hash=ANY(?); |]
+  | otherwise = PG.query (_select @ATError <> " WHERE project_id=? AND hash=ANY(?)") (pid, hashes)
 
 
 errorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ATError)
-errorByHash pid hash = do
-  results <- PG.query q (pid, hash)
-  return $ listToMaybe results
-  where
-    q =
-      [sql| SELECT id, created_at, updated_at, project_id, hash, error_type, message, error_data, first_trace_id, recent_trace_id
-            FROM apis.errors WHERE project_id=? AND hash=?; |]
+errorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @ATError [[field| project_id |], [field| hash |]]) (pid, hash)
 
 
-insertErrorQueryAndParams :: Projects.ProjectId -> RequestDumps.ATError -> (Query, [DBField])
+insertErrorQueryAndParams :: Projects.ProjectId -> ErrorPatterns.ATError -> (Query, [DBField])
 insertErrorQueryAndParams pid err = (q, params)
   where
     q =
-      [sql| insert into apis.errors (project_id, created_at, hash, error_type, message, error_data, first_trace_id, recent_trace_id) VALUES (?,?,?,?,?,?,?,?)
+      [sql| insert into apis.error_patterns (project_id, created_at, hash, error_type, message, error_data, first_trace_id, recent_trace_id) VALUES (?,?,?,?,?,?,?,?)
             ON CONFLICT (project_id, hash) DO UPDATE SET updated_at = EXCLUDED.created_at, recent_trace_id = EXCLUDED.recent_trace_id; |]
     params =
       [ MkDBField pid
       , MkDBField err.when
-      , MkDBField $ Unsafe.fromJust err.hash -- Illegal should not happen
+      , MkDBField err.hash
       , MkDBField err.errorType
       , MkDBField err.message
       , MkDBField err
