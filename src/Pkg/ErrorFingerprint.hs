@@ -108,7 +108,6 @@ splitDotted q = case T.breakOnEnd "." q of
   (modDot, fn) -> (T.dropEnd 1 modDot, fn)
 
 
-
 -- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
 -- Format: package.function(args) or /path/to/file.go:123 +0x1f
 parseGoFrame :: Text -> Maybe StackFrame

@@ -211,33 +211,33 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     [ "blocks"
         AE..= AE.Array
           [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> url <> "|" <> reportType <> " Report for " <> project <> ">")]]
-              , AE.object
-                  [ "type" AE..= "context"
-                  , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTime)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*To:* " <> endTime)]]
-                  ]
-              , AE.object
-                  [ "type" AE..= "image"
-                  , "image_url" AE..= allUrl
-                  , "alt_text" AE..= "Graph"
-                  , "title"
-                      AE..= AE.object
-                        [ "type" AE..= "plain_text"
-                        , "text" AE..= ("Total Events: " <> toText (show totalEvents))
-                        ]
-                  ]
-              , AE.object
-                  [ "type" AE..= "image"
-                  , "image_url" AE..= errUrl
-                  , "alt_text" AE..= "Graph"
-                  , "title"
-                      AE..= AE.object
-                        [ "type" AE..= "plain_text"
-                        , "text" AE..= ("Total Errors: " <> toText (show totalErrors))
-                        ]
-                  ]
-              , AE.object ["type" AE..= "divider"]
-              , AE.object ["type" AE..= "context", "elements" AE..= AE.Array sumr]
+          , AE.object
+              [ "type" AE..= "context"
+              , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*From:* " <> startTime)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*To:* " <> endTime)]]
               ]
+          , AE.object
+              [ "type" AE..= "image"
+              , "image_url" AE..= allUrl
+              , "alt_text" AE..= "Graph"
+              , "title"
+                  AE..= AE.object
+                    [ "type" AE..= "plain_text"
+                    , "text" AE..= ("Total Events: " <> toText (show totalEvents))
+                    ]
+              ]
+          , AE.object
+              [ "type" AE..= "image"
+              , "image_url" AE..= errUrl
+              , "alt_text" AE..= "Graph"
+              , "title"
+                  AE..= AE.object
+                    [ "type" AE..= "plain_text"
+                    , "text" AE..= ("Total Errors: " <> toText (show totalErrors))
+                    ]
+              ]
+          , AE.object ["type" AE..= "divider"]
+          , AE.object ["type" AE..= "context", "elements" AE..= AE.Array sumr]
+          ]
     , "channel" AE..= channelId
     ]
   where
@@ -250,31 +250,31 @@ slackErrorAlert alertType err issTitle project channelId projectUrl =
     [ "blocks"
         AE..= AE.Array
           [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
-              , AE.object
-                  [ "type" AE..= "context"
-                  , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> T.take 500 err.stackTrace <> "`")], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]]
-                  ]
-              , AE.object
-                  [ "type" AE..= "context"
-                  , "elements"
-                      AE..= AE.Array
-                        [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> fromMaybe "" err.traceId)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> fromMaybe "" err.spanId)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "" err.serviceName)]
-                            ]
-                  ]
-              , AE.object
-                  [ "type" AE..= "context"
-                  , "elements"
-                      AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> project)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]]
-                  ]
-              , AE.object ["type" AE..= "divider"]
-              , AE.object
-                  [ "type" AE..= "actions"
-                  , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= targetUrl, "style" AE..= "primary"]]
-                  ]
+          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
+          , AE.object
+              [ "type" AE..= "context"
+              , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> T.take 500 err.stackTrace <> "`")], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]]
               ]
+          , AE.object
+              [ "type" AE..= "context"
+              , "elements"
+                  AE..= AE.Array
+                    [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> fromMaybe "" err.traceId)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> fromMaybe "" err.spanId)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "" err.serviceName)]
+                    ]
+              ]
+          , AE.object
+              [ "type" AE..= "context"
+              , "elements"
+                  AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> project)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]]
+              ]
+          , AE.object ["type" AE..= "divider"]
+          , AE.object
+              [ "type" AE..= "actions"
+              , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= targetUrl, "style" AE..= "primary"]]
+              ]
+          ]
     , "channel" AE..= channelId
     ]
   where
@@ -292,15 +292,15 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     [ "blocks"
         AE..= AE.Array
           [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> targetUrl <> "|:large_blue_circle: New Endpoint(s) Detected>")]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("We've detected *" <> toText (show $ length endpoints) <> "* new endpoint(s) in *" <> projectName <> "*.")]]
-              , AE.object ["type" AE..= "divider"]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoints:*\n\n" <> enps)]]
-              , AE.object
-                  [ "type" AE..= "actions"
-                  , "elements"
-                      AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View in Explorer", "emoji" AE..= False], "style" AE..= "primary", "url" AE..= explorerUrl]]
-                  ]
+          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("We've detected *" <> toText (show $ length endpoints) <> "* new endpoint(s) in *" <> projectName <> "*.")]]
+          , AE.object ["type" AE..= "divider"]
+          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoints:*\n\n" <> enps)]]
+          , AE.object
+              [ "type" AE..= "actions"
+              , "elements"
+                  AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View in Explorer", "emoji" AE..= False], "style" AE..= "primary", "url" AE..= explorerUrl]]
               ]
+          ]
     , "channel" AE..= channelId
     ]
   where
@@ -317,24 +317,24 @@ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField o
     [ "blocks"
         AE..= AE.Array
           [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|:mag: New Log Pattern Detected>")]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("A new log pattern has been detected in *" <> project <> "*.")]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Pattern:*\n```" <> T.take 200 patternText <> "```")]]
-              , AE.object
-                  [ "type" AE..= "context"
-                  , "elements"
-                      AE..= AE.Array
-                        [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Occurrences:* " <> show occurrenceCount)]
-                            ]
-                  ]
-              , AE.object ["type" AE..= "divider"]
-              , AE.object
-                  [ "type" AE..= "actions"
-                  , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
-                  ]
+          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("A new log pattern has been detected in *" <> project <> "*.")]]
+          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Pattern:*\n```" <> T.take 200 patternText <> "```")]]
+          , AE.object
+              [ "type" AE..= "context"
+              , "elements"
+                  AE..= AE.Array
+                    [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Source:* " <> sourceField)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Occurrences:* " <> show occurrenceCount)]
+                    ]
               ]
+          , AE.object ["type" AE..= "divider"]
+          , AE.object
+              [ "type" AE..= "actions"
+              , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
+              ]
+          ]
     , "channel" AE..= channelId
     ]
 
@@ -345,31 +345,31 @@ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName dir
     [ "blocks"
         AE..= AE.Array
           [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> icon <> " Log Pattern Volume " <> T.toTitle direction <> ">")]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("A log pattern volume *" <> direction <> "* has been detected in *" <> project <> "*.")]]
-              , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Pattern:*\n```" <> T.take 200 patternText <> "```")]]
-              , AE.object
-                  [ "type" AE..= "context"
-                  , "elements"
-                      AE..= AE.Array
-                        [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Current:* " <> show (round currentRate :: Int) <> "/hr")]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Baseline:* " <> show (round baselineMean :: Int) <> "/hr")]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Change:* " <> show (round changePercent :: Int) <> "%")]
-                            ]
-                  ]
-              , AE.object
-                  [ "type" AE..= "context"
-                  , "elements"
-                      AE..= AE.Array
-                        [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
-                            , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
-                            ]
-                  ]
-              , AE.object ["type" AE..= "divider"]
-              , AE.object
-                  [ "type" AE..= "actions"
-                  , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
-                  ]
+          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("A log pattern volume *" <> direction <> "* has been detected in *" <> project <> "*.")]]
+          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Pattern:*\n```" <> T.take 200 patternText <> "```")]]
+          , AE.object
+              [ "type" AE..= "context"
+              , "elements"
+                  AE..= AE.Array
+                    [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Current:* " <> show (round currentRate :: Int) <> "/hr")]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Baseline:* " <> show (round baselineMean :: Int) <> "/hr")]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Change:* " <> show (round changePercent :: Int) <> "%")]
+                    ]
               ]
+          , AE.object
+              [ "type" AE..= "context"
+              , "elements"
+                  AE..= AE.Array
+                    [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Level:* " <> fromMaybe "—" logLevel)]
+                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "—" serviceName)]
+                    ]
+              ]
+          , AE.object ["type" AE..= "divider"]
+          , AE.object
+              [ "type" AE..= "actions"
+              , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= issueUrl, "style" AE..= "primary"]]
+              ]
+          ]
     , "channel" AE..= channelId
     ]
   where
@@ -383,22 +383,22 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
     , "components"
         AE..= AE.Array
           [ AE.object ["type" AE..= 10, "content" AE..= ("## 📊 " <> (if reportType == "weekly" then "Weekly" else "Daily") <> " Report for " <> project)]
-              , AE.object ["type" AE..= 10, "content" AE..= ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)]
-              , AE.object ["type" AE..= 10, "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")]
-              , AE.object
-                  [ "type" AE..= 12
-                  , "items"
-                      AE..= AE.Array
-                        [ AE.object ["media" AE..= AE.object ["url" AE..= allUrl, "description" AE..= "Total events"]]
-                            , AE.object ["media" AE..= AE.object ["url" AE..= errUrl, "description" AE..= "Total errors"]]
-                            ]
-                  ]
-              , AE.object ["type" AE..= 10, "content" AE..= servicesStat]
-              , AE.object
-                  [ "type" AE..= 1
-                  , "components" AE..= AE.Array [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]]
-                  ]
+          , AE.object ["type" AE..= 10, "content" AE..= ("**From:** " <> T.take 10 startTime <> "  **To:** " <> T.take 10 endTime)]
+          , AE.object ["type" AE..= 10, "content" AE..= ("Total Events: **" <> show totalEvents <> "**" <> T.replicate 28 "  " <> " Total Errors: **" <> show totalErrors <> "**")]
+          , AE.object
+              [ "type" AE..= 12
+              , "items"
+                  AE..= AE.Array
+                    [ AE.object ["media" AE..= AE.object ["url" AE..= allUrl, "description" AE..= "Total events"]]
+                    , AE.object ["media" AE..= AE.object ["url" AE..= errUrl, "description" AE..= "Total errors"]]
+                    ]
               ]
+          , AE.object ["type" AE..= 10, "content" AE..= servicesStat]
+          , AE.object
+              [ "type" AE..= 1
+              , "components" AE..= AE.Array [AE.object ["type" AE..= 2, "label" AE..= "Open report", "url" AE..= url, "style" AE..= 5]]
+              ]
+          ]
     ]
   where
     servicesStat =
@@ -476,22 +476,23 @@ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField
     [ "embeds"
         AE..= AE.Array
           [ AE.object
-                  [ "title" AE..= "New Log Pattern Detected"
-                  , "description" AE..= ("A new log pattern has been detected in **" <> project <> "**.\n\n```" <> T.take 200 patternText <> "```")
-                  , "color" AE..= (5793266 :: Int)
-                  , "fields"
-                      AE..= AE.Array
-                        ( fromList $ catMaybes
-                              [ Just $ AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
-                              , Just $ AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
-                              , Just $ AE.object ["name" AE..= "Source", "value" AE..= sourceField, "inline" AE..= True]
-                              , Just $ AE.object ["name" AE..= "Occurrences", "value" AE..= show occurrenceCount, "inline" AE..= True]
-                              , sampleMessage <&> \msg -> AE.object ["name" AE..= "Sample", "value" AE..= ("```" <> T.take 150 msg <> "```"), "inline" AE..= False]
-                              ]
-                        )
-                  , "url" AE..= issueUrl
-                  ]
+              [ "title" AE..= "New Log Pattern Detected"
+              , "description" AE..= ("A new log pattern has been detected in **" <> project <> "**.\n\n```" <> T.take 200 patternText <> "```")
+              , "color" AE..= (5793266 :: Int)
+              , "fields"
+                  AE..= AE.Array
+                    ( fromList
+                        $ catMaybes
+                          [ Just $ AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
+                          , Just $ AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
+                          , Just $ AE.object ["name" AE..= "Source", "value" AE..= sourceField, "inline" AE..= True]
+                          , Just $ AE.object ["name" AE..= "Occurrences", "value" AE..= show occurrenceCount, "inline" AE..= True]
+                          , sampleMessage <&> \msg -> AE.object ["name" AE..= "Sample", "value" AE..= ("```" <> T.take 150 msg <> "```"), "inline" AE..= False]
+                          ]
+                    )
+              , "url" AE..= issueUrl
               ]
+          ]
     , "content" AE..= "🔍 New Log Pattern"
     ]
 
@@ -502,22 +503,23 @@ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName d
     [ "embeds"
         AE..= AE.Array
           [ AE.object
-                  [ "title" AE..= ("Log Pattern Volume " <> T.toTitle direction)
-                  , "description" AE..= ("A log pattern volume **" <> direction <> "** has been detected in **" <> project <> "**.\n\n```" <> T.take 200 patternText <> "```")
-                  , "color" AE..= color
-                  , "fields"
-                      AE..= AE.Array
-                        ( fromList $ catMaybes
-                              [ Just $ AE.object ["name" AE..= "Current Rate", "value" AE..= (show (round currentRate :: Int) <> "/hr"), "inline" AE..= True]
-                              , Just $ AE.object ["name" AE..= "Baseline", "value" AE..= (show (round baselineMean :: Int) <> "/hr"), "inline" AE..= True]
-                              , Just $ AE.object ["name" AE..= "Change", "value" AE..= (show (round changePercent :: Int) <> "%"), "inline" AE..= True]
-                              , Just $ AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
-                              , Just $ AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
-                              ]
-                        )
-                  , "url" AE..= issueUrl
-                  ]
+              [ "title" AE..= ("Log Pattern Volume " <> T.toTitle direction)
+              , "description" AE..= ("A log pattern volume **" <> direction <> "** has been detected in **" <> project <> "**.\n\n```" <> T.take 200 patternText <> "```")
+              , "color" AE..= color
+              , "fields"
+                  AE..= AE.Array
+                    ( fromList
+                        $ catMaybes
+                          [ Just $ AE.object ["name" AE..= "Current Rate", "value" AE..= (show (round currentRate :: Int) <> "/hr"), "inline" AE..= True]
+                          , Just $ AE.object ["name" AE..= "Baseline", "value" AE..= (show (round baselineMean :: Int) <> "/hr"), "inline" AE..= True]
+                          , Just $ AE.object ["name" AE..= "Change", "value" AE..= (show (round changePercent :: Int) <> "%"), "inline" AE..= True]
+                          , Just $ AE.object ["name" AE..= "Level", "value" AE..= fromMaybe "—" logLevel, "inline" AE..= True]
+                          , Just $ AE.object ["name" AE..= "Service", "value" AE..= fromMaybe "—" serviceName, "inline" AE..= True]
+                          ]
+                    )
+              , "url" AE..= issueUrl
               ]
+          ]
     , "content" AE..= (icon <> " Log Pattern Volume " <> T.toTitle direction)
     ]
   where
