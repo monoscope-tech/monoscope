@@ -29,7 +29,7 @@ BEGIN
 END;
 $$ LANGUAGE plpgsql;
 
-CREATE TABLE apis.error_patterns (
+CREATE TABLE IF NOT EXISTS apis.error_patterns (
     id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     project_id                UUID NOT NULL REFERENCES projects.projects(id) ON DELETE CASCADE,
     created_at                TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -79,16 +79,18 @@ CREATE TABLE apis.error_patterns (
 );
 SELECT manage_updated_at('apis.error_patterns');
 
-CREATE UNIQUE INDEX idx_apis_error_patterns_project_id_hash ON apis.error_patterns(project_id, hash);
-CREATE INDEX idx_error_patterns_project_state ON apis.error_patterns (project_id, state);
-CREATE INDEX idx_error_patterns_last_seen ON apis.error_patterns (project_id, last_event_id);
-CREATE INDEX idx_error_patterns_active ON apis.error_patterns(project_id, state) WHERE state != 'resolved';
+CREATE UNIQUE INDEX IF NOT EXISTS idx_apis_error_patterns_project_id_hash ON apis.error_patterns(project_id, hash);
+CREATE INDEX IF NOT EXISTS idx_error_patterns_project_state ON apis.error_patterns (project_id, state);
+CREATE INDEX IF NOT EXISTS idx_error_patterns_last_seen ON apis.error_patterns (project_id, last_event_id);
+CREATE INDEX IF NOT EXISTS idx_error_patterns_active ON apis.error_patterns(project_id, state) WHERE state != 'resolved';
+DROP TRIGGER IF EXISTS error_created_anomaly ON apis.error_patterns;
 CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.error_patterns FOR EACH ROW EXECUTE PROCEDURE apis.new_error_proc('runtime_exception', 'created', 'skip_anomaly_record');
+DROP TRIGGER IF EXISTS error_regressed_trigger ON apis.error_patterns;
 CREATE TRIGGER error_regressed_trigger AFTER UPDATE OF state ON apis.error_patterns FOR EACH ROW WHEN (OLD.state = 'resolved' AND NEW.state = 'regressed') EXECUTE PROCEDURE apis.new_error_proc('runtime_exception', 'regressed', 'skip_anomaly_record');
 
 -- Hourly rollup for error occurrence stats.
 -- Individual error occurrences are queryable from otel_logs_and_spans via hashes @> ARRAY['err:<hash>'].
-CREATE TABLE apis.error_hourly_stats (
+CREATE TABLE IF NOT EXISTS apis.error_hourly_stats (
   project_id   UUID NOT NULL,
   error_id     UUID NOT NULL REFERENCES apis.error_patterns(id) ON DELETE CASCADE,
   hour_bucket  TIMESTAMPTZ NOT NULL,
@@ -97,7 +99,7 @@ CREATE TABLE apis.error_hourly_stats (
   PRIMARY KEY (project_id, error_id, hour_bucket)
 );
 
-CREATE INDEX idx_error_hourly_project_time
+CREATE INDEX IF NOT EXISTS idx_error_hourly_project_time
   ON apis.error_hourly_stats (project_id, hour_bucket DESC);
 
 COMMIT;
