@@ -589,10 +589,9 @@ processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Dra
 processBatch isSummary batch now initial = Drain.buildDrainTree tokenize logId sampleContent initial batch now
   where
     tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
-    tokenize = tok . drainContent
+    tokenize = tok . \case SeedPattern c -> c; NewEvent _ c -> c
     logId = \case SeedPattern _ -> ""; NewEvent lid _ -> lid
     sampleContent = \case SeedPattern _ -> Nothing; NewEvent _ c -> Just c
-    drainContent = \case SeedPattern c -> c; NewEvent _ c -> c
 
 
 -- | Process errors from OpenTelemetry spans to detect runtime exceptions
@@ -1829,7 +1828,7 @@ detectErrorSpikes pid = do
             Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, spike.currentRate, mean, spike.zScore)
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
-              issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean stddev
+              issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean spike.zScore
               createAndNotifyErrorIssue pid issue ErrorSpike errRate.errorData ET.errorSpikesEmail errRate.errorId (errRate.slackThreadTs, errRate.discordMessageId)
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
           _ ->

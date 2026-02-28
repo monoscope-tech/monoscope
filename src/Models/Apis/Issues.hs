@@ -819,9 +819,8 @@ getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @R
 
 
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
-createErrorSpikeIssue projectId errRate currentRate baselineMean baselineStddev =
-  let zScore = if baselineStddev > 0 then (currentRate - baselineMean) / baselineStddev else 0
-      increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
+createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
+  let increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
    in mkErrorIssue
         projectId
         errRate.hash
