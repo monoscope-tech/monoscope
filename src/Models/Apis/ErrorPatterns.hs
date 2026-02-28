@@ -100,7 +100,7 @@ data ErrorPattern = ErrorPattern
   , subscribed :: Bool
   , notifyEveryMinutes :: Int
   , lastNotifiedAt :: Maybe ZonedTime
-  , occurrences_1m :: Int
+  , occurrences_1m :: Int -- snake_case fields match DB column names exactly
   , occurrences_5m :: Int
   , occurrences_1h :: Int
   , occurrences_24h :: Int
@@ -131,7 +131,7 @@ data ErrorPatternL = ErrorPatternL
   { base :: ErrorPattern
   , occurrences :: Int
   , affectedUsers :: Int
-  , lastOccurredAt :: Maybe ZonedTime
+  , lastOccurredAt :: Maybe ZonedTime -- hour granularity (bound to MAX(hour_bucket)), not exact event time
   }
   deriving stock (Generic, Show)
   deriving anyclass (NFData)
@@ -198,7 +198,7 @@ getErrorPatternLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
         <> _select @ErrorPattern
         <> [sql|) e LEFT JOIN LATERAL (
               SELECT SUM(event_count) AS occurrences, SUM(user_count) AS affected_users, MAX(hour_bucket) AS last_occurred_at
-              FROM apis.error_hourly_stats WHERE error_id = e.id
+              FROM apis.error_hourly_stats WHERE error_id = e.id AND hour_bucket >= NOW() - INTERVAL '30 days'
             ) ev ON true WHERE e.project_id = ? AND e.hash = ? |]
 
 
@@ -270,7 +270,7 @@ updateErrorPatternSubscription eid subscribed notifyEveryMinutes =
         UPDATE apis.error_patterns SET
           subscribed = ?,
           notify_every_minutes = ?,
-          last_notified_at = CASE WHEN ? THEN NULL ELSE last_notified_at END,
+          last_notified_at = CASE WHEN ? AND NOT subscribed THEN NULL ELSE last_notified_at END,
           updated_at = NOW()
         WHERE id = ?
       |]
@@ -286,14 +286,13 @@ updateErrorPatternThreadIdsAndNotifiedAt = updateErrorPatternThreadIds' True
 
 updateErrorPatternThreadIds' :: DB es => Bool -> ErrorPatternId -> Maybe Text -> Maybe Text -> Eff es Int64
 updateErrorPatternThreadIds' updateNotifiedAt eid slackTs discordMsgId =
-  PG.execute q (slackTs, discordMsgId, eid)
-  where
-    q =
-      [sql| UPDATE apis.error_patterns SET
-          slack_thread_ts = COALESCE(?, slack_thread_ts),
-          discord_message_id = COALESCE(?, discord_message_id), |]
-        <> (if updateNotifiedAt then "last_notified_at = NOW()," else "")
-        <> [sql| updated_at = NOW() WHERE id = ? |]
+  PG.execute
+    [sql| UPDATE apis.error_patterns SET
+        slack_thread_ts = COALESCE(?, slack_thread_ts),
+        discord_message_id = COALESCE(?, discord_message_id),
+        last_notified_at = CASE WHEN ? THEN NOW() ELSE last_notified_at END,
+        updated_at = NOW() WHERE id = ? |]
+    (slackTs, discordMsgId, updateNotifiedAt, eid)
 
 
 -- | Bulk-update baselines for all active error patterns in a project using a single SQL CTE.
@@ -316,7 +315,7 @@ bulkCalculateAndUpdateBaselines pid =
           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(ehs.event_count - s.median_val)) * 1.4826 AS mad_scaled
         FROM apis.error_hourly_stats ehs
         JOIN stats s ON s.error_id = ehs.error_id
-        WHERE ehs.hour_bucket >= NOW() - INTERVAL '168 hours'
+        WHERE ehs.hour_bucket >= NOW() - INTERVAL '168 hours' AND ehs.project_id = ?
         GROUP BY ehs.error_id
       )
       UPDATE apis.error_patterns SET
@@ -328,7 +327,7 @@ bulkCalculateAndUpdateBaselines pid =
       FROM stats s LEFT JOIN mad m ON m.error_id = s.error_id
       WHERE apis.error_patterns.id = s.error_id AND apis.error_patterns.project_id = ?
     |]
-    (pid, pid)
+    (pid, pid, pid)
 
 
 -- | Get all error patterns with their current hour counts (for batch spike detection)

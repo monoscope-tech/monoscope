@@ -758,13 +758,25 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
           AND e.hash = ANY(?::text[])
           AND e.subscribed = TRUE
           AND e.state != 'resolved'
-          AND i.issue_type = ?
+          AND i.issue_type = ? -- error patterns always create RuntimeException issues; alert type derives from error state
           AND (
             e.last_notified_at IS NULL
             OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
           )
       |]
       (pid, errorHashes, Issues.RuntimeException)
+  subscribedCount :: Int <- fromMaybe 0 . fmap fromOnly . listToMaybe <$>
+    PG.query
+      [sql|
+        SELECT COUNT(*)::INT FROM apis.error_patterns e
+        WHERE e.project_id = ? AND e.hash = ANY(?::text[])
+          AND e.subscribed = TRUE AND e.state != 'resolved'
+          AND (e.last_notified_at IS NULL
+               OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
+      |]
+      (pid, errorHashes)
+  Relude.when (subscribedCount > length dueErrors) $
+    Log.logWarn "Subscribed errors missing matching issue" (pid, subscribedCount - length dueErrors)
   unless (null dueErrors) do
     Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
     projectM <- Projects.projectById pid
@@ -1827,7 +1839,7 @@ detectErrorSpikes pid = do
       (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
         let currentRate = fromIntegral errRate.currentHourCount :: Double
             zScore = (currentRate - mean) / stddev
-            isSpike = zScore > 3.0 && currentRate > mean + 5
+            isSpike = zScore > spikeZScoreThreshold && currentRate > mean + spikeMinAbsoluteDelta
 
         if isSpike
           then do
