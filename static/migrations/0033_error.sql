@@ -83,7 +83,7 @@ CREATE UNIQUE INDEX idx_apis_error_patterns_project_id_hash ON apis.error_patter
 CREATE INDEX idx_error_patterns_project_state ON apis.error_patterns (project_id, state);
 CREATE INDEX idx_error_patterns_last_seen ON apis.error_patterns (project_id, last_event_id);
 CREATE INDEX idx_error_patterns_active ON apis.error_patterns(project_id, state) WHERE state != 'resolved';
-CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.error_patterns FOR EACH ROW EXECUTE PROCEDURE apis.new_error_proc();
+CREATE TRIGGER error_created_anomaly AFTER INSERT ON apis.error_patterns FOR EACH ROW EXECUTE PROCEDURE apis.new_error_proc('runtime_exception', 'created', 'skip_anomaly_record');
 
 -- Hourly rollup for error occurrence stats.
 -- Individual error occurrences are queryable from otel_logs_and_spans via hashes @> ARRAY['err:<hash>'].
