@@ -234,8 +234,8 @@ getAllLogGroups tree =
 
 looksLikeJson :: T.Text -> Bool
 looksLikeJson t =
-  ("{" `T.isInfixOf` t && "}" `T.isSuffixOf` t)
-    || ("[" `T.isInfixOf` t && "]" `T.isSuffixOf` t)
+  ("{\"" `T.isPrefixOf` t && "}" `T.isSuffixOf` t)
+    || ("[" `T.isPrefixOf` t && "]" `T.isSuffixOf` t)
 
 
 tokenizeJsonLike :: T.Text -> [T.Text]
