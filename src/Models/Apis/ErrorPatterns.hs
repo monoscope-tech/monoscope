@@ -191,22 +191,22 @@ getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Er
 getErrorPatternByHash pid hash = listToMaybe <$> PG.query (_selectWhere @ErrorPattern [[field| project_id |], [field| hash |]]) (pid, hash)
 
 
-getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorPatternL)
-getErrorPatternLByHash pid hash = listToMaybe <$> PG.query q (pid, hash)
+getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
+getErrorPatternLByHash pid hash now = listToMaybe <$> PG.query q (now, pid, hash)
   where
     q =
       "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.affected_users, 0)::INT, ev.last_occurred_at FROM ("
         <> _select @ErrorPattern
         <> [sql|) e LEFT JOIN LATERAL (
               SELECT SUM(event_count) AS occurrences, SUM(user_count) AS affected_users, MAX(hour_bucket) AS last_occurred_at
-              FROM apis.error_hourly_stats WHERE error_id = e.id AND hour_bucket >= NOW() - INTERVAL '30 days'
+              FROM apis.error_hourly_stats WHERE error_id = e.id AND hour_bucket >= ?::timestamptz - INTERVAL '30 days'
             ) ev ON true WHERE e.project_id = ? AND e.hash = ? |]
 
 
 -- | Update occurrence counts (called periodically to decay counts)
-updateOccurrenceCounts :: DB es => Projects.ProjectId -> Eff es Int64
-updateOccurrenceCounts pid =
-  PG.execute q (Only pid)
+updateOccurrenceCounts :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
+updateOccurrenceCounts pid now =
+  PG.execute q (now, pid)
   where
     q =
       [sql|
@@ -221,50 +221,50 @@ updateOccurrenceCounts pid =
             ELSE state
           END,
           resolved_at = CASE
-            WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN NOW()
+            WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN ?
             ELSE resolved_at
           END
         WHERE project_id = ? AND (state != 'resolved' OR occurrences_24h > 0)
       |]
 
 
-updateErrorPatternState :: DB es => ErrorPatternId -> ErrorState -> Eff es Int64
-updateErrorPatternState eid newState = PG.execute q (newState, eid)
+updateErrorPatternState :: DB es => ErrorPatternId -> ErrorState -> UTCTime -> Eff es Int64
+updateErrorPatternState eid newState now = PG.execute q (newState, now, eid)
   where
     q =
-      [sql| UPDATE apis.error_patterns SET state = ?, updated_at = NOW() WHERE id = ? |]
+      [sql| UPDATE apis.error_patterns SET state = ?, updated_at = ? WHERE id = ? |]
 
 
-updateErrorPatternStateByProjectAndHash :: DB es => Projects.ProjectId -> Text -> ErrorState -> Eff es Int64
-updateErrorPatternStateByProjectAndHash pid hash newState = PG.execute q (newState, pid, hash)
+updateErrorPatternStateByProjectAndHash :: DB es => Projects.ProjectId -> Text -> ErrorState -> UTCTime -> Eff es Int64
+updateErrorPatternStateByProjectAndHash pid hash newState now = PG.execute q (newState, now, pid, hash)
   where
     q =
-      [sql| UPDATE apis.error_patterns SET state = ?, updated_at = NOW() WHERE project_id = ? AND hash = ? |]
+      [sql| UPDATE apis.error_patterns SET state = ?, updated_at = ? WHERE project_id = ? AND hash = ? |]
 
 
-resolveErrorPattern :: DB es => ErrorPatternId -> Eff es Int64
-resolveErrorPattern eid = PG.execute q (Only eid)
+resolveErrorPattern :: DB es => ErrorPatternId -> UTCTime -> Eff es Int64
+resolveErrorPattern eid now = PG.execute q (now, now, eid)
   where
-    q = [sql| UPDATE apis.error_patterns SET state = 'resolved', resolved_at = NOW(), updated_at = NOW() WHERE id = ? |]
+    q = [sql| UPDATE apis.error_patterns SET state = 'resolved', resolved_at = ?, updated_at = ? WHERE id = ? |]
 
 
-setErrorPatternAssignee :: DB es => ErrorPatternId -> Maybe Projects.UserId -> Eff es Int64
-setErrorPatternAssignee eid assigneeIdM =
-  PG.execute q (assigneeIdM, assigneeIdM, eid)
+setErrorPatternAssignee :: DB es => ErrorPatternId -> Maybe Projects.UserId -> UTCTime -> Eff es Int64
+setErrorPatternAssignee eid assigneeIdM now =
+  PG.execute q (assigneeIdM, assigneeIdM, now, now, eid)
   where
     q =
       [sql|
         UPDATE apis.error_patterns SET
           assignee_id = ?,
-          assigned_at = CASE WHEN ? IS NULL THEN NULL ELSE NOW() END,
-          updated_at = NOW()
+          assigned_at = CASE WHEN ? IS NOT NULL THEN ?::timestamptz ELSE NULL END,
+          updated_at = ?
         WHERE id = ?
       |]
 
 
-updateErrorPatternSubscription :: DB es => ErrorPatternId -> Bool -> Int -> Eff es Int64
-updateErrorPatternSubscription eid subscribed notifyEveryMinutes =
-  PG.execute q (subscribed, notifyEveryMinutes, subscribed, eid)
+updateErrorPatternSubscription :: DB es => ErrorPatternId -> Bool -> Int -> UTCTime -> Eff es Int64
+updateErrorPatternSubscription eid subscribed notifyEveryMinutes now =
+  PG.execute q (subscribed, notifyEveryMinutes, subscribed, now, eid)
   where
     q =
       [sql|
@@ -272,36 +272,36 @@ updateErrorPatternSubscription eid subscribed notifyEveryMinutes =
           subscribed = ?,
           notify_every_minutes = ?,
           last_notified_at = CASE WHEN ? AND NOT subscribed THEN NULL ELSE last_notified_at END,
-          updated_at = NOW()
+          updated_at = ?
         WHERE id = ?
       |]
 
 
-updateErrorPatternThreadIds :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> Eff es Int64
-updateErrorPatternThreadIds = updateErrorPatternThreadIds' False
+updateErrorPatternThreadIds :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
+updateErrorPatternThreadIds eid s d now = updateErrorPatternThreadIds' False eid s d now
 
 
-updateErrorPatternThreadIdsAndNotifiedAt :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> Eff es Int64
-updateErrorPatternThreadIdsAndNotifiedAt = updateErrorPatternThreadIds' True
+updateErrorPatternThreadIdsAndNotifiedAt :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
+updateErrorPatternThreadIdsAndNotifiedAt eid s d now = updateErrorPatternThreadIds' True eid s d now
 
 
-updateErrorPatternThreadIds' :: DB es => Bool -> ErrorPatternId -> Maybe Text -> Maybe Text -> Eff es Int64
-updateErrorPatternThreadIds' updateNotifiedAt eid slackTs discordMsgId =
+updateErrorPatternThreadIds' :: DB es => Bool -> ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
+updateErrorPatternThreadIds' updateNotifiedAt eid slackTs discordMsgId now =
   PG.execute
     [sql| UPDATE apis.error_patterns SET
         slack_thread_ts = COALESCE(?, slack_thread_ts),
         discord_message_id = COALESCE(?, discord_message_id),
-        last_notified_at = CASE WHEN ? THEN NOW() ELSE last_notified_at END,
-        updated_at = NOW() WHERE id = ? |]
-    (slackTs, discordMsgId, updateNotifiedAt, eid)
+        last_notified_at = CASE WHEN ? THEN ? ELSE last_notified_at END,
+        updated_at = ? WHERE id = ? |]
+    (slackTs, discordMsgId, updateNotifiedAt, now, now, eid)
 
 
 -- | Bulk-update baselines for all active error patterns in a project using a single SQL CTE.
 -- Reads pre-bucketed data from error_hourly_stats over the last 168 hours.
 -- Note: the 'mad' CTE omits a direct JOIN back to error_patterns because it already joins 'stats',
 -- which only contains non-resolved errors (filtered via state != 'resolved' in the stats CTE).
-bulkCalculateAndUpdateBaselines :: DB es => Projects.ProjectId -> Eff es Int64
-bulkCalculateAndUpdateBaselines pid =
+bulkCalculateAndUpdateBaselines :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
+bulkCalculateAndUpdateBaselines pid now =
   PG.execute
     [sql|
       WITH stats AS (
@@ -310,7 +310,7 @@ bulkCalculateAndUpdateBaselines pid =
           COUNT(*) AS total_hours
         FROM apis.error_hourly_stats ehs
         JOIN apis.error_patterns e ON e.id = ehs.error_id
-        WHERE e.project_id = ? AND e.state != 'resolved' AND ehs.hour_bucket >= NOW() - INTERVAL '168 hours'
+        WHERE e.project_id = ? AND e.state != 'resolved' AND ehs.hour_bucket >= ?::timestamptz - INTERVAL '168 hours'
         GROUP BY ehs.error_id
       ),
       mad AS (
@@ -318,7 +318,7 @@ bulkCalculateAndUpdateBaselines pid =
           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ABS(ehs.event_count - s.median_val)) * 1.4826 AS mad_scaled
         FROM apis.error_hourly_stats ehs
         JOIN stats s ON s.error_id = ehs.error_id
-        WHERE ehs.hour_bucket >= NOW() - INTERVAL '168 hours' AND ehs.project_id = ?
+        WHERE ehs.hour_bucket >= ?::timestamptz - INTERVAL '168 hours' AND ehs.project_id = ?
         GROUP BY ehs.error_id
       )
       UPDATE apis.error_patterns SET
@@ -326,11 +326,11 @@ bulkCalculateAndUpdateBaselines pid =
         baseline_error_rate_stddev = COALESCE(m.mad_scaled, 0),
         baseline_samples = s.total_hours::INT,
         baseline_state = CASE WHEN s.total_hours >= 24 THEN 'established' ELSE 'learning' END,
-        baseline_updated_at = NOW()
+        baseline_updated_at = ?
       FROM stats s LEFT JOIN mad m ON m.error_id = s.error_id
       WHERE apis.error_patterns.id = s.error_id AND apis.error_patterns.project_id = ?
     |]
-    (pid, pid, pid)
+    (pid, now, now, pid, now, pid)
 
 
 -- | Get all error patterns with their current hour counts (for batch spike detection)
@@ -376,9 +376,9 @@ getErrorPatternsWithCurrentRates pid now =
 
 -- | Batch upsert error patterns using unnest arrays (single round-trip instead of N+1)
 -- Groups by hash to avoid "ON CONFLICT DO UPDATE cannot affect row a second time" errors.
-batchUpsertErrorPatterns :: DB es => Projects.ProjectId -> V.Vector ATError -> Eff es Int64
-batchUpsertErrorPatterns _pid errors | V.null errors = pure 0
-batchUpsertErrorPatterns pid errors =
+batchUpsertErrorPatterns :: DB es => Projects.ProjectId -> V.Vector ATError -> UTCTime -> Eff es Int64
+batchUpsertErrorPatterns _pid errors _now | V.null errors = pure 0
+batchUpsertErrorPatterns pid errors now =
   PG.execute
     [sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash,
@@ -394,7 +394,7 @@ batchUpsertErrorPatterns pid errors =
                        unnest(?::text[]) AS runtime, unnest(?::jsonb[]) AS error_data,
                        unnest(?::text[]) AS trace_id, unnest(?::int[]) AS cnt) u
           ON CONFLICT (project_id, hash) DO UPDATE SET
-            updated_at = NOW(),
+            updated_at = ?,
             message = EXCLUDED.message,
             error_data = EXCLUDED.error_data,
             recent_trace_id = EXCLUDED.recent_trace_id,
@@ -404,8 +404,8 @@ batchUpsertErrorPatterns pid errors =
             occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_24h,
             quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
             state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
-            regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN NOW() ELSE apis.error_patterns.regressed_at END |]
-    (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts)
+            regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN ? ELSE apis.error_patterns.regressed_at END |]
+    (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts, now, now)
   where
     -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
     grouped = HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors

@@ -203,7 +203,7 @@ anomalyDetailCore pid firstM fetchIssue = do
     Just issue -> do
       errorM <-
         issue.issueType & \case
-          Issues.RuntimeException -> ErrorPatterns.getErrorPatternLByHash pid issue.targetHash
+          Issues.RuntimeException -> ErrorPatterns.getErrorPatternLByHash pid issue.targetHash now
           _ -> pure Nothing
       (members, canResolve) <- case errorM of
         Just _ -> do
@@ -532,7 +532,8 @@ assignErrorPostH pid errUuid form = do
       | not isMember -> addErrorToast "Assignee must be an active project member" Nothing >> render (Just err.id) err.assigneeId
       | assigneeIdM == err.assigneeId -> addSuccessToast "Assignee unchanged" Nothing >> render (Just err.id) err.assigneeId
       | otherwise -> do
-          void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeIdM
+          now <- Time.currentTime
+          void $ ErrorPatterns.setErrorPatternAssignee err.id assigneeIdM now
           whenJust assigneeIdM \assigneeId ->
             void $ liftIO $ withResource appCtx.pool \conn ->
               createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
@@ -554,7 +555,9 @@ resolveErrorPostH pid errUuid = do
           addErrorToast "You do not have permission to resolve this error" Nothing
           addRespHeaders $ errorResolveAction pid err.id err.state False
       | otherwise -> do
-          when (err.state /= ErrorPatterns.ESResolved) $ void $ ErrorPatterns.resolveErrorPattern err.id
+          when (err.state /= ErrorPatterns.ESResolved) do
+            now <- Time.currentTime
+            void $ ErrorPatterns.resolveErrorPattern err.id now
           addSuccessToast "Error resolved" Nothing
           addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
 
@@ -572,7 +575,8 @@ errorSubscriptionPostH pid errUuid form = do
           let notifyEveryRaw = fromMaybe 0 form.notifyEveryMinutes
               notifyEvery = clamp (1, 1440) $ if notifyEveryRaw == 0 then 30 else notifyEveryRaw
               shouldSubscribe = notifyEveryRaw > 0
-          void $ ErrorPatterns.updateErrorPatternSubscription err.id shouldSubscribe notifyEvery
+          now <- Time.currentTime
+          void $ ErrorPatterns.updateErrorPatternSubscription err.id shouldSubscribe notifyEvery now
           addSuccessToast (if shouldSubscribe then "Subscribed to error" else "Unsubscribed from error") Nothing
           addRespHeaders $ errorSubscriptionAction pid err{ErrorPatterns.subscribed = shouldSubscribe, ErrorPatterns.notifyEveryMinutes = notifyEvery}
 

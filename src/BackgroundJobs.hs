@@ -390,7 +390,7 @@ runHourlyJob scheduledTime hour = do
   activeProjects <-
     coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
       <$> PG.query
-        [sql| SELECT DISTINCT project_id
+        [sql| SELECT DISTINCT project_id::uuid
               FROM otel_logs_and_spans ols
               WHERE ols.timestamp >= ?
                 AND ols.timestamp <= ? |]
@@ -619,7 +619,7 @@ processOneMinuteErrors scheduledTime pid = do
   Relude.when ctx.config.enableEventsTableUpdates $ do
     let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
-  void $ ErrorPatterns.updateOccurrenceCounts pid
+  void $ ErrorPatterns.updateOccurrenceCounts pid scheduledTime
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
     processErrorsPaginated oneMinuteAgo skip = do
@@ -663,7 +663,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- Group errors by (traceId, spanId) — must sort first since V.groupBy only groups consecutive elements
       let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
           errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
-      processProjectErrors pid allErrors
+      processProjectErrors pid allErrors scheduledTime
       notifyErrorSubscriptions pid (V.map (.hash) allErrors)
       -- Upsert hourly rollup stats (aggregated by hash)
       let hashGroups = HM.toList $ V.foldl' addError HM.empty allErrors
@@ -745,6 +745,7 @@ sendAlertToChannels alert pid project users pagerdutyUrl subj html (initSlackTs,
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
 notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
   ctx <- ask @Config.AuthContext
+  now <- Time.currentTime
   dueErrors :: [ErrorSubscriptionDue] <-
     PG.query
       [sql|
@@ -760,10 +761,10 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
           AND i.issue_type = ? -- error patterns always create RuntimeException issues; alert type derives from error state
           AND (
             e.last_notified_at IS NULL
-            OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
+            OR ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
           )
       |]
-      (pid, errorHashes, Issues.RuntimeException)
+      (pid, errorHashes, Issues.RuntimeException, now)
   unless (null dueErrors) do
     Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
     projectM <- Projects.projectById pid
@@ -783,13 +784,13 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
               _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData]
         (finalSlackTs, finalDiscordMsgId) <-
           sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
-        void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt sub.errorId finalSlackTs finalDiscordMsgId
+        void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt sub.errorId finalSlackTs finalDiscordMsgId now
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest)
-processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> ATBackgroundCtx ()
-processProjectErrors pid errors = do
-  result <- try $ ErrorPatterns.batchUpsertErrorPatterns pid errors
+processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
+processProjectErrors pid errors now = do
+  result <- try $ ErrorPatterns.batchUpsertErrorPatterns pid errors now
   case result of
     Left (e :: SomePostgreSqlException) ->
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
@@ -1801,8 +1802,9 @@ pruneStaleLogPatterns pid = do
 
 calculateErrorBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateErrorBaselines pid = do
+  now <- Time.currentTime
   Log.logInfo "Calculating error baselines" pid
-  updated <- ErrorPatterns.bulkCalculateAndUpdateBaselines pid
+  updated <- ErrorPatterns.bulkCalculateAndUpdateBaselines pid now
   Log.logInfo "Finished calculating error baselines" (pid, updated)
 
 
@@ -1820,20 +1822,14 @@ detectErrorSpikes pid = do
   forM_ errorsWithRates \errRate -> do
     -- Only check errors with established baselines
     case (errRate.baselineState, errRate.baselineMean, errRate.baselineStddev) of
-      (BSEstablished, Just mean, Just stddev) -> do
-        let effectiveStddev = max stddev 1.0 -- floor so flat baselines (MAD=0) can still trigger
-            currentRate = fromIntegral errRate.currentHourCount :: Double
-            zScore = (currentRate - mean) / effectiveStddev
-            isSpike = zScore > spikeZScoreThreshold && currentRate > mean + spikeMinAbsoluteDelta
-
-        if isSpike
-          then do
+      (BSEstablished, Just mean, Just stddev) ->
+        case detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean stddev (fromIntegral errRate.currentHourCount) of
+          Just spike | spike.direction == Issues.Spike -> do
             let alreadyEscalating = errRate.state == ErrorPatterns.ESEscalating
-            Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, currentRate, mean, zScore)
-            -- Only create issue/update state on first spike detection, not on repeated cycles
+            Log.logInfo "Error spike detected" (errRate.errorId, errRate.errorType, spike.currentRate, mean, spike.zScore)
             unless alreadyEscalating do
-              void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating
-              issue <- Issues.createErrorSpikeIssue pid errRate currentRate mean stddev
+              void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
+              issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean stddev
               Issues.insertIssue issue
               liftIO $ withResource authCtx.jobsPool \conn ->
                 void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
@@ -1848,12 +1844,12 @@ detectErrorSpikes pid = do
                   sendAlertToChannels spikeAlert pid project users errorsUrl subj html (errRate.slackThreadTs, errRate.discordMessageId)
                 Relude.when (finalSlackTs /= errRate.slackThreadTs || finalDiscordMsgId /= errRate.discordMessageId)
                   $ void
-                  $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errRate.errorId finalSlackTs finalDiscordMsgId
+                  $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errRate.errorId finalSlackTs finalDiscordMsgId now
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
-          else -- Transition from Escalating → Ongoing when spike subsides
+          _ -> -- No spike (or drop): de-escalate if currently escalating
             Relude.when (errRate.state == ErrorPatterns.ESEscalating)
               $ void
-              $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESOngoing
+              $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESOngoing now
       _ -> pass -- Skip errors without established baseline
   Log.logInfo "Finished error spike detection" pid
 
@@ -1862,6 +1858,7 @@ detectErrorSpikes pid = do
 processNewError :: Projects.ProjectId -> Text -> ATBackgroundCtx ()
 processNewError pid errorHash = do
   authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+  now <- Time.currentTime
   Log.logInfo "Processing new error" (pid, errorHash)
   errorM <- ErrorPatterns.getErrorPatternByHash pid errorHash
   case errorM of
@@ -1889,5 +1886,5 @@ processNewError pid errorHash = do
             sendAlertToChannels runtimeAlert pid project users errorsUrl subj html (err.slackThreadTs, err.discordMessageId)
           Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId)
             $ void
-            $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt err.id finalSlackTs finalDiscordMsgId
+            $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt err.id finalSlackTs finalDiscordMsgId now
         Log.logInfo "Created issue for error" (pid, err.id, issue.id, show runtimeAlertType)
