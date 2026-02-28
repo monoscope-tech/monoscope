@@ -108,15 +108,6 @@ splitDotted q = case T.breakOnEnd "." q of
   (modDot, fn) -> (T.dropEnd 1 modDot, fn)
 
 
--- | True when none of the needles appear as infixes in the haystack
-noneInfix :: [Text] -> Text -> Bool
-noneInfix needles haystack = all (not . (`T.isInfixOf` haystack)) needles
-
-
--- | True when none of the needles appear as prefixes of the text
-nonePrefix :: [Text] -> Text -> Bool
-nonePrefix needles txt = all (not . (`T.isPrefixOf` txt)) needles
-
 
 -- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
 -- Format: package.function(args) or /path/to/file.go:123 +0x1f
@@ -137,7 +128,7 @@ parseGoFrame line
               , lineNumber = Nothing
               , columnNumber = Nothing
               , contextLine = Nothing
-              , isInApp = nonePrefix goStdlibPrefixes funcPart
+              , isInApp = not $ any (`T.isPrefixOf` funcPart) goStdlibPrefixes
               }
   | otherwise = Nothing
 
@@ -233,7 +224,7 @@ parseJsFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , moduleName = extractJsModule filePath
+              , moduleName = Just $ extractJsModule filePath
               , functionName = cleanJsFunction funcPart
               , lineNumber = lineNum
               , columnNumber = colNum
@@ -247,7 +238,7 @@ parseJsFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , moduleName = extractJsModule filePath
+              , moduleName = Just $ extractJsModule filePath
               , functionName = "<anonymous>"
               , lineNumber = lineNum
               , columnNumber = colNum
@@ -272,14 +263,14 @@ parseJsFrame line
 
     extractJsModule path =
       let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-       in Just $ T.toLower $ fromMaybe baseName $ asum $ map (`T.stripSuffix` baseName) [".js", ".ts", ".mjs", ".cjs"]
+       in T.toLower $ fromMaybe baseName $ asum $ map (`T.stripSuffix` baseName) [".js", ".ts", ".mjs", ".cjs"]
 
     cleanJsFunction func =
       -- Remove namespacing: Object.foo.bar -> bar
       let parts = T.splitOn "." func
        in fromMaybe func $ viaNonEmpty last parts
 
-    isJsInApp = noneInfix ["node_modules/", "<anonymous>", "internal/", "node:"]
+    isJsInApp fp = not $ any (`T.isInfixOf` fp) ["node_modules/", "<anonymous>", "internal/", "node:"]
 
 
 -- | Parse Python stack frame
@@ -300,7 +291,7 @@ parsePythonFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , moduleName = extractPythonModule filePath
+              , moduleName = Just $ extractPythonModule filePath
               , functionName = cleanPythonFunction funcName
               , lineNumber = lineNum
               , columnNumber = Nothing
@@ -311,12 +302,11 @@ parsePythonFrame line
   where
     extractPythonModule path =
       let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-          moduleName = fromMaybe baseName $ T.stripSuffix ".py" baseName
-       in Just moduleName
+       in fromMaybe baseName $ T.stripSuffix ".py" baseName
 
     cleanPythonFunction = flip (foldr (uncurry T.replace)) ([("<lambda>", "lambda"), ("<listcomp>", "listcomp"), ("<dictcomp>", "dictcomp")] :: [(Text, Text)])
 
-    isPythonInApp = noneInfix ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
+    isPythonInApp fp = not $ any (`T.isInfixOf` fp) ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
 
 
 -- | Parse Java stack frame
@@ -349,7 +339,7 @@ parseJavaFrame line
       -- Remove generics: method<T> -> method
       T.takeWhile (/= '<')
 
-    isJavaInApp = nonePrefix ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
+    isJavaInApp qm = not $ any (`T.isPrefixOf` qm) ["java.", "javax.", "sun.", "com.sun.", "jdk.", "org.springframework."]
 
 
 -- | Parse PHP stack frame
@@ -364,7 +354,7 @@ parsePhpFrame line
        in Just
             StackFrame
               { filePath = filePath
-              , moduleName = extractPhpModule filePath
+              , moduleName = Just $ extractPhpModule filePath
               , functionName = cleanPhpFunction funcName
               , lineNumber = lineNum
               , columnNumber = Nothing
@@ -380,14 +370,14 @@ parsePhpFrame line
 
     extractPhpModule path =
       let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-       in Just $ fromMaybe baseName $ T.stripSuffix ".php" baseName
+       in fromMaybe baseName $ T.stripSuffix ".php" baseName
 
     cleanPhpFunction func =
       T.replace "{closure}" "closure" $ fromMaybe func $ splitLast "->" <|> splitLast "::"
       where
         splitLast sep = viaNonEmpty last $ drop 1 $ T.splitOn sep func
 
-    isPhpInApp = noneInfix ["/vendor/", "/phar://"]
+    isPhpInApp fp = not $ any (`T.isInfixOf` fp) ["/vendor/", "/phar://"]
 
 
 -- | Parse .NET stack frame
@@ -420,7 +410,7 @@ parseDotNetFrame line
       -- Remove generic arity: Method`1 -> Method
       T.takeWhile (/= '`')
 
-    isDotNetInApp = nonePrefix ["System.", "Microsoft.", "Newtonsoft."]
+    isDotNetInApp qm = not $ any (`T.isPrefixOf` qm) ["System.", "Microsoft.", "Newtonsoft."]
 
 
 -- | Generic stack frame parser for unknown formats
@@ -535,9 +525,9 @@ normalizeMessage msg =
 -- 2. Exception type + message
 -- 3. Message only
 --
--- With stack trace - uses projectId, exceptionType, and normalized stack:
+-- With stack trace - uses projectId, service, exceptionType, and normalized stack:
 -- >>> computeErrorFingerprint "proj1" (Just "svc") (Just "span") "nodejs" "TypeError" "msg" "at handler (/app/index.js:10:5)"
--- "269748a1"
+-- "c3500d04"
 --
 -- Without stack trace but with exception type - uses projectId, service, span, type, and message:
 -- >>> computeErrorFingerprint "proj1" (Just "user-service") (Just "/api/users") "nodejs" "ValidationError" "Invalid email format" ""
@@ -573,7 +563,7 @@ computeErrorFingerprint projectIdText mService spanName runtime exceptionType me
     -- Build fingerprint components based on priority
     fingerprintComponents =
       if
-        | not (T.null normalizedStack) -> [projectIdText, normalizedType, normalizedStack]
+        | not (T.null normalizedStack) -> [projectIdText, fromMaybe "" mService, normalizedType, normalizedStack]
         | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedType, normalizedMsg]
         | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedMsg]
 

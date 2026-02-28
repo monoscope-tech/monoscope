@@ -664,7 +664,7 @@ processOneMinuteErrors scheduledTime pid = do
       let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
           errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
       processProjectErrors pid allErrors scheduledTime
-      notifyErrorSubscriptions pid (V.uniq $ V.modify (VA.sort) $ V.map (.hash) allErrors)
+      notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) allErrors)
       -- Upsert hourly rollup stats (aggregated by hash)
       let hashGroups = HM.toList $ V.foldl' addError HM.empty allErrors
           addError acc e = HM.insertWith addCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc
