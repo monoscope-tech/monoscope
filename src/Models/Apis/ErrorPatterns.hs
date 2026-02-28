@@ -277,11 +277,11 @@ updateErrorPatternSubscription eid subscribed notifyEveryMinutes now =
 
 
 updateErrorPatternThreadIds :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
-updateErrorPatternThreadIds eid s d now = updateErrorPatternThreadIds' False eid s d now
+updateErrorPatternThreadIds = updateErrorPatternThreadIds' False
 
 
 updateErrorPatternThreadIdsAndNotifiedAt :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
-updateErrorPatternThreadIdsAndNotifiedAt eid s d now = updateErrorPatternThreadIds' True eid s d now
+updateErrorPatternThreadIdsAndNotifiedAt = updateErrorPatternThreadIds' True
 
 
 updateErrorPatternThreadIds' :: DB es => Bool -> ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
@@ -369,7 +369,7 @@ getErrorPatternsWithCurrentRates pid now =
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
           AND counts.hour_bucket = ?
-        WHERE e.project_id = ? AND e.state != 'resolved' AND e.is_ignored = false
+        WHERE e.project_id = ? AND e.state != 'resolved' AND NOT e.is_ignored
       |]
 
 
@@ -386,7 +386,7 @@ batchUpsertErrorPatterns pid errors now =
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT ?, u.error_type, u.message, u.stacktrace, u.hash,
                  u.environment, u.service, u.runtime, u.error_data,
-                 u.trace_id, u.trace_id, u.cnt, 0, 0, 0
+                 u.trace_id, u.trace_id, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(?::text[]) AS error_type, unnest(?::text[]) AS message,
                        unnest(?::text[]) AS stacktrace, unnest(?::text[]) AS hash,
                        unnest(?::text[]) AS environment, unnest(?::text[]) AS service,
