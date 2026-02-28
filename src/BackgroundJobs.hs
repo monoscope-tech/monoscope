@@ -1595,12 +1595,13 @@ evaluateQueryMonitor monitor startWall = do
       alertAt = if status == Monitors.MSAlerting && (statusChanged || shouldNotify) then Just startWall else monitor.alertLastTriggered
       (finalWarningAt, finalAlertAt) = if isRecovery then (Nothing, Nothing) else (warningAt, alertAt)
 
-  void $ PG.execute
-    [sql| UPDATE monitors.query_monitors
+  void
+    $ PG.execute
+      [sql| UPDATE monitors.query_monitors
           SET current_status = ?, current_value = ?, last_evaluated = ?,
               warning_last_triggered = ?, alert_last_triggered = ?
           WHERE id = ? |]
-    (status, total, startWall, finalWarningAt, finalAlertAt, monitor.id)
+      (status, total, startWall, finalWarningAt, finalAlertAt, monitor.id)
 
   Relude.when shouldNotify do
     Log.logInfo "Query monitor notification" (monitor.id, title, status, total, "recovery" :: Text, isRecovery)
