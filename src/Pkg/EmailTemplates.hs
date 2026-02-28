@@ -301,23 +301,9 @@ projectDeletedEmail userName projectName =
 -- =============================================================================
 
 runtimeErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
-runtimeErrorsEmail projectName errorsUrl errors =
-  ( "[···] New Runtime Exception(s) Detected - " <> projectName
-  , emailBody do
-      h1_ "New Runtime Error(s)"
-      p_ do
-        "We've detected a new runtime error in your "
-        b_ $ toHtml projectName
-        " project. A copy of this email was sent to all members of the project."
-      emailDivider
-      forM_ errors errorCard
-      emailButton errorsUrl "View all errors"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl errorsUrl
-  )
+runtimeErrorsEmail projectName errorsUrl errors = runtimeErrorVariantEmail
+  "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - "
+  projectName errorsUrl errors "We've detected a new runtime error in your "
 
 
 escalatingErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
