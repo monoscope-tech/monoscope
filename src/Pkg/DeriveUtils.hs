@@ -167,7 +167,8 @@ instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC pr
   fromField f = \case
     Nothing -> returnError UnexpectedNull f ""
     Just bss -> maybe (returnError ConversionFailed f $ "Cannot parse: " <> str) (pure . WrappedEnumSC) $ decodeEnumSC @prefix str
-      where str = toString @Text (decodeUtf8 bss)
+      where
+        str = toString @Text (decodeUtf8 bss)
 
 
 instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC prefix a) where

@@ -210,7 +210,8 @@ anomalyDetailCore pid firstM fetchIssue = do
           userPermission <- ProjectMembers.getUserPermission pid sess.user.id
           ms <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
           let cr =
-                userPermission >= Just ProjectMembers.PEdit
+                userPermission
+                  >= Just ProjectMembers.PEdit
                   || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
           pure (ms, cr)
         Nothing -> pure (V.empty, False)

@@ -70,7 +70,7 @@ data Permissions
   = PView
   | PEdit
   | PAdmin
-  deriving stock (Eq, Ord, Generic, Read, Show)
+  deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "P" Permissions
 
