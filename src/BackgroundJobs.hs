@@ -766,8 +766,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
       |]
       (pid, errorHashes, Issues.RuntimeException)
   subscribedCount :: Int <-
-    fromMaybe 0
-      . fmap fromOnly
+    maybe 0 fromOnly
       . listToMaybe
       <$> PG.query
         [sql|
