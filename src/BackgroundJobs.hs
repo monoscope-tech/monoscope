@@ -705,8 +705,6 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , errorState :: ErrorPatterns.ErrorState
   , issueId :: Issues.IssueId
   , issueTitle :: Text
-  , notifyEveryMinutes :: Int
-  , lastNotifiedAt :: Maybe UTCTime
   , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
   }
@@ -750,7 +748,6 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
     PG.query
       [sql|
         SELECT e.id, e.error_data, e.state, i.id, i.title,
-               e.notify_every_minutes, e.last_notified_at,
                e.slack_thread_ts, e.discord_message_id
         FROM apis.error_patterns e
         JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
@@ -1814,7 +1811,6 @@ calculateErrorBaselines pid = do
 -- Uses error_hourly_stats for current rate calculation
 detectErrorSpikes :: Projects.ProjectId -> ATBackgroundCtx ()
 detectErrorSpikes pid = do
-  authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
   now <- Time.currentTime
   Log.logInfo "Detecting error spikes" pid
 
@@ -1832,21 +1828,7 @@ detectErrorSpikes pid = do
             unless alreadyEscalating do
               void $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESEscalating now
               issue <- Issues.createErrorSpikeIssue pid errRate spike.currentRate mean stddev
-              Issues.insertIssue issue
-              liftIO $ withResource authCtx.jobsPool \conn ->
-                void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-              projectM <- Projects.projectById pid
-              whenJust projectM \project -> Relude.when project.errorAlerts do
-                users <- Projects.usersByProjectId pid
-                let issueId = UUID.toText issue.id.unUUIDId
-                    spikeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = errRate.errorData, runtimeAlertType = ErrorSpike}
-                    errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
-                    (subj, html) = ET.errorSpikesEmail project.title errorsUrl [errRate.errorData]
-                (finalSlackTs, finalDiscordMsgId) <-
-                  sendAlertToChannels spikeAlert pid project users errorsUrl subj html (errRate.slackThreadTs, errRate.discordMessageId)
-                Relude.when (finalSlackTs /= errRate.slackThreadTs || finalDiscordMsgId /= errRate.discordMessageId)
-                  $ void
-                  $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errRate.errorId finalSlackTs finalDiscordMsgId now
+              createAndNotifyErrorIssue pid issue ErrorSpike errRate.errorData ET.errorSpikesEmail errRate.errorId (errRate.slackThreadTs, errRate.discordMessageId)
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
           _ ->
             -- No spike (or drop): de-escalate if currently escalating
@@ -1857,11 +1839,39 @@ detectErrorSpikes pid = do
   Log.logInfo "Finished error spike detection" pid
 
 
+-- | Insert an issue, queue LLM enhancement, and send alerts to all channels.
+-- Shared by detectErrorSpikes and processNewError.
+createAndNotifyErrorIssue
+  :: Projects.ProjectId
+  -> Issues.Issue
+  -> RuntimeAlertType
+  -> ErrorPatterns.ATError
+  -> (Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ()))
+  -> ErrorPatterns.ErrorPatternId
+  -> (Maybe Text, Maybe Text)
+  -> ATBackgroundCtx ()
+createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatternId (existSlackTs, existDiscordId) = do
+  authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+  now <- Time.currentTime
+  Issues.insertIssue issue
+  liftIO $ withResource authCtx.jobsPool \conn ->
+    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+  projectM <- Projects.projectById pid
+  whenJust projectM \project -> Relude.when project.errorAlerts do
+    users <- Projects.usersByProjectId pid
+    let alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType}
+        errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
+        (subj, html) = emailFn project.title errorsUrl [errorData]
+    (finalSlackTs, finalDiscordMsgId) <-
+      sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
+    Relude.when (finalSlackTs /= existSlackTs || finalDiscordMsgId /= existDiscordId)
+      $ void
+      $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
+
+
 -- | Process a new error and create an issue
 processNewError :: Projects.ProjectId -> Text -> ATBackgroundCtx ()
 processNewError pid errorHash = do
-  authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
-  now <- Time.currentTime
   Log.logInfo "Processing new error" (pid, errorHash)
   errorM <- ErrorPatterns.getErrorPatternByHash pid errorHash
   case errorM of
@@ -1873,21 +1883,8 @@ processNewError pid errorHash = do
             _ -> Nothing
       whenJust alertType \runtimeAlertType -> do
         issue <- Issues.createNewErrorIssue pid err
-        Issues.insertIssue issue
-        liftIO $ withResource authCtx.jobsPool \conn ->
-          void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        projectM <- Projects.projectById pid
-        whenJust projectM \project -> Relude.when project.errorAlerts do
-          users <- Projects.usersByProjectId pid
-          let issueId = UUID.toText issue.id.unUUIDId
-              runtimeAlert = RuntimeErrorAlert{issueId = issueId, issueTitle = issue.title, errorData = err.errorData, runtimeAlertType}
-              errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
-              (subj, html) = case runtimeAlertType of
-                RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [err.errorData]
-                _ -> ET.runtimeErrorsEmail project.title errorsUrl [err.errorData]
-          (finalSlackTs, finalDiscordMsgId) <-
-            sendAlertToChannels runtimeAlert pid project users errorsUrl subj html (err.slackThreadTs, err.discordMessageId)
-          Relude.when (finalSlackTs /= err.slackThreadTs || finalDiscordMsgId /= err.discordMessageId)
-            $ void
-            $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt err.id finalSlackTs finalDiscordMsgId now
+        let emailFn = case runtimeAlertType of
+              RegressedErrors -> ET.regressedErrorsEmail
+              _ -> ET.runtimeErrorsEmail
+        createAndNotifyErrorIssue pid issue runtimeAlertType err.errorData emailFn err.id (err.slackThreadTs, err.discordMessageId)
         Log.logInfo "Created issue for error" (pid, err.id, issue.id, show runtimeAlertType)

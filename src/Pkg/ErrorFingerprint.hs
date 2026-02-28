@@ -110,12 +110,12 @@ splitDotted q = case T.breakOnEnd "." q of
 
 -- | True when none of the needles appear as infixes in the haystack
 noneInfix :: [Text] -> Text -> Bool
-noneInfix needles haystack = not $ any (`T.isInfixOf` haystack) needles
+noneInfix needles haystack = all (not . (`T.isInfixOf` haystack)) needles
 
 
 -- | True when none of the needles appear as prefixes of the text
 nonePrefix :: [Text] -> Text -> Bool
-nonePrefix needles txt = not $ any (`T.isPrefixOf` txt) needles
+nonePrefix needles txt = all (not . (`T.isPrefixOf` txt)) needles
 
 
 -- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
@@ -272,13 +272,7 @@ parseJsFrame line
 
     extractJsModule path =
       let baseName = fromMaybe path $ viaNonEmpty last $ T.splitOn "/" path
-       in Just
-            $ T.toLower
-            $ fromMaybe baseName
-            $ T.stripSuffix ".js" baseName
-            <|> T.stripSuffix ".ts" baseName
-            <|> T.stripSuffix ".mjs" baseName
-            <|> T.stripSuffix ".cjs" baseName
+       in Just $ T.toLower $ fromMaybe baseName $ asum $ map (`T.stripSuffix` baseName) [".js", ".ts", ".mjs", ".cjs"]
 
     cleanJsFunction func =
       -- Remove namespacing: Object.foo.bar -> bar
@@ -320,11 +314,7 @@ parsePythonFrame line
           moduleName = fromMaybe baseName $ T.stripSuffix ".py" baseName
        in Just moduleName
 
-    cleanPythonFunction func =
-      -- Remove lambda indicators
-      T.replace "<lambda>" "lambda"
-        $ T.replace "<listcomp>" "listcomp"
-        $ T.replace "<dictcomp>" "dictcomp" func
+    cleanPythonFunction = flip (foldr (uncurry T.replace)) ([("<lambda>", "lambda"), ("<listcomp>", "listcomp"), ("<dictcomp>", "dictcomp")] :: [(Text, Text)])
 
     isPythonInApp = noneInfix ["site-packages/", "dist-packages/", "/lib/python", "<frozen"]
 
