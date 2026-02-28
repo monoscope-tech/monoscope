@@ -1,6 +1,6 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError, notifyErrorSubscriptions) where
 
-import Control.Lens (view, (.~), _1, _2, _3)
+import Control.Lens ((.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
@@ -223,7 +223,7 @@ processBackgroundJob authCtx bgJob =
       case (projectM, errM, userM) of
         (Just project, Just err, Just user) -> do
           let userEmail = CI.original user.email
-          let userName = if T.null user.firstName then userEmail else user.firstName
+              userName = if T.null user.firstName then userEmail else user.firstName
           issueM <- Issues.selectIssueByHash pid err.hash
           let (issueTitle, issuePath) = case issueM of
                 Just issue -> (issue.title, issue.id.toText)
@@ -679,9 +679,7 @@ processOneMinuteErrors scheduledTime pid = do
             pure (sId, tId, AE.toJSON mappedErrors)
           updates = V.mapMaybe mkErrorUpdate (V.fromList errorsByTrace)
       unless (V.null updates) $ do
-        let spanIds = V.map (view _1) updates
-            traceIds = V.map (view _2) updates
-            errorsJson = V.map (view _3) updates
+        let (spanIds, traceIds, errorsJson) = V.unzip3 updates
         rowsUpdated <-
           PG.execute
             [sql| UPDATE otel_logs_and_spans o
@@ -765,20 +763,6 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
           )
       |]
       (pid, errorHashes, Issues.RuntimeException)
-  subscribedCount :: Int <-
-    maybe 0 fromOnly
-      . listToMaybe
-      <$> PG.query
-        [sql|
-        SELECT COUNT(*)::INT FROM apis.error_patterns e
-        WHERE e.project_id = ? AND e.hash = ANY(?::text[])
-          AND e.subscribed = TRUE AND e.state != 'resolved'
-          AND (e.last_notified_at IS NULL
-               OR NOW() - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
-      |]
-        (pid, errorHashes)
-  Relude.when (subscribedCount > length dueErrors)
-    $ Log.logWarn "Subscribed errors missing matching issue" (pid, subscribedCount - length dueErrors)
   unless (null dueErrors) do
     Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
     projectM <- Projects.projectById pid

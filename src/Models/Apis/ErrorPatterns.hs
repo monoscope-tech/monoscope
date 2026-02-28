@@ -35,7 +35,7 @@ where
 import Data.Aeson qualified as AE
 import Data.Default
 import Data.Map.Strict qualified as Map
-import Data.Time (UTCTime (..), ZonedTime, secondsToDiffTime)
+import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
@@ -57,6 +57,7 @@ import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Relude hiding (id)
 import System.Types (DB)
+import Utils (truncateHour)
 
 
 newtype ErrorPatternId = ErrorPatternId {unErrorPatternId :: UUID.UUID}
@@ -297,6 +298,8 @@ updateErrorPatternThreadIds' updateNotifiedAt eid slackTs discordMsgId =
 
 -- | Bulk-update baselines for all active error patterns in a project using a single SQL CTE.
 -- Reads pre-bucketed data from error_hourly_stats over the last 168 hours.
+-- Note: the 'mad' CTE omits a direct JOIN back to error_patterns because it already joins 'stats',
+-- which only contains non-resolved errors (filtered via state != 'resolved' in the stats CTE).
 bulkCalculateAndUpdateBaselines :: DB es => Projects.ProjectId -> Eff es Int64
 bulkCalculateAndUpdateBaselines pid =
   PG.execute
@@ -434,8 +437,3 @@ upsertErrorPatternHourlyStats pid now stats =
     (truncateHour now, hashes, eventCounts, userCounts, pid)
   where
     (hashes, eventCounts, userCounts) = V.unzip3 stats
-
-
--- | Truncate UTCTime to the start of its hour (fixes frozen-time effect not propagating into SQL date_trunc)
-truncateHour :: UTCTime -> UTCTime
-truncateHour (UTCTime day dt) = UTCTime day (secondsToDiffTime $ floor dt `div` 3600 * 3600)

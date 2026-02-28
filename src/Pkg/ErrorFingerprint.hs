@@ -151,67 +151,21 @@ parseGoFrame line
       let parts = T.splitOn "." func
        in fromMaybe func $ viaNonEmpty last parts
 
-    isGoFuncInApp =
-      nonePrefix
-        [ "runtime."
-        , "syscall."
-        , "net."
-        , "net/"
-        , "reflect."
-        , "os."
-        , "io."
-        , "io/"
-        , "fmt."
-        , "log."
-        , "log/"
-        , "strings."
-        , "strconv."
-        , "sync."
-        , "sync/"
-        , "sort."
-        , "bytes."
-        , "encoding."
-        , "encoding/"
-        , "crypto."
-        , "crypto/"
-        , "math."
-        , "math/"
-        , "testing."
-        , "context."
-        , "time."
-        , "path."
-        , "path/"
-        , "regexp."
-        , "bufio."
-        , "archive/"
-        , "compress/"
-        , "database/"
-        , "debug/"
-        , "embed."
-        , "errors."
-        , "expvar."
-        , "flag."
-        , "go/"
-        , "hash."
-        , "hash/"
-        , "html."
-        , "html/"
-        , "image."
-        , "image/"
-        , "index/"
-        , "internal/"
-        , "maps."
-        , "mime."
-        , "mime/"
-        , "plugin."
-        , "slices."
-        , "unicode."
-        , "unicode/"
-        , "unsafe."
-        , "cmp."
-        , "iter."
-        , "unique."
-        ]
+    isGoFuncInApp = nonePrefix goStdlibPrefixes
+
+
+goStdlibPrefixes :: [Text]
+goStdlibPrefixes =
+  [ "runtime.", "syscall.", "net.", "net/", "reflect.", "os.", "io.", "io/"
+  , "fmt.", "log.", "log/", "strings.", "strconv.", "sync.", "sync/", "sort."
+  , "bytes.", "encoding.", "encoding/", "crypto.", "crypto/", "math.", "math/"
+  , "testing.", "context.", "time.", "path.", "path/", "regexp.", "bufio."
+  , "archive/", "compress/", "database/", "debug/", "embed.", "errors."
+  , "expvar.", "flag.", "go/", "hash.", "hash/", "html.", "html/", "image."
+  , "image/", "index/", "internal/", "maps.", "mime.", "mime/", "plugin."
+  , "slices.", "unicode.", "unicode/", "unsafe.", "cmp.", "iter.", "unique."
+  ]
+{-# NOINLINE goStdlibPrefixes #-}
 
 
 -- | Parse JavaScript stack frame

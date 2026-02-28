@@ -54,6 +54,7 @@ module Utils (
   levelFillColor,
   changeTypeFillColor,
   replaceAllFormats,
+  truncateHour,
 )
 where
 
@@ -72,7 +73,7 @@ import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
-import Data.Time.Clock (UTCTime)
+import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -1351,3 +1352,7 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 
     isHexDigit' :: Char -> Bool
     isHexDigit' c = isDigit c || isHexAlpha c
+
+
+truncateHour :: UTCTime -> UTCTime
+truncateHour (UTCTime day dt) = UTCTime day (secondsToDiffTime $ floor dt `div` 3600 * 3600)
