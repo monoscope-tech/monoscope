@@ -747,7 +747,8 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
   dueErrors :: [ErrorSubscriptionDue] <-
     PG.query
       [sql|
-        SELECT e.id, e.error_data, e.state, i.id, i.title,
+        SELECT DISTINCT ON (e.id)
+               e.id, e.error_data, e.state, i.id, i.title,
                e.slack_thread_ts, e.discord_message_id
         FROM apis.error_patterns e
         JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
@@ -760,6 +761,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
             e.last_notified_at IS NULL
             OR ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
           )
+        ORDER BY e.id, i.created_at DESC
       |]
       (pid, errorHashes, Issues.RuntimeException, now)
   unless (null dueErrors) do
@@ -1817,7 +1819,7 @@ detectErrorSpikes pid = do
   -- Get all errors with their current hour counts in one query
   errorsWithRates <- ErrorPatterns.getErrorPatternsWithCurrentRates pid now
 
-  forM_ errorsWithRates \errRate -> do
+  void $ forConcurrently errorsWithRates \errRate -> do
     -- Only check errors with established baselines
     case (errRate.baselineState, errRate.baselineMean, errRate.baselineStddev) of
       (BSEstablished, Just mean, Just stddev) ->

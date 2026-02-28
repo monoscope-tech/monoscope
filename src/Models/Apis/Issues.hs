@@ -135,8 +135,7 @@ data IssueType
   | LogPatternRateChange
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] IssueType
-  deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "" IssueType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "" IssueType
 
 
 issueTypeToText :: IssueType -> Text
@@ -689,10 +688,9 @@ data LogPatternData = LogPatternData
 
 
 data RateChangeDirection = Spike | Drop
-  deriving stock (Eq, Generic, Show)
+  deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.ConstructorTagModifier '[DAE.CamelToSnake]] RateChangeDirection
-  deriving (Display) via WrappedEnumSC "" RateChangeDirection
+  deriving (AE.FromJSON, AE.ToJSON, Display) via WrappedEnumSC "" RateChangeDirection
 
 
 data SpikeResult = SpikeResult
