@@ -1846,7 +1846,8 @@ detectErrorSpikes pid = do
                   $ void
                   $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errRate.errorId finalSlackTs finalDiscordMsgId now
               Log.logInfo "Created issue for error spike" (pid, errRate.errorId, issue.id)
-          _ -> -- No spike (or drop): de-escalate if currently escalating
+          _ ->
+            -- No spike (or drop): de-escalate if currently escalating
             Relude.when (errRate.state == ErrorPatterns.ESEscalating)
               $ void
               $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESOngoing now
