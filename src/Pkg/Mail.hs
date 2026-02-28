@@ -623,6 +623,7 @@ sampleReport title = ReportAlert ("🧪 TEST: " <> title) "2025-01-01" "2025-01-
 
 data AlertMessages = AlertMessages {slackEmoji :: Text, discordContent :: Text}
 
+
 runtimeAlertMessages :: RuntimeAlertType -> AlertMessages
 runtimeAlertMessages = \case
   NewRuntimeError -> AlertMessages ":red_circle:" "**🔴 New Runtime Error**"
