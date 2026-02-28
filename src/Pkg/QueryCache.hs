@@ -24,8 +24,10 @@ import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (Only (..))
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
@@ -177,14 +179,15 @@ lookupCache key (reqFrom, reqTo) =
 
 
 -- | Update or insert cache entry (replaces time range and data on conflict)
-updateCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
-updateCache key (fromTime, toTime) metricsData originalQuery =
+updateCache :: (DB es, Time :> es) => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
+updateCache key (fromTime, toTime) metricsData originalQuery = do
+  now <- Time.currentTime
   void
     $ PG.execute
       [sql|
     INSERT INTO query_cache (project_id, source, query_hash, bin_interval, original_query,
                              cached_from, cached_to, cached_data, hit_count, last_accessed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, now())
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
     ON CONFLICT (project_id, source, query_hash, bin_interval)
     DO UPDATE SET
       cached_from = EXCLUDED.cached_from,
@@ -192,10 +195,10 @@ updateCache key (fromTime, toTime) metricsData originalQuery =
       cached_data = EXCLUDED.cached_data,
       original_query = EXCLUDED.original_query,
       hit_count = query_cache.hit_count + 1,
-      last_accessed_at = now(),
-      updated_at = now()
+      last_accessed_at = EXCLUDED.last_accessed_at,
+      updated_at = EXCLUDED.last_accessed_at
   |]
-      (key.projectId, key.source, key.queryHash, key.binInterval, originalQuery, fromTime, toTime, AesonText metricsData)
+      (key.projectId, key.source, key.queryHash, key.binInterval, originalQuery, fromTime, toTime, AesonText metricsData, now)
 
 
 -- | Merge two MetricsData by timestamp, handling different column structures
@@ -290,17 +293,18 @@ trimOldData windowStart = filterByTimestamp (>= toPosix windowStart)
 
 
 -- | Cleanup expired cache entries (LRU eviction)
-cleanupExpiredCache :: DB es => Eff es Int
-cleanupExpiredCache =
+cleanupExpiredCache :: (DB es, Time :> es) => Eff es Int
+cleanupExpiredCache = do
+  now <- Time.currentTime
   maybe 0 fromOnly
     . viaNonEmpty head
     <$> PG.query
       [sql|
       WITH deleted AS (
         DELETE FROM query_cache
-        WHERE last_accessed_at < now() - interval '4 hours'
+        WHERE last_accessed_at < ? - interval '4 hours'
         RETURNING id
       )
       SELECT COUNT(*)::int FROM deleted
     |]
-      ()
+      (Only now)

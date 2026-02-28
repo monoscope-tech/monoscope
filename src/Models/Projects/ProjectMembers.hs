@@ -56,8 +56,10 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -152,12 +154,14 @@ updateProjectMembersPermissons vals = void $ PG.executeMany q vals
             WHERE pm.id::uuid = c.id::uuid; |]
 
 
-softDeleteProjectMembers :: DB es => NonEmpty UUID.UUID -> Eff es ()
-softDeleteProjectMembers ids = void $ PG.execute q (Only $ V.fromList $ toList ids)
+softDeleteProjectMembers :: (DB es, Time :> es) => NonEmpty UUID.UUID -> Eff es ()
+softDeleteProjectMembers ids = do
+  now <- Time.currentTime
+  void $ PG.execute q (now, V.fromList $ toList ids)
   where
     q =
       [sql| UPDATE projects.project_members
-            SET active = FALSE, deleted_at = NOW()
+            SET active = FALSE, deleted_at = ?
             WHERE id = ANY(?::uuid[]); |]
 
 
@@ -360,20 +364,24 @@ getTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
 getTeamByHandle pid handle = listToMaybe <$> getTeamsByHandles pid [handle]
 
 
-deleteTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es ()
-deleteTeamByHandle pid handle = void $ PG.execute q (pid, handle)
+deleteTeamByHandle :: (DB es, Time :> es) => Projects.ProjectId -> Text -> Eff es ()
+deleteTeamByHandle pid handle = do
+  now <- Time.currentTime
+  void $ PG.execute q (now, pid, handle)
   where
     q =
-      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND handle = ? AND is_everyone = FALSE |]
+      [sql| UPDATE projects.teams SET deleted_at = ? WHERE project_id = ? AND handle = ? AND is_everyone = FALSE |]
 
 
-deleteTeams :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
+deleteTeams :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
 deleteTeams pid tids
   | V.null tids = pass
-  | otherwise = void $ PG.execute q (pid, tids)
+  | otherwise = do
+      now <- Time.currentTime
+      void $ PG.execute q (now, pid, tids)
   where
     q =
-      [sql| UPDATE projects.teams SET deleted_at = now() WHERE project_id = ? AND id = ANY(?::uuid[]) AND is_everyone = FALSE |]
+      [sql| UPDATE projects.teams SET deleted_at = ? WHERE project_id = ? AND id = ANY(?::uuid[]) AND is_everyone = FALSE |]
 
 
 getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]

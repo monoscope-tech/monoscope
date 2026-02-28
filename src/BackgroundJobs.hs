@@ -264,10 +264,10 @@ processBackgroundJob authCtx bgJob =
               <$> PG.query
                 [sql|SELECT COUNT(*) FROM background_jobs
                WHERE payload->>'tag' = 'HourlyJob'
-                 AND run_at >= date_trunc('day', now())
-                 AND run_at < date_trunc('day', now()) + interval '1 day'
+                 AND run_at >= date_trunc('day', ?::timestamptz)
+                 AND run_at < date_trunc('day', ?::timestamptz) + interval '1 day'
                  AND status IN ('queued', 'locked')|]
-                ()
+                (currentTime, currentTime)
 
           unless hourlyJobsExist $ do
             Log.logInfo "Scheduling hourly jobs for today" ()
@@ -287,7 +287,7 @@ processBackgroundJob authCtx bgJob =
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
 
-          projects <- PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > now() - interval '24 hours'|] ()
+          projects <- PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > ? - interval '24 hours'|] (Only currentTime)
           Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
           forM_ projects \p -> do
             -- Check if this project's jobs already scheduled for today (per-project idempotent check)
@@ -296,10 +296,10 @@ processBackgroundJob authCtx bgJob =
                 [sql|SELECT COUNT(*) FROM background_jobs
                  WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
                    AND payload->>'projectId' = ?
-                   AND run_at >= date_trunc('day', now())
-                   AND run_at < date_trunc('day', now()) + interval '1 day'
+                   AND run_at >= date_trunc('day', ?::timestamptz)
+                   AND run_at < date_trunc('day', ?::timestamptz) + interval '1 day'
                    AND status IN ('queued', 'locked')|]
-                (Only p)
+                (p, currentTime, currentTime)
 
             let projectJobsExist = case existingProjectJobs of
                   [Only (count :: Int)] -> count >= 288

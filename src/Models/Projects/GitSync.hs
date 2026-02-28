@@ -55,6 +55,8 @@ import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
@@ -196,38 +198,43 @@ getGitHubSyncByInstallation instId = listToMaybe <$> PG.query q (Only instId)
     q = [sql| SELECT * FROM projects.github_sync WHERE installation_id = ? |]
 
 
-updateGitHubSync :: DB es => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled =
-  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, encryptToken encKey token, enabled, sid)
+updateGitHubSync :: (DB es, Time :> es) => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
+updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled = do
+  now <- Time.currentTime
+  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, encryptToken encKey token, enabled, now, sid)
   where
     q =
-      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = now()
+      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = ?
               WHERE id = ? RETURNING * |]
 
 
-updateGitHubSyncKeepToken :: DB es => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
-updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled =
-  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, enabled, sid)
+updateGitHubSyncKeepToken :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
+updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled = do
+  now <- Time.currentTime
+  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, enabled, now, sid)
   where
     q =
-      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = now()
+      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = ?
               WHERE id = ? RETURNING * |]
 
 
 -- | Update repo selection for GitHub App installation
-updateGitHubSyncRepo :: DB es => GitHubSyncId -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
-updateGitHubSyncRepo sid ownerVal repoVal branchVal prefix =
-  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, prefix, sid)
+updateGitHubSyncRepo :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
+updateGitHubSyncRepo sid ownerVal repoVal branchVal prefix = do
+  now <- Time.currentTime
+  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, prefix, now, sid)
   where
     q =
-      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, path_prefix = ?, updated_at = now()
+      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, path_prefix = ?, updated_at = ?
               WHERE id = ? RETURNING * |]
 
 
-updateLastTreeSha :: DB es => GitHubSyncId -> Text -> Eff es Int64
-updateLastTreeSha sid sha = PG.execute q (sha, sid)
+updateLastTreeSha :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
+updateLastTreeSha sid sha = do
+  now <- Time.currentTime
+  PG.execute q (sha, now, sid)
   where
-    q = [sql|UPDATE projects.github_sync SET last_tree_sha = ?, updated_at = now() WHERE id = ?|]
+    q = [sql|UPDATE projects.github_sync SET last_tree_sha = ?, updated_at = ? WHERE id = ?|]
 
 
 deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64
@@ -242,10 +249,12 @@ getDashboardGitState pid = M.fromList . fmap (\(did, path, sha) -> (path, (did, 
     q = [sql|SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = ? AND file_path IS NOT NULL AND file_sha IS NOT NULL|]
 
 
-updateDashboardGitInfo :: DB es => DashboardId -> Text -> Text -> Eff es Int64
-updateDashboardGitInfo did path sha = PG.execute q (path, sha, did)
+updateDashboardGitInfo :: (DB es, Time :> es) => DashboardId -> Text -> Text -> Eff es Int64
+updateDashboardGitInfo did path sha = do
+  now <- Time.currentTime
+  PG.execute q (path, sha, now, did)
   where
-    q = [sql|UPDATE projects.dashboards SET file_path = ?, file_sha = ?, updated_at = now() WHERE id = ?|]
+    q = [sql|UPDATE projects.dashboards SET file_path = ?, file_sha = ?, updated_at = ? WHERE id = ?|]
 
 
 -- GitHub API Operations

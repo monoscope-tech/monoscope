@@ -20,6 +20,8 @@ import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
@@ -162,7 +164,7 @@ mergeFileCountThreshold :: Int
 mergeFileCountThreshold = 20
 
 
-saveReplayMinio :: (DB es, Log :> es) => EnvConfig -> Pool Connection -> (Text, ReplayPost') -> Eff es (Maybe Text)
+saveReplayMinio :: (DB es, Log :> es, Time :> es) => EnvConfig -> Pool Connection -> (Text, ReplayPost') -> Eff es (Maybe Text)
 saveReplayMinio envCfg jobsPool (ackId, replayData) = do
   project <- Projects.projectById replayData.projectId
   case project of
@@ -174,7 +176,7 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
         AE.Array newEvents
           | V.null newEvents -> pure $ Just ackId
           | otherwise -> do
-              now <- liftIO getCurrentTime
+              now <- Time.currentTime
               let timeStr = toText $ formatTime defaultTimeLocale "%Y%m%dT%H%M%S%q" now
                   objKey = fromString $ toString $ session <> "/" <> timeStr <> ".json"
                   body = AE.encode (AE.Array newEvents)
@@ -187,11 +189,11 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
                     PG.query
                       [sql|
                     INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count)
-                    VALUES (?, ?, now(), 1)
-                    ON CONFLICT (session_id) DO UPDATE SET last_event_at = now(), merged = FALSE, event_file_count = projects.replay_sessions.event_file_count + 1, updated_at = now()
+                    VALUES (?, ?, ?, 1)
+                    ON CONFLICT (session_id) DO UPDATE SET last_event_at = ?, merged = FALSE, event_file_count = projects.replay_sessions.event_file_count + 1, updated_at = ?
                     RETURNING event_file_count
                   |]
-                      (replayData.sessionId, replayData.projectId)
+                      (replayData.sessionId, replayData.projectId, now, now, now)
                   let fileCount = maybe 0 fromOnly (listToMaybe (countRows :: [Only Int]))
                   when (fileCount >= mergeFileCountThreshold) $ do
                     let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON replayData.projectId, AE.toJSON replayData.sessionId] :: [AE.Value])]
@@ -241,7 +243,8 @@ mergeReplaySession pid sessionId = do
       result <- liftIO $ tryAny $ mergeOneSession s3Conn bucket sessionId
       case result of
         Right _ -> do
-          _ <- PG.execute [sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = now() WHERE session_id = ? AND project_id = ?|] (sessionId, pid)
+          now' <- Time.currentTime
+          _ <- PG.execute [sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = ? WHERE session_id = ? AND project_id = ?|] (now', sessionId, pid)
           Log.logInfo "Merged replay session (file count threshold)" ("session_id", UUID.toText sessionId)
         Left err ->
           Log.logAttention "Failed to merge replay session" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", pid.toText), ("error", toText $ show err)])
@@ -253,14 +256,15 @@ compressAndMergeReplaySessions = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
 
+  now <- Time.currentTime
   sessions <-
     PG.query
       [sql|
     SELECT session_id, project_id FROM projects.replay_sessions
-    WHERE merged = FALSE AND last_event_at < now() - interval '30 minutes'
+    WHERE merged = FALSE AND last_event_at < ? - interval '30 minutes'
     LIMIT 100
   |]
-      ()
+      (Only now)
 
   Log.logInfo "Starting replay session merge job" ("sessions_count", length (sessions :: [(UUID.UUID, Projects.ProjectId)]))
 
@@ -277,9 +281,9 @@ compressAndMergeReplaySessions = do
             _ <-
               PG.execute
                 [sql|
-              UPDATE projects.replay_sessions SET merged = TRUE, event_file_count = 0, updated_at = now() WHERE session_id = ?
+              UPDATE projects.replay_sessions SET merged = TRUE, event_file_count = 0, updated_at = ? WHERE session_id = ?
             |]
-                (Only sessionId)
+                (now, sessionId)
             Log.logInfo "Merged replay session" ("session_id", UUID.toText sessionId)
           Left err ->
             Log.logAttention "Failed to merge replay session" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", projectId.toText), ("error", toText $ show err)])

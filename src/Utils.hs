@@ -78,13 +78,14 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (Only, fromOnly))
+import Database.PostgreSQL.Simple (fromOnly)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Effectful (Eff, IOE)
-import Effectful qualified
+import Effectful (Eff, IOE, type (:>))
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -97,7 +98,7 @@ import Network.URI (escapeURIString, isUnescapedInURI)
 import Numeric (showHex)
 import Pkg.DeriveUtils (hashFile)
 import Relude hiding (notElem, show)
-import Servant
+import Servant hiding ((:>))
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
 import Text.Show
@@ -490,11 +491,12 @@ freeTierLimitExceededBanner pid =
     a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
 
 
-checkFreeTierExceeded :: (IOE Effectful.:> es, WithConnection Effectful.:> es) => Projects.ProjectId -> Text -> Eff es Bool
+checkFreeTierExceeded :: (IOE :> es, WithConnection :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid paymentPlan =
   if paymentPlan == "Free"
     then do
-      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > NOW() - interval '1 day'|] (Only pid)
+      now <- Time.currentTime
+      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ? - interval '1 day'|] (pid, now)
       pure $ count > fromInteger freeTierDailyMaxEvents
     else pure False
 

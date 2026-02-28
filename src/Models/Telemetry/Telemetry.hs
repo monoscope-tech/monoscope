@@ -63,10 +63,8 @@ import Data.List qualified as L (nubBy)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (Display)
-import Data.Time (UTCTime, formatTime)
+import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime)
-import Data.Time.Format (defaultTimeLocale)
-import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed))
@@ -86,6 +84,7 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified as Eff
+import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -97,7 +96,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (lookupValueText)
+import Utils (formatUTC, lookupValueText)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -510,26 +509,26 @@ getSpanRecordsByTraceId pid trId tme now = PG.query q (pid.toText, start, end, t
         |]
 
 
-getSpanRecordsByTraceIds :: DB es => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceIds pid traceIds tme = PG.query (Query $ encodeUtf8 q) (pid.toText, traceIds)
-  where
-    (start, end) =
-      case tme of
-        Nothing -> ("now() - interval '1 day'", "now()")
-        Just ts -> ("'" <> toText (iso8601Show $ addUTCTime (-300) ts) <> "'", "'" <> toText (iso8601Show $ addUTCTime 300 ts) <> "'")
-    q =
-      [text|
-        SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
-               body, attributes, resource, COALESCE(hashes, '{}'), kind, status_code, status_message,
-               COALESCE(start_time, timestamp), end_time, events, links, duration, name,
-               parent_id, summary, date::timestamptz
-        FROM otel_logs_and_spans
-        WHERE project_id = ?
-          AND timestamp >= $start
-          AND timestamp <= $end
-          AND context___trace_id = ANY(?)
-        ORDER BY context___trace_id ASC, start_time ASC;
-      |]
+getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
+getSpanRecordsByTraceIds pid traceIds tme = do
+  now <- Time.currentTime
+  let (start, end) = case tme of
+        Nothing -> (formatUTC $ addUTCTime (-86400) now, formatUTC now)
+        Just ts -> (formatUTC $ addUTCTime (-300) ts, formatUTC $ addUTCTime 300 ts)
+      q =
+        [text|
+          SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
+                 body, attributes, resource, COALESCE(hashes, '{}'), kind, status_code, status_message,
+                 COALESCE(start_time, timestamp), end_time, events, links, duration, name,
+                 parent_id, summary, date::timestamptz
+          FROM otel_logs_and_spans
+          WHERE project_id = ?
+            AND timestamp >= '${start}'
+            AND timestamp <= '${end}'
+            AND context___trace_id = ANY(?)
+          ORDER BY context___trace_id ASC, start_time ASC;
+        |]
+  PG.query (Query $ encodeUtf8 q) (pid.toText, traceIds)
 
 
 spanRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
@@ -550,18 +549,18 @@ spanRecordByName pid trId spanName = listToMaybe <$> PG.query q (pid.toText, trI
               FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
 
 
-getDataPointsData :: DB es => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
-getDataPointsData pid dateRange = PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
-  where
-    dateRangeStr = toText $ case dateRange of
-      (Nothing, Just b) -> "AND timestamp BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      _ -> ""
-
-    q =
-      [text|
+getDataPointsData :: (DB es, Time.Time :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
+getDataPointsData pid dateRange = do
+  now <- Time.currentTime
+  let nowStr = formatUTC now
+      dateRangeStr = case dateRange of
+        (Nothing, Just b) -> "AND timestamp BETWEEN '" <> nowStr <> "' AND '" <> formatUTC b <> "'"
+        (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatUTC a <> "' AND '" <> formatUTC b <> "'"
+        _ -> ""
+      q =
+        [text|
 WITH metrics_aggregated AS (
-    SELECT 
+    SELECT
         project_id,
         metric_name,
         COUNT(*) AS data_points
@@ -569,7 +568,7 @@ WITH metrics_aggregated AS (
     WHERE project_id = ? $dateRangeStr
     GROUP BY project_id, metric_name
 )
-SELECT 
+SELECT
     mm.metric_name,
     mm.metric_type,
     mm.metric_unit,
@@ -584,6 +583,7 @@ LEFT JOIN metrics_aggregated ma
 WHERE mm.project_id = ?
 GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, ma.data_points;
 |]
+  PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
@@ -644,25 +644,27 @@ getTotalMetricsCount pid lastReported = do
       [sql| SELECT count(*) FROM telemetry.metrics WHERE project_id=? AND timestamp > ?|]
 
 
-getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
-getMetricChartListData pid sourceM prefixM dateRange cursor = PG.query (Query $ Relude.encodeUtf8 q) pid
-  where
-    dateRangeStr = toText $ case dateRange of
-      (Nothing, Just b) -> "AND created_at BETWEEN NOW() AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      (Just a, Just b) -> "AND created_at BETWEEN '" <> formatTime defaultTimeLocale "%F %R" a <> "' AND '" <> formatTime defaultTimeLocale "%F %R" b <> "'"
-      _ -> ""
-    sourceFilter = case sourceM of
-      Nothing -> ""
-      Just source -> if source == "" || source == "all" then "" else "AND service_name = '" <> source <> "'"
-    prefixFilter = case prefixM of
-      Nothing -> ""
-      Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
-    cursorTxt = show cursor
-    q =
-      [text|
-        SELECT distinct metric_name, metric_type, metric_unit, metric_description
-        FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
-     |]
+getMetricChartListData :: (DB es, Time.Time :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
+getMetricChartListData pid sourceM prefixM dateRange cursor = do
+  now <- Time.currentTime
+  let nowStr = formatUTC now
+      dateRangeStr = case dateRange of
+        (Nothing, Just b) -> "AND created_at BETWEEN '" <> nowStr <> "' AND '" <> formatUTC b <> "'"
+        (Just a, Just b) -> "AND created_at BETWEEN '" <> formatUTC a <> "' AND '" <> formatUTC b <> "'"
+        _ -> ""
+      sourceFilter = case sourceM of
+        Nothing -> ""
+        Just source -> if source == "" || source == "all" then "" else "AND service_name = '" <> source <> "'"
+      prefixFilter = case prefixM of
+        Nothing -> ""
+        Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
+      cursorTxt = show cursor
+      q =
+        [text|
+          SELECT distinct metric_name, metric_type, metric_unit, metric_description
+          FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
+       |]
+  PG.query (Query $ Relude.encodeUtf8 q) pid
 
 
 getMetricLabelValues :: DB es => Projects.ProjectId -> Text -> Text -> Eff es [Text]
@@ -1196,8 +1198,10 @@ ORDER BY avg_duration DESC LIMIT 10;
       |]
 
 
-getTraceShapes :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
-getTraceShapes pid trIds = PG.query q (pid, trIds, pid, pid)
+getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
+getTraceShapes pid trIds = do
+  now <- Time.currentTime
+  PG.query q (pid, now, trIds, pid, now, pid, now)
   where
     q =
       [sql|
@@ -1205,7 +1209,7 @@ getTraceShapes pid trIds = PG.query q (pid, trIds, pid, pid)
         SELECT DISTINCT context___trace_id, name
         FROM otel_logs_and_spans
         WHERE project_id = ?
-          AND timestamp > now() - interval '1 hour'
+          AND timestamp > ? - interval '1 hour'
           AND context___trace_id = ANY(?)
       ),
       target_shapes AS (
@@ -1221,7 +1225,7 @@ getTraceShapes pid trIds = PG.query q (pid, trIds, pid, pid)
           ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
         FROM otel_logs_and_spans
         WHERE project_id = ?
-          AND timestamp > now() - interval '1 hour'
+          AND timestamp > ? - interval '1 hour'
           AND context___trace_id IS NOT NULL
         GROUP BY context___trace_id
       ),
@@ -1242,7 +1246,7 @@ getTraceShapes pid trIds = PG.query q (pid, trIds, pid, pid)
       JOIN matching_traces m
         ON s.context___trace_id = m.trace_id
       WHERE s.project_id = ?
-        AND s.timestamp > now() - interval '1 hour' and s.name IS NOT NULL
+        AND s.timestamp > ? - interval '1 hour' and s.name IS NOT NULL
       GROUP BY m.target_trace_id, s.name
       ORDER BY m.target_trace_id, s.name;
       |]

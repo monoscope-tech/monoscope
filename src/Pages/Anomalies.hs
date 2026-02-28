@@ -124,10 +124,11 @@ unAcknowledgeAnomalyGetH pid aid = do
 archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 archiveAnomalyGetH pid aid = do
   (sess, project) <- Sessions.sessionAndProject pid
-  let q = [sql| update apis.anomalies set archived_at=NOW() where id=? |]
-  let qI = [sql| update apis.issues set archived_at=NOW() where id=? |]
-  _ <- PG.execute qI (Only aid)
-  _ <- PG.execute q (Only aid)
+  now <- Time.currentTime
+  let q = [sql| update apis.anomalies set archived_at=? where id=? |]
+  let qI = [sql| update apis.issues set archived_at=? where id=? |]
+  _ <- PG.execute qI (now, aid)
+  _ <- PG.execute q (now, aid)
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) True
 
 
@@ -170,7 +171,8 @@ anomalyBulkActionsPostH pid action items = do
           _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
           pass
         "archive" -> do
-          _ <- PG.execute [sql| update apis.anomalies set archived_at=NOW() where id=ANY(?::uuid[]) |] (Only $ V.fromList items.anomalyId)
+          now <- Time.currentTime
+          _ <- PG.execute [sql| update apis.anomalies set archived_at=? where id=ANY(?::uuid[]) |] (now, V.fromList items.anomalyId)
           pass
         _ -> throwError err400{errBody = "unhandled anomaly bulk action: " <> encodeUtf8 action}
       addSuccessToast (action <> "d items Successfully") Nothing

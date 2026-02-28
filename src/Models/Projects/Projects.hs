@@ -69,7 +69,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL qualified as PG
-import Effectful.Time (Time, currentTime)
+import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText)
 import Pkg.Parser.Stats (Section)
@@ -335,8 +335,10 @@ data CreateProject = CreateProject
 
 
 -- FIXME: We currently return an object with empty vectors when nothing was found.
-projectCacheById :: DB es => ProjectId -> Eff es (Maybe ProjectCache)
-projectCacheById pid = listToMaybe <$> PG.query q (pid, pid, pid, pid)
+projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es (Maybe ProjectCache)
+projectCacheById pid = do
+  now <- currentTime
+  listToMaybe <$> PG.query q (pid, now, pid, now, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
@@ -344,10 +346,10 @@ projectCacheById pid = listToMaybe <$> PG.query q (pid, pid, pid, pid)
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
                     ( SELECT count(*) FROM otel_logs_and_spans
-                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY
+                     WHERE project_id=? AND timestamp > ? - INTERVAL '1' DAY
                     ) daily_event_count,
                     ( SELECT count(*) FROM telemetry.metrics
-                     WHERE project_id=? AND timestamp > NOW() - INTERVAL '1' DAY
+                     WHERE project_id=? AND timestamp > ? - INTERVAL '1' DAY
                     ) daily_metric_count,
                     (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
             from
@@ -360,7 +362,7 @@ projectCacheById pid = listToMaybe <$> PG.query q (pid, pid, pid, pid)
 
 
 projectCacheByIdIO :: Pool Connection -> ProjectId -> IO (Maybe ProjectCache)
-projectCacheByIdIO pool pid = runEff $ PG.runWithConnectionPool pool $ projectCacheById pid
+projectCacheByIdIO pool pid = runEff $ PG.runWithConnectionPool pool $ runTime $ projectCacheById pid
 
 
 insertProject :: DB es => CreateProject -> Eff es ()
@@ -379,8 +381,10 @@ getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
     q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
 
 
-selectProjectsForUser :: DB es => UserId -> Eff es [Project']
-selectProjectsForUser uid = PG.query q (Only uid)
+selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [Project']
+selectProjectsForUser uid = do
+  now <- currentTime
+  PG.query q (now, uid)
   where
     q =
       [sql|
@@ -388,7 +392,7 @@ selectProjectsForUser uid = PG.query q (Only uid)
                EXISTS (
                     SELECT 1 FROM otel_logs_and_spans ols
                     WHERE ols.project_id = pp.id::text
-                    AND ols.timestamp >= CURRENT_DATE - INTERVAL '30 days'
+                    AND ols.timestamp >= ?::timestamptz - INTERVAL '30 days'
                     LIMIT 1
                 ) as has_integrated,
                ARRAY_AGG('/api/avatar/' || us.id::text) OVER (PARTITION BY pp.id)
@@ -435,11 +439,13 @@ updateProjectReportNotif pid report_type = PG.execute q (Only pid)
         else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
 
 
-deleteProject :: DB es => ProjectId -> Eff es Int64
-deleteProject pid = PG.execute q (Only pid)
+deleteProject :: (DB es, Time :> es) => ProjectId -> Eff es Int64
+deleteProject pid = do
+  now <- currentTime
+  PG.execute q (now, pid)
   where
     q =
-      [sql| UPDATE projects.projects SET deleted_at=NOW(), active=False where id=?;|]
+      [sql| UPDATE projects.projects SET deleted_at=?, active=False where id=?;|]
 
 
 updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> [Text] -> Eff es Int64
