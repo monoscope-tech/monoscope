@@ -7,6 +7,7 @@ module Pkg.ErrorFingerprint (
 )
 where
 
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Relude
 import Utils (replaceAllFormats, toXXHash)
@@ -108,6 +109,28 @@ splitDotted q = case T.breakOnEnd "." q of
   (modDot, fn) -> (T.dropEnd 1 modDot, fn)
 
 
+-- | O(log n) prefix check via Set.lookupLE: the largest entry <= the input
+-- is the only possible prefix match in a sorted set of prefixes.
+isGoStdlib :: Text -> Bool
+isGoStdlib txt = case S.lookupLE txt goStdlibPrefixes of
+  Just prefix -> prefix `T.isPrefixOf` txt
+  Nothing -> False
+
+goStdlibPrefixes :: S.Set Text
+goStdlibPrefixes =
+  S.fromList
+    [ "archive/", "bufio.", "bytes.", "cmp.", "compress/", "context.", "crypto.", "crypto/"
+    , "database/", "debug/", "embed.", "encoding.", "encoding/", "errors.", "expvar."
+    , "flag.", "fmt.", "go/", "hash.", "hash/", "html.", "html/", "image.", "image/"
+    , "index/", "internal/", "io.", "io/", "iter.", "log.", "log/", "maps.", "math."
+    , "math/", "mime.", "mime/", "net.", "net/", "os.", "path.", "path/", "plugin."
+    , "reflect.", "regexp.", "runtime.", "slices.", "sort.", "strconv.", "strings."
+    , "sync.", "sync/", "syscall.", "testing.", "time.", "unicode.", "unicode/"
+    , "unique.", "unsafe."
+    ]
+{-# NOINLINE goStdlibPrefixes #-}
+
+
 -- | Parse Go stack frame: "goroutine 1 [running]:" or "main.foo(0x1234)"
 -- Format: package.function(args) or /path/to/file.go:123 +0x1f
 parseGoFrame :: Text -> Maybe StackFrame
@@ -127,73 +150,9 @@ parseGoFrame line
               , lineNumber = Nothing
               , columnNumber = Nothing
               , contextLine = Nothing
-              , isInApp = not $ any (`T.isPrefixOf` funcPart) goStdlibPrefixes
+              , isInApp = not $ isGoStdlib funcPart
               }
   | otherwise = Nothing
-
-
-goStdlibPrefixes :: [Text]
-goStdlibPrefixes =
-  [ "runtime."
-  , "syscall."
-  , "net."
-  , "net/"
-  , "reflect."
-  , "os."
-  , "io."
-  , "io/"
-  , "fmt."
-  , "log."
-  , "log/"
-  , "strings."
-  , "strconv."
-  , "sync."
-  , "sync/"
-  , "sort."
-  , "bytes."
-  , "encoding."
-  , "encoding/"
-  , "crypto."
-  , "crypto/"
-  , "math."
-  , "math/"
-  , "testing."
-  , "context."
-  , "time."
-  , "path."
-  , "path/"
-  , "regexp."
-  , "bufio."
-  , "archive/"
-  , "compress/"
-  , "database/"
-  , "debug/"
-  , "embed."
-  , "errors."
-  , "expvar."
-  , "flag."
-  , "go/"
-  , "hash."
-  , "hash/"
-  , "html."
-  , "html/"
-  , "image."
-  , "image/"
-  , "index/"
-  , "internal/"
-  , "maps."
-  , "mime."
-  , "mime/"
-  , "plugin."
-  , "slices."
-  , "unicode."
-  , "unicode/"
-  , "unsafe."
-  , "cmp."
-  , "iter."
-  , "unique."
-  ]
-{-# NOINLINE goStdlibPrefixes #-}
 
 
 -- | Parse JavaScript stack frame
