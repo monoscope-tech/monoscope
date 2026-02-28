@@ -50,10 +50,9 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
-import Pkg.DeriveUtils (BaselineState (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Relude hiding (id)
 import System.Types (DB)

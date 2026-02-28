@@ -28,6 +28,7 @@ import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
+import Effectful.Concurrent.Async (forConcurrently)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
@@ -83,7 +84,6 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
-import Effectful.Concurrent.Async (forConcurrently)
 import UnliftIO.Exception (bracket, catch, try)
 import Utils (replaceAllFormats, toXXHash)
 
