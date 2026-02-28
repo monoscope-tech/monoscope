@@ -50,7 +50,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
-import Models.Apis.LogPatterns (BaselineState (..))
+import Pkg.DeriveUtils (BaselineState (..))
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -131,7 +131,7 @@ data ErrorPattern = ErrorPattern
 data ErrorPatternL = ErrorPatternL
   { base :: ErrorPattern
   , occurrences :: Int
-  , affectedUsers :: Int
+  , userCount :: Int
   , lastOccurredAt :: Maybe ZonedTime -- hour granularity (bound to MAX(hour_bucket)), not exact event time
   }
   deriving stock (Generic, Show)
@@ -195,10 +195,10 @@ getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff 
 getErrorPatternLByHash pid hash now = listToMaybe <$> PG.query q (now, pid, hash)
   where
     q =
-      "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.affected_users, 0)::INT, ev.last_occurred_at FROM ("
+      "SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.user_count, 0)::INT, ev.last_occurred_at FROM ("
         <> _select @ErrorPattern
         <> [sql|) e LEFT JOIN LATERAL (
-              SELECT SUM(event_count) AS occurrences, SUM(user_count) AS affected_users, MAX(hour_bucket) AS last_occurred_at
+              SELECT SUM(event_count) AS occurrences, SUM(user_count) AS user_count, MAX(hour_bucket) AS last_occurred_at
               FROM apis.error_hourly_stats WHERE error_id = e.id AND hour_bucket >= ?::timestamptz - INTERVAL '30 days'
             ) ev ON true WHERE e.project_id = ? AND e.hash = ? |]
 
@@ -387,7 +387,7 @@ batchUpsertErrorPatterns pid errors now =
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
           SELECT ?, u.error_type, u.message, u.stacktrace, u.hash,
                  u.environment, u.service, u.runtime, u.error_data,
-                 u.trace_id, u.trace_id, u.cnt, u.cnt, u.cnt, u.cnt
+                 u.trace_id, u.trace_id, u.cnt, 0, 0, 0
           FROM (SELECT unnest(?::text[]) AS error_type, unnest(?::text[]) AS message,
                        unnest(?::text[]) AS stacktrace, unnest(?::text[]) AS hash,
                        unnest(?::text[]) AS environment, unnest(?::text[]) AS service,
@@ -399,9 +399,9 @@ batchUpsertErrorPatterns pid errors now =
             error_data = EXCLUDED.error_data,
             recent_trace_id = EXCLUDED.recent_trace_id,
             occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
-            occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_5m,
-            occurrences_1h = apis.error_patterns.occurrences_1h + EXCLUDED.occurrences_1h,
-            occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_24h,
+            occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,
+            occurrences_1h = apis.error_patterns.occurrences_1h + EXCLUDED.occurrences_1m,
+            occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_1m,
             quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
             state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
             regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN ? ELSE apis.error_patterns.regressed_at END |]

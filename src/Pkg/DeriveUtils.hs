@@ -2,6 +2,7 @@
 
 module Pkg.DeriveUtils (
   AesonText (..),
+  BaselineState (..),
   DB,
   PGTextArray (..),
   UUIDId (..),
@@ -204,6 +205,12 @@ instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
        in case readMaybe str of
             Just a -> pure $ WrappedEnumShow a
             Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
+
+
+data BaselineState = BSLearning | BSEstablished
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (Default, NFData)
+  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "BS" BaselineState
 
 
 connectPostgreSQL :: ByteString -> IO Connection

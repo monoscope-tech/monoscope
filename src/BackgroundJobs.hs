@@ -46,7 +46,6 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.Integrations (PagerdutyData (..), getPagerdutyByProjectId)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
-import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.RequestDumps qualified as RequestDumps
@@ -69,7 +68,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
@@ -84,6 +83,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
+import Effectful.Concurrent.Async (forConcurrently)
 import UnliftIO.Exception (bracket, catch, try)
 import Utils (replaceAllFormats, toXXHash)
 
@@ -221,7 +221,7 @@ processBackgroundJob authCtx bgJob =
       userM <- Users.userById assigneeId
       projectM <- Projects.projectById pid
       case (projectM, errM, userM) of
-        (Just project, Just err, Just user) -> do
+        (Just project, Just err, Just user) | err.projectId == pid -> do
           let userEmail = CI.original user.email
               userName = if T.null user.firstName then userEmail else user.firstName
           issueM <- Issues.selectIssueByHash pid err.hash
@@ -664,7 +664,7 @@ processOneMinuteErrors scheduledTime pid = do
       let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
           errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
       processProjectErrors pid allErrors scheduledTime
-      notifyErrorSubscriptions pid (V.map (.hash) allErrors)
+      notifyErrorSubscriptions pid (V.uniq $ V.modify (VA.sort) $ V.map (.hash) allErrors)
       -- Upsert hourly rollup stats (aggregated by hash)
       let hashGroups = HM.toList $ V.foldl' addError HM.empty allErrors
           addError acc e = HM.insertWith addCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc
@@ -725,7 +725,7 @@ sendAlertToChannels
   -> Html ()
   -> (Maybe Text, Maybe Text)
   -> ATBackgroundCtx (Maybe Text, Maybe Text)
-sendAlertToChannels alert pid project users pagerdutyUrl subj html (initSlackTs, initDiscordMsgId) =
+sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, initDiscordMsgId) =
   foldlM
     ( \(slackTs, discordMsgId) -> \case
         Projects.NSlack -> do
@@ -736,7 +736,7 @@ sendAlertToChannels alert pid project users pagerdutyUrl subj html (initSlackTs,
           pure (slackTs, discordMsgId <|> msgIdM)
         Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert alert pid project.title project.whatsappNumbers
         Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-        Projects.NPagerduty -> (slackTs, discordMsgId) <$ (getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title pagerdutyUrl)
+        Projects.NPagerduty -> (slackTs, discordMsgId) <$ (getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title alertUrl)
     )
     (initSlackTs, initDiscordMsgId)
     project.notificationsChannel
@@ -774,7 +774,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
             ErrorPatterns.ESEscalating -> EscalatingErrors
             ErrorPatterns.ESRegressed -> RegressedErrors
             _ -> NewRuntimeError
-      forM_ dueErrors \sub -> do
+      results <- forConcurrently dueErrors \sub -> do
         let alertType = alertTypeForState sub.errorState
             alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType}
             errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
@@ -784,7 +784,9 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
               _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData]
         (finalSlackTs, finalDiscordMsgId) <-
           sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
-        void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt sub.errorId finalSlackTs finalDiscordMsgId now
+        pure (sub.errorId, finalSlackTs, finalDiscordMsgId)
+      forM_ results \(errorId, slackTs, discordMsgId) ->
+        void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorId slackTs discordMsgId now
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest)

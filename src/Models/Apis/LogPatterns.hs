@@ -36,7 +36,6 @@ where
 
 import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Data.Aeson qualified as AE
-import Data.Default (Default)
 import Data.List (lookup)
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
@@ -52,16 +51,10 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (truncateHour)
-
-
-data BaselineState = BSLearning | BSEstablished
-  deriving stock (Eq, Generic, Read, Show)
-  deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "BS" BaselineState
 
 
 newtype LogPatternId = LogPatternId {unLogPatternId :: Int64}

@@ -78,9 +78,9 @@ data StackFrame = StackFrame
 -- >>> map (.isInApp) $ parseStackTrace "dotnet" "at MyApp.Services.DbService.Query() in /app/Services/DbService.cs:line 15\nat System.Runtime.CompilerServices.TaskAwaiter.HandleNonSuccessAndDebuggerNotification(Task task)"
 -- [True,False]
 parseStackTrace :: Text -> Text -> [StackFrame]
-parseStackTrace mSdk stackText =
+parseStackTrace runtime stackText =
   let lns = filter (not . T.null . T.strip) $ lines stackText
-   in mapMaybe (parseStackFrame mSdk) lns
+   in mapMaybe (parseStackFrame runtime) lns
 
 
 -- | Parse a single stack frame line based on SDK type
@@ -127,31 +127,19 @@ parseGoFrame line
       -- File path line: /path/to/file.go:123 +0x1f — skip since functionName is empty (noise in fingerprints)
       Nothing
   | "(" `T.isInfixOf` line =
-      -- Function call line: main.foo(0x1234, 0x5678)
       let (funcPart, _) = T.breakOn "(" line
+          (modName, fnName) = splitDotted funcPart
        in Just
             StackFrame
               { filePath = ""
-              , moduleName = extractGoModuleFromFunc funcPart
-              , functionName = extractGoFuncName funcPart
+              , moduleName = if T.null modName then Nothing else Just modName
+              , functionName = fnName
               , lineNumber = Nothing
               , columnNumber = Nothing
               , contextLine = Nothing
-              , isInApp = isGoFuncInApp funcPart
+              , isInApp = nonePrefix goStdlibPrefixes funcPart
               }
   | otherwise = Nothing
-  where
-    extractGoModuleFromFunc func =
-      let parts = T.splitOn "." func
-       in if length parts > 1
-            then T.intercalate "." <$> viaNonEmpty init parts
-            else Nothing
-
-    extractGoFuncName func =
-      let parts = T.splitOn "." func
-       in fromMaybe func $ viaNonEmpty last parts
-
-    isGoFuncInApp = nonePrefix goStdlibPrefixes
 
 
 goStdlibPrefixes :: [Text]
