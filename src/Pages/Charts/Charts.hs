@@ -149,7 +149,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
 
 -- | Execute query with caching support for timeseries queries
 queryMetricsWithCache
-  :: DB es
+  :: (DB es, Time.Time :> es)
   => AuthContext
   -> DataType
   -> Projects.ProjectId

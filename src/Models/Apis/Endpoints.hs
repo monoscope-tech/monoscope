@@ -28,11 +28,14 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL (withConnection)
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import System.Types (DB)
+import Utils (formatUTC)
 
 
 type EndpointId = UUIDId "endpoint"
@@ -160,34 +163,30 @@ data HostEvents = HostEvents
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-dependenciesAndEventsCount :: DB es => Projects.ProjectId -> Text -> Text -> Int -> Text -> Eff es [HostEvents]
-dependenciesAndEventsCount pid requestType sortT skip timeF = PG.query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
-  where
-    orderBy = case sortT of
-      "first_seen" -> "first_seen ASC"
-      "last_seen" -> "last_seen DESC"
-      _ -> "eventsCount DESC"
-
-    timeRange = case timeF of
-      "14D" -> "timestamp > now() - interval '14 day'"
-      _ -> "timestamp > now() - interval '1 day'"
-
-    endpointFilter = case requestType of
-      "Outgoing" -> "ep.outgoing = true"
-      "Incoming" -> "ep.outgoing = false"
-      _ -> "ep.outgoing = false"
-
-    isOutgoing = requestType == "Outgoing"
-
-    q =
-      [text|
+dependenciesAndEventsCount :: (DB es, Time :> es) => Projects.ProjectId -> Text -> Text -> Int -> Text -> Eff es [HostEvents]
+dependenciesAndEventsCount pid requestType sortT skip timeF = do
+  now <- Time.currentTime
+  let nowStr = formatUTC now
+      timeRange = case timeF of
+        "14D" -> "timestamp > '" <> nowStr <> "'::timestamptz - interval '14 day'"
+        _ -> "timestamp > '" <> nowStr <> "'::timestamptz - interval '1 day'"
+      orderBy = case sortT of
+        "first_seen" -> "first_seen ASC"
+        "last_seen" -> "last_seen DESC"
+        _ -> "eventsCount DESC"
+      endpointFilter = case requestType of
+        "Outgoing" -> "ep.outgoing = true"
+        "Incoming" -> "ep.outgoing = false"
+        _ -> "ep.outgoing = false"
+      q =
+        [text|
 WITH filtered_requests AS (
     SELECT attributes->'net'->'host'->>'name' AS host,
            COUNT(*) AS eventsCount,
            MAX(timestamp) AS last_seen,
            MIN(timestamp) AS first_seen
     FROM otel_logs_and_spans
-    WHERE project_id = ? 
+    WHERE project_id = ?
       AND $timeRange
       AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
       AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
@@ -204,7 +203,10 @@ WHERE ep.project_id = ?
   AND $endpointFilter
 ORDER BY $orderBy
 LIMIT 20 OFFSET ?
-      |]
+        |]
+  PG.query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, skip)
+  where
+    isOutgoing = requestType == "Outgoing"
 
 
 countEndpointInbox :: DB es => Projects.ProjectId -> Text -> Text -> Eff es Int

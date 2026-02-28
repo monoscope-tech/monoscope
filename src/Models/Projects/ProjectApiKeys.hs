@@ -88,10 +88,12 @@ projectApiKeysByProjectId :: DB es => Projects.ProjectId -> Eff es [ProjectApiKe
 projectApiKeysByProjectId projectId = PG.query (_selectWhere @ProjectApiKey [[field| project_id |]]) (Only projectId)
 
 
-revokeApiKey :: DB es => ProjectApiKeyId -> Eff es Int64
-revokeApiKey kid = PG.execute q (Only kid)
+revokeApiKey :: (DB es, Time :> es) => ProjectApiKeyId -> Eff es Int64
+revokeApiKey kid = do
+  now <- Time.currentTime
+  PG.execute q (now, kid)
   where
-    q = [sql| UPDATE projects.project_api_keys SET deleted_at=NOW(), active=false where id=?;|]
+    q = [sql| UPDATE projects.project_api_keys SET deleted_at=?, active=false where id=?;|]
 
 
 activateApiKey :: DB es => ProjectApiKeyId -> Eff es Int64

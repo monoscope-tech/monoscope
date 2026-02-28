@@ -137,7 +137,7 @@ dashTitle t = t
 -- | Sync file_path and file_sha for a dashboard after any update.
 -- Only recomputes SHA when the schema content has actually changed.
 -- Skips template-based dashboards (schema = Nothing) since they have no custom content to sync.
-syncDashboardFileInfo :: DB es => Dashboards.DashboardId -> Eff es ()
+syncDashboardFileInfo :: (DB es, Time.Time :> es) => Dashboards.DashboardId -> Eff es ()
 syncDashboardFileInfo dashId = do
   dashM <- Dashboards.getDashboardById dashId
   forM_ dashM \dash -> forM_ dash.schema \_ -> do

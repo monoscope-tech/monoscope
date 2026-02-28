@@ -42,13 +42,16 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Entity.Types qualified as DAT
-import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.)(..))
+
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
@@ -145,67 +148,70 @@ getNewLogPatterns pid limit = PG.query (_selectWhere @LogPattern [[DAT.field| pr
 -- | Acknowledge log patterns. Pass Nothing for system-triggered acknowledgments.
 -- Matches on (project_id, source_field, pattern_hash) — the unique key — to avoid
 -- cross-field collisions (e.g. url_path and exception sharing the same normalized hash).
-acknowledgeLogPatterns :: DB es => Projects.ProjectId -> Maybe Users.UserId -> V.Vector (Text, Text) -> Eff es Int64
+acknowledgeLogPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Users.UserId -> V.Vector (Text, Text) -> Eff es Int64
 acknowledgeLogPatterns pid uid fieldHashPairs
   | V.null fieldHashPairs = pure 0
-  | otherwise =
+  | otherwise = do
+      now <- Time.currentTime
       let (fields, hashes) = V.unzip fieldHashPairs
-       in PG.execute q (LPSAcknowledged, uid, pid, fields, hashes)
+      PG.execute q (LPSAcknowledged, uid, now, pid, fields, hashes)
   where
     q =
       [sql|
         UPDATE apis.log_patterns
-        SET state = ?, acknowledged_by = ?, acknowledged_at = NOW()
+        SET state = ?, acknowledged_by = ?, acknowledged_at = ?
         WHERE project_id = ? AND (source_field, pattern_hash) IN (SELECT unnest(?::text[]), unnest(?::text[]))
       |]
 
 
-upsertLogPattern :: DB es => UpsertPattern -> Eff es Int64
+upsertLogPattern :: (DB es, Time :> es) => UpsertPattern -> Eff es Int64
 upsertLogPattern = upsertLogPatternBatch . pure
 
 
 -- | Bulk update baselines for multiple patterns in a single query.
 -- Matches on (project_id, source_field, pattern_hash) since pattern_hash alone is not unique across source fields.
-updateBaselineBatch :: DB es => Projects.ProjectId -> V.Vector (Text, Text, BaselineState, Double, Double, Int) -> Eff es Int64
+updateBaselineBatch :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector (Text, Text, BaselineState, Double, Double, Int) -> Eff es Int64
 updateBaselineBatch pid rows
   | V.null rows = pure 0
-  | otherwise =
+  | otherwise = do
+      now <- Time.currentTime
       let srcFields = V.map (view _1) rows
           hashes = V.map (view _2) rows
           states = V.map (view _3) rows
           means = V.map (view _4) rows
           mads = V.map (view _5) rows
           samples = V.map (view _6) rows
-       in PG.execute
+      PG.execute
             [sql|
               UPDATE apis.log_patterns lp
               SET baseline_state = v.state,
                   baseline_volume_hourly_mean = v.mean,
                   baseline_volume_hourly_mad = v.mad,
                   baseline_samples = v.samples,
-                  baseline_updated_at = NOW()
+                  baseline_updated_at = ?
               FROM (SELECT unnest(?::text[]) AS source_field, unnest(?::text[]) AS hash, unnest(?::text[]) AS state, unnest(?::float8[]) AS mean, unnest(?::float8[]) AS mad, unnest(?::int[]) AS samples) v
               WHERE lp.project_id = ? AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash
             |]
-            (srcFields, hashes, states, means, mads, samples, pid)
+            (now, srcFields, hashes, states, means, mads, samples, pid)
 
 
 -- | Batch version of upsertLogPattern using executeMany.
-upsertLogPatternBatch :: DB es => [UpsertPattern] -> Eff es Int64
+upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
 upsertLogPatternBatch [] = pure 0
-upsertLogPatternBatch ups =
+upsertLogPatternBatch ups = do
+  now <- Time.currentTime
   PG.executeMany
-    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
-          last_seen_at = NOW(),
+          last_seen_at = EXCLUDED.last_seen_at,
           occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
           sample_message = COALESCE(EXCLUDED.sample_message, apis.log_patterns.sample_message),
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
           log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
   |]
-    ups
+    (map (:. Only now) ups)
 
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
@@ -366,4 +372,4 @@ pruneOldHourlyStats pid now hoursBack = PG.execute [sql| DELETE FROM apis.log_pa
 -- | Auto-acknowledge patterns stuck in 'new' state longer than staleDays.
 -- Prevents unbounded accumulation for low-volume projects that never trigger processNewLogPatterns.
 autoAcknowledgeStaleNewPatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
-autoAcknowledgeStaleNewPatterns pid now staleDays = PG.execute [sql| UPDATE apis.log_patterns SET state = ?, acknowledged_at = NOW() WHERE project_id = ? AND state = ? AND created_at < ?::timestamptz - INTERVAL '1 day' * ? |] (LPSAcknowledged, pid, LPSNew, now, staleDays)
+autoAcknowledgeStaleNewPatterns pid now staleDays = PG.execute [sql| UPDATE apis.log_patterns SET state = ?, acknowledged_at = ? WHERE project_id = ? AND state = ? AND created_at < ?::timestamptz - INTERVAL '1 day' * ? |] (LPSAcknowledged, now, pid, LPSNew, now, staleDays)

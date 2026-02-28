@@ -204,7 +204,7 @@ createDash tr title tags = do
 
 runSyncJobs :: TestResources -> IO ()
 runSyncJobs tr = do
-  withResource tr.trPool setBjRunAtInThePast
+  withResource tr.trPool $ setBjRunAtInThePast frozenTime
   void $ runBackgroundJobsWhere frozenTime tr.trATCtx isGitSyncJob
   where
     isGitSyncJob BackgroundJobs.GitSyncPushDashboard{} = True

@@ -205,10 +205,10 @@ spec = aroundAll withTestResources do
     it "returns active endpoints after acknowledging issues" \tr -> do
       -- Acknowledge all endpoint issues
       _ <- withPool tr.trPool $ DBT.execute [sql|
-        UPDATE apis.issues 
-        SET acknowledged_at = NOW(), acknowledged_by = ?
+        UPDATE apis.issues
+        SET acknowledged_at = ?, acknowledged_by = ?
         WHERE project_id = ? AND issue_type = 'api_change'
-      |] (Users.UserId UUID.nil, testPid)
+      |] (frozenTime, Users.UserId UUID.nil, testPid)
       
       -- Test active filter
       activeEndpoints <- getEndpointStats tr (Just "Active") Nothing

@@ -45,8 +45,10 @@ import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff)
+import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Time (Time)
+import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (WrappedEnumSC (..))
@@ -225,14 +227,16 @@ queryMonitorsById ids
     |]
 
 
-monitorToggleActiveById :: DB es => QueryMonitorId -> Eff es Int64
-monitorToggleActiveById id' = PG.execute q (Only id')
+monitorToggleActiveById :: (DB es, Time :> es) => QueryMonitorId -> Eff es Int64
+monitorToggleActiveById id' = do
+  now <- Time.currentTime
+  PG.execute q (now, id')
   where
     q =
-      [sql| 
+      [sql|
         UPDATE monitors.query_monitors SET deactivated_at=CASE
             WHEN deactivated_at IS NOT NULL THEN NULL
-            ELSE NOW()
+            ELSE ?
         END
         where id=?|]
 

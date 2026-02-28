@@ -350,34 +350,37 @@ findOpenIssueForEndpoint pid targetHash =
 
 
 -- | Update issue with new anomaly data
-updateIssueWithNewAnomaly :: DB es => IssueId -> APIChangeData -> Eff es ()
-updateIssueWithNewAnomaly issueId newData = void $ PG.execute q (Aeson newData, issueId)
+updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> APIChangeData -> Eff es ()
+updateIssueWithNewAnomaly issueId newData = do
+  now <- Time.currentTime
+  void $ PG.execute q (Aeson newData, now, issueId)
   where
     q =
       [sql|
       UPDATE apis.issues
-      SET 
+      SET
         issue_data = issue_data || ?::jsonb,
         affected_requests = affected_requests + 1,
-        updated_at = NOW()
+        updated_at = ?
       WHERE id = ?
     |]
 
 
-updateIssueEnhancement :: DB es => IssueId -> Text -> Text -> Text -> Eff es ()
-updateIssueEnhancement issueId title action complexity = void $ PG.execute q params
+updateIssueEnhancement :: (DB es, Time :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
+updateIssueEnhancement issueId title action complexity = do
+  now <- Time.currentTime
+  void $ PG.execute q (title, action, complexity, now, issueId)
   where
     q =
       [sql|
       UPDATE apis.issues
-      SET 
+      SET
         title = ?,
         recommended_action = ?,
         migration_complexity = ?,
-        updated_at = NOW()
+        updated_at = ?
       WHERE id = ?
     |]
-    params = (title, action, complexity, issueId)
 
 
 -- | Update issue criticality and severity
@@ -396,13 +399,15 @@ updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
 
 
 -- | Acknowledge issue
-acknowledgeIssue :: DB es => IssueId -> Users.UserId -> Eff es ()
-acknowledgeIssue issueId userId = void $ PG.execute q (userId, issueId)
+acknowledgeIssue :: (DB es, Time :> es) => IssueId -> Users.UserId -> Eff es ()
+acknowledgeIssue issueId userId = do
+  now <- Time.currentTime
+  void $ PG.execute q (now, userId, issueId)
   where
     q =
       [sql|
       UPDATE apis.issues
-      SET acknowledged_at = NOW(), acknowledged_by = ?
+      SET acknowledged_at = ?, acknowledged_by = ?
       WHERE id = ?
     |]
 
@@ -536,14 +541,15 @@ data AIChatMessage = AIChatMessage
 
 
 -- | Get or create a conversation (race-condition safe via ON CONFLICT + RETURNING)
-getOrCreateConversation :: (DB es, Error ServerError :> es) => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
+getOrCreateConversation :: (DB es, Error ServerError :> es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
-  result <- PG.query q (pid, convId, convType, Aeson ctx)
+  now <- Time.currentTime
+  result <- PG.query q (pid, convId, convType, Aeson ctx, now)
   maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure $ listToMaybe result
   where
     q =
       [sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
-              VALUES (?, ?, ?, ?) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = NOW()
+              VALUES (?, ?, ?, ?) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = ?
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
 
 
