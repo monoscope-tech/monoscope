@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError, notifyErrorSubscriptions) where
 
 import Control.Lens (view, (.~), _1, _2, _3)
 import Data.Aeson qualified as AE
@@ -789,11 +789,10 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
         void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt sub.errorId finalSlackTs finalDiscordMsgId
 
 
--- | Process and insert errors for a specific project
--- TODO: batch upserts with unnest like upsertErrorPatternHourlyStats — currently N+1 (up to 2000 round-trips per window)
+-- | Process and insert errors for a specific project (single batched round-trip via unnest)
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> ATBackgroundCtx ()
 processProjectErrors pid errors = do
-  result <- try $ V.forM_ errors \err -> uncurry PG.execute $ ErrorPatterns.upsertErrorPatternQueryAndParam pid err
+  result <- try $ ErrorPatterns.batchUpsertErrorPatterns pid errors
   case result of
     Left (e :: SomePostgreSqlException) ->
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)

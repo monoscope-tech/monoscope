@@ -14,7 +14,7 @@ module Models.Apis.ErrorPatterns (
   getErrorPatternLByHash,
   bulkCalculateAndUpdateBaselines,
   resolveErrorPattern,
-  upsertErrorPatternQueryAndParam,
+  batchUpsertErrorPatterns,
   upsertErrorPatternHourlyStats,
   updateErrorPatternSubscription,
   updateErrorPatternThreadIds,
@@ -34,6 +34,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.HashMap.Strict qualified as HM
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -45,7 +46,7 @@ import Database.PostgreSQL.Simple.FromRow qualified as FR
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.Types (Query)
+
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
@@ -56,7 +57,6 @@ import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Relude hiding (id)
 import System.Types (DB)
-import Utils (DBField (MkDBField))
 
 
 newtype ErrorPatternId = ErrorPatternId {unErrorPatternId :: UUID.UUID}
@@ -372,53 +372,51 @@ getErrorPatternsWithCurrentRates pid now =
       |]
 
 
--- | Upsert an error pattern (insert or update on conflict)
-upsertErrorPatternQueryAndParam :: Projects.ProjectId -> ATError -> (Query, [DBField])
-upsertErrorPatternQueryAndParam pid err = (q, params)
+-- | Batch upsert error patterns using unnest arrays (single round-trip instead of N+1)
+-- Groups by hash to avoid "ON CONFLICT DO UPDATE cannot affect row a second time" errors.
+batchUpsertErrorPatterns :: DB es => Projects.ProjectId -> V.Vector ATError -> Eff es Int64
+batchUpsertErrorPatterns _pid errors | V.null errors = pure 0
+batchUpsertErrorPatterns pid errors =
+  PG.execute
+    [sql| INSERT INTO apis.error_patterns (
+            project_id, error_type, message, stacktrace, hash,
+            environment, service, runtime, error_data,
+            first_trace_id, recent_trace_id,
+            occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
+          SELECT ?, u.error_type, u.message, u.stacktrace, u.hash,
+                 u.environment, u.service, u.runtime, u.error_data,
+                 u.trace_id, u.trace_id, u.cnt, u.cnt, u.cnt, u.cnt
+          FROM (SELECT unnest(?::text[]) AS error_type, unnest(?::text[]) AS message,
+                       unnest(?::text[]) AS stacktrace, unnest(?::text[]) AS hash,
+                       unnest(?::text[]) AS environment, unnest(?::text[]) AS service,
+                       unnest(?::text[]) AS runtime, unnest(?::jsonb[]) AS error_data,
+                       unnest(?::text[]) AS trace_id, unnest(?::int[]) AS cnt) u
+          ON CONFLICT (project_id, hash) DO UPDATE SET
+            updated_at = NOW(),
+            message = EXCLUDED.message,
+            error_data = EXCLUDED.error_data,
+            recent_trace_id = EXCLUDED.recent_trace_id,
+            occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
+            occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_5m,
+            occurrences_1h = apis.error_patterns.occurrences_1h + EXCLUDED.occurrences_1h,
+            occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_24h,
+            quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
+            state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
+            regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN NOW() ELSE apis.error_patterns.regressed_at END |]
+    (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts)
   where
-    q =
-      [sql|
-        INSERT INTO apis.error_patterns (
-          project_id, error_type, message, stacktrace, hash,
-          environment, service, runtime, error_data,
-          first_trace_id, recent_trace_id,
-          occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, 1, 1, 1)
-        ON CONFLICT (project_id, hash) DO UPDATE SET
-          updated_at = NOW(),
-          message = EXCLUDED.message,
-          error_data = EXCLUDED.error_data,
-          recent_trace_id = EXCLUDED.recent_trace_id,
-          occurrences_1m = apis.error_patterns.occurrences_1m + 1,
-          occurrences_5m = apis.error_patterns.occurrences_5m + 1,
-          occurrences_1h = apis.error_patterns.occurrences_1h + 1,
-          occurrences_24h = apis.error_patterns.occurrences_24h + 1,
-          quiet_minutes = CASE
-            WHEN apis.error_patterns.state = 'resolved' THEN 0
-            ELSE apis.error_patterns.quiet_minutes
-          END,
-          state = CASE
-            WHEN apis.error_patterns.state = 'resolved' THEN 'regressed'
-            ELSE apis.error_patterns.state
-          END,
-          regressed_at = CASE
-            WHEN apis.error_patterns.state = 'resolved' THEN NOW()
-            ELSE apis.error_patterns.regressed_at
-          END
-      |]
-    params =
-      [ MkDBField pid
-      , MkDBField err.errorType
-      , MkDBField err.message
-      , MkDBField err.stackTrace
-      , MkDBField err.hash
-      , MkDBField err.environment
-      , MkDBField err.serviceName
-      , MkDBField err.runtime
-      , MkDBField err
-      , MkDBField err.traceId
-      , MkDBField err.traceId
-      ]
+    -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
+    grouped = HM.elems $ V.foldl' (\acc e -> HM.insertWith (\(newE, n) (_, m) -> (newE, n + m)) e.hash (e, 1 :: Int) acc) HM.empty errors
+    (errs, counts) = V.unzip $ V.fromList grouped
+    errorTypes = V.map (.errorType) errs
+    messages = V.map (.message) errs
+    stacktraces = V.map (.stackTrace) errs
+    hashes = V.map (.hash) errs
+    environments = V.map (.environment) errs
+    services = V.map (.serviceName) errs
+    runtimes = V.map (.runtime) errs
+    errorDatas = V.map Aeson errs
+    traceIds = V.map (.traceId) errs
 
 
 -- | Batch upsert hourly rollup stats. Takes (hash, event_count, user_count) triples and

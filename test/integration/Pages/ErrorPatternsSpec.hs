@@ -15,6 +15,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies qualified
 import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.ErrorFingerprint qualified as EF
 import Pkg.TestUtils
 import Relude
 import Servant qualified
@@ -167,12 +168,12 @@ spec = aroundAll withTestResources do
       fmap (.state) resolvedPat `shouldBe` Just ESResolved
 
       -- Test subscribe
-      void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm (Just 30) (Just "subscribe"))
+      void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
       subscribedPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.subscribed) subscribedPat `shouldBe` Just True
 
       -- Test unsubscribe
-      void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm Nothing (Just "unsubscribe"))
+      void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid errUuid (Pages.Anomalies.ErrorSubscriptionForm Nothing)
       unsubPat <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
       fmap (.subscribed) unsubPat `shouldBe` Just False
 
@@ -203,3 +204,69 @@ spec = aroundAll withTestResources do
           p.state `shouldBe` ESResolved
           p.occurrences_1m `shouldBe` 0
         Nothing -> error "Pattern not found after occurrence count update"
+
+    it "8. Notification threading stores and reuses thread IDs" \tr -> do
+      -- Set up Slack + Discord integrations for the test project
+      withResource tr.trPool \conn -> do
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.slack (project_id, webhook_url, team_id, channel_id, team_name, bot_token)
+                VALUES (?, 'https://hooks.slack.com/test', 'T_TEST', 'C_TEST', 'TestTeam', 'xoxb-test')
+                ON CONFLICT (project_id) DO UPDATE SET channel_id = 'C_TEST', bot_token = 'xoxb-test' |]
+          (PGS.Only pid)
+        void $ PGS.execute conn
+          [sql| INSERT INTO apis.discord (project_id, guild_id, notifs_channel_id)
+                VALUES (?, 'G_TEST', 'DC_TEST')
+                ON CONFLICT (project_id) DO UPDATE SET notifs_channel_id = 'DC_TEST' |]
+          (PGS.Only pid)
+        void $ PGS.execute conn
+          [sql| UPDATE projects.projects SET notifications_channel = '{slack,discord}', error_alerts = true WHERE id = ? |]
+          (PGS.Only pid)
+
+      -- Find a subscribed, non-resolved pattern with a matching issue
+      patterns <- runTestBg tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      let pat = fromMaybe (error "no patterns") $ find (\p -> p.state /= ESResolved) patterns
+      -- Ensure it's subscribed
+      void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
+      -- Ensure matching issue exists
+      void $ runAllBackgroundJobs tr.trATCtx
+
+      -- First notification: should create thread IDs
+      runTestBg tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      pat1 <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      let slackTs1 = pat1 >>= (.slackThreadTs)
+          discordId1 = pat1 >>= (.discordMessageId)
+      isJust slackTs1 `shouldBe` True
+      isJust discordId1 `shouldBe` True
+
+      -- Make notification due again by pushing last_notified_at into the past
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.error_patterns SET last_notified_at = NOW() - INTERVAL '2 hours' WHERE id = ? |]
+          (PGS.Only pat.id)
+
+      -- Second notification: should reuse same thread IDs (threading preserved)
+      runTestBg tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      pat2 <- runTestBg tr $ ErrorPatterns.getErrorPatternById pat.id
+      (pat2 >>= (.slackThreadTs)) `shouldBe` slackTs1
+      (pat2 >>= (.discordMessageId)) `shouldBe` discordId1
+
+    it "9. Error fingerprint stability across IPs and timestamps" \tr -> do
+      apiKey <- createTestAPIKey tr pid "fingerprint-test-key"
+      let stack = "Error: connection failed\n    at DbPool.connect (/app/src/db.js:25:10)\n    at Server.start (/app/src/server.js:50:5)"
+
+      -- Same error with different IPs in message and different timestamps → same fingerprint
+      ingestTraceWithException tr apiKey "POST /api/data" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack (addUTCTime 300 frozenTime)
+      ingestTraceWithException tr apiKey "POST /api/data" "ConnectionError" "connect ECONNREFUSED 192.168.1.100:5432" stack (addUTCTime 310 frozenTime)
+      runTestBg tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 360 frozenTime) pid
+
+      -- Both should have matched the same pattern (IP normalized to {ipv4})
+      patM <- runTestBg tr $ ErrorPatterns.getErrorPatternByHash pid
+        (EF.computeErrorFingerprint (UUID.toText UUID.nil) Nothing (Just "POST /api/data") "unknown" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack)
+      isJust patM `shouldBe` True
+
+      -- Different error type → different fingerprint (separate pattern)
+      prevCount <- length <$> runTestBg tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
+      ingestTraceWithException tr apiKey "POST /api/data" "TimeoutError" "request timed out after 30000ms" stack (addUTCTime 320 frozenTime)
+      runTestBg tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 380 frozenTime) pid
+      newCount <- length <$> runTestBg tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
+      newCount `shouldSatisfy` (> prevCount)
