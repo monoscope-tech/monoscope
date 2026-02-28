@@ -4,7 +4,7 @@ ALTER TYPE apis.issue_type ADD VALUE IF NOT EXISTS 'error_regressed';
 
 BEGIN;
 
--- Drop existing trigger and table
+-- Drop the old apis.errors table, replaced by apis.error_patterns with fingerprinting and baselines
 DROP TRIGGER IF EXISTS error_created_anomaly ON apis.errors;
 DROP TABLE IF EXISTS apis.errors;
 

@@ -1839,9 +1839,10 @@ detectErrorSpikes pid = do
   forM_ errorsWithRates \errRate -> do
     -- Only check errors with established baselines
     case (errRate.baselineState, errRate.baselineMean, errRate.baselineStddev) of
-      (BSEstablished, Just mean, Just stddev) | stddev > 0 -> do
-        let currentRate = fromIntegral errRate.currentHourCount :: Double
-            zScore = (currentRate - mean) / stddev
+      (BSEstablished, Just mean, Just stddev) -> do
+        let effectiveStddev = max stddev 1.0 -- floor so flat baselines (MAD=0) can still trigger
+            currentRate = fromIntegral errRate.currentHourCount :: Double
+            zScore = (currentRate - mean) / effectiveStddev
             isSpike = zScore > spikeZScoreThreshold && currentRate > mean + spikeMinAbsoluteDelta
 
         if isSpike

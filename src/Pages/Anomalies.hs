@@ -210,8 +210,7 @@ anomalyDetailCore pid firstM fetchIssue = do
           userPermission <- ProjectMembers.getUserPermission pid sess.user.id
           ms <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
           let cr =
-                userPermission
-                  == Just ProjectMembers.PAdmin
+                userPermission >= Just ProjectMembers.PEdit
                   || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
           pure (ms, cr)
         Nothing -> pure (V.empty, False)
@@ -545,7 +544,7 @@ resolveErrorPostH pid errUuid = do
   (sess, _project) <- Sessions.sessionAndProject pid
   errM <- ErrorPatterns.getErrorPatternById (ErrorPatterns.ErrorPatternId errUuid)
   userPermission <- ProjectMembers.getUserPermission pid sess.user.id
-  let canResolve err = userPermission == Just ProjectMembers.PAdmin || err.assigneeId == Just sess.user.id
+  let canResolve err = userPermission >= Just ProjectMembers.PEdit || err.assigneeId == Just sess.user.id
   case errM of
     Nothing -> addErrorToast "Error not found" Nothing >> addRespHeaders mempty
     Just err

@@ -551,6 +551,14 @@ normalizeMessage msg =
 -- Same stack trace produces same fingerprint regardless of message:
 -- >>> computeErrorFingerprint "proj1" Nothing Nothing "nodejs" "Error" "message 1" "at handler (/app/index.js:10:5)" == computeErrorFingerprint "proj1" Nothing Nothing "nodejs" "Error" "different message" "at handler (/app/index.js:10:5)"
 -- True
+--
+-- Python: same in-app frame with different line numbers → same fingerprint (line numbers excluded from hash):
+-- >>> computeErrorFingerprint "proj1" Nothing Nothing "python" "ValueError" "invalid literal" "File \"/app/main.py\", line 10, in handler\nFile \"/usr/lib/python3.11/json/decoder.py\", line 355, in raw_decode" == computeErrorFingerprint "proj1" Nothing Nothing "python" "ValueError" "invalid literal" "File \"/app/main.py\", line 99, in handler\nFile \"/usr/lib/python3.11/json/decoder.py\", line 400, in raw_decode"
+-- True
+--
+-- Java: same in-app method at different lines → same fingerprint:
+-- >>> computeErrorFingerprint "proj1" Nothing Nothing "java" "NullPointerException" "msg1" "at com.example.App.process(App.java:42)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)" == computeErrorFingerprint "proj1" Nothing Nothing "java" "NullPointerException" "msg2" "at com.example.App.process(App.java:99)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:2000)"
+-- True
 computeErrorFingerprint :: Text -> Maybe Text -> Maybe Text -> Text -> Text -> Text -> Text -> Text
 computeErrorFingerprint projectIdText mService spanName runtime exceptionType message stackTrace =
   let

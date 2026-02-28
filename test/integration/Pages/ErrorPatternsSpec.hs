@@ -1,7 +1,9 @@
 module Pages.ErrorPatternsSpec (spec) where
 
 import BackgroundJobs qualified
+import Data.Effectful.Notify (Notification (..), SlackData (..))
 import Data.Pool (withResource)
+import Data.Text qualified as T
 import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -146,6 +148,61 @@ spec = aroundAll withTestResources do
 
         Nothing -> error "No established pattern found for spike test"
 
+    it "5a. Spike idempotence — repeated detection does not create duplicate issues" \tr -> do
+      -- detectErrorSpikes already ran in test 5 and set ESEscalating.
+      -- Running it again with same spike data should NOT create another issue.
+      issuesBefore <- countIssues tr Issues.RuntimeException
+      runTestBg frozenTime tr $ BackgroundJobs.detectErrorSpikes pid
+      issuesAfter <- countIssues tr Issues.RuntimeException
+      issuesAfter `shouldBe` issuesBefore
+
+    it "5b. De-escalation: Escalating → Ongoing when spike subsides" \tr -> do
+      -- Find the escalating pattern from test 5
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      let escalatingM = find (\r -> r.state == ESEscalating && r.baselineState == BSEstablished) errRates
+      case escalatingM of
+        Just errRate -> do
+          let mean = fromMaybe 0 errRate.baselineMean
+          -- Insert a normal-rate hourly stat (at mean, well below spike threshold)
+          -- Use a fresh hour bucket so the spike from test 5 doesn't persist
+          let normalTime = addUTCTime 3600 frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid normalTime (V.singleton (errRate.hash, ceiling mean, 2))
+
+          runTestBg normalTime tr $ BackgroundJobs.detectErrorSpikes pid
+
+          deescalatedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          fmap (.state) deescalatedPat `shouldBe` Just ESOngoing
+        Nothing -> error "No escalating pattern found for de-escalation test"
+
+    it "5c. Flat baseline (stddev=0) still detects spikes via MAD floor" \tr -> do
+      -- Find the pattern from 5b (now ESOngoing) and give it a flat baseline (stddev=0)
+      errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      let ongoingM = find (\r -> r.state == ESOngoing && r.baselineState == BSEstablished) errRates
+      case ongoingM of
+        Just errRate -> do
+          -- Set stddev to 0 (perfectly flat baseline)
+          withResource tr.trPool \conn ->
+            void $ PGS.execute conn
+              [sql| UPDATE apis.error_patterns SET baseline_error_rate_stddev = 0, baseline_error_rate_mean = 100 WHERE id = ? |]
+              (PGS.Only errRate.errorId)
+          -- Acknowledge existing RuntimeException issues to avoid ON CONFLICT dedup
+          let sess = Servant.getResponse tr.trSessAndHeader
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+          forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
+
+          -- Insert a massive spike (200, well above mean=100 + minAbsoluteDelta=50)
+          let spikeTime = addUTCTime 7200 frozenTime
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid spikeTime (V.singleton (errRate.hash, 200, 5))
+
+          issuesBefore <- countIssues tr Issues.RuntimeException
+          runTestBg spikeTime tr $ BackgroundJobs.detectErrorSpikes pid
+          issuesAfter <- countIssues tr Issues.RuntimeException
+          issuesAfter `shouldSatisfy` (> issuesBefore)
+
+          spikedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
+          fmap (.state) spikedPat `shouldBe` Just ESEscalating
+        Nothing -> error "No ongoing pattern found for flat baseline test"
+
     it "6. User action handlers (assign, resolve, subscribe)" \tr -> do
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 1 0
       let pat = fromMaybe (error "no patterns") $ listToMaybe patterns
@@ -231,8 +288,19 @@ spec = aroundAll withTestResources do
       -- Ensure matching issue exists
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-      -- First notification: should create thread IDs
-      runTestBg frozenTime tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      -- First notification: should create thread IDs and produce Slack + Discord notifications
+      (notifs1, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+        $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      -- Verify notification types and content
+      let slackNotifs1 = [sd | SlackNotification sd <- notifs1]
+          discordNotifs1 = [dd | DiscordNotification dd <- notifs1]
+      length slackNotifs1 `shouldSatisfy` (>= 1)
+      length discordNotifs1 `shouldSatisfy` (>= 1)
+      -- Slack payload should mention the error type
+      forM_ slackNotifs1 \sd -> do
+        let payloadText = show @Text sd.payload
+        T.isInfixOf pat.errorType payloadText `shouldBe` True
+
       pat1 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       let slackTs1 = pat1 >>= (.slackThreadTs)
           discordId1 = pat1 >>= (.discordMessageId)
@@ -246,7 +314,10 @@ spec = aroundAll withTestResources do
           (PGS.Only pat.id)
 
       -- Second notification: should reuse same thread IDs (threading preserved)
-      runTestBg frozenTime tr $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      (notifs2, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
+        $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
+      length [() | SlackNotification _ <- notifs2] `shouldSatisfy` (>= 1)
+
       pat2 <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
       (pat2 >>= (.slackThreadTs)) `shouldBe` slackTs1
       (pat2 >>= (.discordMessageId)) `shouldBe` discordId1
