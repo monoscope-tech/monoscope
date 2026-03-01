@@ -1133,8 +1133,6 @@ data ReportType = DailyReport | WeeklyReport
   deriving (Show)
 
 
-
-
 sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()
 sendReportForProject pid rType = do
   Log.logInfo "Generating report for project" pid

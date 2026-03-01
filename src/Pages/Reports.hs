@@ -86,6 +86,7 @@ data DBQueryStat = DBQueryStat
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
 
+
 data IssueStat = IssueStat
   { id :: Issues.IssueId
   , title :: Text
@@ -117,7 +118,7 @@ eventsWidget = def{Widget.wType = WTTimeseries, Widget.query = Just "summarize c
 errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
 
 
-anomalyTypeCounts :: (Foldable f) => (a -> Issues.IssueType) -> f a -> (Int, Int, Int)
+anomalyTypeCounts :: Foldable f => (a -> Issues.IssueType) -> f a -> (Int, Int, Int)
 anomalyTypeCounts getType = foldl' (\(e, a, m) x -> (e + fromEnum (getType x == Issues.RuntimeException), a + fromEnum (getType x == Issues.ApiChange), m + fromEnum (getType x == Issues.QueryAlert))) (0, 0, 0)
 
 
@@ -207,14 +208,26 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
       pctOf n = if totalAnom == 0 then 0 else (fromIntegral n / fromIntegral totalAnom) * 99
   eventsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
   errorsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
-  let reportData = ET.WeeklyReportData
-        { userName, projectName = project.title, reportUrl = reportUrl'
-        , startDate = dayStart, endDate = dayEnd
-        , eventsChartUrl = eventsUrl, errorsChartUrl = errorsUrl
-        , totalEvents, totalErrors, anomaliesCount
-        , runtimeErrorsPct = pctOf errTotal, apiChangesPct = pctOf apiTotal, alertsPct = pctOf qTotal
-        , anomalies, performance, slowQueries, freeTierExceeded
-        }
+  let reportData =
+        ET.WeeklyReportData
+          { userName
+          , projectName = project.title
+          , reportUrl = reportUrl'
+          , startDate = dayStart
+          , endDate = dayEnd
+          , eventsChartUrl = eventsUrl
+          , errorsChartUrl = errorsUrl
+          , totalEvents
+          , totalErrors
+          , anomaliesCount
+          , runtimeErrorsPct = pctOf errTotal
+          , apiChangesPct = pctOf apiTotal
+          , alertsPct = pctOf qTotal
+          , anomalies
+          , performance
+          , slowQueries
+          , freeTierExceeded
+          }
       (subj, html) = ET.weeklyReportEmail reportData
   pure (dayEnd, ET.renderEmail subj html)
 
