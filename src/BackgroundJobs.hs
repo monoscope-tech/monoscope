@@ -1,6 +1,6 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError, notifyErrorSubscriptions) where
 
-import Control.Lens (view, _3, (.~))
+import Control.Lens (view, (.~), _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
@@ -424,24 +424,29 @@ processBackgroundJob authCtx bgJob =
         newProjects :: [Projects.Project] <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= ?::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|] (Only since)
         let fmtNew (p :: Projects.Project) =
               let hoursAgo = show (round (diffUTCTime now p.createdAt / 3600) :: Int)
-              in "- " <> p.title <> " (" <> p.paymentPlan <> ") -- created " <> hoursAgo <> "h ago"
-        send $ bool
-          ("**New Projects** (" <> show (length newProjects) <> ")\n" <> T.unlines (map fmtNew newProjects))
-          "**New Projects**: None"
-          (null newProjects)
+               in "- " <> p.title <> " (" <> p.paymentPlan <> ") -- created " <> hoursAgo <> "h ago"
+        send
+          $ bool
+            ("**New Projects** (" <> show (length newProjects) <> ")\n" <> T.unlines (map fmtNew newProjects))
+            "**New Projects**: None"
+            (null newProjects)
 
       -- Section 3: Inactive projects (non-ONBOARDING with 0 events)
       tryLog "churnSignals" do
         let churn = filter (\(p, _, _, _) -> p.paymentPlan /= "ONBOARDING") inactiveRows
-        unless (null churn) $ send $
-          "**Inactive Projects** (" <> show (length churn) <> " with 0 events in 24h)\n"
+        unless (null churn)
+          $ send
+          $ "**Inactive Projects** ("
+          <> show (length churn)
+          <> " with 0 events in 24h)\n"
           <> T.unlines (map (\(p, _, _, _) -> "- " <> p.title <> " (" <> p.paymentPlan <> ")") churn)
 
       -- Section 4: New issues
       tryLog "newIssues" do
-        issueCounts :: [(Projects.ProjectId, Text, Int)] <- PG.query
-          [sql|SELECT project_id::uuid, issue_type, COUNT(*)::int FROM apis.issues WHERE created_at > ?::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
-          (Only since)
+        issueCounts :: [(Projects.ProjectId, Text, Int)] <-
+          PG.query
+            [sql|SELECT project_id::uuid, issue_type, COUNT(*)::int FROM apis.issues WHERE created_at > ?::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
+            (Only since)
         unless (null issueCounts) do
           let total = sum $ map (view _3) issueCounts
               byProject = Map.toDescList $ Map.fromListWith (<>) $ map (\(pid, itype, cnt) -> (pid, [(itype, cnt)])) issueCounts
@@ -449,25 +454,37 @@ processBackgroundJob authCtx bgJob =
               fmtProject (pid, types) =
                 let pTotal = sum $ map snd types
                     details = T.intercalate ", " $ map (\(t, c) -> t <> ": " <> show c) types
-                in "- " <> lookupTitle pid <> ": " <> show pTotal <> " (" <> details <> ")"
-          send $ "**New Issues** (" <> show total <> " across " <> show projectCount <> " projects)\n"
+                 in "- " <> lookupTitle pid <> ": " <> show pTotal <> " (" <> details <> ")"
+          send
+            $ "**New Issues** ("
+            <> show total
+            <> " across "
+            <> show projectCount
+            <> " projects)\n"
             <> T.unlines (map fmtProject $ take 10 byProject)
 
       -- Section 5: Monitor alerts
       tryLog "monitorAlerts" do
-        alertCounts :: [(Projects.ProjectId, Text, Int)] <- PG.query
-          [sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::int FROM monitors.query_monitors m
+        alertCounts :: [(Projects.ProjectId, Text, Int)] <-
+          PG.query
+            [sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::int FROM monitors.query_monitors m
                WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
                GROUP BY m.project_id, m.current_status|]
-          ()
+            ()
         unless (null alertCounts) do
           let totalAlerting = sum [c | (_, s, c) <- alertCounts, s == "alerting"]
               totalWarning = sum [c | (_, s, c) <- alertCounts, s == "warning"]
               byProject = Map.toDescList $ Map.fromListWith (<>) $ map (\(pid, st, cnt) -> (pid, [(st, cnt)])) alertCounts
               fmtProject (pid, statuses) =
                 "- " <> lookupTitle pid <> ": " <> T.intercalate ", " (map (\(s, c) -> show c <> " " <> s) statuses)
-          send $ "**Monitor Alerts**\n"
-            <> show totalAlerting <> " alerting | " <> show totalWarning <> " warning across " <> show (length byProject) <> " projects\n"
+          send
+            $ "**Monitor Alerts**\n"
+            <> show totalAlerting
+            <> " alerting | "
+            <> show totalWarning
+            <> " warning across "
+            <> show (length byProject)
+            <> " projects\n"
             <> T.unlines (map fmtProject $ take 10 byProject)
 
       -- Section 6: Background job health
@@ -476,39 +493,48 @@ processBackgroundJob authCtx bgJob =
         stuckJobs :: [Only Int] <- PG.query [sql|SELECT COUNT(*)::int FROM background_jobs WHERE status = 'locked' AND locked_at < ?::timestamptz|] (Only (addUTCTime (-1800) now))
         let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
             stuck = maybe 0 (.fromOnly) $ listToMaybe stuckJobs
-        send $ "**Job Health** (last 24h)\n" <> statsLine
+        send
+          $ "**Job Health** (last 24h)\n"
+          <> statsLine
           <> bool ("\n!! " <> show stuck <> " stuck jobs (locked > 30min)") "" (stuck == 0)
 
       -- Section 7: Top growing projects (day-over-day)
       tryLog "topGrowing" do
-        growthData :: [(Projects.ProjectId, Int, Int)] <- PG.query
-          [sql|SELECT du.project_id::uuid,
+        growthData :: [(Projects.ProjectId, Int, Int)] <-
+          PG.query
+            [sql|SELECT du.project_id::uuid,
                  COALESCE(SUM(CASE WHEN du.created_at >= (?::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::int as yesterday,
                  COALESCE(SUM(CASE WHEN du.created_at < (?::date - interval '1 day') AND du.created_at >= (?::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::int as day_before
                FROM apis.daily_usage du WHERE du.created_at >= (?::date - interval '2 days')
                GROUP BY du.project_id|]
-          (now, now, now, now)
+            (now, now, now, now)
         let withGrowth = sortOn (\(_, _, _, g) -> negate g) [(pid, y, db, y - db) | (pid, y, db) <- growthData, y > db, db > 0]
             fmtGrowth (pid, y, db, _) =
               let pct = show (round @Double @Int $ fromIntegral (y - db) / fromIntegral db * 100)
-              in "- " <> lookupTitle pid <> ": " <> fmtNum db <> " -> " <> fmtNum y <> " (+" <> pct <> "%)"
-        unless (null withGrowth) $ send $
-          "**Top Growing** (vs previous day)\n" <> T.unlines (map fmtGrowth $ take 5 withGrowth)
+               in "- " <> lookupTitle pid <> ": " <> fmtNum db <> " -> " <> fmtNum y <> " (+" <> pct <> "%)"
+        unless (null withGrowth)
+          $ send
+          $ "**Top Growing** (vs previous day)\n"
+          <> T.unlines (map fmtGrowth $ take 5 withGrowth)
 
       -- Section 8: Active users (last 24h)
       tryLog "activeUsers" do
-        activeUsers :: [(Text, Text, Text, PGArray Projects.ProjectId)] <- PG.query
-          [sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
+        activeUsers :: [(Text, Text, Text, PGArray Projects.ProjectId)] <-
+          PG.query
+            [sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
                FROM users.persistent_sessions ps
                JOIN users.users u ON u.id = ps.user_id
                LEFT JOIN projects.project_members pm ON pm.user_id = ps.user_id AND pm.active = TRUE
                WHERE ps.updated_at >= ?::timestamptz
                GROUP BY u.id, u.email, u.first_name, u.last_name ORDER BY u.email|]
-          (Only since)
+            (Only since)
         let fmtUser (email, _, _, PGArray pids) =
               let projs = T.intercalate ", " $ map lookupTitle $ filter (`Map.member` projectMap) pids
-              in "- " <> email <> bool (" -- " <> projs) "" (T.null projs)
-        send $ "**Active Users** (" <> show (length activeUsers) <> " in last 24h)\n"
+               in "- " <> email <> bool (" -- " <> projs) "" (T.null projs)
+        send
+          $ "**Active Users** ("
+          <> show (length activeUsers)
+          <> " in last 24h)\n"
           <> T.unlines (map fmtUser activeUsers)
 
       -- Section 9: Project links
