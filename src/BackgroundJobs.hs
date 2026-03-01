@@ -126,6 +126,7 @@ data BgJobs
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
+  | MonoscopeAdminDaily
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -272,6 +273,7 @@ processBackgroundJob authCtx bgJob =
           unless hourlyJobsExist $ do
             Log.logInfo "Scheduling hourly jobs for today" ()
             liftIO $ withResource authCtx.jobsPool \conn -> do
+              void $ createJob conn "background_jobs" BackgroundJobs.MonoscopeAdminDaily
               -- background job to cleanup demo project
               Relude.when (dayOfWeek currentDay == Monday) do
                 void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
@@ -345,9 +347,10 @@ processBackgroundJob authCtx bgJob =
         totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
         totalMetricsCount <- Telemetry.getTotalMetricsCount pid project.usageLastReported
         Log.logInfo "Total events to report" ("events_count", totalToReport + totalMetricsCount)
-        Relude.when (totalToReport > 0) do
-          liftIO $ reportUsageToLemonsqueezy fSubId (totalToReport + totalMetricsCount) authCtx.config.lemonSqueezyApiKey
-          void $ Projects.addDailyUsageReport pid totalToReport
+        let totalUsage = totalToReport + totalMetricsCount
+        Relude.when (totalUsage > 0) do
+          liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
+          void $ Projects.addDailyUsageReport pid totalUsage
           void $ Projects.updateUsageLastReported pid currentTime
       Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
     CleanupDemoProject -> do
@@ -376,6 +379,38 @@ processBackgroundJob authCtx bgJob =
       tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
       tryLog "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
+    MonoscopeAdminDaily -> do
+      now <- Time.currentTime
+      let since = addUTCTime (-86400) now
+          dateStr = T.pack $ formatTime defaultTimeLocale "%Y-%m-%d" now
+      projects <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|] ()
+      rows <- fmap catMaybes $ forM projects \(project :: Projects.Project) -> do
+        events <- Telemetry.getTotalEventsToReport project.id since
+        metrics <- Telemetry.getTotalMetricsCount project.id since
+        let total = events + metrics
+        pure $ bool Nothing (Just (project, events, metrics, total)) (total > 0)
+      let sorted = sortOn (\(_, _, _, t) -> negate t) rows
+          totalEvents = sum $ map (\(_, e, _, _) -> e) sorted
+          totalMetrics = sum $ map (\(_, _, m, _) -> m) sorted
+          projectCount = length sorted
+          summaryHeader = "**Daily Usage Summary** (" <> dateStr <> ")\n" <> show projectCount <> " active projects | " <> show totalEvents <> " events | " <> show totalMetrics <> " metrics"
+          fmtRow (p, e, m, t) = T.justifyLeft 25 ' ' p.title <> T.justifyLeft 12 ' ' p.paymentPlan <> T.justifyRight 10 ' ' (show e) <> T.justifyRight 10 ' ' (show m) <> T.justifyRight 10 ' ' (show t)
+          tableHeader = T.justifyLeft 25 ' ' "Project" <> T.justifyLeft 12 ' ' "Plan" <> T.justifyRight 10 ' ' "Events" <> T.justifyRight 10 ' ' "Metrics" <> T.justifyRight 10 ' ' "Total"
+          tableBody = tableHeader : map fmtRow sorted
+          linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> authCtx.env.hostUrl <> "p/" <> p.id.toText <> ")"
+          links = map linkRow sorted
+          -- Discord 2000 char limit: split into chunks
+          buildMessages [] msgs = msgs
+          buildMessages items msgs =
+            let (chunk, rest) = splitAccum 1800 items
+            in buildMessages rest (msgs <> [T.unlines chunk])
+          splitAccum _ [] = ([], [])
+          splitAccum remaining (x : xs)
+            | T.length x > remaining = ([], x : xs)
+            | otherwise = let (taken, left) = splitAccum (remaining - T.length x - 1) xs in (x : taken, left)
+          allMessages = [summaryHeader, "```\n" <> T.unlines tableBody <> "```"] <> buildMessages links []
+      forM_ allMessages \msg -> sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+      Log.logInfo "Sent daily usage summary to Discord" ("project_count", projectCount)
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
