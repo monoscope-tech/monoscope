@@ -108,7 +108,7 @@ import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
@@ -447,7 +447,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
 
 
 -- | Create Runtime Exception issue
-createRuntimeExceptionIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> RequestDumps.ATError -> Eff es Issue
+createRuntimeExceptionIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogQueries.ATError -> Eff es Issue
 createRuntimeExceptionIssue projectId atError =
   mkIssue
     MkIssueOpts

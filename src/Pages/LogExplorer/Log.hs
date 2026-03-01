@@ -34,7 +34,7 @@ import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
@@ -526,8 +526,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true"
       fetchLogs =
         if authCtx.env.enableTimefusionReads
-          then labeled @"timefusion" @PG.WithConnection $ RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
-          else RequestDumps.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+          then labeled @"timefusion" @PG.WithConnection $ LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+          else LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
   let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"
@@ -539,13 +539,13 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
             traceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
             alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
             (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
-        childSpansList <- RequestDumps.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
+        childSpansList <- LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
         let finalVecs = requestVecs <> V.fromList childSpansList
             curatedColNames = nubOrd $ curateCols summaryCols colNames
             lastFM = reqLastCreatedAtM >>= textToUTC >>= Just . toText . iso8601Show . addUTCTime (-0.001)
-            nextLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-            resetLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-            recentLogsURL = RequestDumps.requestDumpLogUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+            nextLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+            resetLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+            recentLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
             colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
             queryResultCount = V.length requestVecs
             traces = buildTraceTree colIdxMap queryResultCount finalVecs
@@ -569,7 +569,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   if isJsonFastPath
     then case effectiveVizType of
       Just "patterns" -> do
-        (totalPatterns, patternRows) <- RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+        (totalPatterns, patternRows) <- LogQueries.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
         addRespHeaders $ LogsPatternJson totalPatterns (V.fromList patternRows)
       _ -> do
         tableAsVecE <- fetchOrSkip
@@ -588,7 +588,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         t4 <- Ki.fork scope $ checkFreeTierExceeded pid project.paymentPlan
         t5 <- Ki.fork scope $ V.fromList <$> ManageMembers.getTeams pid
         t6 <- Ki.fork scope $ case effectiveVizType of
-          Just "patterns" -> Just . second V.fromList <$> RequestDumps.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+          Just "patterns" -> Just . second V.fromList <$> LogQueries.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
           _ -> pure Nothing
         (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
@@ -603,7 +603,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
       -- Build preload URL using the same function that builds the JSON URLs
-      let preloadUrl = RequestDumps.requestDumpLogUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
+      let preloadUrl = LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
           -- Also preload the chart data request
           chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
           headContent = Just $ do
@@ -750,7 +750,7 @@ data LogsGet
   | LogsGetErrorSimple Text
   | LogsGetJson LogResult
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
-  | LogsPatternJson Int (V.Vector RequestDumps.PatternRow)
+  | LogsPatternJson Int (V.Vector LogQueries.PatternRow)
 
 
 instance ToHtml LogsGet where
@@ -819,7 +819,7 @@ data ApiLogsPageData = ApiLogsPageData
   , facets :: Maybe FacetSummary
   , vizType :: Maybe Text
   , alert :: Maybe Monitors.QueryMonitor
-  , patterns :: Maybe (Int, V.Vector RequestDumps.PatternRow)
+  , patterns :: Maybe (Int, V.Vector LogQueries.PatternRow)
   , patternsToSkip :: Int
   , targetPattern :: Maybe Text
   , project :: Projects.Project

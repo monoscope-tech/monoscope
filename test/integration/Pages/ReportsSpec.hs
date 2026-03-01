@@ -98,7 +98,7 @@ spec = aroundAll withTestResources do
 --   _ <- runTestBackground tr.trATCtx $ processFiveMinuteSpans processTime
 --
 --   -- Make sure there's data to report on by processing background jobs first
---   createRequestDumps tr testPid 10
+--   createTestSpans tr testPid 10
 --   processAllBackgroundJobsMultipleTimes tr
 --
 --   -- Create report jobs

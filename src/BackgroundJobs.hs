@@ -49,7 +49,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -1181,10 +1181,10 @@ sendReportForProject pid rType = do
 
     endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
-    endpoint_rp <- RequestDumps.getRequestDumpForReports pid typTxt
+    endpoint_rp <- LogQueries.getEndpointReportData pid typTxt
     let endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
     total_anomalies <- Anomalies.countAnomalies pid typTxt
-    previous_week <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
+    previous_week <- LogQueries.getPreviousPeriodEndpointPerf pid typTxt
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom
@@ -1218,7 +1218,7 @@ sendReportForProject pid rType = do
         Projects.NPhone -> do
           sendWhatsAppAlert alert pid pr.title pr.whatsappNumbers
         _ -> do
-          totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+          totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           Relude.when (totalRequest > 0) do
             let dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                 sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime

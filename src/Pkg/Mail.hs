@@ -22,7 +22,7 @@ import Effectful.Reader.Static (Reader, ask)
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Integrations (DiscordData (..), SlackData (..), getDiscordDataByProjectId, getProjectSlackData)
 import Models.Apis.Issues (IssueType (..), parseIssueType)
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Relude hiding (Reader, ask)
@@ -563,7 +563,7 @@ sampleAlert = \case
           , ErrorPatterns.rootErrorMessage = "Sample error"
           , ErrorPatterns.stackTrace = "at sampleFunction (sample.js:42:15)"
           , ErrorPatterns.hash = "test-hash-xyz"
-          , ErrorPatterns.technology = Just RequestDumps.JsExpress
+          , ErrorPatterns.technology = Just LogQueries.JsExpress
           , ErrorPatterns.requestMethod = Just "GET"
           , ErrorPatterns.requestPath = Just "/api/test"
           , ErrorPatterns.spanId = Just "test-span-id"

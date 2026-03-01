@@ -71,7 +71,7 @@ import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Monitors qualified as Monitors
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
@@ -560,7 +560,7 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
   case variable._vType of
     Dashboards.VTQuery | Just sqlQuery <- variable.sql -> do
       -- SECURITY: Use secured query execution with project_id filtering
-      result <- RequestDumps.executeSecuredQuery pid sqlQuery 1000
+      result <- LogQueries.executeSecuredQuery pid sqlQuery 1000
       case result of
         Right queryResults -> pure variable{Dashboards.options = Just $ map (map valueToText . V.toList) $ V.toList queryResults}
         Left _ -> pure variable -- Return unchanged on error
@@ -632,7 +632,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
   case (constant.sql, constant.query) of
     (Just sqlQuery, _) -> do
       -- SECURITY: Use secured query execution with project_id filtering
-      (res, duration) <- Log.timeAction $ RequestDumps.executeSecuredQuery pid sqlQuery 1000
+      (res, duration) <- Log.timeAction $ LogQueries.executeSecuredQuery pid sqlQuery 1000
       case res of
         Left err -> Log.logWarn "Dashboard constant SQL query failed" (constant.key, err, duration) $> constant
         Right queryResults -> do

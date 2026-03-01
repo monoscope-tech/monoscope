@@ -1,7 +1,5 @@
-module Models.Apis.RequestDumps (
-  RequestDump (..),
+module Models.Apis.LogQueries (
   SDKTypes (..),
-  RequestDumpLogItem (..),
   EndpointPerf (..),
   RequestTypes (..),
   RequestForReport (..),
@@ -11,9 +9,9 @@ module Models.Apis.RequestDumps (
   selectLogTable,
   executeArbitraryQuery,
   executeSecuredQuery,
-  requestDumpLogUrlPath,
-  getRequestDumpForReports,
-  getRequestDumpsForPreviousReportPeriod,
+  logExplorerUrlPath,
+  getEndpointReportData,
+  getPreviousPeriodEndpointPerf,
   getLast24hTotalRequest,
   getLastSevenDaysTotalRequest,
   fetchLogPatterns,
@@ -29,14 +27,13 @@ import Data.Default
 import Data.HashMap.Strict qualified as HashMap
 import Data.Set (member)
 import Data.Text qualified as T
-import Data.Time (CalendarDiffTime, UTCTime, ZonedTime, addUTCTime, diffUTCTime)
+import Data.Time (UTCTime, ZonedTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (Only (Only), ToRow, fromOnly)
+import Database.PostgreSQL.Simple (Only (Only), fromOnly)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -117,8 +114,6 @@ data RequestTypes
   deriving (FromField, ToField) via WrappedEnumShow RequestTypes
 
 
--- Nothing -> returnError ConversionFailed f ("Could not read SDKTypes: " ++ str)
-
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
 -- >>> normalizeUrlPath GoGin 200 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
 -- "https://apitoolkit.io/abc/:bla"
@@ -134,59 +129,18 @@ data RequestTypes
 -- "https://apitoolkit.io/abc/:bla"
 --
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
-normalizeUrlPath GoOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath GoGin statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath GoFiber statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath GoBuiltIn statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath GoDefault statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath GoGorillaMux statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PhpLaravel statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PhpSymfony statusCode _method urlPath = removeQueryParams statusCode urlPath
 -- NOTE: Temporary workaround due to storing complex paths in the urlPath, which should be unaccepted, and messes with our logic
-normalizeUrlPath JsExpress statusCode "OPTIONS" urlPath = ""
-normalizeUrlPath JsExpress statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JavaSpringBoot statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JsNest statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JsAxiosOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath DotNet statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PythonFastApi statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JsFastify statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PythonFlask statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PythonDjango statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PythonOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JsAdonis statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PhpSlim statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath GuzzleOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath ElixirPhoenix statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath PythonPyramid statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath DotNetOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath TestkitOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JavaSpring statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JavaApacheOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JavaVertx statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JsOutgoing statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath JsNext statusCode _method urlPath = removeQueryParams statusCode urlPath
-normalizeUrlPath SDKUnknown statusCode _method urlPath = removeQueryParams statusCode urlPath
+normalizeUrlPath JsExpress _ "OPTIONS" _ = ""
+normalizeUrlPath _ statusCode _ urlPath = removeQueryParams statusCode urlPath
 
-
--- getRequestType ...
--- >>> getRequestType GoGin
--- Incoming
--- >>> getRequestType GoOutgoing
--- Outgoing
--- >>> getRequestType JsAxiosOutgoing
--- Outgoing
 
 -- removeQueryParams ...
 -- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
 --
 -- Function to remove the query parameter section from a URL
 removeQueryParams :: Int -> Text -> Text
-removeQueryParams 404 urlPath = ""
-removeQueryParams statusCode urlPath =
-  case T.break (== '?') urlPath of
-    (before, "") -> before -- No query parameters found
-    (before, after) -> before -- Query parameters found, stripping them
+removeQueryParams 404 _ = ""
+removeQueryParams _ urlPath = T.takeWhile (/= '?') urlPath
 
 
 data ATError = ATError
@@ -214,53 +168,6 @@ data ATError = ATError
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
---   via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATErrors
--- deriving (ToField, FromField) via Aeson ATErrors
-
--- request dumps are time series dumps representing each requests which we consume from our users.
--- We use this field via the log explorer for exploring and searching traffic. And at the moment also use it for most time series analytics.
--- It's likely a good idea to stop relying on it for some of the time series analysis, to allow us easily support request sampling, but still support
--- relatively accurate analytic counts.
--- NOTE: This record closely mirrors the order of fields in the table. Changing the order of fields here would break inserting and querying request dumps
-data RequestDump = RequestDump
-  { id :: UUID.UUID
-  , createdAt :: UTCTime
-  , updatedAt :: UTCTime
-  , projectId :: UUID.UUID
-  , host :: Text
-  , urlPath :: Text
-  , rawUrl :: Text
-  , pathParams :: AE.Value
-  , method :: Text
-  , referer :: Text
-  , protoMajor :: Int64
-  , protoMinor :: Int64
-  , duration :: CalendarDiffTime
-  , statusCode :: Int64
-  , --
-    queryParams :: AE.Value
-  , requestHeaders :: AE.Value
-  , responseHeaders :: AE.Value
-  , requestBody :: AE.Value
-  , responseBody :: AE.Value
-  , --
-    endpointHash :: Text
-  , shapeHash :: Text
-  , formatHashes :: V.Vector Text
-  , fieldHashes :: V.Vector Text
-  , durationNs :: Int64
-  , sdkType :: SDKTypes
-  , parentId :: Maybe UUID.UUID
-  , serviceVersion :: Maybe Text
-  , errors :: AE.Value -- Vector ATError
-  , tags :: V.Vector Text
-  , requestType :: RequestTypes
-  }
-  deriving stock (Generic)
-  deriving anyclass (NFData, ToRow)
-
-
--- Fields to from request dump neccessary for generating performance reports
 data RequestForReport = RequestForReport
   { id :: UUID.UUID
   , createdAt :: ZonedTime
@@ -273,10 +180,7 @@ data RequestForReport = RequestForReport
   , averageDuration :: Integer
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] RequestForReport)
+  deriving anyclass (FromRow, NFData)
 
 
 data EndpointPerf = EndpointPerf
@@ -284,45 +188,7 @@ data EndpointPerf = EndpointPerf
   , averageDuration :: Integer
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
-  deriving
-    (Entity)
-    via (GenericEntity '[Schema "apis", TableName "request_dumps", PrimaryKey "id", FieldModifiers '[CamelToSnake]] EndpointPerf)
-
-
--- RequestDumpLogItem is used in the to query log items for the log query explorer on the dashboard. Each item here can be queried
--- via the query language on said dashboard page.
-data RequestDumpLogItem = RequestDumpLogItem
-  { id :: UUID.UUID
-  , createdAt :: ZonedTime
-  , projectId :: Projects.ProjectId
-  , host :: Text
-  , urlPath :: Text
-  , method :: Text
-  , rawUrl :: Text
-  , referer :: Text
-  , --
-    pathParams :: AE.Value
-  , -- , duration :: CalendarDiffTime
-    statusCode :: Int
-  , --
-    queryParams :: AE.Value
-  , requestBody :: AE.Value
-  , responseBody :: AE.Value
-  , requestHeaders :: AE.Value
-  , responseHeaders :: AE.Value
-  , durationNs :: Integer
-  , sdkType :: SDKTypes
-  , parentId :: Maybe UUID.UUID
-  , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
-  , errorsCount :: Integer
-  , errors :: AE.Value
-  , tags :: Maybe (V.Vector Text)
-  , requestType :: RequestTypes
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] RequestDumpLogItem
+  deriving anyclass (FromRow, NFData)
 
 
 incrementByOneMillisecond :: String -> String
@@ -336,8 +202,8 @@ incrementByOneMillisecond dateStr =
     maybeTime = parseTimeM True defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" dateStr :: Maybe UTCTime
 
 
-requestDumpLogUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
-requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
+logExplorerUrlPath :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Bool -> Text
+logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/" <> pid.toText <> "/log_explorer?" <> T.intercalate "&" params
   where
     recentTo = cursor >>= (\x -> Just (toText . incrementByOneMillisecond . toString $ x))
     params =
@@ -354,8 +220,8 @@ requestDumpLogUrlPath pid q cols cursor since fromV toV layout source recent = "
         ]
 
 
-getRequestDumpForReports :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es [RequestForReport]
-getRequestDumpForReports pid report_type = do
+getEndpointReportData :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es [RequestForReport]
+getEndpointReportData pid report_type = do
   now <- Time.currentTime
   let nowStr = formatUTC now
       report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
@@ -381,8 +247,8 @@ getRequestDumpForReports pid report_type = do
   PG.query (Query $ encodeUtf8 q) (Only pid)
 
 
-getRequestDumpsForPreviousReportPeriod :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es [EndpointPerf]
-getRequestDumpsForPreviousReportPeriod pid report_type = do
+getPreviousPeriodEndpointPerf :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es [EndpointPerf]
+getPreviousPeriodEndpointPerf pid report_type = do
   now <- Time.currentTime
   let nowStr = formatUTC now
       (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")

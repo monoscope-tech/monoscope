@@ -181,8 +181,8 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected issues count result"
 
     it "returns endpoints in inbox filter after creating issues" \tr -> do
-      -- Create request dumps to populate materialized view
-      createRequestDumps tr testPid 10
+      -- Create test spans to populate materialized view
+      createTestSpans tr testPid 10
       -- _ <- withPool tr.trPool $ refreshMaterializedView "apis.endpoint_request_stats"
       
       -- Test inbox filter without host
@@ -227,7 +227,7 @@ spec = aroundAll withTestResources do
     --   -- First ensure endpoints are created and all background jobs are processed
     --   msgs <- prepareTestMessages
     --   processMessagesAndBackgroundJobs tr msgs
-    --   createRequestDumps tr testPid 10
+    --   createTestSpans tr testPid 10
     --
     --   -- Process all background jobs multiple times to ensure anomalies are created
     --   _ <- runAllBackgroundJobs tr.trATCtx

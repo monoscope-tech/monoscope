@@ -30,7 +30,7 @@ import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
@@ -259,7 +259,7 @@ buildLiveReportEmailHtml pid project userName = do
   (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing
   let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
   anomaliesCount <- Anomalies.countAnomalies pid "weekly"
-  totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+  totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
   let reportUrl = "/p/" <> pid.toText <> "/reports"
       freeTierExceeded = project.paymentPlan == "FREE" && totalRequest > 5000
   renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors anomalies' performance slowQueries anomaliesCount freeTierExceeded

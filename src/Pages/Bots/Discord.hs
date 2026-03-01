@@ -32,7 +32,7 @@ import Effectful (Eff, type (:>))
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
@@ -388,7 +388,7 @@ sendDiscordResponse options interaction envCfg authCtx discordData resp now =
       Nothing -> case parseQueryToAST query of
         Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord (QueryParseError query))
         Right query' -> do
-          tableAsVecE <- RequestDumps.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          tableAsVecE <- LogQueries.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
           sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
 
 

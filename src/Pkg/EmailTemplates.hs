@@ -40,7 +40,7 @@ import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Utils (formatWithCommas)
@@ -602,7 +602,7 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
         , ErrorPatterns.hash = "abc123def"
         , ErrorPatterns.requestMethod = Just "GET"
         , ErrorPatterns.requestPath = Just "/api/v1/items"
-        , ErrorPatterns.technology = Just RequestDumps.JsExpress
+        , ErrorPatterns.technology = Just LogQueries.JsExpress
         }
     sampleError2 =
       def

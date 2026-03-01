@@ -50,7 +50,7 @@ import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
 import Pkg.ErrorFingerprint qualified as EF
@@ -150,7 +150,7 @@ data ATError = ATError
   , rootErrorMessage :: Text
   , stackTrace :: Text
   , hash :: Text
-  , technology :: Maybe RequestDumps.SDKTypes
+  , technology :: Maybe LogQueries.SDKTypes
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
   , serviceName :: Maybe Text

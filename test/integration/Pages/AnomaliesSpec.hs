@@ -97,7 +97,7 @@ spec = aroundAll withTestResources do
       _ <- runBackgroundJobsWhere frozenTime tr.trATCtx $ \case
         BackgroundJobs.NewAnomaly{} -> True
         _ -> False
-      createRequestDumps tr testPid 10
+      createTestSpans tr testPid 10
 
       -- Check that API change issue was created for the endpoint
       apiChangeIssues <- withResource tr.trPool \conn -> PGS.query conn [sql|
@@ -161,7 +161,7 @@ spec = aroundAll withTestResources do
             ]
 
       processMessagesAndBackgroundJobs tr msgs
-      createRequestDumps tr testPid 10
+      createTestSpans tr testPid 10
 
       -- Get pending jobs and run only NewAnomaly jobs for shapes and fields
       pendingJobs3 <- getPendingBackgroundJobs tr.trATCtx

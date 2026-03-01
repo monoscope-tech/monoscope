@@ -28,7 +28,7 @@ module Pkg.TestUtils (
   frozenTime,
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
-  createRequestDumps,
+  createTestSpans,
   processAllBackgroundJobsMultipleTimes,
   -- OTLP/Telemetry helpers
   createTestAPIKey,
@@ -824,9 +824,9 @@ processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
   void $ runAllBackgroundJobs frozenTime trATCtx
 
 
--- Helper function to create request dumps for endpoints
-createRequestDumps :: TestResources -> Projects.ProjectId -> Int -> IO ()
-createRequestDumps TestResources{..} projectId numRequestsPerEndpoint = do
+-- Helper function to create test spans for endpoints
+createTestSpans :: TestResources -> Projects.ProjectId -> Int -> IO ()
+createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
   endpoints <-
     withResource trPool \conn ->
       V.fromList

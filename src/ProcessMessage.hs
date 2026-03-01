@@ -52,7 +52,7 @@ import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator (generateSummary)
@@ -243,10 +243,10 @@ processSpanToEntities pjc otelSpan dumpId =
         fromMaybe "unknown"
           $ (attrValue ^? key "monoscope" . key "sdk_type" . _String)
           <|> (attrValue ^? key "apitoolkit" . key "sdk_type" . _String)
-      !sdkType = fromMaybe RequestDumps.SDKUnknown $ readMaybe $ toString sdkTypeStr
+      !sdkType = fromMaybe LogQueries.SDKUnknown $ readMaybe $ toString sdkTypeStr
 
       -- URL normalization and dynamic path parameter extraction
-      !urlPath' = RequestDumps.normalizeUrlPath sdkType statusCode method routePath
+      !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
       !(!urlPathDyn, !pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
       !(!urlPath, !pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params")
 
@@ -529,14 +529,14 @@ data RequestMessage = RequestMessage
   , requestHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
   , responseBody :: Text
   , responseHeaders :: AE.Value -- key value map of a key to a list of text values map[string][]string
-  , sdkType :: RequestDumps.SDKTypes -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
+  , sdkType :: LogQueries.SDKTypes -- convension should be <language>-<router library> eg: go-gin, go-builtin, js-express
   , statusCode :: Int
   , urlPath :: Maybe Text -- became Maybe to support express, which sometimes doesn't send urlPath for root.
   , timestamp :: ZonedTime
-  , msgId :: Maybe UUID.UUID -- This becomes the request_dump id.
+  , msgId :: Maybe UUID.UUID -- This becomes the span id.
   , parentId :: Maybe UUID.UUID
   , serviceVersion :: Maybe Text -- allow users track deployments and versions (tags, commits, etc)
-  , errors :: Maybe [RequestDumps.ATError]
+  , errors :: Maybe [LogQueries.ATError]
   , tags :: Maybe [Text]
   }
   deriving stock (Generic, Show)

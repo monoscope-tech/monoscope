@@ -40,17 +40,18 @@ widgets:
     sql: |
       SELECT timeB, value, quantile
       FROM (
-        SELECT extract(epoch from time_bucket('1h', created_at))::integer AS timeB,
+        SELECT extract(epoch from time_bucket('1h', timestamp))::integer AS timeB,
                ARRAY[
-                 (approx_percentile(0.50, percentile_agg(duration_ns)) / 1000000.0)::float,
-                 (approx_percentile(0.75, percentile_agg(duration_ns)) / 1000000.0)::float,
-                 (approx_percentile(0.90, percentile_agg(duration_ns)) / 1000000.0)::float,
-                 (approx_percentile(0.95, percentile_agg(duration_ns)) / 1000000.0)::float
+                 (approx_percentile(0.50, percentile_agg(duration)) / 1000000.0)::float,
+                 (approx_percentile(0.75, percentile_agg(duration)) / 1000000.0)::float,
+                 (approx_percentile(0.90, percentile_agg(duration)) / 1000000.0)::float,
+                 (approx_percentile(0.95, percentile_agg(duration)) / 1000000.0)::float
                ] AS values,
                ARRAY['p50', 'p75', 'p90', 'p95'] AS quantiles
-        FROM apis.request_dumps
-        WHERE project_id='{{project_id}}'::uuid
-          {{time_filter_sql_created_at}}
+        FROM otel_logs_and_spans
+        WHERE project_id='{{project_id}}'
+          AND name = 'monoscope.http' AND kind = 'SERVER'
+          {{time_filter_sql}}
         GROUP BY timeB
       ) s,
       LATERAL unnest(s.values, s.quantiles) AS u(value, quantile);

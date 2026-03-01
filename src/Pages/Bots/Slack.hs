@@ -32,7 +32,7 @@ import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -267,7 +267,7 @@ slackInteractionsH interaction = do
           Log.logTrace ("Slack followup response (parse error)" :: Text) resp
           sendSlackFollowupResponse inter.response_url resp
         Right query' -> do
-          tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          tableAsVecE <- LogQueries.selectLogTable slackData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
           let resp = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
           Log.logTrace ("Slack followup response (table)" :: Text) resp
           _ <- sendSlackFollowupResponse inter.response_url resp
@@ -733,7 +733,7 @@ slackEventsPostH payload = do
       Nothing -> case parseQueryToAST query of
         Left _ -> sendSlackChatMessage envCfg.slackBotToken (mergeSlackContent (formatBotError Slack (QueryParseError query)) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
         Right query' -> do
-          tableAsVecE <- RequestDumps.selectLogTable slackData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          tableAsVecE <- LogQueries.selectLogTable slackData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
           let content' = handleTableResponse Slack tableAsVecE envCfg slackData.projectId query
               content = case content' of
                 AE.Object o -> AE.Object (o <> KEMP.fromList [("channel", AE.String event.channel), ("thread_ts", AE.String threadTs)])

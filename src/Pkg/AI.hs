@@ -62,7 +62,7 @@ import Langchain.Memory.Core (BaseMemory (..))
 import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.RequestDumps (executeSecuredQuery, selectLogTable)
+import Models.Apis.LogQueries (executeSecuredQuery, selectLogTable)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)

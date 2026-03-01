@@ -15,7 +15,7 @@ import Effectful.Log qualified as Log
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.Integrations (getDashboardsForWhatsapp)
-import Models.Apis.RequestDumps qualified as RequestDumps
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
@@ -132,7 +132,7 @@ whatsappIncomingPostH val = do
       Nothing -> case parseQueryToAST query of
         Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "warning" <> " Couldn't parse query. Try: 'show errors in last hour'")
         Right query' -> do
-          tableAsVecE <- RequestDumps.selectLogTable project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          tableAsVecE <- LogQueries.selectLogTable project.id query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
           let content = case handleTableResponse WhatsApp tableAsVecE envCfg project.id query of
                 AE.Object o -> case KEM.lookup "body" o of
                   Just (AE.String c) -> c
