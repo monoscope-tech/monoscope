@@ -800,7 +800,7 @@ getBackgroundJobs conn = V.fromList <$> PGS.query conn q ()
 setBjRunAtInThePast :: UTCTime -> Connection -> IO ()
 setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
   where
-    q = [sql|UPDATE background_jobs SET run_at = ? - INTERVAL '1 day' WHERE status = 'pending'|]
+    q = [sql|UPDATE background_jobs SET run_at = ?::timestamptz - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
 refreshMaterializedView :: Text -> Connection -> IO Int64

@@ -287,7 +287,7 @@ processBackgroundJob authCtx bgJob =
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
 
-          projects <- PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > ? - interval '24 hours'|] (Only currentTime)
+          projects <- PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > ?::timestamptz - interval '24 hours'|] (Only currentTime)
           Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
           forM_ projects \p -> do
             -- Check if this project's jobs already scheduled for today (per-project idempotent check)

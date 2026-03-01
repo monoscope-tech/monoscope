@@ -684,4 +684,4 @@ getRequestCountForInterval interval pid = do
   now <- Time.currentTime
   fromMaybe 0 . coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query q (pid, now, interval)
   where
-    q = [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ? - interval ?;|]
+    q = [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval ?;|]

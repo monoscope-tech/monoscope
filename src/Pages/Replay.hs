@@ -261,7 +261,7 @@ compressAndMergeReplaySessions = do
     PG.query
       [sql|
     SELECT session_id, project_id FROM projects.replay_sessions
-    WHERE merged = FALSE AND last_event_at < ? - interval '30 minutes'
+    WHERE merged = FALSE AND last_event_at < ?::timestamptz - interval '30 minutes'
     LIMIT 100
   |]
       (Only now)

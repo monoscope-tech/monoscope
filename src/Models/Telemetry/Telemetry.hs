@@ -1209,7 +1209,7 @@ getTraceShapes pid trIds = do
         SELECT DISTINCT context___trace_id, name
         FROM otel_logs_and_spans
         WHERE project_id = ?
-          AND timestamp > ? - interval '1 hour'
+          AND timestamp > ?::timestamptz - interval '1 hour'
           AND context___trace_id = ANY(?)
       ),
       target_shapes AS (
@@ -1225,7 +1225,7 @@ getTraceShapes pid trIds = do
           ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
         FROM otel_logs_and_spans
         WHERE project_id = ?
-          AND timestamp > ? - interval '1 hour'
+          AND timestamp > ?::timestamptz - interval '1 hour'
           AND context___trace_id IS NOT NULL
         GROUP BY context___trace_id
       ),
@@ -1246,7 +1246,7 @@ getTraceShapes pid trIds = do
       JOIN matching_traces m
         ON s.context___trace_id = m.trace_id
       WHERE s.project_id = ?
-        AND s.timestamp > ? - interval '1 hour' and s.name IS NOT NULL
+        AND s.timestamp > ?::timestamptz - interval '1 hour' and s.name IS NOT NULL
       GROUP BY m.target_trace_id, s.name
       ORDER BY m.target_trace_id, s.name;
       |]

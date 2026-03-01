@@ -491,12 +491,12 @@ freeTierLimitExceededBanner pid =
     a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
 
 
-checkFreeTierExceeded :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es Bool
+checkFreeTierExceeded :: (IOE :> es, WithConnection :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid paymentPlan =
   if paymentPlan == "Free"
     then do
       now <- Time.currentTime
-      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ? - interval '1 day'|] (pid, now)
+      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day'|] (pid, now)
       pure $ count > fromInteger freeTierDailyMaxEvents
     else pure False
 

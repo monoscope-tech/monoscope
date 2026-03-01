@@ -157,7 +157,7 @@ getAnomaliesVM pid hash
   | V.null hash = pure []
   | otherwise = do
       now <- Time.currentTime
-      PG.query q (pid, hash, now)
+      PG.query q (now, pid, hash)
   where
     q =
       [sql|
@@ -187,7 +187,7 @@ SELECT
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
     an.archived_at,
-    0,?
+    0,?::timestamptz
 from
     apis.anomalies an
     LEFT JOIN apis.formats on (target_hash = formats.hash AND an.project_id = formats.project_id)

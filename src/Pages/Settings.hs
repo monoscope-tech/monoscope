@@ -462,7 +462,7 @@ notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeade
 notificationsTestPostH pid TestForm{..} = do
   -- Rate limit: check if test was sent in last 60 seconds
   now <- Time.currentTime
-  recentTests <- DB.query [sql|SELECT COUNT(*) FROM apis.notification_test_history WHERE project_id = ? AND created_at > ? - interval '60 seconds'|] (pid, now)
+  recentTests <- DB.query [sql|SELECT COUNT(*) FROM apis.notification_test_history WHERE project_id = ? AND created_at > ?::timestamptz - interval '60 seconds'|] (pid, now)
   when (maybe 0 fromOnly (listToMaybe recentTests) > (0 :: Int))
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 

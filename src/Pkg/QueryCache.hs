@@ -302,7 +302,7 @@ cleanupExpiredCache = do
       [sql|
       WITH deleted AS (
         DELETE FROM query_cache
-        WHERE last_accessed_at < ? - interval '4 hours'
+        WHERE last_accessed_at < ?::timestamptz - interval '4 hours'
         RETURNING id
       )
       SELECT COUNT(*)::int FROM deleted

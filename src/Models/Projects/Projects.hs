@@ -346,10 +346,10 @@ projectCacheById pid = do
                     coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
                     coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
                     ( SELECT count(*) FROM otel_logs_and_spans
-                     WHERE project_id=? AND timestamp > ? - INTERVAL '1' DAY
+                     WHERE project_id=? AND timestamp > ?::timestamptz - INTERVAL '1' DAY
                     ) daily_event_count,
                     ( SELECT count(*) FROM telemetry.metrics
-                     WHERE project_id=? AND timestamp > ? - INTERVAL '1' DAY
+                     WHERE project_id=? AND timestamp > ?::timestamptz - INTERVAL '1' DAY
                     ) daily_metric_count,
                     (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
             from
