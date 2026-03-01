@@ -172,6 +172,8 @@ lookupCache key (reqFrom, reqTo) =
       ((pid, src, qh, bi, oq, cf, ct, AesonText cd, hc) : _) ->
         let entry = CacheEntry pid src qh bi oq cf ct cd hc
          in if
+              -- Don't trust empty cached data — new data may have arrived since
+              | V.null cd.dataset -> CacheBypassed "Cached data is empty"
               | reqFrom >= cf && reqTo <= ct -> CacheHit entry
               | reqFrom >= cf && reqTo > ct -> PartialHit entry
               | reqFrom < cf -> CacheBypassed "Request extends before cached range"
