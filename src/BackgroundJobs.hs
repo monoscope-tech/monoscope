@@ -1,6 +1,6 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError, notifyErrorSubscriptions) where
 
-import Control.Lens ((.~))
+import Control.Lens (view, _3, (.~))
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
@@ -10,7 +10,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List as L (foldl)
+import Data.List as L (foldl, partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
@@ -383,23 +383,7 @@ processBackgroundJob authCtx bgJob =
       now <- Time.currentTime
       let since = addUTCTime (-86400) now
           dateStr = T.pack $ formatTime defaultTimeLocale "%Y-%m-%d" now
-      projects <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|] ()
-      rows <- fmap catMaybes $ forM projects \(project :: Projects.Project) -> do
-        events <- Telemetry.getTotalEventsToReport project.id since
-        metrics <- Telemetry.getTotalMetricsCount project.id since
-        let total = events + metrics
-        pure $ bool Nothing (Just (project, events, metrics, total)) (total > 0)
-      let sorted = sortOn (\(_, _, _, t) -> negate t) rows
-          totalEvents = sum $ map (\(_, e, _, _) -> e) sorted
-          totalMetrics = sum $ map (\(_, _, m, _) -> m) sorted
-          projectCount = length sorted
-          summaryHeader = "**Daily Usage Summary** (" <> dateStr <> ")\n" <> show projectCount <> " active projects | " <> show totalEvents <> " events | " <> show totalMetrics <> " metrics"
-          fmtRow (p, e, m, t) = T.justifyLeft 25 ' ' p.title <> T.justifyLeft 12 ' ' p.paymentPlan <> T.justifyRight 10 ' ' (show e) <> T.justifyRight 10 ' ' (show m) <> T.justifyRight 10 ' ' (show t)
-          tableHeader = T.justifyLeft 25 ' ' "Project" <> T.justifyLeft 12 ' ' "Plan" <> T.justifyRight 10 ' ' "Events" <> T.justifyRight 10 ' ' "Metrics" <> T.justifyRight 10 ' ' "Total"
-          tableBody = tableHeader : map fmtRow sorted
-          linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> authCtx.env.hostUrl <> "p/" <> p.id.toText <> ")"
-          links = map linkRow sorted
-          -- Discord 2000 char limit: split into chunks
+          send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
           buildMessages [] msgs = msgs
           buildMessages items msgs =
             let (chunk, rest) = splitAccum 1800 items
@@ -408,9 +392,130 @@ processBackgroundJob authCtx bgJob =
           splitAccum remaining (x : xs)
             | T.length x > remaining = ([], x : xs)
             | otherwise = let (taken, left) = splitAccum (remaining - T.length x - 1) xs in (x : taken, left)
-          allMessages = [summaryHeader, "```\n" <> T.unlines tableBody <> "```"] <> buildMessages links []
-      forM_ allMessages \msg -> sendMessageToDiscord msg authCtx.config.discordWebhookUrl
-      Log.logInfo "Sent daily usage summary to Discord" ("project_count", projectCount)
+          fmtNum n
+            | n >= 1000000 = show (n `div` 1000) <> "K"
+            | n >= 10000 = show (n `div` 1000) <> "K"
+            | otherwise = show n
+
+      -- Gather all projects and usage data
+      allProjects <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|] ()
+      let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
+          lookupTitle pid = maybe (pid.toText) (.title) $ Map.lookup pid projectMap
+
+      allRows <- forM allProjects \(project :: Projects.Project) -> do
+        events <- Telemetry.getTotalEventsToReport project.id since
+        metrics <- Telemetry.getTotalMetricsCount project.id since
+        pure (project, events, metrics, events + metrics)
+      let (activeRows, inactiveRows) = partition (\(_, _, _, t) -> t > 0) allRows
+          sorted = sortOn (\(_, _, _, t) -> negate t) activeRows
+
+      -- Section 1: Usage summary
+      let totalEvents = sum $ map (\(_, e, _, _) -> e) sorted
+          totalMetrics = sum $ map (\(_, _, m, _) -> m) sorted
+          summaryHeader = "**Daily Usage Summary** (" <> dateStr <> ")\n" <> show (length sorted) <> " active projects | " <> show totalEvents <> " events | " <> show totalMetrics <> " metrics"
+          fmtRow (p, e, m, t) = T.justifyLeft 25 ' ' p.title <> T.justifyLeft 12 ' ' p.paymentPlan <> T.justifyRight 10 ' ' (show e) <> T.justifyRight 10 ' ' (show m) <> T.justifyRight 10 ' ' (show t)
+          tableHeader = T.justifyLeft 25 ' ' "Project" <> T.justifyLeft 12 ' ' "Plan" <> T.justifyRight 10 ' ' "Events" <> T.justifyRight 10 ' ' "Metrics" <> T.justifyRight 10 ' ' "Total"
+          tableBody = tableHeader : map fmtRow sorted
+      send summaryHeader
+      send $ "```\n" <> T.unlines tableBody <> "```"
+
+      -- Section 2: New projects (created in last 24h)
+      tryLog "newProjects" do
+        newProjects :: [Projects.Project] <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= ?::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|] (Only since)
+        let fmtNew (p :: Projects.Project) =
+              let hoursAgo = show (round (diffUTCTime now p.createdAt / 3600) :: Int)
+              in "- " <> p.title <> " (" <> p.paymentPlan <> ") -- created " <> hoursAgo <> "h ago"
+        send $ bool
+          ("**New Projects** (" <> show (length newProjects) <> ")\n" <> T.unlines (map fmtNew newProjects))
+          "**New Projects**: None"
+          (null newProjects)
+
+      -- Section 3: Inactive projects (non-ONBOARDING with 0 events)
+      tryLog "churnSignals" do
+        let churn = filter (\(p, _, _, _) -> p.paymentPlan /= "ONBOARDING") inactiveRows
+        unless (null churn) $ send $
+          "**Inactive Projects** (" <> show (length churn) <> " with 0 events in 24h)\n"
+          <> T.unlines (map (\(p, _, _, _) -> "- " <> p.title <> " (" <> p.paymentPlan <> ")") churn)
+
+      -- Section 4: New issues
+      tryLog "newIssues" do
+        issueCounts :: [(Projects.ProjectId, Text, Int)] <- PG.query
+          [sql|SELECT project_id::uuid, issue_type, COUNT(*)::int FROM apis.issues WHERE created_at > ?::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
+          (Only since)
+        unless (null issueCounts) do
+          let total = sum $ map (view _3) issueCounts
+              byProject = Map.toDescList $ Map.fromListWith (<>) $ map (\(pid, itype, cnt) -> (pid, [(itype, cnt)])) issueCounts
+              projectCount = length byProject
+              fmtProject (pid, types) =
+                let pTotal = sum $ map snd types
+                    details = T.intercalate ", " $ map (\(t, c) -> t <> ": " <> show c) types
+                in "- " <> lookupTitle pid <> ": " <> show pTotal <> " (" <> details <> ")"
+          send $ "**New Issues** (" <> show total <> " across " <> show projectCount <> " projects)\n"
+            <> T.unlines (map fmtProject $ take 10 byProject)
+
+      -- Section 5: Monitor alerts
+      tryLog "monitorAlerts" do
+        alertCounts :: [(Projects.ProjectId, Text, Int)] <- PG.query
+          [sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::int FROM monitors.query_monitors m
+               WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
+               GROUP BY m.project_id, m.current_status|]
+          ()
+        unless (null alertCounts) do
+          let totalAlerting = sum [c | (_, s, c) <- alertCounts, s == "alerting"]
+              totalWarning = sum [c | (_, s, c) <- alertCounts, s == "warning"]
+              byProject = Map.toDescList $ Map.fromListWith (<>) $ map (\(pid, st, cnt) -> (pid, [(st, cnt)])) alertCounts
+              fmtProject (pid, statuses) =
+                "- " <> lookupTitle pid <> ": " <> T.intercalate ", " (map (\(s, c) -> show c <> " " <> s) statuses)
+          send $ "**Monitor Alerts**\n"
+            <> show totalAlerting <> " alerting | " <> show totalWarning <> " warning across " <> show (length byProject) <> " projects\n"
+            <> T.unlines (map fmtProject $ take 10 byProject)
+
+      -- Section 6: Background job health
+      tryLog "jobHealth" do
+        jobStats :: [(Text, Int)] <- PG.query [sql|SELECT status, COUNT(*)::int FROM background_jobs WHERE created_at >= ?::timestamptz GROUP BY status|] (Only since)
+        stuckJobs :: [Only Int] <- PG.query [sql|SELECT COUNT(*)::int FROM background_jobs WHERE status = 'locked' AND locked_at < ?::timestamptz|] (Only (addUTCTime (-1800) now))
+        let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
+            stuck = maybe 0 (.fromOnly) $ listToMaybe stuckJobs
+        send $ "**Job Health** (last 24h)\n" <> statsLine
+          <> bool ("\n!! " <> show stuck <> " stuck jobs (locked > 30min)") "" (stuck == 0)
+
+      -- Section 7: Top growing projects (day-over-day)
+      tryLog "topGrowing" do
+        growthData :: [(Projects.ProjectId, Int, Int)] <- PG.query
+          [sql|SELECT du.project_id::uuid,
+                 COALESCE(SUM(CASE WHEN du.created_at >= (?::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::int as yesterday,
+                 COALESCE(SUM(CASE WHEN du.created_at < (?::date - interval '1 day') AND du.created_at >= (?::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::int as day_before
+               FROM apis.daily_usage du WHERE du.created_at >= (?::date - interval '2 days')
+               GROUP BY du.project_id|]
+          (now, now, now, now)
+        let withGrowth = sortOn (\(_, _, _, g) -> negate g) [(pid, y, db, y - db) | (pid, y, db) <- growthData, y > db, db > 0]
+            fmtGrowth (pid, y, db, _) =
+              let pct = show (round @Double @Int $ fromIntegral (y - db) / fromIntegral db * 100)
+              in "- " <> lookupTitle pid <> ": " <> fmtNum db <> " -> " <> fmtNum y <> " (+" <> pct <> "%)"
+        unless (null withGrowth) $ send $
+          "**Top Growing** (vs previous day)\n" <> T.unlines (map fmtGrowth $ take 5 withGrowth)
+
+      -- Section 8: Active users (last 24h)
+      tryLog "activeUsers" do
+        activeUsers :: [(Text, Text, Text, PGArray Projects.ProjectId)] <- PG.query
+          [sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
+               FROM users.persistent_sessions ps
+               JOIN users.users u ON u.id = ps.user_id
+               LEFT JOIN projects.project_members pm ON pm.user_id = ps.user_id AND pm.active = TRUE
+               WHERE ps.updated_at >= ?::timestamptz
+               GROUP BY u.id, u.email, u.first_name, u.last_name ORDER BY u.email|]
+          (Only since)
+        let fmtUser (email, _, _, PGArray pids) =
+              let projs = T.intercalate ", " $ map lookupTitle $ filter (`Map.member` projectMap) pids
+              in "- " <> email <> bool (" -- " <> projs) "" (T.null projs)
+        send $ "**Active Users** (" <> show (length activeUsers) <> " in last 24h)\n"
+          <> T.unlines (map fmtUser activeUsers)
+
+      -- Section 9: Project links
+      let linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> authCtx.env.hostUrl <> "p/" <> p.id.toText <> ")"
+          links = map linkRow sorted
+      forM_ (buildMessages links []) send
+      Log.logInfo "Sent daily admin summary to Discord" ("project_count", length sorted)
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
