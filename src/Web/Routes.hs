@@ -244,6 +244,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
   , -- Slack/Discord integration
     reportsGet :: mode :- "p" :> ProjectId :> "reports" :> QPT "page" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders Reports.ReportsGet)
+  , reportsLiveGet :: mode :- "p" :> ProjectId :> "reports" :> "live" :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsSingleGet :: mode :- "p" :> ProjectId :> "reports" :> Capture "report_id" Anomalies.ReportId :> HXRequest :> Get '[HTML] (RespHeaders Reports.ReportsGet)
   , reportsPost :: mode :- "p" :> ProjectId :> "reports_notif" :> Capture "report_type" Text :> Post '[HTML] (RespHeaders Reports.ReportsPost)
   , shareLinkPost :: mode :- "p" :> ProjectId :> "share" :> Capture "event_id" UUID.UUID :> Capture "createdAt" UTCTime :> QPT "event_type" :> Post '[HTML] (RespHeaders Share.ShareLinkPost)
@@ -481,6 +482,7 @@ cookieProtectedServer =
     , flamegraphGet = flamegraphGetH
     , -- Slack/Discord handlers
       reportsGet = Reports.reportsGetH
+    , reportsLiveGet = Reports.reportsLiveGetH
     , reportsSingleGet = Reports.singleReportGetH
     , reportsPost = Reports.reportsPostH
     , shareLinkPost = Share.shareLinkPostH

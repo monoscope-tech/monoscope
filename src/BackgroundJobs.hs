@@ -1133,60 +1133,6 @@ data ReportType = DailyReport | WeeklyReport
   deriving (Show)
 
 
-getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Double, Int, Double)
-getSpanTypeStats current prev =
-  let
-    spanTypes =
-      ordNub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
-    getStats t =
-      let
-        evtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) current)
-        prevEvtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) prev)
-        evtChange' = if prevEvtCount == 0 then 0.00 :: Double else fromIntegral (evtCount - prevEvtCount) / fromIntegral prevEvtCount * 100
-        evtChange = fromIntegral (round (evtChange' * 100)) / 100
-        -- average duration
-        avgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) current)
-        prevAvgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) prev)
-        durationChange' = if prevAvgDuration == 0 then 0.00 :: Double else fromIntegral (avgDuration - prevAvgDuration) / fromIntegral prevAvgDuration * 100
-        durationChange = fromIntegral (round (durationChange' * 100)) / 100
-       in
-        (t, evtCount, evtChange, avgDuration, durationChange)
-   in
-    V.fromList (map getStats spanTypes)
-
-
-type EndpointStatsTuple = (Text, Text, Text, Int, Int)
-
-
-computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int, Double, Int, Double)
-computeDurationChanges current prev =
-  let
-    prevMap :: Map.Map (Text, Text, Text) Int
-    prevMap =
-      Map.fromList
-        [ ((h, m, u), dur)
-        | (h, m, u, dur, req) <- V.toList prev
-        ]
-    prevMapReq :: Map.Map (Text, Text, Text) Int
-    prevMapReq =
-      Map.fromList
-        [ ((h, m, u), req)
-        | (h, m, u, dur, req) <- V.toList prev
-        ]
-    compute (h, m, u, dur, req) =
-      let change = case Map.lookup (h, m, u) prevMap of
-            Just prevDur
-              | prevDur > 0 ->
-                  Just $ (fromIntegral (dur - prevDur) / fromIntegral prevDur) * 100
-            _ -> Nothing
-          reqChange = case Map.lookup (h, m, u) prevMapReq of
-            Just prevDur
-              | prevDur > 0 ->
-                  Just $ (fromIntegral (req - prevDur) / fromIntegral prevDur) * 100
-            _ -> Nothing
-       in (h, m, u, dur, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) change, req, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) reqChange)
-   in
-    V.map compute current
 
 
 sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()
@@ -1215,7 +1161,7 @@ sendReportForProject pid rType = do
         eventsChange' = if totalEventsPrev == 0 then 0.00 else fromIntegral (totalEvents - totalEventsPrev) / fromIntegral totalEventsPrev * 100
         errorsChange = fromIntegral (round (errorsChange' * 100)) / 100
         eventsChange = fromIntegral (round (eventsChange' * 100)) / 100
-        spanStatsDiff = getSpanTypeStats statsBySpanType statsBySpanTypePrev
+        spanStatsDiff = RP.getSpanTypeStats statsBySpanType statsBySpanTypePrev
 
     slowDbQueries <- V.fromList <$> Telemetry.getDBQueryStats pid startTime currentTime
 
@@ -1238,7 +1184,7 @@ sendReportForProject pid rType = do
     endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
     endpoint_rp <- RequestDumps.getRequestDumpForReports pid typTxt
-    let endpointPerformance = computeDurationChanges endpointStats endpointStatsPrev
+    let endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
     total_anomalies <- Anomalies.countAnomalies pid typTxt
     previous_week <- RequestDumps.getRequestDumpsForPreviousReportPeriod pid typTxt
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'

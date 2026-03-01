@@ -1,6 +1,7 @@
 module Pages.Reports (
   reportsGetH,
   singleReportGetH,
+  reportsLiveGetH,
   renderEndpointsTable,
   getAnomaliesEmailTemplate,
   reportsPostH,
@@ -8,28 +9,39 @@ module Pages.Reports (
   PerformanceReport (..),
   ReportsGet (..),
   ReportsPost (..),
+  getSpanTypeStats,
+  computeDurationChanges,
+  EndpointStatsTuple,
 )
 where
 
+import Control.Lens (view, _2, _3, _5)
 import Data.Aeson qualified as AE
 import Data.Default (def)
-import Data.List qualified as L (foldl)
+import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
-import Data.Time (defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
+import Data.Time.Zones (loadTZFromDB, utcToLocalTimeTZ)
 import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
+import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
+import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.RequestDumps qualified as RequestDumps
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
-import Pkg.Components.Widget (WidgetAxis (..), WidgetType (..))
+import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
+import Pkg.EmailTemplates qualified as ET
 import Relude hiding (ask)
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
 import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, getDurationNSMS, loadingIndicatorWith_, prettyPrintCount)
 
@@ -73,6 +85,7 @@ data DBQueryStat = DBQueryStat
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
+
 data IssueStat = IssueStat
   { id :: Issues.IssueId
   , title :: Text
@@ -96,6 +109,16 @@ data ReportData = ReportData
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
+
+
+-- | Shared widget definitions for chart URL generation
+eventsWidget, errorsWidget :: Widget.Widget
+eventsWidget = def{Widget.wType = WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"}
+errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
+
+
+anomalyTypeCounts :: (Foldable f) => (a -> Issues.IssueType) -> f a -> (Int, Int, Int)
+anomalyTypeCounts getType = foldl' (\(e, a, m) x -> (e + fromEnum (getType x == Issues.RuntimeException), a + fromEnum (getType x == Issues.ApiChange), m + fromEnum (getType x == Issues.QueryAlert))) (0, 0, 0)
 
 
 getDataset :: Charts.MetricsData -> Widget.WidgetDataset
@@ -131,10 +154,108 @@ getAnomaliesEmailTemplate :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.
 getAnomaliesEmailTemplate = V.map (\(i, t, c, s, tp) -> AE.object ["id" AE..= i, "title" AE..= t, "critical" AE..= c, "severity" AE..= s, "issueType" AE..= tp])
 
 
+-- | Moved from BackgroundJobs
+type EndpointStatsTuple = (Text, Text, Text, Int, Int)
+
+
+getSpanTypeStats :: V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int, Double, Int, Double)
+getSpanTypeStats current prev =
+  let spanTypes = ordNub $ V.toList (V.map (\(t, _, _) -> t) current <> V.map (\(t, _, _) -> t) prev)
+      getStats t =
+        let evtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) current)
+            prevEvtCount = maybe 0 (\(_, c, _) -> c) (V.find (\(st, _, _) -> st == t) prev)
+            evtChange' = if prevEvtCount == 0 then 0.00 :: Double else fromIntegral (evtCount - prevEvtCount) / fromIntegral prevEvtCount * 100
+            evtChange = fromIntegral (round (evtChange' * 100)) / 100
+            avgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) current)
+            prevAvgDuration = maybe 0 (\(_, _, d) -> d) (V.find (\(st, _, _) -> st == t) prev)
+            durationChange' = if prevAvgDuration == 0 then 0.00 :: Double else fromIntegral (avgDuration - prevAvgDuration) / fromIntegral prevAvgDuration * 100
+            durationChange = fromIntegral (round (durationChange' * 100)) / 100
+         in (t, evtCount, evtChange, avgDuration, durationChange)
+   in V.fromList (map getStats spanTypes)
+
+
+computeDurationChanges :: V.Vector EndpointStatsTuple -> V.Vector EndpointStatsTuple -> V.Vector (Text, Text, Text, Int, Double, Int, Double)
+computeDurationChanges current prev =
+  let prevMap :: Map.Map (Text, Text, Text) Int
+      prevMap = Map.fromList [((h, m, u), dur) | (h, m, u, dur, _req) <- V.toList prev]
+      prevMapReq :: Map.Map (Text, Text, Text) Int
+      prevMapReq = Map.fromList [((h, m, u), req) | (h, m, u, _dur, req) <- V.toList prev]
+      compute (h, m, u, dur, req) =
+        let change = case Map.lookup (h, m, u) prevMap of
+              Just prevDur | prevDur > 0 -> Just $ (fromIntegral (dur - prevDur) / fromIntegral prevDur) * 100
+              _ -> Nothing
+            reqChange = case Map.lookup (h, m, u) prevMapReq of
+              Just prevReq | prevReq > 0 -> Just $ (fromIntegral (req - prevReq) / fromIntegral prevReq) * 100
+              _ -> Nothing
+         in (h, m, u, dur, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) change, req, maybe 100.00 (\x -> fromIntegral (round (x * 100)) / 100) reqChange)
+   in V.map compute current
+
+
+-- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email
+-- Returns (dateLabel based on endTime, rendered email HTML)
+renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Int -> Bool -> ATAuthCtx (Text, Text)
+renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors anomalies performance slowQueries anomaliesCount freeTierExceeded = do
+  ctx <- ask @AuthContext
+  tz <- liftIO $ loadTZFromDB (toString project.timeZone)
+  let reportUrl' = ctx.env.hostUrl <> reportUrl
+      dayStart = show $ localDay (utcToLocalTimeTZ tz startTime)
+      dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
+      stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
+      endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" endTime
+      totalAnom = V.length anomalies
+      (errTotal, apiTotal, qTotal) = anomalyTypeCounts (view _5) anomalies
+      pctOf n = if totalAnom == 0 then 0 else (fromIntegral n / fromIntegral totalAnom) * 99
+  eventsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
+  errorsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
+  let reportData = ET.WeeklyReportData
+        { userName, projectName = project.title, reportUrl = reportUrl'
+        , startDate = dayStart, endDate = dayEnd
+        , eventsChartUrl = eventsUrl, errorsChartUrl = errorsUrl
+        , totalEvents, totalErrors, anomaliesCount
+        , runtimeErrorsPct = pctOf errTotal, apiChangesPct = pctOf apiTotal, alertsPct = pctOf qTotal
+        , anomalies, performance, slowQueries, freeTierExceeded
+        }
+      (subj, html) = ET.weeklyReportEmail reportData
+  pure (dayEnd, ET.renderEmail subj html)
+
+
+-- | Reconstruct the email HTML from a stored Report's reportJson. Returns (dateLabel, emailHtml)
+reportToEmailHtml :: Issues.Report -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
+reportToEmailHtml report project userName = case AE.fromJSON @ReportData report.reportJson of
+  AE.Error _ -> pure ("", "Error: Could not parse report data")
+  AE.Success rd -> do
+    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> rd.issues
+        performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int, ep.durationDiffPct, ep.requestCount, ep.requestDiffPct)) <$> rd.endpoints
+        slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
+        reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
+    renderWeeklyEmail reportUrl project project.id userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) anomalies' performance slowQueries (length rd.issues) False
+
+
+-- | Build live "week to date" email preview. Returns (dateLabel, emailHtml)
+buildLiveReportEmailHtml :: Projects.ProjectId -> Projects.Project -> Text -> ATAuthCtx (Text, Text)
+buildLiveReportEmailHtml pid project userName = do
+  currentTime <- Time.currentTime
+  let startTime = addUTCTime (negate $ 6 * 86400) currentTime
+  stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
+  let totalErrors = sum $ map (view _2) stats
+      totalEvents = sum $ map (view _3) stats
+  slowQueries <- V.fromList <$> Telemetry.getDBQueryStats pid startTime currentTime
+  endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
+  endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate $ 12 * 86400) currentTime) startTime
+  let performance = computeDurationChanges endpointStats endpointStatsPrev
+  (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing
+  let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
+  anomaliesCount <- Anomalies.countAnomalies pid "weekly"
+  totalRequest <- RequestDumps.getLastSevenDaysTotalRequest pid
+  let reportUrl = "/p/" <> pid.toText <> "/reports"
+      freeTierExceeded = project.paymentPlan == "FREE" && totalRequest > 5000
+  renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors anomalies' performance slowQueries anomaliesCount freeTierExceeded
+
+
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
 reportsPostH pid t = do
   _ <- Sessions.sessionAndProject pid
-  apiKeys <- Projects.updateProjectReportNotif pid t
+  _ <- Projects.updateProjectReportNotif pid t
   addSuccessToast "Report notifications updated Successfully" Nothing
   addRespHeaders $ ReportsPost "updated"
 
@@ -147,23 +268,36 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
+wrapSingleResponse :: Sessions.Session -> Projects.Project -> Bool -> EnvConfig -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
+wrapSingleResponse sess project freeTierExceeded config pageTitle hxRequestM content = case hxRequestM of
+  Just _ -> addRespHeaders $ ReportsGetSingle' content
+  _ -> do
+    let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle, freeTierExceeded, config}
+    addRespHeaders $ ReportsGetSingle $ PageCtx bwconf content
+
+
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
-  report <- Issues.getReportById rid
+  reportM <- Issues.getReportById rid
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Report"
-          , freeTierExceeded = freeTierExceeded
-          , config = appCtx.env
-          }
-  case hxRequestM of
-    Just _ -> addRespHeaders $ ReportsGetSingle' (pid, report)
-    _ -> addRespHeaders $ ReportsGetSingle $ PageCtx bwconf (pid, report)
+  content <- case reportM of
+    Nothing -> pure ("unknown", "Report not found", "")
+    Just report -> do
+      (dateLabel, emailHtml) <- reportToEmailHtml report project sess.user.firstName
+      pure (report.reportType, dateLabel, emailHtml)
+  wrapSingleResponse sess project freeTierExceeded appCtx.env "Report" hxRequestM content
+
+
+reportsLiveGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
+reportsLiveGetH pid hxRequestM = do
+  (sess, project) <- Sessions.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  (dateLabel, emailHtml) <- buildLiveReportEmailHtml pid project sess.user.firstName
+  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  let content = ("weekly" :: Text, dateLabel, emailHtml)
+  wrapSingleResponse sess project freeTierExceeded appCtx.env "Reports" hxRequestM content
 
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
@@ -194,127 +328,35 @@ reportsGetH pid page hxRequest hxBoosted = do
       addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
 
 
+-- | (reportType, dateLabel, emailHtml)
 data ReportsGet
   = ReportsGetMain (PageCtx (Projects.ProjectId, V.Vector Issues.ReportListItem, Maybe Text, Bool, Bool))
   | ReportsGetList Projects.ProjectId (V.Vector Issues.ReportListItem) (Maybe Text)
-  | ReportsGetSingle (PageCtx (Projects.ProjectId, Maybe Issues.Report))
-  | ReportsGetSingle' (Projects.ProjectId, Maybe Issues.Report)
+  | ReportsGetSingle (PageCtx (Text, Text, Text))
+  | ReportsGetSingle' (Text, Text, Text)
 
 
--- this one has no PageCtx wrapping
 instance ToHtml ReportsGet where
   toHtml (ReportsGetMain (PageCtx conf (pid, reports, next, daily, weekly))) = toHtml $ PageCtx conf $ reportsPage pid reports next daily weekly
   toHtml (ReportsGetList pid reports next) = toHtml $ reportListItems pid reports next
-  toHtml (ReportsGetSingle (PageCtx conf (pid, report))) = toHtml $ PageCtx conf $ singleReportPage pid report
-  toHtml (ReportsGetSingle' (pid, report)) = toHtml $ singleReportPage pid report
+  toHtml (ReportsGetSingle (PageCtx conf content)) = toHtml $ PageCtx conf $ singleReportPage content
+  toHtml (ReportsGetSingle' content) = toHtml $ singleReportPage content
   toHtmlRaw = toHtml
 
 
-singleReportPage :: Projects.ProjectId -> Maybe Issues.Report -> Html ()
-singleReportPage pid report =
-  div_ [class_ "mx-auto w-full flex flex-col overflow-y-scroll h-full"] do
-    case report of
-      Just report' -> do
-        div_ [class_ "flex w-full justify-between items-center border-b p-4"] do
-          h3_ [class_ "text-textStrong font-medium capitalize"] $ toHtml report'.reportType <> " report"
-          span_ [] $ show $ localDay (zonedTimeToLocalTime report'.createdAt)
-        div_ [class_ "space-y-4"] do
-          div_ [class_ "mx-auto max-w-[1000px]"] do
-            div_ [class_ "px-4 py-3 space-y-8"] do
-              let rep_json = AE.decode (AE.encode report'.reportJson) :: Maybe ReportData
-              let r = AE.eitherDecode (AE.encode report'.reportJson) :: Either String ReportData
-              case r of
-                Left err -> do
-                  pre_ [class_ "text-textError"] $ toHtml $ "Error parsing report data: " <> toText err
-                Right _ -> pass
-              case rep_json of
-                Just v -> do
-                  div_ [class_ "flex gap-2 h-48 items-center"] do
-                    div_ [class_ "h-full w-1/2 border rounded-lg p-3"] do
-                      div_ [class_ "flex w-full items-center justify-between"] do
-                        div_ [class_ "flex text-sm items-center gap-3"] do
-                          span_ [class_ "text-textWeak"] "Total events"
-                          span_ [class_ "font-semibold tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral v.events.total)
-                        span_ [class_ $ "text-xs" <> (if v.events.change < 0 then " text-textError" else " text-textSuccess")] $ show v.events.change <> "% from last period"
-                      div_ [class_ "h-[90%]"] do
-                        Widget.widget_
-                          $ (def :: Widget.Widget){Widget.wType = WTTimeseries, Widget.unit = Just "rows", Widget.naked = Just True, Widget.dataset = Just v.eventsDataset, Widget.title = Just "Events trend", Widget.hideLegend = Just True, Widget._projectId = Just pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
-                    div_ [class_ "h-full w-1/2 border rounded-lg p-3"] do
-                      div_ [class_ "flex w-full items-center justify-between"] do
-                        div_ [class_ "flex text-sm items-center gap-3"] do
-                          span_ [class_ "text-textWeak"] "Error trend"
-                          span_ [class_ "font-semibold tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral v.errors.total)
-                        span_ [class_ $ "text-xs" <> (if v.errors.change >= 0 then " text-textError" else " text-textSuccess ")] $ show v.errors.change <> "% from last week"
-                      div_ [class_ "h-[90%]"] do
-                        Widget.widget_
-                          $ (def :: Widget.Widget){Widget.wType = WTTimeseries, Widget.dataset = Just v.errorDataset, Widget.unit = Just "rows", Widget.naked = Just True, Widget.title = Just "Errors trend", Widget.theme = Just "roma", Widget.hideLegend = Just True, Widget._projectId = Just pid, Widget.standalone = Just True, Widget.yAxis = Just (def{showOnlyMaxLabel = Just True}), Widget.allowZoom = Just True, Widget.showMarkArea = Just True, Widget.layout = Just (def{Widget.w = Just 6, Widget.h = Just 4})}
-                  div_ [class_ "space-y-6"] do
-                    div_ [class_ "pt-3 border-t flex justify-between"] do
-                      h5_ [class_ "text-sm font-medium"] "Span types overview"
-                    let cats = v.spanTypeStats
-                    div_ [class_ "flex items-center w-full overflow-x-auto gap-3"] do
-                      forM_ cats $ \cat -> do
-                        categoryCard cat.spanType cat.eventCount cat.averageDuration cat.durationChange cat.eventChange
-
-                  div_ [class_ "space-y-6 pt-4"] do
-                    div_ [class_ "pt-3 border-t flex  items-center justify-between"] do
-                      h5_ [class_ "text-sm font-medium"] "Issues breakdown"
-                      div_ [class_ "flex flex-col gap-2"] do
-                        div_ [class_ "flex items-center gap-4 "] do
-                          div_ [class_ "flex items-center gap-1"] do
-                            span_ [class_ "h-3 w-3 rounded bg-fillError-strong"] pass
-                            span_ [class_ "text-xs"] "Runtime errors"
-                          div_ [class_ "flex items-center gap-1"] do
-                            span_ [class_ "h-3 rounded w-3 bg-blue-500"] pass
-                            span_ [class_ "text-xs"] "Api changes"
-                          div_ [class_ "flex items-center gap-1"] do
-                            span_ [class_ "h-3 w-3 rounded bg-yellow-500"] pass
-                            span_ [class_ "text-xs"] "Monitor alerts"
-                        let totalAnomalies = length v.issues
-                            (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) x -> (e + if x.issueType == Issues.RuntimeException then 1 else 0, a + if x.issueType == Issues.ApiChange then 1 else 0, m + if x.issueType == Issues.QueryAlert then 1 else 0)) (0, 0, 0) v.issues
-                        div_ [class_ "w-full h-3 rounded overflow-x-hidden bg-fillWeak"] do
-                          when (totalAnomalies > 0) do
-                            div_ [class_ "h-full bg-fillError-strong", style_ $ "width: " <> show (errTotal `div` totalAnomalies * 100) <> "%"] pass
-                            div_ [class_ "h-full bg-blue-500", style_ $ "width: " <> show (apiTotal `div` totalAnomalies * 100) <> "%"] pass
-                            div_ [class_ "h-full bg-yellow-500", style_ $ "width: " <> show (qTotal `div` totalAnomalies * 100) <> "%"] pass
-                    div_ [class_ "flex flex-col gap-2 mt-4"] do
-                      when (null v.issues) do
-                        span_ [class_ "text-sm font-semibold text-textStrong"] "No new issues found for this period"
-                      forM_ v.issues $ \iss -> do
-                        div_ [class_ "flex items-center justify-between"] do
-                          let titleCls = case iss.issueType of
-                                Issues.RuntimeException -> "text-textError"
-                                Issues.QueryAlert -> "text-yellow-500"
-                                _ -> "text-textBrand-strong"
-                          span_ [class_ $ "text-sm font-medium " <> titleCls] $ toHtml iss.title
-                  -- span_ [] $ toHtml iss.severity
-
-                  div_ [class_ "space-y-6 pt-4"] do
-                    div_ [class_ "pt-3 border-t flex justify-between"] do
-                      h5_ [class_ "text-sm font-medium"] "HTTP endpoints"
-                    renderEndpointsTable v.endpoints
-                  unless (null v.slowDbQueries) $ do
-                    div_ [class_ "space-y-3 pt-4 w-full"] do
-                      div_ [class_ "pt-3 border-t flex justify-between"] do
-                        h5_ [class_ "text-sm font-medium"] "Slow queries"
-                      div_ [class_ "w-full border rounded-lg"] do
-                        table_ [class_ "table-auto w-full"] do
-                          thead_ [class_ "text-xs text-left text-textStrong font-medium capitalize border-b"] $ tr_ do
-                            th_ [class_ "p-2 "] "Query"
-                            th_ [class_ "p-2 "] "Avg. duration"
-                            th_ [class_ "p-2 "] "Total events"
-                          tbody_ [class_ "text-sm"] $ forM_ v.slowDbQueries $ \queryStat -> do
-                            tr_ [class_ "p"] do
-                              td_ [class_ "p-2 text-textStrong max-w-96 truncate ellipsis"] $ toHtml queryStat.query
-                              td_ [class_ "p-2 tabular-nums"] $ toHtml $ getDurationNSMS (round queryStat.averageDuration)
-                              td_ [class_ "p-2 tabular-nums"] $ toHtml $ prettyPrintCount (fromIntegral queryStat.totalEvents)
-                Nothing -> pass
-      Nothing -> do
-        h3_ [] "Report Not Found"
+singleReportPage :: (Text, Text, Text) -> Html ()
+singleReportPage (reportType, dateLabel, emailHtml) =
+  div_ [class_ "w-full flex flex-col h-full"] do
+    div_ [class_ "flex w-full justify-between items-center border-b p-4"] do
+      h3_ [class_ "text-textStrong font-medium capitalize"] $ toHtml reportType <> " report"
+      span_ [class_ "text-sm text-textWeak"] $ toHtml dateLabel
+    if T.null emailHtml
+      then h3_ [class_ "p-4"] "Report Not Found"
+      else iframe_ [term "srcdoc" emailHtml, style_ "width:100%;height:100%;border:none;", term "sandbox" "allow-same-origin"] ""
 
 
 reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
-reportsPage pid reports nextUrl daily weekly =
+reportsPage pid reports nextUrl _daily _weekly =
   div_ [class_ "flex flex-row h-full w-full border-t"] do
     when (V.null reports) do
       div_ [class_ "flex h-full w-full justify-center items-center"] do
@@ -324,14 +366,33 @@ reportsPage pid reports nextUrl daily weekly =
           h3_ [class_ "text-xl text-textStrong mb-2"] "No reports generated for this project yet."
     unless (V.null reports) do
       div_ [class_ "w-1/3 border-r border-strokeWeak p-4 overflow-y-auto"] do
-        div_ [class_ "mt-4"] do
+        div_ [class_ "mt-4 space-y-4 w-full"] do
+          -- "Week to Date" live preview entry
+          div_ [class_ "w-full flex flex-col border border-strokeBrand-weak bg-fillBrand-weak/10 rounded-lg cursor-pointer hover:bg-fillWeaker"] do
+            div_ [class_ "w-full"] do
+              a_
+                [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"
+                , hxGet_ $ "/p/" <> pid.toText <> "/reports/live"
+                , hxTarget_ "#detailSidebar"
+                , hxSwap_ "innerHTML"
+                ]
+                $ div_ [class_ "flex flex-col grow gap-4"] do
+                  div_ [class_ "flex items-center w-full justify-between gap-2"] do
+                    div_ [class_ "flex items-center gap-2"] do
+                      div_ [class_ "bg-fillBrand-weak text-xs font-medium px-2.5 py-1 rounded-full"] "Weekly report"
+                      span_ [class_ "bg-fillSuccess-strong text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full uppercase"] "Live"
+                    faSprite_ "chevron-right" "regular" "w-3 h-3"
+                  h4_ [class_ "font-medium text-sm flex items-center gap-2"] do
+                    faSprite_ "calendar" "regular" "w-4 h-4"
+                    "Week to Date"
+          -- Historical reports
           reportListItems pid reports nextUrl
       div_ [class_ "w-2/3 overflow-y-auto"] do
         div_ [class_ "flex h-full", id_ "detailSidebar"] do
-          let h = V.head reports
+          -- Auto-load the live preview on initial page load
           a_
-            [ class_ "w-full text-center  cursor-pointer"
-            , hxGet_ $ "/p/" <> pid.toText <> "/reports/" <> h.id.toText
+            [ class_ "w-full text-center cursor-pointer"
+            , hxGet_ $ "/p/" <> pid.toText <> "/reports/live"
             , hxTarget_ "#detailSidebar"
             , hxSwap_ "innerHTML"
             , hxTrigger_ "intersect once"
@@ -339,8 +400,6 @@ reportsPage pid reports nextUrl daily weekly =
             $ div_ [class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"] do
               loadingIndicatorWith_ LdSM LdDots "text-textWeak"
 
-
--- div_ [class_ "w-5 bg-gray-200"] ""
 
 reportListItems :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Html ()
 reportListItems pid reports nextUrl =
@@ -386,38 +445,3 @@ renderEndpointsTable endpoints = div_ [class_ "w-full border rounded-lg overflow
     th_ [class_ "p-2"] "Avg. latency"
     th_ [class_ "p-2"] "Latency change %"
   tbody_ [class_ "text-sm"] $ mapM_ renderEndpointRow endpoints
-
-
-categoryCard :: Text -> Integer -> Double -> Double -> Double -> Html ()
-categoryCard category total avDur changeDur changeCount = do
-  div_ [class_ "flex text-sm flex-col items-center"] $ do
-    div_ [class_ "flex items-center gap-1"] $ do
-      faSprite_ (getFaSprite category) "regular" "w-3 h-3"
-      h3_ [class_ "text-sm text-textStrong "] $ toHtml category
-    span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
-    div_ [class_ "flex w-full items-center"] $ do
-      div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Total events"] $ do
-        span_ [class_ "w-12 border-t border-t-strokeWeak self-end"] pass
-        span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
-        div_ [class_ "text-sm text-textStrong tabular-nums"] $ toHtml (prettyPrintCount (fromIntegral total))
-        div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeCount < 0 then " text-textError" else " text-textSuccess")] $ do
-          faSprite_ (if changeCount < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [class_ "tabular-nums"] $ toHtml $ show changeCount <> "%"
-      div_ [class_ "flex w-24 flex-col items-center", term "data-tippy-content" "Average duration"] $ do
-        span_ [class_ "w-12 border-t border-t-strokeWeak self-start"] pass
-        span_ [class_ "h-4 w-[2px] bg-fillWeak"] pass
-        div_ [class_ "text-sm text-textStrong tabular-nums"] $ toHtml (getDurationNSMS $ round avDur)
-        div_ [class_ $ "flex items-center gap-1 text-xs mt-1" <> (if changeDur < 0 then " text-textSuccess" else " text-textError")] $ do
-          faSprite_ (if changeDur < 0 then "trending-down" else "trending-up") "regular" "w-3 h-3"
-          span_ [class_ "tabular-nums"] $ toHtml $ show changeDur <> "%"
-
-
-getFaSprite :: Text -> Text
-getFaSprite category =
-  case T.toLower category of
-    "http" -> "web"
-    "db" -> "database"
-    "cache" -> "memory"
-    "external" -> "globe"
-    "internal" -> "function"
-    _ -> "cube"

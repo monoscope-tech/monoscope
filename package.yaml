@@ -241,6 +241,7 @@ library:
     - typed-process
     - unliftio
     - time
+    - tz
     - unordered-containers
     - uuid
     - valor >= 1.0.0.0

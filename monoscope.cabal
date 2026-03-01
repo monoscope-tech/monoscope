@@ -339,6 +339,7 @@ library
     , time
     , tmp-postgres
     , typed-process
+    , tz
     , unliftio
     , unordered-containers
     , uuid

@@ -43,6 +43,7 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.RequestDumps qualified as RequestDumps
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
+import Utils (formatWithCommas)
 
 
 cellpadding_, cellspacing_, align_ :: Text -> Attribute
@@ -489,10 +490,10 @@ weeklyReportEmail d =
       table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ do
         td_ [width_ "50%", style_ "text-align: center; padding: 16px 0;"] do
           p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Total project events"
-          p_ [style_ "margin: 0; font-size: 28px; font-weight: 700;"] $ toHtml $ show d.totalEvents
+          p_ [style_ "margin: 0; font-size: 28px; font-weight: 700;"] $ toHtml $ formatWithCommas (fromIntegral d.totalEvents)
         td_ [width_ "50%", style_ "text-align: center; padding: 16px 0; border-left: 1px solid #dee2e7;"] do
           p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Total project errors"
-          p_ [style_ "margin: 0; font-size: 28px; font-weight: 700;"] $ toHtml $ show d.totalErrors
+          p_ [style_ "margin: 0; font-size: 28px; font-weight: 700;"] $ toHtml $ formatWithCommas (fromIntegral d.totalErrors)
 
       -- Charts: stacked full-width
       chartBlock "Events" d.eventsChartUrl
