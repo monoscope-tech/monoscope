@@ -403,7 +403,7 @@ processBackgroundJob authCtx bgJob =
           buildMessages [] msgs = msgs
           buildMessages items msgs =
             let (chunk, rest) = splitAccum 1800 items
-            in buildMessages rest (msgs <> [T.unlines chunk])
+             in buildMessages rest (msgs <> [T.unlines chunk])
           splitAccum _ [] = ([], [])
           splitAccum remaining (x : xs)
             | T.length x > remaining = ([], x : xs)
