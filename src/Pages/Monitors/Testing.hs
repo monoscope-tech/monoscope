@@ -439,45 +439,67 @@ unifiedMonitorOverviewH pid monitorId = do
 unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
 unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
   section_ [class_ "pt-2 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-y-auto"] do
-    -- Header section
-    div_ [class_ "flex justify-between items-start gap-4"] do
-      div_ [class_ "flex flex-col gap-2"] do
-        div_ [class_ "flex items-center gap-3"] do
-          statusBadge_ True displayName
-          h1_ [class_ "text-2xl font-semibold text-textStrong"] $ toHtml $ bool alert.alertConfig.title "(Untitled)" (T.null alert.alertConfig.title)
-        div_ [class_ "flex flex-wrap gap-2 items-center"] do
-          metadataChip_ "shield-halved" $ "Severity: " <> alert.alertConfig.severity
-          metadataChip_ "clock" $ "Every " <> show alert.checkIntervalMins <> " min"
-          metadataChip_ "calendar" $ "Created " <> toText (prettyTimeAuto currTime alert.createdAt)
-          whenJust alert.mutedUntil \until' ->
-            span_ [class_ "badge badge-sm badge-warning gap-1"] do
-              faSprite_ "bell-slash" "regular" "h-3 w-3"
-              toHtml $ mutedLabel currTime until'
-
-      -- Action buttons
-      div_ [class_ "flex gap-2 items-center shrink-0"] do
+    -- Row 1: actions left, Edit right
+    div_ [class_ "flex items-center justify-between gap-4"] do
+      div_ [class_ "flex items-center gap-2"] do
+        let actionBtn = "btn btn-sm btn-ghost border border-strokeWeak"
         case alert.mutedUntil of
-          Just _ -> button_ [class_ "btn btn-sm btn-outline", hxPost_ $ muteBase <> "/unmute"] do
+          Just _ -> button_ [class_ actionBtn, hxPost_ $ muteBase <> "/unmute"] do
             faSprite_ "bell" "regular" "h-4 w-4"
             "Unmute"
           Nothing -> muteDropdown_ alert.id.toText (muteBase <> "/mute")
         when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]) do
-          button_ [class_ "btn btn-sm btn-outline btn-success", hxPost_ $ muteBase <> "/resolve"] do
+          button_ [class_ $ actionBtn <> " text-textSuccess", hxPost_ $ muteBase <> "/resolve"] do
             faSprite_ "check" "regular" "h-4 w-4"
             "Resolve"
         let isInactive = isJust alert.deactivatedAt
-        button_ [class_ "btn btn-sm btn-outline", hxPost_ $ muteBase <> "/toggle_active"] do
-          faSprite_ (bool "circle-pause" "circle-play" isInactive) "regular" "h-4 w-4"
+        button_ [class_ actionBtn, hxPost_ $ muteBase <> "/toggle_active"] do
+          faSprite_ (bool "pause" "circle-play" isInactive) "regular" "h-4 w-4"
           bool "Deactivate" "Activate" isInactive
-        a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm btn-primary"] do
-          faSprite_ "pen-to-square" "regular" "h-4 w-4"
-          "Edit Alert"
+      a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm btn-primary"] do
+        faSprite_ "pen-to-square" "regular" "h-4 w-4"
+        "Edit Alert"
 
-    -- Stats section
-    div_ [class_ "border-b border-strokeWeak pb-3"] $ alertStats_ alert currTime
+    -- Row 2: Title + status badge
+    div_ [class_ "flex items-center gap-3"] do
+      h1_ [class_ "text-2xl font-semibold text-textStrong"] $ toHtml $ bool alert.alertConfig.title "(Untitled)" (T.null alert.alertConfig.title)
+      statusBadge_ False displayName
 
-    -- Content tabs
-    tabbedSection_ "monitor-tabs" [("Query & Visualization", alertQueryTab_ pid alert), ("Execution History", monitorHistoryTab_ pid alert.id), ("Notification Channels", alertNotificationsTab_ alert teams)]
+    -- Row 3: Metadata chips
+    div_ [class_ "flex flex-wrap gap-2 items-center"] do
+      metadataChip_ "shield-halved" $ "Severity: " <> alert.alertConfig.severity
+      metadataChip_ "clock" $ "Every " <> show alert.checkIntervalMins <> " min"
+      metadataChip_ "calendar" $ "Created " <> toText (prettyTimeAuto currTime alert.createdAt)
+      whenJust alert.mutedUntil \until' ->
+        span_ [class_ "badge badge-sm badge-warning gap-1"] do
+          faSprite_ "bell-slash" "regular" "h-3 w-3"
+          toHtml $ mutedLabel currTime until'
+
+    -- Two-column main area: chart left, sidebar right
+    div_ [class_ "flex gap-6 border-t border-strokeWeak pt-4"] do
+      -- Left: timepicker + chart
+      div_ [class_ "flex-1 min-w-0 flex flex-col gap-3"] do
+        div_ [class_ "flex justify-end items-center gap-2"] do
+          TimePicker.timepicker_ Nothing Nothing Nothing
+          TimePicker.refreshButton_
+        div_ [class_ "border border-strokeWeak rounded-lg p-3", style_ "aspect-ratio: 5 / 2; max-height: 420px;"] do
+          Widget.widget_
+            $ (def :: Widget)
+              { Widget.wType = Widget.mapChatTypeToWidgetType alert.visualizationType
+              , Widget.query = Just alert.logQuery
+              , Widget.title = Just "Alert Query Visualization"
+              , Widget.standalone = Just True
+              , Widget._projectId = Just pid
+              , Widget.layout = Just (def{Widget.w = Just 12, Widget.h = Just 6})
+              , Widget.alertThreshold = Just alert.alertThreshold
+              , Widget.warningThreshold = alert.warningThreshold
+              , Widget.showThresholdLines = Just "always"
+              }
+      -- Right: sidebar
+      alertSidebar_ displayName alert currTime
+
+    -- Tabs: History + Notifications (no Query tab)
+    tabbedSection_ "monitor-tabs" [("Execution History", monitorHistoryTab_ pid alert.id), ("Notification Channels", alertNotificationsTab_ alert teams)]
   where
     displayName = bool (view _2 $ statusInfo alert.currentStatus) "Inactive" (isJust alert.deactivatedAt)
     muteBase = "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText
@@ -527,61 +549,33 @@ monitorHistoryTab_ pid alertId = do
     virtualTable pid (Just initialUrl) Nothing
 
 
--- | Alert details as a compact key-value row with dividers
-alertStats_ :: Monitors.QueryMonitorEvaled -> UTCTime -> Html ()
-alertStats_ alert currTime = do
-  div_ [class_ "flex flex-wrap items-center gap-y-2 py-2 text-sm"] do
-    detailItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums"] $ toHtml $ formatWithCommas alert.evalResult
-    sep_
-    detailItem_ "Threshold" $ toHtml $ direction <> " " <> formatWithCommas alert.alertThreshold
-    whenJust alert.warningThreshold \w -> sep_ >> detailItem_ "Warning" (toHtml $ direction <> " " <> formatWithCommas w)
-    whenJust alert.alertRecoveryThreshold \r -> sep_ >> detailItem_ "Recovery" (toHtml $ formatWithCommas r)
-    sep_
-    detailItem_ "Last Evaluated" $ toHtml $ prettyTimeAuto currTime alert.lastEvaluated
-    sep_
-    detailItem_ "Last Triggered" $ toHtml $ maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered
-    sep_
-    detailItem_ "Notifications" $ span_ [class_ "tabular-nums"] $ toHtml $ show @Text alert.notificationCount
-    whenJust alert.renotifyIntervalMins \mins -> sep_ >> detailItem_ "Renotify" (toHtml $ show @Text mins <> " min")
-    whenJust alert.stopAfterCount \count -> sep_ >> detailItem_ "Stop After" (toHtml $ show @Text count)
+-- | Alert sidebar with key details in a bordered card
+alertSidebar_ :: Text -> Monitors.QueryMonitorEvaled -> UTCTime -> Html ()
+alertSidebar_ displayName alert currTime = do
+  div_ [class_ "w-72 shrink-0 border border-strokeWeak rounded-lg divide-y divide-strokeWeak"] do
+    sidebarItem_ "Status" $ statusBadge_ True displayName
+    sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.evalResult
+    sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textWeak overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
+    sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
+      span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Alert: " <> direction <> " " <> formatWithCommas alert.alertThreshold
+      whenJust alert.warningThreshold \w -> span_ [class_ "text-yellow-600 tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
+      whenJust alert.alertRecoveryThreshold \r -> span_ [class_ "text-textWeak tabular-nums"] $ toHtml $ "Recovery: " <> formatWithCommas r
+    sidebarItem_ "Evaluation" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
+      span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> toText (prettyTimeAuto currTime alert.lastEvaluated)
+      span_ [class_ "text-textWeak"] $ toHtml $ "Last Triggered: " <> maybe "Never" (toText . prettyTimeAuto currTime) alert.alertLastTriggered
+    sidebarItem_ "Notifications" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
+      span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Sent: " <> show @Text alert.notificationCount
+      whenJust alert.renotifyIntervalMins \mins -> span_ [class_ "text-textWeak"] $ toHtml $ "Renotify: " <> show @Text mins <> " min"
+      whenJust alert.stopAfterCount \count -> span_ [class_ "text-textWeak"] $ toHtml $ "Stop after: " <> show @Text count
   where
     direction = bool ">" "<" alert.triggerLessThan
     statusColor = case alert.currentStatus of
-      Monitors.MSAlerting -> "text-red-500 font-semibold"
-      Monitors.MSWarning -> "text-yellow-600 font-semibold"
-      Monitors.MSNormal -> "text-green-600 font-semibold"
-    sep_ = div_ [class_ "w-px h-4 bg-strokeWeak mx-3"] ""
-    detailItem_ label val = div_ [class_ "flex items-center gap-1.5"] do
-      _ <- span_ [class_ "text-textWeak"] label
-      span_ [class_ "text-textStrong font-medium"] val
-
-
--- | Alert query tab content
-alertQueryTab_ :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> Html ()
-alertQueryTab_ pid alert = do
-  div_ [class_ "pt-4 pb-3 flex flex-col gap-4"] do
-    -- Query + timepicker row
-    div_ [class_ "flex items-start justify-between gap-4"] do
-      div_ [class_ "bg-fillWeaker rounded-lg px-3 py-2 border border-strokeWeak min-w-0 flex-1"] do
-        pre_ [class_ "text-sm font-mono text-textWeak overflow-x-auto whitespace-pre-wrap"] $ toHtml alert.logQuery
-      div_ [class_ "flex items-center shrink-0"] do
-        TimePicker.timepicker_ Nothing Nothing Nothing
-        TimePicker.refreshButton_
-
-    -- Chart
-    div_ [class_ "border border-strokeWeak rounded-lg p-3", style_ "aspect-ratio: 5 / 2; max-height: 420px;"] do
-      Widget.widget_
-        $ (def :: Widget)
-          { Widget.wType = Widget.mapChatTypeToWidgetType alert.visualizationType
-          , Widget.query = Just alert.logQuery
-          , Widget.title = Just "Alert Query Visualization"
-          , Widget.standalone = Just True
-          , Widget._projectId = Just pid
-          , Widget.layout = Just (def{Widget.w = Just 12, Widget.h = Just 6})
-          , Widget.alertThreshold = Just alert.alertThreshold
-          , Widget.warningThreshold = alert.warningThreshold
-          , Widget.showThresholdLines = Just "always"
-          }
+      Monitors.MSAlerting -> "text-red-500"
+      Monitors.MSWarning -> "text-yellow-600"
+      Monitors.MSNormal -> "text-green-600"
+    sidebarItem_ label val = div_ [class_ "p-3 flex flex-col gap-1"] do
+      _ <- span_ [class_ "text-xs font-medium text-textWeak uppercase tracking-wider"] label
+      val
 
 
 -- | Alert notifications tab content (copied from Alerts module)
