@@ -59,7 +59,7 @@ import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
-import Data.List qualified as L (nubBy)
+import Data.List qualified as L (groupBy, sortOn)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -890,8 +890,8 @@ bulkInserSpansAndLogsQuery =
     |]
 
 
-removeDuplic :: Eq a => Eq e => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
-removeDuplic = L.nubBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2)
+removeDuplic :: (Ord a, Ord e) => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
+removeDuplic = mapMaybe (viaNonEmpty Relude.head) . L.groupBy (\(a1, a2, _, _, _, _) (b1, b2, _, _, _, _) -> a1 == b1 && a2 == b2) . L.sortOn (\(a, b, _, _, _, _) -> (a, b))
 
 
 data Severity = Severity
