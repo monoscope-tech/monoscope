@@ -46,6 +46,7 @@ import Data.Vector.Algorithms.Intro qualified as VA
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent)
+import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
@@ -143,7 +144,7 @@ defaultProjectCache =
 
 
 processMessages
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
+  :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HashMap Text Text
   -> Eff es [Text]

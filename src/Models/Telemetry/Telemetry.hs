@@ -79,6 +79,7 @@ import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
 import Effectful.Concurrent (Concurrent, threadDelay)
+import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
@@ -817,15 +818,21 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   appCtx <- Eff.ask @AuthContext
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON appCtx.config.enableTimefusionWrites)]
   updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
-  _ <- bulkInsertOtelLogsAndSpans updatedRecords
-  when appCtx.config.enableTimefusionWrites $ do
-    Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length updatedRecords)]
-    void $ retryTimefusion 10 updatedRecords
+  if appCtx.config.enableTimefusionWrites
+    then Ki.scoped \scope -> do
+      mainThread <- Ki.fork scope $ void $ bulkInsertOtelLogsAndSpans updatedRecords
+      _ <- Ki.fork scope do
+        Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length updatedRecords)]
+        void $ tryAny (retryTimefusion 10 updatedRecords) >>= \case
+          Left e -> Log.logAttention "TimeFusion write failed" $ AE.object [("error", AE.toJSON $ show e)]
+          Right _ -> pass
+      Ki.atomically $ Ki.await mainThread
+    else void $ bulkInsertOtelLogsAndSpans updatedRecords
   where
     retryTimefusion 0 recs = labeled @"timefusion" @WithConnection $ bulkInsertOtelLogsAndSpans recs
     retryTimefusion n recs = do
@@ -1301,7 +1308,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
+  :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
   => OtelLogsAndSpans
   -> Eff es ()
 insertSystemLog otelLog = bulkInsertOtelLogsAndSpansTF (V.singleton otelLog)

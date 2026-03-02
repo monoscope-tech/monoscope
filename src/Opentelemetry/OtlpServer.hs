@@ -42,6 +42,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (Concurrent)
+import Effectful.Ki qualified as Ki
 import Effectful.Exception (onException)
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
@@ -214,7 +215,7 @@ getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe ge
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -423,34 +424,71 @@ processList msgs !attrs = checkpoint "processList" $ do
         Just "org.opentelemetry.otlp.metrics.v1" -> checkpoint "processList:metrics" do
           processingStartTime <- liftIO getCurrentTime
           let !msgsCount = length msgs
-          results <- V.generateM msgsCount $ \idx ->
-            let (ackId, msg) = msgs L.!! idx
-             in case (decodeMessage msg :: Either String MS.ExportMetricsServiceRequest) of
-                  Left err -> do
-                    recordProtoError "metrics" err msg Log.logAttention
-                    pure (ackId, V.empty)
-                  Right metricReq -> checkpoint "processList:metrics:getProjectId" do
-                    let !resourceMetrics = V.fromList $ metricReq ^. PMF.resourceMetrics
-                        !projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
-                        !projectIdText = getMetricAttributeValue "at-project-id" resourceMetrics
 
-                    pidM <- join <$> forM projectKey ProjectApiKeys.getProjectIdByApiKey
-                    let pid2M = Projects.projectIdFromText =<< projectIdText
-                    case pidM <|> pid2M of
-                      Just pid -> do
-                        -- Fetch project cache using cache pattern
-                        projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-                          mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
-                          pure $ fromMaybe defaultProjectCache mpjCache
-                        let !projectCaches = one (pid, projectCache)
-                            !metrics = convertResourceMetricsToMetricRecords fallbackTime projectCaches pid resourceMetrics
-                        pure (ackId, V.fromList metrics)
-                      Nothing -> checkpoint "processList:metrics:missing-project-info" $ do
-                        Log.logAttention_ "processList:metrics: project API Key and project ID not available in metrics"
-                        pure (ackId, V.empty)
+          -- Decode messages in parallel
+          let !decodedMsgs =
+                [(ackId, decodeMessage msg :: Either String MS.ExportMetricsServiceRequest) | (ackId, msg) <- msgs]
+                  `using` parList rpar
 
-          let (!ackIds, !metricVectors) = V.unzip results
-              !metricRecords = V.concat $ V.toList metricVectors
+          -- Extract all unique project keys and IDs in a single pass
+          let !keysAndIds =
+                [ (getMetricAttributeValue "at-project-key" rms, getMetricAttributeValue "at-project-id" rms)
+                | (_, Right metricReq) <- decodedMsgs
+                , let rms = V.fromList $ metricReq ^. PMF.resourceMetrics
+                ]
+              !allProjectKeys = catMaybes $ map fst keysAndIds
+              !uniqueProjectKeys = V.force $ V.fromList $ L.nub allProjectKeys
+              !atIds = catMaybes [Projects.projectIdFromText =<< mId | (_, mId) <- keysAndIds]
+
+          -- Batch fetch all project data in one go
+          (!projectKeyToId, !projectCachesMap) <-
+            if V.null uniqueProjectKeys
+              then pure (HashMap.empty, HashMap.empty)
+              else do
+                projectIdsAndKeys <-
+                  checkpoint "processList:metrics:getProjectIds"
+                    $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
+
+                let !keyToIdMap = HashMap.fromList $ V.toList projectIdsAndKeys
+                    !projectIds = L.nub $ atIds <> HashMap.elems keyToIdMap
+
+                projectCaches <- checkpoint "processList:metrics:getProjectCaches" $ do
+                  caches <- liftIO $ do
+                    cachePairs <- forM projectIds $ \pid ->
+                      Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
+                        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
+                        pure $! fromMaybe defaultProjectCache mpjCache
+                    pure (zip projectIds cachePairs `using` parList rpar)
+                  pure $ HashMap.fromList caches
+
+                pure (keyToIdMap, projectCaches)
+
+          -- Process messages in parallel chunks
+          let !chunkSize = max 10 (msgsCount `div` 4)
+              !chunks = chunksOf chunkSize (zip [0 ..] decodedMsgs)
+              processChunk chunk =
+                [ case decodeResult of
+                    Left _ -> (ackId, V.empty)
+                    Right metricReq ->
+                      let !resourceMetrics = V.fromList $ metricReq ^. PMF.resourceMetrics
+                          !projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
+                          !projectIdText = getMetricAttributeValue "at-project-id" resourceMetrics
+                          !pidM = projectKey >>= (`HashMap.lookup` projectKeyToId)
+                          !pid2M = Projects.projectIdFromText =<< projectIdText
+                       in case pidM <|> pid2M of
+                            Just pid -> (ackId, V.fromList $ convertResourceMetricsToMetricRecords fallbackTime projectCachesMap pid resourceMetrics)
+                            Nothing -> (ackId, V.empty)
+                | (_, (ackId, decodeResult)) <- chunk
+                ]
+
+          !chunkedResults <- liftIO $ pure (map processChunk chunks `using` parList rpar)
+
+          forM_ [(idx, err) | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs] $ \(idx, err) ->
+            recordProtoError "metrics" err (snd $ msgs L.!! idx) Log.logAttention
+
+          let !results = V.fromList $ concat chunkedResults
+              (!ackIds, !metricVectors) = V.unzip results
+              !metricRecords = V.force $ V.concat $ V.toList metricVectors
 
           processingEndTime <- liftIO getCurrentTime
           let processingDuration = diffUTCTime processingEndTime processingStartTime
@@ -1279,7 +1317,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
   Log.logTrace "Received trace export request" AE.Null
 
@@ -1351,7 +1389,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
   Log.logTrace "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
