@@ -145,13 +145,20 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
 
 parseIntervalToMins :: Text -> Int
 parseIntervalToMins = \case
-  "10m" -> 10; "20m" -> 20; "30m" -> 30; "1h" -> 60; "6h" -> 360; "24h" -> 1440
+  "10m" -> 10
+  "20m" -> 20
+  "30m" -> 30
+  "1h" -> 60
+  "6h" -> 360
+  "24h" -> 1440
   t -> fromMaybe 30 $ readMaybe $ toString $ T.dropEnd 1 t
 
 
 minsToInterval :: Int -> Text
 minsToInterval = \case
-  60 -> "1h"; 360 -> "6h"; 1440 -> "24h"
+  60 -> "1h"
+  360 -> "6h"
+  1440 -> "24h"
   m -> show m <> "m"
 
 

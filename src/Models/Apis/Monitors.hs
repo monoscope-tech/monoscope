@@ -45,7 +45,7 @@ import Database.PostgreSQL.Entity.Types (
   TableName,
  )
 import Database.PostgreSQL.Entity.Types qualified as DAT
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow, (:.)(..))
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow, (:.) (..))
 
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -173,13 +173,29 @@ queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm =
   PG.execute
     q
-    ( ( qm.id, qm.projectId, qm.alertThreshold, qm.warningThreshold, qm.logQuery
-      , qm.logQueryAsSql, qm.lastEvaluated, qm.warningLastTriggered, qm.alertLastTriggered, qm.triggerLessThan
+    ( ( qm.id
+      , qm.projectId
+      , qm.alertThreshold
+      , qm.warningThreshold
+      , qm.logQuery
+      , qm.logQueryAsSql
+      , qm.lastEvaluated
+      , qm.warningLastTriggered
+      , qm.alertLastTriggered
+      , qm.triggerLessThan
       )
-    :. ( qm.thresholdSustainedForMins, qm.alertConfig, qm.checkIntervalMins, qm.visualizationType, qm.teams
-       , qm.widgetId, qm.dashboardId, qm.alertRecoveryThreshold, qm.warningRecoveryThreshold
-       , qm.renotifyIntervalMins, qm.stopAfterCount
-       )
+        :. ( qm.thresholdSustainedForMins
+           , qm.alertConfig
+           , qm.checkIntervalMins
+           , qm.visualizationType
+           , qm.teams
+           , qm.widgetId
+           , qm.dashboardId
+           , qm.alertRecoveryThreshold
+           , qm.warningRecoveryThreshold
+           , qm.renotifyIntervalMins
+           , qm.stopAfterCount
+           )
     )
   where
     q =

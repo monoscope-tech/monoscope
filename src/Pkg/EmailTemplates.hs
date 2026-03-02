@@ -255,12 +255,13 @@ emailFallbackUrl url = do
 
 
 emailStatRow :: [(Text, Text, Maybe Text)] -> Html ()
-emailStatRow cols = div_ [class_ "highlight-box"] $
-  table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ $
-    forM_ (zip [0 :: Int ..] cols) \(i, (label, val, colorM)) ->
-      td_ [width_ "33%", style_ $ "text-align: center; padding: 8px 0;" <> if i > 0 then " border-left: 1px solid #dee2e7;" else ""] do
-        p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] $ toHtml label
-        p_ [style_ $ "margin: 0; font-size: 22px; font-weight: 700;" <> maybe "" ("; color: " <>) colorM] $ toHtml val
+emailStatRow cols = div_ [class_ "highlight-box"]
+  $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+  $ tr_
+  $ forM_ (zip [0 :: Int ..] cols) \(i, (label, val, colorM)) ->
+    td_ [width_ "33%", style_ $ "text-align: center; padding: 8px 0;" <> if i > 0 then " border-left: 1px solid #dee2e7;" else ""] do
+      p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] $ toHtml label
+      p_ [style_ $ "margin: 0; font-size: 22px; font-weight: 700;" <> maybe "" ("; color: " <>) colorM] $ toHtml val
 
 
 emailGreeting :: Maybe Text -> Html ()
@@ -746,10 +747,10 @@ logPatternRateChangeEmail projectName issueUrl patternText sampleMessageM logLev
       emailDivider
       -- Rate change stats
       emailStatRow
-            [ ("Current Rate", show (round currentRate :: Int) <> "/hr", Nothing)
-            , ("Baseline", show (round baselineMean :: Int) <> "/hr", Nothing)
-            , ("Change", show (round changePercent :: Int) <> "%", Just $ if direction == "spike" then "#cf222e" else "#1a7f37")
-            ]
+        [ ("Current Rate", show (round currentRate :: Int) <> "/hr", Nothing)
+        , ("Baseline", show (round baselineMean :: Int) <> "/hr", Nothing)
+        , ("Change", show (round changePercent :: Int) <> "%", Just $ if direction == "spike" then "#cf222e" else "#1a7f37")
+        ]
       -- Pattern card
       table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
         tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
@@ -791,10 +792,10 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
         " project has breached its threshold."
       emailDivider
       emailStatRow
-            [ ("Current Value", show (round currentValue :: Int), Just "#cf222e")
-            , ("Threshold", show (round threshold :: Int), Nothing)
-            , ("Direction", direction, Nothing)
-            ]
+        [ ("Current Value", show (round currentValue :: Int), Just "#cf222e")
+        , ("Threshold", show (round threshold :: Int), Nothing)
+        , ("Direction", direction, Nothing)
+        ]
       emailButton monitorUrl "View Monitor"
       emailDivider
       emailHelpLinks

@@ -1114,7 +1114,12 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
             then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl
             else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value monitor.alertThreshold thresholdDir
         renderedBody = ET.renderEmail subj html
-    for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl
+    for_ targetTeams \team -> dispatchTeamNotifications
+      team
+      alert
+      monitor.projectId
+      p.title
+      alertUrl
       \email _userM -> sendRenderedEmail (CI.original email) subj renderedBody
 
 
@@ -1125,6 +1130,7 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailActi
   for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
   for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)
   for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
+
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 jobsWorkerInit logger appCtx tp =
@@ -1257,7 +1263,6 @@ sendReportForProject pid rType = do
                   (subj, html) = ET.weeklyReportEmail reportData
               sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
       Log.logInfo "Completed sending report notifications for" pid
-
 
 
 -- | Process new anomalies detected by database triggers
