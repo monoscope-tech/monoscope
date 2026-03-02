@@ -3,7 +3,7 @@ version: '3.8'
 services:
   # TimescaleDB service (PostgreSQL with TimescaleDB extension)
   timescaledb:
-    image: timescale/timescaledb-ha:pg16-all
+    image: timescale/timescaledb-ha:pg18-all
     container_name: monoscope-timescaledb
     restart: unless-stopped
     ports:
@@ -89,7 +89,7 @@ services:
   # Optional: TimescaleDB with ephemeral storage for testing
   # Start with: docker-compose --profile test up
   timescaledb-test:
-    image: timescale/timescaledb-ha:pg16-all
+    image: timescale/timescaledb-ha:pg18-all
     container_name: monoscope-timescaledb-test
     profiles: ['test'] # Only starts when explicitly requested with --profile test
     ports:
