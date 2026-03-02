@@ -341,9 +341,14 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertUpsertPost :: mode :- "alerts" :> ReqBody '[FormUrlEncoded] Alerts.AlertUpsertForm :> Post '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Get '[HTML] (RespHeaders Alerts.Alert)
   , alertSingleToggleActive :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[HTML] (RespHeaders Alerts.Alert)
+  , alertMutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration" Int :> Post '[HTML] (RespHeaders (Html ()))
+  , alertUnmutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "unmute" :> Post '[HTML] (RespHeaders (Html ()))
+  , alertResolvePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
+  , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
   , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" UUID.UUID :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" UUID.UUID :> Delete '[HTML] (RespHeaders Alerts.Alert)
+  , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
   }
   deriving stock (Generic)
 
@@ -565,9 +570,14 @@ monitorsServer pid =
     , alertUpsertPost = Alerts.alertUpsertPostH pid
     , alertSingleGet = Alerts.alertSingleGetH pid
     , alertSingleToggleActive = Alerts.alertSingleToggleActiveH pid
+    , alertMutePost = Testing.alertMuteH pid
+    , alertUnmutePost = Testing.alertUnmuteH pid
+    , alertResolvePost = Testing.alertResolveH pid
+    , alertDeleteRoute = Testing.alertDeleteH pid
     , alertOverviewGet = Alerts.alertOverviewGetH pid
     , teamAlertsGetH = Testing.teamAlertsGetH pid
     , alertTeamDeleteH = Alerts.alertTeamDeleteH pid
+    , alertBulkAction = Testing.alertBulkActionH pid
     }
 
 

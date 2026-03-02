@@ -467,7 +467,7 @@ renderHeaderBulkActions bulkActions =
   span_ [class_ "inline-flex gap-2 ml-2"] do
     forM_ bulkActions \blkA ->
       button_
-        [ class_ "btn btn-xs btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:btn-primary group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
+        [ class_ "btn btn-xs btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
         , hxPost_ blkA.uri
         , hxSwap_ "none"
         ]

@@ -121,6 +121,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , alertConfig
         , deletedAt = Nothing
         , deactivatedAt = Nothing
+        , mutedUntil = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
         , teams = V.fromList alertForm.teams
         , -- Widget alert fields
@@ -167,10 +168,9 @@ alertListGetH pid = do
 
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
-  _ <- Monitors.monitorToggleActiveById monitorId
-
-  monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
-  addRespHeaders $ AlertListGet monitors
+  void $ Monitors.monitorToggleActiveById monitorId
+  redirectCS $ "/p/" <> pid.toText <> "/monitors"
+  addRespHeaders $ AlertNoContent ""
 
 
 alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)

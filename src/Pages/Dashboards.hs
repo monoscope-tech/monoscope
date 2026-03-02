@@ -832,6 +832,7 @@ syncWidgetAlert pid widgetId widget = do
               , Monitors.alertConfig = monitor.alertConfig
               , Monitors.deactivatedAt = monitor.deactivatedAt
               , Monitors.deletedAt = monitor.deletedAt
+              , Monitors.mutedUntil = monitor.mutedUntil
               , Monitors.visualizationType = monitor.visualizationType
               , Monitors.teams = monitor.teams
               , Monitors.widgetId = monitor.widgetId

@@ -285,6 +285,10 @@ processBackgroundJob authCtx bgJob =
               forM_ [0 .. 23] \hr -> do
                 let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
                 scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
+              -- Schedule query monitor checks every minute (each check uses its own checkIntervalMins internally)
+              forM_ [0 .. 1439] \interval -> do
+                let scheduledTime5 = addUTCTime (fromIntegral @Int $ interval * 60) currentTime
+                scheduleJob conn "background_jobs" BackgroundJobs.QueryMonitorsCheck scheduledTime5
 
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
@@ -1656,8 +1660,11 @@ checkTriggeredQueryMonitors = do
 
 evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
 evaluateQueryMonitor monitor startWall = do
+  ctx <- ask @Config.AuthContext
+  let tfEnabled = ctx.config.enableTimefusionReads
+      isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` monitor.logQueryAsSql
   start <- liftIO $ getTime Monotonic
-  results <- PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) () :: ATBackgroundCtx [Only Double]
+  results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) ()
   end <- liftIO $ getTime Monotonic
 
   let total = sum [v | Only v <- results]
@@ -1713,7 +1720,8 @@ evaluateQueryMonitor monitor startWall = do
           WHERE id = ? |]
       (status, total, startWall, finalWarningAt, finalAlertAt, monitor.id)
 
-  Relude.when shouldNotify do
+  let isMuted = maybe False (> startWall) monitor.mutedUntil
+  Relude.when (shouldNotify && not isMuted) do
     Log.logInfo "Query monitor notification" (monitor.id, title, status, total, "recovery" :: Text, isRecovery)
     notifyQueryMonitorStatusChange monitor total status isRecovery
 

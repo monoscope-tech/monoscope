@@ -4,6 +4,12 @@ module Models.Apis.Monitors (
   queryMonitorsById,
   queryMonitorUpsert,
   monitorToggleActiveById,
+  monitorDeactivateByIds,
+  monitorReactivateByIds,
+  monitorMuteByIds,
+  monitorUnmuteByIds,
+  monitorResolveByIds,
+  monitorSoftDeleteByIds,
   QueryMonitor (..),
   QueryMonitorEvaled (..),
   MonitorAlertConfig (..),
@@ -25,7 +31,7 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Text.Display (Display)
-import Data.Time.Clock (UTCTime)
+import Data.Time.Clock (UTCTime (..), addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
@@ -105,6 +111,7 @@ data QueryMonitor = QueryMonitor
   , alertConfig :: MonitorAlertConfig
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
+  , mutedUntil :: Maybe UTCTime
   , visualizationType :: Text
   , teams :: V.Vector UUID.UUID
   , -- Widget alert fields
@@ -139,6 +146,7 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , alertConfig :: MonitorAlertConfig
   , deactivatedAt :: Maybe UTCTime
   , deletedAt :: Maybe UTCTime
+  , mutedUntil :: Maybe UTCTime
   , visualizationType :: Text
   , teams :: V.Vector UUID.UUID
   , -- Widget alert fields
@@ -220,7 +228,7 @@ queryMonitorsById ids
       [sql|
     SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, visualization_type, teams,
+        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, muted_until, visualization_type, teams,
         widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold, current_status,
         eval(log_query_as_sql)
       FROM monitors.query_monitors where id=ANY(?::UUID[])
@@ -241,12 +249,47 @@ monitorToggleActiveById id' = do
         where id=?|]
 
 
+monitorDeactivateByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
+monitorDeactivateByIds ids = do
+  now <- Time.currentTime
+  PG.execute [sql| UPDATE monitors.query_monitors SET deactivated_at = ? WHERE id = ANY(?::uuid[]) AND deactivated_at IS NULL |] (now, V.fromList ids)
+
+
+monitorReactivateByIds :: DB es => [QueryMonitorId] -> Eff es Int64
+monitorReactivateByIds ids =
+  PG.execute [sql| UPDATE monitors.query_monitors SET deactivated_at = NULL WHERE id = ANY(?::uuid[]) AND deactivated_at IS NOT NULL |] (Only $ V.fromList ids)
+
+
+-- | Mute monitors until a future time. Pass Nothing for indefinite mute.
+monitorMuteByIds :: (DB es, Time :> es) => Maybe Int -> [QueryMonitorId] -> Eff es Int64
+monitorMuteByIds durationMinsM ids = do
+  now <- Time.currentTime
+  let mutedUntil = maybe (UTCTime (toEnum 100000) 0) (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
+  PG.execute [sql| UPDATE monitors.query_monitors SET muted_until = ? WHERE id = ANY(?::uuid[]) |] (mutedUntil, V.fromList ids)
+
+
+monitorUnmuteByIds :: DB es => [QueryMonitorId] -> Eff es Int64
+monitorUnmuteByIds ids =
+  PG.execute [sql| UPDATE monitors.query_monitors SET muted_until = NULL WHERE id = ANY(?::uuid[]) AND muted_until IS NOT NULL |] (Only $ V.fromList ids)
+
+
+monitorResolveByIds :: DB es => [QueryMonitorId] -> Eff es Int64
+monitorResolveByIds ids =
+  PG.execute [sql| UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, warning_last_triggered = NULL WHERE id = ANY(?::uuid[]) AND current_status != 'normal' |] (Only $ V.fromList ids)
+
+
+monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
+monitorSoftDeleteByIds ids = do
+  now <- Time.currentTime
+  PG.execute [sql| UPDATE monitors.query_monitors SET deleted_at = ? WHERE id = ANY(?::uuid[]) AND deleted_at IS NULL |] (now, V.fromList ids)
+
+
 queryMonitorsAll :: DB es => Projects.ProjectId -> Eff es [QueryMonitor]
-queryMonitorsAll pid = PG.query (_selectWhere @QueryMonitor [[DAT.field| project_id |]]) (Only pid)
+queryMonitorsAll pid = PG.query (_select @QueryMonitor <> " WHERE project_id = ? AND deleted_at IS NULL") (Only pid)
 
 
 getAlertsByTeamHandle :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [QueryMonitor]
-getAlertsByTeamHandle pid teamId = PG.query (_select @QueryMonitor <> " WHERE project_id = ? AND ? = ANY(teams)") (pid, teamId)
+getAlertsByTeamHandle pid teamId = PG.query (_select @QueryMonitor <> " WHERE project_id = ? AND ? = ANY(teams) AND deleted_at IS NULL") (pid, teamId)
 
 
 monitorRemoveTeam :: DB es => Projects.ProjectId -> QueryMonitorId -> UUID.UUID -> Eff es Int64
@@ -261,7 +304,7 @@ monitorRemoveTeam pid monitorId teamId = PG.execute q (teamId, pid, monitorId)
 
 
 getActiveQueryMonitors :: DB es => Eff es [QueryMonitor]
-getActiveQueryMonitors = PG.query (_select @QueryMonitor <> " WHERE deactivated_at IS NULL AND log_query_as_sql IS NOT NULL AND log_query_as_sql != ''") ()
+getActiveQueryMonitors = PG.query (_select @QueryMonitor <> " WHERE deactivated_at IS NULL AND deleted_at IS NULL AND log_query_as_sql IS NOT NULL AND log_query_as_sql != ''") ()
 
 
 updateLastEvaluatedAt :: DB es => QueryMonitorId -> UTCTime -> Eff es Int64
