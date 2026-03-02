@@ -28,6 +28,7 @@ import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
@@ -263,28 +264,30 @@ end
             Just wid -> case monitor.dashboardId of
               Just dashId ->
                 a_ [class_ "flex items-center gap-1 hover:text-textStrong", href_ $ "/p/" <> monitor.projectId.toText <> "/dashboards/" <> UUID.toText dashId <> "#" <> wid] do
-                  faSprite_ "chart-simple" "regular" "w-3.5 h-3.5"
+                  faSprite_ "chart-simple" "regular" "w-3.5 h-3.5 text-iconNeutral"
                   "Widget"
               Nothing -> span_ [class_ "flex items-center gap-1"] do
-                faSprite_ "chart-simple" "regular" "w-3.5 h-3.5"
+                faSprite_ "chart-simple" "regular" "w-3.5 h-3.5 text-iconNeutral"
                 "Widget"
             Nothing -> span_ [class_ "flex items-center gap-1"] do
-              faSprite_ "file-lines" "regular" "w-3.5 h-3.5"
+              faSprite_ "file-lines" "regular" "w-3.5 h-3.5 text-iconNeutral"
               "Log Explorer"
-        td_ [] do
+        td_ [class_ "flex items-center gap-1"] do
           a_
-            [ class_ "btn btn-ghost btn-xs"
+            [ class_ "btn btn-ghost btn-xs btn-square text-iconNeutral"
             , hxTarget_ "#alertsListContainer"
             , hxGet_ editURI
             , editAction
+            , Aria.label_ "Edit"
             ]
-            "edit"
+            $ faSprite_ "pen-to-square" "regular" "w-3.5 h-3.5"
           a_
-            [ class_ "btn btn-ghost btn-xs"
+            [ class_ "btn btn-ghost btn-xs btn-square text-iconNeutral"
             , hxTarget_ "#alertsListContainer"
             , hxPost_ $ "/p/" <> monitor.projectId.toText <> "/monitors/alerts/" <> monitor.id.toText <> "/toggle_active"
+            , Aria.label_ $ if isJust monitor.deactivatedAt then "Reactivate" else "Delete"
             ]
-            if isJust monitor.deactivatedAt then "reactivate" else "deactivate"
+            $ faSprite_ (if isJust monitor.deactivatedAt then "arrow-rotate-left" else "trash") "regular" "w-3.5 h-3.5"
 
 
 -- | Alert overview page handler - redirects to unified monitor overview

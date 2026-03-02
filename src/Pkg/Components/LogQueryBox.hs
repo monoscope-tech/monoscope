@@ -436,7 +436,7 @@ queryLibItem_ isRecent qli =
               , hxSelect_ "#queryLibraryParentEl"
               , hxPushUrl_ "false"
               ]
-            $ faSprite_ "trash-can" "regular" "h-3 w-3"
+            $ faSprite_ "trash" "regular" "h-3 w-3"
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches

@@ -220,7 +220,7 @@ renderNameCol item = do
           then inlineBtn "Unmute" "bell" (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/unmute") []
           else muteDropdown_ item.monitorId (base <> "/alerts/" <> item.monitorId <> "/mute")
         when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/resolve") []
-        inlineBtn "Delete" "trash-can" (hxDelete_ $ base <> "/alerts/" <> item.monitorId) [hxConfirm_ "Are you sure you want to delete this monitor?"]
+        inlineBtn "Delete" "trash" (hxDelete_ $ base <> "/alerts/" <> item.monitorId) [hxConfirm_ "Are you sure you want to delete this monitor?"]
     div_ [class_ "flex items-center gap-1.5"] do
       span_ [class_ "text-xs text-textWeak font-mono line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query] $ toHtml item.details.query
   where
@@ -290,11 +290,11 @@ bulkActionsFor filterType pid =
           , BulkAction (Just "bell-slash") "Mute" (bulkBase <> "mute")
           , BulkAction (Just "bell") "Unmute" (bulkBase <> "unmute")
           , BulkAction (Just "check") "Resolve" (bulkBase <> "resolve")
-          , BulkAction (Just "trash-can") "Delete" (bulkBase <> "delete")
+          , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
           ]
         _ ->
           [ BulkAction (Just "play") "Reactivate" (bulkBase <> "reactivate")
-          , BulkAction (Just "trash-can") "Delete" (bulkBase <> "delete")
+          , BulkAction (Just "trash") "Delete" (bulkBase <> "delete")
           ]
 
 
