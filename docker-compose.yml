@@ -41,7 +41,7 @@ services:
       - DATABASE_URL=host=timescaledb user=postgres password=postgres dbname=monoscope port=5432 sslmode=disable
       - PORT=8080
       - GRPC_PORT=4317
-      - MIGRATIONS_DIR=/app/static/migrations/
+      - MIGRATIONS_DIR=/opt/monoscope/static/migrations/
       - ENVIRONMENT=DEV
       - LOGGING_DESTINATION=StdOut
       - BASIC_AUTH_ENABLED=True
@@ -83,8 +83,6 @@ services:
     depends_on:
       timescaledb:
         condition: service_healthy
-    volumes:
-      - ./static:/app/static:ro
     networks:
       - monoscope-network
 

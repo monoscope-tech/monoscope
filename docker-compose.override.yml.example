@@ -22,8 +22,7 @@ services:
         BUILDKIT_INLINE_CACHE: 1
     # Optional: Mount source code for development (requires rebuild on changes)
     volumes:
-      - ./static:/app/static:ro
-      - ./config:/app/config:ro
+      - ./static:/opt/monoscope/static:ro
     # Optional: Add development environment variables
     environment:
       - ENVIRONMENT=DEV
