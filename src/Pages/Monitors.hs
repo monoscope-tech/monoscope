@@ -414,10 +414,10 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
         p_ [class_ "text-xs text-textWeak"] "Continue notifications until monitor recovers"
       div_ [class_ "space-y-3"] do
         div_ [class_ "flex items-center"] do
-          formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" [checked_ | renotifyEnabled]
+          formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" $ value_ "true" : [checked_ | renotifyEnabled]
           select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ forM_ @[] @_ @(Text, Text) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")] \(v, t) -> option_ (value_ v : [selected_ "" | v == renotifyVal]) $ toHtml t
         div_ [class_ "flex items-center"] do
-          formCheckbox_ FieldSm "Stop after" "stopAfterCheck" $ [[__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]] <> [checked_ | stopEnabled]
+          formCheckbox_ FieldSm "Stop after" "stopAfterCheck" $ value_ "true" : [__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|] : [checked_ | stopEnabled]
           div_ [class_ $ "flex items-center gap-1.5 ml-2" <> bool " hidden" "" stopEnabled, id_ "stopAfterInput"] do
             input_ [type_ "number", class_ "input input-sm w-16", value_ stopVal, name_ "stopAfter", min_ "1", max_ "100"]
             span_ [class_ "text-xs text-textWeak"] "occurrences"

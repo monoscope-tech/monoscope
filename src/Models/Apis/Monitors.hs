@@ -289,7 +289,7 @@ monitorUnmuteByIds ids =
 
 monitorResolveByIds :: DB es => [QueryMonitorId] -> Eff es Int64
 monitorResolveByIds ids =
-  PG.execute [sql| UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, warning_last_triggered = NULL WHERE id = ANY(?::uuid[]) AND current_status != 'normal' |] (Only $ V.fromList ids)
+  PG.execute [sql| UPDATE monitors.query_monitors SET current_status = 'normal', alert_last_triggered = NULL, warning_last_triggered = NULL, notification_count = 0 WHERE id = ANY(?::uuid[]) AND current_status != 'normal' |] (Only $ V.fromList ids)
 
 
 monitorSoftDeleteByIds :: (DB es, Time :> es) => [QueryMonitorId] -> Eff es Int64
