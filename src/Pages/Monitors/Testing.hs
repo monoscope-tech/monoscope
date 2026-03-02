@@ -35,10 +35,10 @@ import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils (Channel (channelId, channelName))
-import Pkg.Components.TimePicker qualified as TimePicker
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Projects (TBulkActionForm (..))
 import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
 import Relude hiding (ask)
@@ -362,7 +362,6 @@ toUnifiedMonitorItem teamMap pid currTime alert =
           }
     , teamBadges = mapMaybe (\tid -> (UUID.toText tid,) <$> Map.lookup tid teamMap) $ V.toList alert.teams
     }
-
 
 
 -- | Status badge component with size option
