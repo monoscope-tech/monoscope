@@ -18,6 +18,8 @@ module Pkg.EmailTemplates (
   WeeklyReportData (..),
   logPatternEmail,
   logPatternRateChangeEmail,
+  monitorAlertEmail,
+  monitorRecoveryEmail,
 
   -- * Sample data for previews
   sampleProjectInvite,
@@ -250,6 +252,15 @@ emailFallbackUrl url = do
   emailDivider
   p_ [class_ "sub"] "If you're having trouble with the button above, copy and paste this URL into your browser:"
   p_ [class_ "sub"] $ toHtml url
+
+
+emailStatRow :: [(Text, Text, Maybe Text)] -> Html ()
+emailStatRow cols = div_ [class_ "highlight-box"] $
+  table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ $
+    forM_ (zip [0 :: Int ..] cols) \(i, (label, val, colorM)) ->
+      td_ [width_ "33%", style_ $ "text-align: center; padding: 8px 0;" <> if i > 0 then " border-left: 1px solid #dee2e7;" else ""] do
+        p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] $ toHtml label
+        p_ [style_ $ "margin: 0; font-size: 22px; font-weight: 700;" <> maybe "" ("; color: " <>) colorM] $ toHtml val
 
 
 emailGreeting :: Maybe Text -> Html ()
@@ -734,17 +745,11 @@ logPatternRateChangeEmail projectName issueUrl patternText sampleMessageM logLev
         " project."
       emailDivider
       -- Rate change stats
-      div_ [class_ "highlight-box"] do
-        table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ do
-          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0;"] do
-            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Current Rate"
-            p_ [style_ "margin: 0; font-size: 22px; font-weight: 700;"] $ toHtml $ show (round currentRate :: Int) <> "/hr"
-          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0; border-left: 1px solid #dee2e7;"] do
-            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Baseline"
-            p_ [style_ "margin: 0; font-size: 22px; font-weight: 700;"] $ toHtml $ show (round baselineMean :: Int) <> "/hr"
-          td_ [width_ "33%", style_ "text-align: center; padding: 8px 0; border-left: 1px solid #dee2e7;"] do
-            p_ [style_ "margin: 0 0 4px; font-size: 13px; color: #57606a;"] "Change"
-            p_ [style_ $ "margin: 0; font-size: 22px; font-weight: 700; color: " <> if direction == "spike" then "#cf222e" else "#1a7f37"] $ toHtml $ show (round changePercent :: Int) <> "%"
+      emailStatRow
+            [ ("Current Rate", show (round currentRate :: Int) <> "/hr", Nothing)
+            , ("Baseline", show (round baselineMean :: Int) <> "/hr", Nothing)
+            , ("Change", show (round changePercent :: Int) <> "%", Just $ if direction == "spike" then "#cf222e" else "#1a7f37")
+            ]
       -- Pattern card
       table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
         tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
@@ -766,4 +771,54 @@ logPatternRateChangeEmail projectName issueUrl patternText sampleMessageM logLev
       br_ []
       emailSignoff
       emailFallbackUrl issueUrl
+  )
+
+
+-- =============================================================================
+-- Monitor Alert Templates
+-- =============================================================================
+
+monitorAlertEmail :: Text -> Text -> Text -> Double -> Double -> Text -> (Text, Html ())
+monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold direction =
+  ( "[···] Monitor Alert: " <> monitorTitle <> " - " <> projectName
+  , emailBody do
+      h1_ "Monitor Alert Triggered"
+      p_ do
+        "The monitor "
+        b_ $ toHtml monitorTitle
+        " in your "
+        b_ $ toHtml projectName
+        " project has breached its threshold."
+      emailDivider
+      emailStatRow
+            [ ("Current Value", show (round currentValue :: Int), Just "#cf222e")
+            , ("Threshold", show (round threshold :: Int), Nothing)
+            , ("Direction", direction, Nothing)
+            ]
+      emailButton monitorUrl "View Monitor"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl monitorUrl
+  )
+
+
+monitorRecoveryEmail :: Text -> Text -> Text -> (Text, Html ())
+monitorRecoveryEmail projectName monitorTitle monitorUrl =
+  ( "[···] Monitor Recovered: " <> monitorTitle <> " - " <> projectName
+  , emailBody do
+      h1_ [style_ "color: #1a7f37;"] "Monitor Recovered"
+      p_ do
+        "The monitor "
+        b_ $ toHtml monitorTitle
+        " in your "
+        b_ $ toHtml projectName
+        " project has recovered and is back to normal."
+      emailButton monitorUrl "View Monitor"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl monitorUrl
   )

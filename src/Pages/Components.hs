@@ -450,7 +450,7 @@ included features title =
 featureRow :: Text -> Html ()
 featureRow feature =
   div_ [class_ "flex items-center gap-3"] $ do
-    faSprite_ "feature-check" "regular" "h-4 text-textBrand shrink-0"
+    faSprite_ "feature-check" "regular" "h-4 text-iconBrand shrink-0"
     p_ [class_ "text-sm text-textStrong leading-tight"] (toHtml feature)
 
 

@@ -193,7 +193,7 @@ projectCard_ project = do
           div_ [class_ "flex-1 min-w-0"] do
             h4_ [class_ "text-textStrong font-semibold text-lg truncate group-hover:text-textBrand transition-colors"] $ toHtml project.title
             p_ [class_ "text-textWeak text-sm mt-1 line-clamp-2"] $ toHtml project.description
-          faSprite_ "arrow-right" "regular" "h-4 w-4 text-textWeak opacity-0 group-hover:opacity-100 transition-opacity ml-2 mt-1"
+          faSprite_ "arrow-right" "regular" "h-4 w-4 text-iconNeutral opacity-0 group-hover:opacity-100 transition-opacity ml-2 mt-1"
 
         div_ [class_ "flex items-center justify-between text-sm text-textWeak"] do
           div_ [class_ "flex items-center gap-1"] do
@@ -542,7 +542,7 @@ renderSlackIntegration envCfg pid slackData channels existingChannels = do
     Just sd -> do
       div_ [class_ "rounded-lg border border-strokeBrand-weak bg-fillBrand-weak p-4 mb-4"] do
         div_ [class_ "flex items-center gap-2 mb-2"] do
-          faSprite_ "circle-check" "solid" "w-5 h-5 text-textSuccess"
+          faSprite_ "circle-check" "solid" "w-5 h-5 text-iconSuccess"
           span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected to Slack (Team ID: " <> sd.teamId <> ")") ("Connected to Slack workspace: " <>) sd.teamName
 
         when (isNothing sd.teamName) do
@@ -566,7 +566,7 @@ renderDiscordIntegration :: EnvConfig -> Text -> Html ()
 renderDiscordIntegration envCfg pid = do
   let addQueryParams = "&state=" <> pid <> "&redirect_uri=" <> envCfg.discordRedirectUri
   a_ [target_ "_blank", class_ "flex items-center gap-2 border p-2 w-max border-strokeStrong rounded-lg", href_ $ "https://discord.com/oauth2/authorize?response_type=code&client_id=" <> envCfg.discordClientId <> "&permissions=277025392640&integration_type=0&scope=bot+applications.commands" <> addQueryParams] do
-    faSprite_ "discord" "solid" "h-6 w-6 text-textBrand"
+    faSprite_ "discord" "solid" "h-6 w-6 text-iconBrand"
     span_ [class_ "text-sm text-textStrong font-semibold"] "Add to Discord"
 
 
@@ -574,7 +574,7 @@ renderPagerdutyIntegration :: Text -> Maybe Slack.PagerdutyData -> Html ()
 renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . maybe disconnectedUI (const connectedUI)
   where
     connectedUI = do
-      p_ [class_ "text-sm text-textSuccess flex items-center gap-2"] $ faSprite_ "circle-check" "regular" "h-4 w-4" >> "Connected"
+      p_ [class_ "text-sm text-textSuccess flex items-center gap-2"] $ faSprite_ "circle-check" "regular" "h-4 w-4 text-iconSuccess" >> "Connected"
       button_ [class_ "btn btn-sm btn-outline mt-2", hxPost_ [text|/p/$pid/integrations/pagerduty/disconnect|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] "Disconnect"
     disconnectedUI = form_ [class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/integrations/pagerduty|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] do
       formField_ FieldSm def{placeholder = "Events API v2 Integration Key"} "Integration Key" "integrationKey" False Nothing
@@ -914,14 +914,14 @@ teamPage pid team projMembers slackChannels discordChannels = do
         _ <- div_ [class_ "flex items-center justify-between w-full p-4 border-b border-strokeWeak"] do
           _ <- span_ [class_ "flex items-center gap-2 text-sm font-semibold text-textStrong"] (faSprite_ icon "regular" "h-4 w-4" >> toHtml title)
           label_ [class_ "input input-sm w-64 bg-fillWeak border-0"] do
-            faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-textWeak"
+            faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 text-iconNeutral"
             input_ [type_ "text", placeholder_ searchPh, class_ "", makeAttribute "_" $ "on input show <tr/> in #" <> secId <> " when its textContent.toLowerCase() contains my value.toLowerCase()"]
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
-          div_ [class_ "flex flex-col items-center justify-center py-8 text-center gap-2"] (faSprite_ icon "regular" "h-6 w-6 text-textWeak" >> div_ [class_ "text-sm text-textWeak"] (toHtml $ "No " <> T.toLower title <> " linked"))
+          div_ [class_ "flex flex-col items-center justify-center py-8 text-center gap-2"] (faSprite_ icon "regular" "h-6 w-6 text-iconNeutral" >> div_ [class_ "text-sm text-textWeak"] (toHtml $ "No " <> T.toLower title <> " linked"))
   section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "px-4 w-full"] do
     div_ [class_ "mb-6 flex items-center gap-3"] do
-      a_ [href_ ("/p/" <> pid.toText <> "/manage_teams"), class_ "text-textWeak hover:text-textStrong"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
+      a_ [href_ ("/p/" <> pid.toText <> "/manage_teams"), class_ "text-iconNeutral hover:text-iconBrand"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
       h2_ [class_ "text-textStrong text-3xl font-semibold flex items-center gap-2"] do
         toHtml team.name
         when isEveryone $ span_ [class_ "badge badge-primary"] "Default"
@@ -954,7 +954,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
               div_ [class_ "rounded-lg bg-fillBrand-weak/10 border border-strokeBrand-weak p-3"] do
                 div_ [class_ "flex items-start justify-between gap-3"] do
                   div_ [class_ "flex items-start gap-2 flex-1"] do
-                    faSprite_ "circle-info" "regular" "h-4 w-4 text-textBrand shrink-0"
+                    faSprite_ "circle-info" "regular" "h-4 w-4 text-iconBrand shrink-0"
                     div_ [class_ "text-xs"] do
                       div_ [class_ "font-medium text-textStrong"] "Test your notification setup"
                       div_ [class_ "text-textWeak mt-0.5"] "Sends a test incident to all configured channels"
@@ -1018,7 +1018,7 @@ manageMembersBody pid projMembers paymentPlan =
 
       when (paymentPlan == "Free" && V.length projMembers > 1) do
         div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
-          faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-textWarning flex-shrink-0 mt-0.5"
+          faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
           div_ do
             p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
@@ -1060,7 +1060,7 @@ memberRowWithStatus pid idx prM = do
         option_ ([value_ "admin"] <> [selected_ "" | prM.permission == ProjectMembers.PAdmin]) "Admin"
         option_ ([value_ "edit"] <> [selected_ "" | prM.permission == ProjectMembers.PEdit]) "Editor"
         option_ ([value_ "view"] <> [selected_ "" | prM.permission == ProjectMembers.PView]) "Viewer"
-      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-textWeak hover:text-textError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
+      unless isOwner $ button_ [class_ "btn btn-sm btn-ghost text-iconNeutral hover:text-iconError hover:bg-fillError-weak", Aria.label_ "Remove member", hxDelete_ $ "/p/" <> pid.toText <> "/manage_members/" <> memberId, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML", hxConfirm_ "Remove this member from the project?"] $ faSprite_ "trash" "regular" "w-4 h-4"
 
 
 deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))

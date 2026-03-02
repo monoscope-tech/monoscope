@@ -559,7 +559,7 @@ integrationsPage pid apikey =
             div_ [class_ "flex flex-col w-full items-center gap-8"] do
               -- Icon/graphic
               div_ [class_ "p-6 bg-fillWeak rounded-full"] do
-                faSprite_ "brackets-curly" "regular" "h-16 w-16 text-textBrand"
+                faSprite_ "brackets-curly" "regular" "h-16 w-16 text-iconBrand"
 
               -- Welcome text
               h2_ [class_ "text-3xl text-textStrong"] "👈 Select your stack on the left to begin"
@@ -678,7 +678,7 @@ integrationsPage pid apikey =
 
       -- Success message
       div_ [class_ "mt-6 p-4 bg-fillSuccess-weak border border-strokeSuccess-weak rounded-lg flex items-start gap-3"] do
-        faSprite_ "circle-check" "regular" "h-5 w-5 text-textSuccess flex-shrink-0 mt-0.5"
+        faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess flex-shrink-0 mt-0.5"
         div_ do
           p_ [class_ "text-textSuccess text-sm font-medium leading-relaxed"] "What happens next?"
           p_ [class_ "text-textSuccess text-sm mt-1 leading-relaxed"] "After running the command, traces will appear in your dashboard within seconds. You can then proceed with the full SDK integration."

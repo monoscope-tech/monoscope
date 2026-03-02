@@ -216,7 +216,7 @@ discordError :: Html ()
 discordError = do
   navBar
   section_ [class_ "h-full mt-[80px] w-[1000px] flex flex-col items-center mx-auto"] do
-    faSprite_ "circle-exclamation" "solid" "text-textError h-10 w-10"
+    faSprite_ "circle-exclamation" "solid" "text-iconError h-10 w-10"
     h3_ [class_ "text-4xl font-bold my-6 text-textError"] "Uh-oh! Something went wrong"
     p_
       [class_ "text-xl text-textStrong text-center max-w-prose mb-4"]
@@ -234,7 +234,7 @@ installedSuccess botPlatform pidM = do
       div_ [class_ "bg-bgBase border border-strokeWeak rounded-3xl border border-fillWeak overflow-hidden"] do
         div_ [class_ "bg-gradient-to-r from-fillSuccess-weak to-fillBrand-weak px-8 py-10 text-center"] do
           div_ [class_ "inline-flex items-center justify-center w-16 h-16 bg-bgRaised rounded-full mb-4 shadow-lg"] do
-            faSprite_ "check" "regular" "h-8 w-8 text-textSuccess"
+            faSprite_ "check" "regular" "h-8 w-8 text-iconSuccess"
           h1_ [class_ "text-3xl font-semibold text-white mb-4"] "Installation Complete!"
           p_ [class_ "text-textBrand font-semibold max-w-2xl mx-auto"] $ toHtml $ "Monoscope Bot has been successfully added to your " <> botPlatform <> " server"
         div_ [class_ "px-8 py-12"] do

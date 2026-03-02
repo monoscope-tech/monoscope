@@ -615,7 +615,7 @@ projectsDropDown currProject projects = do
             projects & mapM_ \project ->
               a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
                 div_ [class_ "space-x-3"] (faSprite_ "folders" "regular" "h-5 w-5 inline-block" >> span_ [class_ "inline-block"] (toHtml project.title))
-                when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-textSuccess"
+                when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-iconSuccess"
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
@@ -677,7 +677,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , term "data-tippy-content" "Settings"
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-iconBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
       [ class_ "hover:bg-fillBrand-weak "
@@ -686,7 +686,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , term "data-tippy-content" "Documentation"
       , href_ "https://monoscope.tech/docs/"
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-textBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-iconBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
@@ -699,7 +699,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       $ do
         -- Regular toggle with icons (visible when sidebar is expanded)
         label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center", Aria.label_ "Toggle dark mode"] $ do
-          faSprite_ "sun-bright" "regular" "h-5 w-5 text-textBrand"
+          faSprite_ "sun-bright" "regular" "h-5 w-5 text-iconBrand"
           input_
             [ type_ "checkbox"
             , class_ "toggle theme-controller"
@@ -707,7 +707,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
             , Aria.label_ "Toggle dark mode"
             , onclick_ "toggleDarkMode()"
             ]
-          faSprite_ "moon-stars" "regular" "h-5 w-5 text-textBrand"
+          faSprite_ "moon-stars" "regular" "h-5 w-5 text-iconBrand"
 
         -- Swap rotate icon (visible when sidebar is collapsed)
         label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden", Aria.label_ "Toggle dark mode"] $ do
@@ -730,7 +730,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillError-weak text-textError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillError-weak text-iconError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 
@@ -790,7 +790,7 @@ loginBanner :: Html ()
 loginBanner = do
   div_ [class_ "flex items-center justify-between border-b border-strokeWeak bg-fillWeak px-4 py-1.5 gap-3 text-sm"] do
     div_ [class_ "flex items-center gap-2"] do
-      faSprite_ "flask" "regular" "h-4 w-4 text-textBrand"
+      faSprite_ "flask" "regular" "h-4 w-4 text-iconBrand"
       span_ [class_ "font-medium text-textStrong"] "Demo Project"
       span_ [class_ "hidden sm:inline text-textWeak"] "· Explore APIToolkit's features"
     div_ [class_ "flex items-center gap-3"] do

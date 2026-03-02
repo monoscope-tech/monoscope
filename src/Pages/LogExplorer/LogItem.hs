@@ -231,7 +231,7 @@ expandedItemView pid item aptSp leftM rightM = do
             |]
               ]
               do
-                faSprite_ "xmark" "regular" "w-3 h-3 text-textBrand"
+                faSprite_ "xmark" "regular" "w-3 h-3 text-iconBrand"
     div_ [class_ "flex flex-col gap-4"] do
       if isLog
         then div_ [class_ "flex items-center gap-4"] do
@@ -262,7 +262,7 @@ expandedItemView pid item aptSp leftM rightM = do
                         div_ [class_ "flex items-center"] do
                           span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
                           div_ [[__| install Copy(content:.urlPath )|]] do
-                            faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-textWeak"
+                            faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-iconNeutral"
                       (scheme, method, path, status) -> do
                         div_ [class_ "flex flex-wrap items-center"] do
                           span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method

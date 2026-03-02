@@ -404,7 +404,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
             div_ [id_ "trace_container", class_ "grow-1 max-w-[80%] w-1/2 min-w-[20%] shrink-1"]
               $ maybe
                 ( div_ [class_ "flex flex-col items-center justify-center h-48"] do
-                    faSprite_ "inbox-full" "regular" "w-6 h-6 text-textWeak"
+                    faSprite_ "inbox-full" "regular" "w-6 h-6 text-iconNeutral"
                     span_ [class_ "mt-2 text-sm text-textWeak"] "No trace data available for this error."
                 )
                 (\t -> tracePage pid t spanRecs)

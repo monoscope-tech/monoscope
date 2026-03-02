@@ -1119,7 +1119,7 @@ alertConfigurationForm_ project alertM teams = do
         , class_ "p-1 rounded-lg hover:bg-fillWeak transition-colors"
         , [__|on click set #create-alert-toggle.checked to false|]
         ]
-        $ faSprite_ "xmark" "regular" "w-3 h-3 text-textWeak"
+        $ faSprite_ "xmark" "regular" "w-3 h-3 text-iconNeutral"
 
     -- Form content wrapper with scrolling
     div_ [class_ "p-4 pt-3 flex-1 overflow-y-auto c-scroll"] do
@@ -1150,7 +1150,7 @@ alertConfigurationForm_ project alertM teams = do
 
           -- Notification Settings section (shared component)
           let selectedTeamIds = maybe V.empty (.teams) alertM
-          AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form"
+          AlertUI.notificationSettingsSection_ ((.alertConfig.severity) <$> alertM) ((.alertConfig.subject) <$> alertM) ((.alertConfig.message) <$> alertM) (maybe True (.alertConfig.emailAll) alertM) teams selectedTeamIds "alert-form" alertM
 
           -- Action buttons with proper spacing
           div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do

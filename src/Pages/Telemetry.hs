@@ -541,7 +541,7 @@ tracePage pid traceItem spanRecords = do
         div_ [class_ "flex items-center gap-2"] $ do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
           button_ [class_ "p-0 m-0 cursor-pointer", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
-            faSprite_ "side-chevron-left" "regular" "w-5 h-5 text-textBrand rotate-180"
+            faSprite_ "side-chevron-left" "regular" "w-5 h-5 text-iconBrand rotate-180"
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
@@ -553,11 +553,11 @@ tracePage pid traceItem spanRecords = do
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
               div_ [class_ "flex items-center gap-2"] do
                 stBox (show $ length spanRecords) Nothing
-                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-textError")
-                stBox (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-textWeak")
+                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
+                stBox (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
             div_ [class_ "flex gap-2 w-full items-center"] do
               div_ [class_ "flex items-center gap-2 w-full rounded-lg px-3 grow-1 h-9 border border-strokeWeak bg-fillWeaker"] do
-                faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-textWeak"
+                faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-iconNeutral"
                 input_
                   [ class_ "w-full text-textStrong bg-transparent hover:outline-hidden focus:outline-hidden focus:ring-0"
                   , type_ "text"
@@ -692,7 +692,7 @@ renderSpanRecordRow spanRecords colors service = do
     do
       td_ [class_ "ml-1 px-2 py-1 w-[600px] text-textStrong truncate flex items-center gap-1 font-medium"] do
         div_ [class_ "w-1 bg-fillBrand-weak h-4"] pass
-        faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-textWeak"
+        faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-iconNeutral"
         div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
         span_ [] $ toHtml service
       td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ show listLen

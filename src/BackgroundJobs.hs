@@ -902,7 +902,7 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
           msgIdM <- sendDiscordAlertWith discordMsgId alert pid project.title Nothing
           pure (slackTs, discordMsgId <|> msgIdM)
         Projects.NPhone -> (slackTs, discordMsgId) <$ sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-        Projects.NEmail -> (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+        Projects.NEmail -> let rendered = ET.renderEmail subj html in (slackTs, discordMsgId) <$ forM_ users \u -> sendRenderedEmail (CI.original u.email) subj rendered
         Projects.NPagerduty -> (slackTs, discordMsgId) <$ (getPagerdutyByProjectId pid >>= traverse_ \pd -> sendPagerdutyAlertToService pd.integrationKey alert project.title alertUrl)
     )
     (initSlackTs, initDiscordMsgId)
@@ -1087,28 +1087,35 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
 
 
 -- | Send notifications for a query monitor status change (inline, no separate job)
-notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Monitors.MonitorStatus -> Bool -> ATBackgroundCtx ()
-notifyQueryMonitorStatusChange monitor value newStatus isRecovery = do
+notifyQueryMonitorStatusChange :: Monitors.QueryMonitor -> Double -> Bool -> ATBackgroundCtx ()
+notifyQueryMonitorStatusChange monitor value isRecovery = do
   appCtx <- ask @Config.AuthContext
   whenJustM (Projects.projectById monitor.projectId) \p -> do
     teams <- ProjectMembers.getTeamsById monitor.projectId monitor.teams
     Relude.when (not (V.null monitor.teams) && null teams)
       $ Log.logAttention "Monitor configured with teams but none found (possibly deleted)" (monitor.id, monitor.projectId, V.length monitor.teams)
     let hostUrl = appCtx.env.hostUrl
-        monitorUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
-    alert <-
+        monitorListUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
+        thresholdDir = if monitor.triggerLessThan then "below" else "above" :: Text
+    (alert, alertUrl) <-
       if isRecovery
-        then pure $ MonitorsRecoveryAlert{monitorTitle = monitor.alertConfig.title, monitorUrl}
+        then pure (MonitorsRecoveryAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = monitorListUrl}, monitorListUrl)
         else do
-          let thresholdType = if monitor.triggerLessThan then "below" else "above"
-          issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdType
+          issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdDir
           Issues.insertIssue issue
-          pure $ MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/anomalies/" <> issue.id.toText}
+          let issueUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/anomalies/" <> issue.id.toText
+          pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl}, issueUrl)
     targetTeams <-
       if null teams
         then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId
         else pure teams
-    for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title monitorUrl (const . const pass)
+    let (subj, html) =
+          if isRecovery
+            then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl
+            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value monitor.alertThreshold thresholdDir
+        renderedBody = ET.renderEmail subj html
+    for_ targetTeams \team -> dispatchTeamNotifications team alert monitor.projectId p.title alertUrl
+      \email _userM -> sendRenderedEmail (CI.original email) subj renderedBody
 
 
 dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
@@ -1118,10 +1125,6 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailActi
   for_ team.slack_channels (void . sendSlackAlert alert projectId projectTitle . Just)
   for_ team.discord_channels (void . sendDiscordAlert alert projectId projectTitle . Just)
   for_ team.pagerduty_services \integrationKey -> sendPagerdutyAlertToService integrationKey alert projectTitle monitorUrl
-
-
--- way to get emails for company. for email all
--- TODO: based on monitor send emails or slack
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
 jobsWorkerInit logger appCtx tp =
@@ -1256,18 +1259,6 @@ sendReportForProject pid rType = do
       Log.logInfo "Completed sending report notifications for" pid
 
 
--- TODO: implement query alert email using postmark
---   (CI.original email)
---   [fmt| 🤖 APITOOLKIT: log monitor triggered `{alertConfig.title}` |]
---   [fmtTrim|
---     Hi {user.firstName},<br/>
---
---     The monitor: `{alertConfig.title}` was triggered and got above it's defined threshold.
---
---     <br/><br/>
---     Regards,
---     Apitoolkit team
---               |]
 
 -- | Process new anomalies detected by database triggers
 -- This job is created by the apis.new_anomaly_proc() stored procedure
@@ -1699,31 +1690,40 @@ evaluateQueryMonitor monitor startWall = do
   -- Determine notification intent before UPDATE so we can set timestamps correctly
   let isRecovery = status == Monitors.MSNormal && prevStatus /= Monitors.MSNormal
       statusChanged = status /= prevStatus
-      reminderIntervalSecs = 3600 :: NominalDiffTime -- 1 hour
+      hasRenotify = isJust monitor.renotifyIntervalMins
+      reminderIntervalSecs = maybe 0 (fromIntegral . (* 60)) monitor.renotifyIntervalMins :: NominalDiffTime
       lastTriggered = monitor.alertLastTriggered <|> monitor.warningLastTriggered
       pastReminderWindow = maybe True (\lt -> diffUTCTime startWall lt >= reminderIntervalSecs) lastTriggered
+      stoppedByCount = maybe False (monitor.notificationCount >=) monitor.stopAfterCount
       shouldNotify
         | isRecovery = True
+        | stoppedByCount = False
         | statusChanged && status /= Monitors.MSNormal = True
-        | not statusChanged && status /= Monitors.MSNormal && pastReminderWindow = True
+        | not statusChanged && status /= Monitors.MSNormal && hasRenotify && pastReminderWindow = True
         | otherwise = False
-      -- Update timestamps on transitions OR reminders (prevents spam after 1h window)
+      -- Update timestamps on transitions OR reminders (prevents spam after reminder window)
       warningAt = if status == Monitors.MSWarning && (statusChanged || shouldNotify) then Just startWall else monitor.warningLastTriggered
       alertAt = if status == Monitors.MSAlerting && (statusChanged || shouldNotify) then Just startWall else monitor.alertLastTriggered
       (finalWarningAt, finalAlertAt) = if isRecovery then (Nothing, Nothing) else (warningAt, alertAt)
+
+  let isMuted = maybe False (> startWall) monitor.mutedUntil
+      newNotifCount
+        | isRecovery = 0
+        | shouldNotify && not isMuted = monitor.notificationCount + 1
+        | otherwise = monitor.notificationCount
 
   void
     $ PG.execute
       [sql| UPDATE monitors.query_monitors
           SET current_status = ?, current_value = ?, last_evaluated = ?,
-              warning_last_triggered = ?, alert_last_triggered = ?
+              warning_last_triggered = ?, alert_last_triggered = ?,
+              notification_count = ?
           WHERE id = ? |]
-      (status, total, startWall, finalWarningAt, finalAlertAt, monitor.id)
+      (status, total, startWall, finalWarningAt, finalAlertAt, newNotifCount, monitor.id)
 
-  let isMuted = maybe False (> startWall) monitor.mutedUntil
   Relude.when (shouldNotify && not isMuted) do
     Log.logInfo "Query monitor notification" (monitor.id, title, status, total, "recovery" :: Text, isRecovery)
-    notifyQueryMonitorStatusChange monitor total status isRecovery
+    notifyQueryMonitorStatusChange monitor total isRecovery
 
 
 -- | Determine monitor status with hysteresis support.

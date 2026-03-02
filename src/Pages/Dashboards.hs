@@ -813,35 +813,7 @@ syncWidgetAlert pid widgetId widget = do
           newSqlQuery = case parseQueryToComponents sqlQueryCfg newQuery of
             Right (_, qc) -> fromMaybe "" qc.finalAlertQuery
             Left _ -> monitor.logQueryAsSql -- Keep previous SQL on parse failure
-          updatedMonitor =
-            Monitors.QueryMonitor
-              { Monitors.id = monitor.id
-              , Monitors.createdAt = monitor.createdAt
-              , Monitors.updatedAt = monitor.updatedAt
-              , Monitors.projectId = monitor.projectId
-              , Monitors.checkIntervalMins = monitor.checkIntervalMins
-              , Monitors.alertThreshold = monitor.alertThreshold
-              , Monitors.warningThreshold = monitor.warningThreshold
-              , Monitors.logQuery = newQuery
-              , Monitors.logQueryAsSql = newSqlQuery
-              , Monitors.lastEvaluated = monitor.lastEvaluated
-              , Monitors.warningLastTriggered = monitor.warningLastTriggered
-              , Monitors.alertLastTriggered = monitor.alertLastTriggered
-              , Monitors.triggerLessThan = monitor.triggerLessThan
-              , Monitors.thresholdSustainedForMins = monitor.thresholdSustainedForMins
-              , Monitors.alertConfig = monitor.alertConfig
-              , Monitors.deactivatedAt = monitor.deactivatedAt
-              , Monitors.deletedAt = monitor.deletedAt
-              , Monitors.mutedUntil = monitor.mutedUntil
-              , Monitors.visualizationType = monitor.visualizationType
-              , Monitors.teams = monitor.teams
-              , Monitors.widgetId = monitor.widgetId
-              , Monitors.dashboardId = monitor.dashboardId
-              , Monitors.alertRecoveryThreshold = monitor.alertRecoveryThreshold
-              , Monitors.warningRecoveryThreshold = monitor.warningRecoveryThreshold
-              , Monitors.currentStatus = monitor.currentStatus
-              , Monitors.currentValue = monitor.currentValue
-              }
+          updatedMonitor = (monitor :: Monitors.QueryMonitor){Monitors.logQuery = newQuery, Monitors.logQueryAsSql = newSqlQuery}
       void $ Monitors.queryMonitorUpsert updatedMonitor
 
 
@@ -1107,7 +1079,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           if isNewWidget
             then button_ [class_ "btn btn-primary btn-sm shadow-sm", type_ "submit", form_ widgetFormId] "Save changes"
             else button_ [class_ "btn btn-primary btn-sm shadow-sm hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block", type_ "submit", form_ widgetFormId] "Save changes"
-          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-textWeak hover:text-textStrong", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
+          label_ [class_ "btn btn-ghost btn-circle btn-sm tap-target text-iconNeutral hover:text-iconBrand", Aria.label_ "Close drawer", data_ "tippy-content" "Close Drawer", Lucid.for_ drawerStateCheckbox] $ faSprite_ "xmark" "regular" "w-3 h-3"
 
       div_ [class_ "w-full aspect-4/1 p-4 rounded-xl bg-fillWeaker border border-strokeWeak widget-preview-container", data_ "widget-type" widgetTypeAttr] do
         script_ [text| var widgetJSON = ${widgetJSON}; |]
@@ -1236,7 +1208,7 @@ widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget 
           option_ ([value_ "never"] <> [selected_ "" | isNever]) "Never"
 
       -- Notification Settings section (shared component) - empty teams, users can configure after creation
-      Alerts.notificationSettingsSection_ Nothing Nothing Nothing True V.empty V.empty alertFormId
+      Alerts.notificationSettingsSection_ Nothing Nothing Nothing True V.empty V.empty alertFormId Nothing
 
       -- Action buttons
       div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
@@ -1328,6 +1300,10 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
               , warningRecoveryThreshold = form.warningRecoveryThreshold
               , widgetId = Just form.widgetId
               , dashboardId = UUID.toText <$> dashboardIdM
+              , notifyAfterCheck = Nothing
+              , notifyAfter = Nothing
+              , stopAfterCheck = Nothing
+              , stopAfter = Nothing
               }
 
       let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm
@@ -1419,7 +1395,7 @@ starButton_ pid dashId isStarred = do
     ]
     $ faSprite_ "star" starIconType
     $ "w-4 h-4 "
-    <> if isStarred then "text-yellow-500" else "text-iconNeutral"
+    <> if isStarred then "text-iconWarning" else "text-iconNeutral"
 
 
 dashboardsGet_ :: DashboardsGetD -> Html ()

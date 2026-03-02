@@ -341,7 +341,7 @@ apiKeyColumns pid =
                    put "Show key" into my @data-tippy-content
                  end |]
             ]
-            $ faSprite_ "eye" "regular" "h-4 w-4 text-textWeak"
+            $ faSprite_ "eye" "regular" "h-4 w-4 text-iconNeutral"
           button_
             [ class_ "text-textBrand cursor-pointer"
             , type_ "button"
@@ -352,7 +352,7 @@ apiKeyColumns pid =
                           end |]
             , term "data-tippy-content" "Copy key"
             ]
-            $ faSprite_ "clipboard-copy" "regular" "h-4 w-4 text-textWeak"
+            $ faSprite_ "clipboard-copy" "regular" "h-4 w-4 text-iconNeutral"
           if apiKey.active
             then button_
               [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
@@ -362,7 +362,7 @@ apiKeyColumns pid =
               , id_ $ "key" <> show i
               ]
               do
-                faSprite_ "circle-xmark" "regular" "h-4 w-4 text-textError"
+                faSprite_ "circle-xmark" "regular" "h-4 w-4 text-iconError"
                 span_ [class_ "text-textWeak"] "Revoke"
             else button_
               [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
@@ -372,7 +372,7 @@ apiKeyColumns pid =
               , id_ $ "key" <> show i
               ]
               do
-                faSprite_ "circle-check" "regular" "h-4 w-4 text-textWeak"
+                faSprite_ "circle-check" "regular" "h-4 w-4 text-iconNeutral"
                 span_ [class_ "text-textWeak"] "Activate"
   ]
 
@@ -386,7 +386,7 @@ copyNewApiKey newKeyM hasNext =
         div_ [class_ "rounded-md bg-fillSuccess-weak p-4"] do
           div_ [class_ "flex"] do
             div_ [class_ "shrink-0"] do
-              faSprite_ "circle-check" "regular" "h-5 w-5 text-textSuccess"
+              faSprite_ "circle-check" "regular" "h-5 w-5 text-iconSuccess"
             div_ [class_ "ml-3"] do
               h3_ [class_ " font-medium text-textSuccess"] "API Key was generated successfully"
               div_ [class_ "mt-2  text-textSuccess py-2"] do

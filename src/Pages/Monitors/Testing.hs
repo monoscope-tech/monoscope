@@ -335,9 +335,9 @@ renderLastRunCol item = span_ [class_ "text-sm text-textWeak whitespace-nowrap"]
 renderThresholdCol :: UnifiedMonitorItem -> Html ()
 renderThresholdCol item =
   div_ [class_ "flex flex-col gap-1"] do
-    span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillError-weak text-red-700 rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " (" <> item.details.triggerDirection <> ")"
+    span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillError-weak text-iconError rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas item.details.alertThreshold <> " (" <> item.details.triggerDirection <> ")"
     whenJust item.details.warningThreshold \w ->
-      span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-yellow-50 text-yellow-700 rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas w <> " (warn)"
+      span_ [class_ "text-xs tabular-nums whitespace-nowrap bg-fillWarning-weak text-iconWarning rounded-full px-2 py-0.5 w-fit"] $ toHtml $ formatWithCommas w <> " (warn)"
 
 
 toUnifiedMonitorItem :: Map.Map UUID.UUID Text -> Projects.ProjectId -> UTCTime -> Monitors.QueryMonitor -> UnifiedMonitorItem
@@ -578,24 +578,24 @@ alertNotificationsTab_ alert teams = do
             div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
               button_
                 [ type_ "button"
-                , class_ "absolute top-3 cursor-pointer right-3 text-red-600 text-textWeak hover:text-textBrand transition-colors"
+                , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
                 , term "data-tippy-content" "Remove team"
                 , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> UUID.toText team.id
                 , hxTarget_ $ "#" <> team.handle
                 , hxSwap_ "outerHTML"
                 ]
                 do
-                  faSprite_ "trash" "regular" "h-3 w-3 stroke-red-400"
+                  faSprite_ "trash" "regular" "h-3 w-3"
               span_ [class_ "text-sm font-medium"] $ toHtml team.name
               forM_ team.notify_emails $ \email ->
                 div_ [class_ "flex items-center gap-2"] do
-                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "envelope" "regular" "h-3 w-3 mr-2" >> toHtml email
+                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "envelope" "regular" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml email
               forM_ team.slack_channels $ \channel ->
                 div_ [class_ "flex items-center gap-2"] do
-                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "slack" "solid" "h-3 w-3 mr-2" >> toHtml ("#" <> channel)
+                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "slack" "solid" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml ("#" <> channel)
               forM_ team.discord_channels $ \channel ->
                 div_ [class_ "flex items-center gap-2"] do
-                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "discord" "brand" "h-3 w-3 mr-2" >> toHtml ("#" <> channel)
+                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "discord" "brand" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml ("#" <> channel)
 
     -- Message template
     div_ [class_ "pt-6 pb-3"] do

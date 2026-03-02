@@ -45,7 +45,8 @@ import Database.PostgreSQL.Entity.Types (
   TableName,
  )
 import Database.PostgreSQL.Entity.Types qualified as DAT
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow, (:.)(..))
+
 import Database.PostgreSQL.Simple.FromField (FromField (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -121,6 +122,9 @@ data QueryMonitor = QueryMonitor
   , warningRecoveryThreshold :: Maybe Double
   , currentStatus :: MonitorStatus
   , currentValue :: Double
+  , renotifyIntervalMins :: Maybe Int
+  , stopAfterCount :: Maybe Int
+  , notificationCount :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -156,6 +160,9 @@ data QueryMonitorEvaled = QueryMonitorEvaled
   , warningRecoveryThreshold :: Maybe Double
   , currentStatus :: MonitorStatus
   , evalResult :: Double
+  , renotifyIntervalMins :: Maybe Int
+  , stopAfterCount :: Maybe Int
+  , notificationCount :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -166,25 +173,13 @@ queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm =
   PG.execute
     q
-    ( qm.id
-    , qm.projectId
-    , qm.alertThreshold
-    , qm.warningThreshold
-    , qm.logQuery
-    , qm.logQueryAsSql
-    , qm.lastEvaluated
-    , qm.warningLastTriggered
-    , qm.alertLastTriggered
-    , qm.triggerLessThan
-    , qm.thresholdSustainedForMins
-    , qm.alertConfig
-    , qm.checkIntervalMins
-    , qm.visualizationType
-    , qm.teams
-    , qm.widgetId
-    , qm.dashboardId
-    , qm.alertRecoveryThreshold
-    , qm.warningRecoveryThreshold
+    ( ( qm.id, qm.projectId, qm.alertThreshold, qm.warningThreshold, qm.logQuery
+      , qm.logQueryAsSql, qm.lastEvaluated, qm.warningLastTriggered, qm.alertLastTriggered, qm.triggerLessThan
+      )
+    :. ( qm.thresholdSustainedForMins, qm.alertConfig, qm.checkIntervalMins, qm.visualizationType, qm.teams
+       , qm.widgetId, qm.dashboardId, qm.alertRecoveryThreshold, qm.warningRecoveryThreshold
+       , qm.renotifyIntervalMins, qm.stopAfterCount
+       )
     )
   where
     q =
@@ -192,8 +187,9 @@ queryMonitorUpsert qm =
     INSERT INTO monitors.query_monitors (id, project_id, alert_threshold, warning_threshold, log_query,
                   log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
                   threshold_sustained_for_mins, alert_config, check_interval_mins, visualization_type, teams,
-                  widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold)
-    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?,?,?,?)
+                  widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold,
+                  renotify_interval_mins, stop_after_count)
+    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?::uuid[],?,?,?,?,?,?)
     ON CONFLICT (id) DO UPDATE SET
                   alert_threshold=EXCLUDED.alert_threshold,
                   warning_threshold=EXCLUDED.warning_threshold,
@@ -211,7 +207,9 @@ queryMonitorUpsert qm =
                   widget_id=EXCLUDED.widget_id,
                   dashboard_id=EXCLUDED.dashboard_id,
                   alert_recovery_threshold=EXCLUDED.alert_recovery_threshold,
-                  warning_recovery_threshold=EXCLUDED.warning_recovery_threshold
+                  warning_recovery_threshold=EXCLUDED.warning_recovery_threshold,
+                  renotify_interval_mins=EXCLUDED.renotify_interval_mins,
+                  stop_after_count=EXCLUDED.stop_after_count
     |]
 
 
@@ -230,7 +228,7 @@ queryMonitorsById ids
         log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
         threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, muted_until, visualization_type, teams,
         widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold, current_status,
-        eval(log_query_as_sql)
+        eval(log_query_as_sql), renotify_interval_mins, stop_after_count, notification_count
       FROM monitors.query_monitors where id=ANY(?::UUID[])
     |]
 
@@ -244,7 +242,7 @@ monitorToggleActiveById id' = do
       [sql|
         UPDATE monitors.query_monitors SET deactivated_at=CASE
             WHEN deactivated_at IS NOT NULL THEN NULL
-            ELSE ?
+            ELSE ?::timestamptz
         END
         where id=?|]
 

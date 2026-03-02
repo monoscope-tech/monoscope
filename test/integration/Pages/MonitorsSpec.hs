@@ -50,6 +50,10 @@ alertForm =
     , warningRecoveryThreshold = Nothing
     , widgetId = Nothing
     , dashboardId = Nothing
+    , notifyAfterCheck = Nothing
+    , notifyAfter = Nothing
+    , stopAfterCheck = Nothing
+    , stopAfter = Nothing
     }
 
 

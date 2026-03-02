@@ -2,6 +2,7 @@ module MonitoringSpec (spec) where
 
 import BackgroundJobs (checkTriggeredQueryMonitors)
 import Data.Aeson qualified as AE
+import Data.Effectful.Notify (Notification (..))
 import Data.ByteString.Lazy qualified as BL
 import Data.Default (def)
 import Data.HashMap.Strict qualified as HashMap
@@ -60,6 +61,10 @@ spec = aroundAll withTestResources do
                 , warningRecoveryThreshold = Nothing
                 , widgetId = Nothing
                 , dashboardId = Nothing
+                , notifyAfterCheck = Nothing
+                , notifyAfter = Nothing
+                , stopAfterCheck = Nothing
+                , stopAfter = Nothing
                 }
       respC <- runTestBg frozenTime tr $ Monitors.queryMonitorUpsert queryMonitor
       respC `shouldBe` 1
@@ -222,6 +227,10 @@ spec = aroundAll withTestResources do
                 , warningRecoveryThreshold = Just "50"
                 , widgetId = Nothing
                 , dashboardId = Nothing
+                , notifyAfterCheck = Nothing
+                , notifyAfter = Nothing
+                , stopAfterCheck = Nothing
+                , stopAfter = Nothing
                 }
       -- Insert the monitor
       _ <- runTestBg frozenTime tr $ Monitors.queryMonitorUpsert queryMonitor
@@ -271,14 +280,15 @@ spec = aroundAll withTestResources do
       -- alertLastTriggered should NOT be updated (no re-notification)
       m.alertLastTriggered `shouldBe` prev.alertLastTriggered
 
-    it "Periodic reminder after 1 hour updates timestamp" \tr -> do
+    it "Periodic reminder after 1 hour when renotify is disabled: no reminder" \tr -> do
       prev <- fetchMonitor tr pipelineMonId
       resetLastEvaluated tr pipelineMonId
       evalMonitorsAt (addUTCTime 3660 t0) tr -- +61 min
       m <- fetchMonitor tr pipelineMonId
       m.currentStatus `shouldBe` Monitors.MSAlerting
-      -- alertLastTriggered should be updated (reminder sent)
-      m.alertLastTriggered `shouldNotBe` prev.alertLastTriggered
+      -- renotify is disabled (Nothing), so alertLastTriggered should NOT be updated
+      m.alertLastTriggered `shouldBe` prev.alertLastTriggered
+      m.notificationCount `shouldBe` prev.notificationCount
 
     it "Alerting → Normal recovery clears timestamps" \tr -> do
       setMonitorQuery tr pipelineMonId "SELECT 50::float8"
@@ -324,6 +334,88 @@ spec = aroundAll withTestResources do
       evalMonitorsAt t0 tr
       m <- fetchMonitor tr skipMonId
       m.currentStatus `shouldBe` Monitors.MSNormal
+
+    describe "Renotify and Stop-After" do
+      let renotifyMonId = Monitors.QueryMonitorId $ Unsafe.fromJust $ UUID.fromText "55555555-5555-5555-5555-555555555555"
+
+      it "Renotify disabled: no reminder after interval" \tr -> do
+        -- Deactivate other monitors so only the renotify monitor gets evaluated
+        void $ withResource tr.trPool \conn ->
+          PGS.execute conn [sql|UPDATE monitors.query_monitors SET check_interval_mins = 99999 WHERE id != ?|] (PGS.Only renotifyMonId)
+        insertRenotifyMonitor tr renotifyMonId "SELECT 150::float8" 100
+        -- Initial eval → alerting with notification
+        notifs1 <- evalMonitorsWithNotifs t0 tr
+        m1 <- fetchMonitor tr renotifyMonId
+        m1.currentStatus `shouldBe` Monitors.MSAlerting
+        m1.notificationCount `shouldBe` 1
+        length notifs1 `shouldSatisfy` (> 0)
+        -- Verify both email and pagerduty notifications are sent
+        any (\case EmailNotification{} -> True; _ -> False) notifs1 `shouldBe` True
+        any (\case PagerdutyNotification{} -> True; _ -> False) notifs1 `shouldBe` True
+        -- Eval 61min later with renotify disabled → no reminder
+        resetLastEvaluated tr renotifyMonId
+        notifs2 <- evalMonitorsWithNotifs (addUTCTime 3660 t0) tr
+        m2 <- fetchMonitor tr renotifyMonId
+        m2.notificationCount `shouldBe` 1
+        m2.alertLastTriggered `shouldBe` m1.alertLastTriggered
+        length notifs2 `shouldBe` 0
+
+      it "Renotify enabled: reminder fires at configured interval" \tr -> do
+        setMonitorRenotifyConfig tr renotifyMonId (Just 30) Nothing 1
+        resetLastEvaluated tr renotifyMonId
+        setAlertLastTriggered tr renotifyMonId (Just t0) -- 35min ago
+        notifs <- evalMonitorsWithNotifs (addUTCTime (35 * 60) t0) tr
+        m <- fetchMonitor tr renotifyMonId
+        m.notificationCount `shouldBe` 2
+        m.alertLastTriggered `shouldNotBe` Just t0
+        length notifs `shouldSatisfy` (> 0)
+
+      it "Renotify enabled: no reminder before interval elapses" \tr -> do
+        resetLastEvaluated tr renotifyMonId
+        setAlertLastTriggered tr renotifyMonId (Just $ addUTCTime (39 * 60) t0) -- only 1min ago
+        notifs <- evalMonitorsWithNotifs (addUTCTime (40 * 60) t0) tr
+        m <- fetchMonitor tr renotifyMonId
+        m.notificationCount `shouldBe` 2 -- unchanged
+        length notifs `shouldBe` 0
+
+      it "Stop-after: notifications stop after N occurrences" \tr -> do
+        setMonitorRenotifyConfig tr renotifyMonId (Just 30) (Just 3) 2
+        resetLastEvaluated tr renotifyMonId
+        setAlertLastTriggered tr renotifyMonId (Just t0)
+        notifs1 <- evalMonitorsWithNotifs (addUTCTime (35 * 60) t0) tr
+        m1 <- fetchMonitor tr renotifyMonId
+        m1.notificationCount `shouldBe` 3
+        length notifs1 `shouldSatisfy` (> 0)
+        -- Now at limit → no more notifications
+        resetLastEvaluated tr renotifyMonId
+        setAlertLastTriggered tr renotifyMonId (Just t0)
+        notifs2 <- evalMonitorsWithNotifs (addUTCTime (70 * 60) t0) tr
+        m2 <- fetchMonitor tr renotifyMonId
+        m2.notificationCount `shouldBe` 3 -- unchanged at limit
+        length notifs2 `shouldBe` 0
+
+      it "Recovery always notifies and resets count even when stopped" \tr -> do
+        setMonitorQuery tr renotifyMonId "SELECT 50::float8" -- below threshold=100
+        notifs <- evalMonitorsWithNotifs (addUTCTime (75 * 60) t0) tr
+        m <- fetchMonitor tr renotifyMonId
+        m.currentStatus `shouldBe` Monitors.MSNormal
+        m.notificationCount `shouldBe` 0 -- reset on recovery
+        m.alertLastTriggered `shouldBe` Nothing
+        length notifs `shouldSatisfy` (> 0)
+
+      it "Muted monitor: notifications suppressed but count does not increment" \tr -> do
+        let evalTime = addUTCTime (80 * 60) t0
+        setMonitorQuery tr renotifyMonId "SELECT 150::float8"
+        setMonitorRenotifyConfig tr renotifyMonId Nothing Nothing 0
+        resetLastEvaluated tr renotifyMonId
+        void $ withResource tr.trPool \conn ->
+          PGS.execute conn [sql|UPDATE monitors.query_monitors SET muted_until = ? WHERE id = ?|]
+            (addUTCTime 86400 evalTime, renotifyMonId)
+        notifs <- evalMonitorsWithNotifs evalTime tr
+        m <- fetchMonitor tr renotifyMonId
+        m.currentStatus `shouldBe` Monitors.MSAlerting
+        m.notificationCount `shouldBe` 0 -- muted: count not incremented
+        length notifs `shouldBe` 0
 
 
 testPid :: Projects.ProjectId
@@ -376,3 +468,29 @@ fetchMonitor :: TestResources -> Monitors.QueryMonitorId -> IO Monitors.QueryMon
 fetchMonitor tr monId = do
   m <- runTestBg frozenTime tr $ Monitors.queryMonitorById monId
   maybe (error "Monitor not found") pure m
+
+
+-- | Insert a pipeline monitor with a pagerduty service on the everyone team so notifications are captured via Notify effect
+insertRenotifyMonitor :: TestResources -> Monitors.QueryMonitorId -> Text -> Double -> IO ()
+insertRenotifyMonitor tr monId sqlQuery threshold = do
+  insertPipelineMonitor tr monId sqlQuery threshold Nothing "above" Nothing Nothing
+  void $ withResource tr.trPool \conn ->
+    PGS.execute conn [sql|UPDATE projects.teams SET pagerduty_services = ARRAY['test-integration-key'] WHERE project_id = ? AND handle = 'everyone'|] (PGS.Only testPid)
+
+
+-- | Run checkTriggeredQueryMonitors and return captured notifications
+evalMonitorsWithNotifs :: UTCTime -> TestResources -> IO [Notification]
+evalMonitorsWithNotifs t tr = fst <$> runTestBackgroundWithNotifications t tr.trLogger tr.trATCtx checkTriggeredQueryMonitors
+
+
+-- | Set renotify config columns via direct SQL
+setMonitorRenotifyConfig :: TestResources -> Monitors.QueryMonitorId -> Maybe Int -> Maybe Int -> Int -> IO ()
+setMonitorRenotifyConfig tr monId renotifyMins stopAfter notifCount = void $ withResource tr.trPool \conn ->
+  PGS.execute conn [sql|UPDATE monitors.query_monitors SET renotify_interval_mins = ?, stop_after_count = ?, notification_count = ? WHERE id = ?|]
+    (renotifyMins, stopAfter, notifCount, monId)
+
+
+-- | Set alertLastTriggered timestamp
+setAlertLastTriggered :: TestResources -> Monitors.QueryMonitorId -> Maybe UTCTime -> IO ()
+setAlertLastTriggered tr monId t = void $ withResource tr.trPool \conn ->
+  PGS.execute conn [sql|UPDATE monitors.query_monitors SET alert_last_triggered = ? WHERE id = ?|] (t, monId)

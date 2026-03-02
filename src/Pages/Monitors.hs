@@ -73,6 +73,11 @@ data AlertUpsertForm = AlertUpsertForm
   , -- Widget alert fields
     widgetId :: Maybe Text
   , dashboardId :: Maybe Text
+  , -- Renotify / stop-after
+    notifyAfterCheck :: Maybe Bool
+  , notifyAfter :: Maybe Text
+  , stopAfterCheck :: Maybe Bool
+  , stopAfter :: Maybe Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromForm)
@@ -103,6 +108,8 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
       alertRecoveryD = readMaybe . toString =<< alertForm.alertRecoveryThreshold
       warningRecoveryD = readMaybe . toString =<< alertForm.warningRecoveryThreshold
       dashboardUuid = UUID.fromText =<< alertForm.dashboardId
+      renotifyMins = if fromMaybe False alertForm.notifyAfterCheck then Just (parseIntervalToMins $ fromMaybe "30m" alertForm.notifyAfter) else Nothing
+      stopCount = if fromMaybe False alertForm.stopAfterCheck then alertForm.stopAfter <|> Just 5 else Nothing
    in Monitors.QueryMonitor
         { id = queryMonitorId
         , createdAt = now
@@ -124,14 +131,28 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , mutedUntil = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
         , teams = V.fromList alertForm.teams
-        , -- Widget alert fields
-          widgetId = alertForm.widgetId
+        , widgetId = alertForm.widgetId
         , dashboardId = dashboardUuid
         , alertRecoveryThreshold = if isThresholdAlert then alertRecoveryD else Nothing
         , warningRecoveryThreshold = if isThresholdAlert then warningRecoveryD else Nothing
         , currentStatus = Monitors.MSNormal
         , currentValue = 0
+        , renotifyIntervalMins = renotifyMins
+        , stopAfterCount = stopCount
+        , notificationCount = 0
         }
+
+
+parseIntervalToMins :: Text -> Int
+parseIntervalToMins = \case
+  "10m" -> 10; "20m" -> 20; "30m" -> 30; "1h" -> 60; "6h" -> 360; "24h" -> 1440
+  t -> fromMaybe 30 $ readMaybe $ toString $ T.dropEnd 1 t
+
+
+minsToInterval :: Int -> Text
+minsToInterval = \case
+  60 -> "1h"; 360 -> "6h"; 1440 -> "24h"
+  m -> show m <> "m"
 
 
 alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders Alert)
@@ -363,14 +384,18 @@ thresholdsSection_ chartTargetIdM alertThresholdM warningThresholdM triggerLessT
         formField_ FieldSm def{inputType = "number", dot = Just "bg-fillWarning-strong", suffix = Just "events", placeholder = "Same as trigger", value = showVal warningRecoveryM} "Warning recovery" "warningRecoveryThreshold" False Nothing
 
 
-notificationSettingsSection_ :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> V.Vector ProjectMembers.Team -> V.Vector UUID.UUID -> Text -> Html ()
-notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selectedTeamIds formId = do
+notificationSettingsSection_ :: Maybe Text -> Maybe Text -> Maybe Text -> Bool -> V.Vector ProjectMembers.Team -> V.Vector UUID.UUID -> Text -> Maybe Monitors.QueryMonitor -> Html ()
+notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selectedTeamIds formId monitorM = do
   let defaultSeverity = fromMaybe "Error" severityM
       defaultSubject = fromMaybe "Alert triggered" subjectM
       defaultMessage = fromMaybe "The alert threshold has been exceeded. Check the APItoolkit dashboard for details." messageM
       teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> allTeams
       teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
       existingTeams = decodeUtf8 $ AE.encode $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
+      renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
+      renotifyVal = fromMaybe "30m" $ monitorM >>= (.renotifyIntervalMins) <&> minsToInterval
+      stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
+      stopVal = fromMaybe "5" $ monitorM >>= (.stopAfterCount) <&> show
   panel_ def{icon = Just "envelope", collapsible = Just False} "Notification Settings" do
     div_ [class_ "flex items-center w-full gap-2 mb-3"] do
       formSelectField_ FieldSm "Severity" "severity" False $ forM_ ["Info", "Error", "Warning", "Critical"] \s -> option_ [selected_ "" | defaultSeverity == s] $ toHtml s
@@ -382,12 +407,12 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
         p_ [class_ "text-xs text-textWeak"] "Continue notifications until monitor recovers"
       div_ [class_ "space-y-3"] do
         div_ [class_ "flex items-center"] do
-          formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" []
-          select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ forM_ @[] @_ @(Text, Text) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")] \(v, t) -> option_ (value_ v : [selected_ "" | v == "30m"]) $ toHtml t
+          formCheckbox_ FieldSm "Renotify every" "notifyAfterCheck" [checked_ | renotifyEnabled]
+          select_ [class_ "select select-sm w-28 ml-2", name_ "notifyAfter", id_ "notifyAfterInterval"] $ forM_ @[] @_ @(Text, Text) [("10m", "10 mins"), ("20m", "20 mins"), ("30m", "30 mins"), ("1h", "1 hour"), ("6h", "6 hours"), ("24h", "24 hours")] \(v, t) -> option_ (value_ v : [selected_ "" | v == renotifyVal]) $ toHtml t
         div_ [class_ "flex items-center"] do
-          formCheckbox_ FieldSm "Stop after" "stopAfterCheck" [[__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]]
-          div_ [class_ "flex items-center gap-1.5 ml-2 hidden", id_ "stopAfterInput"] do
-            input_ [type_ "number", class_ "input input-sm w-16", value_ "5", name_ "stopAfter", min_ "1", max_ "100"]
+          formCheckbox_ FieldSm "Stop after" "stopAfterCheck" $ [[__|on change if my.checked then remove .hidden from #stopAfterInput else add .hidden to #stopAfterInput end|]] <> [checked_ | stopEnabled]
+          div_ [class_ $ "flex items-center gap-1.5 ml-2" <> bool " hidden" "" stopEnabled, id_ "stopAfterInput"] do
+            input_ [type_ "number", class_ "input input-sm w-16", value_ stopVal, name_ "stopAfter", min_ "1", max_ "100"]
             span_ [class_ "text-xs text-textWeak"] "occurrences"
     div_ [class_ "border-t border-strokeWeak pt-4 mt-4"] do
       div_ [class_ "flex flex-col gap-1"] do
