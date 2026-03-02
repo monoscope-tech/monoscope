@@ -818,7 +818,7 @@ instance ToRow OtelLogsAndSpans where
       parseSeverityNumber = fmap (show . severity_number)
 
 
-bulkInsertOtelLogsAndSpansTF :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   appCtx <- Eff.ask @AuthContext
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON appCtx.config.enableTimefusionWrites)]
@@ -1308,7 +1308,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Ki.StructuredConcurrency :> es, Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
   => OtelLogsAndSpans
   -> Eff es ()
 insertSystemLog otelLog = bulkInsertOtelLogsAndSpansTF (V.singleton otelLog)
