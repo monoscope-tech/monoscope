@@ -211,9 +211,9 @@ renderNameCol item = do
       when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False displayName
       whenJust item.mutedUntil \until' ->
         let muteLabel = mutedLabel item.now until'
-        in span_ [class_ "badge badge-sm badge-ghost gap-1", term "data-tippy-content" muteLabel] do
-          faSprite_ "bell-slash" "regular" "h-3 w-3"
-          toHtml muteLabel
+         in span_ [class_ "badge badge-sm badge-ghost gap-1", term "data-tippy-content" muteLabel] do
+              faSprite_ "bell-slash" "regular" "h-3 w-3"
+              toHtml muteLabel
       div_ [class_ "flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] do
         inlineBtn (bool "Activate" "Deactivate" isActive) (bool "play" "pause" isActive) (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/toggle_active") []
         if isMuted
@@ -235,7 +235,9 @@ muteDropdown_ monitorId muteUrl = do
   let popId = "mute-pop-" <> monitorId
   div_ [class_ "inline-block"] do
     button_
-      [ type_ "button", term "data-tippy-content" "Mute", class_ "cursor-pointer hover:text-textBrand transition-colors tap-target"
+      [ type_ "button"
+      , term "data-tippy-content" "Mute"
+      , class_ "cursor-pointer hover:text-textBrand transition-colors tap-target"
       , term "popovertarget" popId
       , style_ $ "anchor-name: --anchor-" <> popId
       ]
@@ -263,7 +265,8 @@ mutedLabel now until'
   | diffMins >= 1440 = "Muted \xb7 " <> show (diffMins `div` 1440) <> "d left"
   | diffMins >= 60 = "Muted \xb7 " <> show (diffMins `div` 60) <> "h left"
   | otherwise = "Muted \xb7 " <> show (max 1 diffMins) <> "m left"
-  where diffMins = round (diffUTCTime until' now / 60) :: Int
+  where
+    diffMins = round (diffUTCTime until' now / 60) :: Int
 
 
 monitorBase :: UnifiedMonitorItem -> Text
@@ -349,13 +352,14 @@ toUnifiedMonitorItem teamMap pid currTime alert =
     , schedule = "every " <> show alert.checkIntervalMins <> " min"
     , lastRun = Just alert.lastEvaluated
     , now = currTime
-    , details = AlertDetails
-        { query = alert.logQuery
-        , alertThreshold = alert.alertThreshold
-        , warningThreshold = alert.warningThreshold
-        , triggerDirection = if alert.triggerLessThan then "below" else "above"
-        , visualizationType = alert.visualizationType
-        }
+    , details =
+        AlertDetails
+          { query = alert.logQuery
+          , alertThreshold = alert.alertThreshold
+          , warningThreshold = alert.warningThreshold
+          , triggerDirection = if alert.triggerLessThan then "below" else "above"
+          , visualizationType = alert.visualizationType
+          }
     , teamBadges = mapMaybe (\tid -> (UUID.toText tid,) <$> Map.lookup tid teamMap) $ V.toList alert.teams
     }
 
