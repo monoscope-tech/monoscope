@@ -79,9 +79,8 @@ spec = aroundAll withTestResources do
         p.message `shouldSatisfy` (/= "")
         p.stacktrace `shouldSatisfy` (/= "")
 
-    it "2. NewErrorDetected creates RuntimeException issues" \tr -> do
-      -- DB trigger on INSERT already fired during test 1
-      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+    it "2. processOneMinuteErrors creates RuntimeException issues for new errors" \tr -> do
+      -- processOneMinuteErrors in test 1 already created issues synchronously
       issueCount <- countIssues tr Issues.RuntimeException
       issueCount `shouldSatisfy` (> 0)
 
@@ -115,13 +114,16 @@ spec = aroundAll withTestResources do
         void $ PGS.execute conn
           [sql| UPDATE projects.projects SET notifications_channel = '{slack}', error_alerts = true WHERE id = ? |]
           (PGS.Only pid)
-      -- Find the regressed pattern from test 3
+      -- Find the regressed pattern from test 3 (issue was already created by processOneMinuteErrors)
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       let regressedM = find (\p -> p.state == ESRegressed) patterns
       case regressedM of
         Just pat -> do
+          -- Reset last_notified_at so this counts as a first alert
+          withResource tr.trPool \conn ->
+            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE id = ? |] (PGS.Only pat.id)
           (notifs, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx
-            $ BackgroundJobs.processNewError pid pat.hash
+            $ BackgroundJobs.notifyErrorSubscriptions pid (V.singleton pat.hash)
           -- Should produce at least one notification (Slack or email)
           notifs `shouldSatisfy` (not . null)
           -- Verify an issue was created with the correct type

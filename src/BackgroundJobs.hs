@@ -176,6 +176,11 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
             setStatus sp Ok
 
 
+unlessStale :: Text -> UTCTime -> NominalDiffTime -> ATBackgroundCtx () -> ATBackgroundCtx ()
+unlessStale jobName scheduledTime buffer action = do
+  now <- Time.currentTime
+  bool action (Log.logTrace ("Skipping stale " <> jobName) scheduledTime) $ diffUTCTime now scheduledTime > buffer
+
 -- | Process a background job - extracted so it can be run with different effect interpreters
 processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
 processBackgroundJob authCtx bgJob =
@@ -343,7 +348,7 @@ processBackgroundJob authCtx bgJob =
 
             Relude.when projectJobsExist
               $ Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
-    HourlyJob scheduledTime hour -> runHourlyJob scheduledTime hour
+    HourlyJob scheduledTime hour -> unlessStale "HourlyJob" scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
     ReportUsage pid -> whenJustM (Projects.projectById pid) \project -> do
@@ -364,12 +369,12 @@ processBackgroundJob authCtx bgJob =
       void $ PG.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
       void $ PG.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
       void $ PG.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
-    FiveMinuteSpanProcessing scheduledTime pid -> processFiveMinuteSpans scheduledTime pid
-    OneMinuteErrorProcessing scheduledTime pid -> processOneMinuteErrors scheduledTime pid
+    FiveMinuteSpanProcessing scheduledTime pid -> unlessStale "FiveMinuteSpanProcessing" scheduledTime (15 * 60) $ processFiveMinuteSpans scheduledTime pid
+    OneMinuteErrorProcessing scheduledTime pid -> unlessStale "OneMinuteErrorProcessing" scheduledTime (5 * 60) $ processOneMinuteErrors scheduledTime pid
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
-    ProcessIssuesEnhancement scheduledTime -> processIssuesEnhancement scheduledTime
-    FiveMinuteLogPatternExtraction scheduledTime pid -> logsPatternExtraction scheduledTime pid
+    ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
+    FiveMinuteLogPatternExtraction scheduledTime pid -> unlessStale "FiveMinuteLogPatternExtraction" scheduledTime (15 * 60) $ logsPatternExtraction scheduledTime pid
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
@@ -378,7 +383,7 @@ processBackgroundJob authCtx bgJob =
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
-    LogPatternPeriodicProcessing scheduledTime pid ->
+    LogPatternPeriodicProcessing scheduledTime pid -> unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60) $
       tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
       tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
@@ -928,13 +933,13 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
             AND e.state != 'resolved'
             AND i.issue_type = ? -- error patterns always create RuntimeException issues; alert type derives from error state
             AND (
-              e.last_notified_at IS NULL
+              (e.last_notified_at IS NULL AND e.created_at >= ?::timestamptz - INTERVAL '10 minutes')
               OR (e.subscribed = TRUE
                   AND ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
             )
           ORDER BY e.id, i.created_at DESC
         |]
-        (pid, errorHashes, Issues.RuntimeException, now)
+        (pid, errorHashes, Issues.RuntimeException, now, now)
     unless (null dueErrors) do
       Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
       projectM <- Projects.projectById pid
@@ -1375,23 +1380,31 @@ processAPIChangeAnomalies pid targetHashes = do
         let firstAnom = V.head anomalies
         pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
 
-  -- Only send notifications for newly created issues
+  -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do
-    projectM <- Projects.projectById pid
-    whenJust projectM \project -> do
-      users <- Projects.usersByProjectId pid
-      Relude.when project.endpointAlerts do
-        let alert = EndpointAlert{project = project.title, endpoints = V.fromList newEndpointInfos, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
-        forM_ project.notificationsChannel \case
-          Projects.NSlack -> void $ sendSlackAlert alert pid project.title Nothing
-          Projects.NDiscord -> void $ sendDiscordAlert alert pid project.title Nothing
-          Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-          Projects.NPagerduty -> pass
-          Projects.NEmail -> do
-            forM_ users \u -> do
-              let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
-                  (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl newEndpointInfos
-              sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+    now <- Time.currentTime
+    recentIssueCount :: [Only Int] <- PG.query
+      [sql| SELECT COUNT(*)::int FROM apis.issues
+            WHERE project_id = ? AND issue_type = 'api_change'
+              AND created_at >= ?::timestamptz - INTERVAL '30 minutes'
+              AND created_at < ?::timestamptz - INTERVAL '1 minute' |]
+      (pid, now, now)
+    Relude.unless (any ((> 0) . fromOnly) recentIssueCount) do
+      projectM <- Projects.projectById pid
+      whenJust projectM \project -> do
+        users <- Projects.usersByProjectId pid
+        Relude.when project.endpointAlerts do
+          let alert = EndpointAlert{project = project.title, endpoints = V.fromList newEndpointInfos, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
+          forM_ project.notificationsChannel \case
+            Projects.NSlack -> void $ sendSlackAlert alert pid project.title Nothing
+            Projects.NDiscord -> void $ sendDiscordAlert alert pid project.title Nothing
+            Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+            Projects.NPagerduty -> pass
+            Projects.NEmail -> do
+              forM_ users \u -> do
+                let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
+                    (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl newEndpointInfos
+                sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
 -- | Group anomalies by endpoint hash
