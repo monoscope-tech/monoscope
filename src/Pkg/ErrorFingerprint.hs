@@ -462,10 +462,10 @@ parseGenericFrame line =
 -- "server|handleRequest"
 --
 -- >>> normalizeStackTrace "python" "File \"/app/main.py\", line 10, in main\nFile \"/app/utils.py\", line 5, in helper"
--- "main|main\nutils|helper"
+-- "utils|helper"
 --
 -- >>> normalizeStackTrace "java" "at com.example.MyClass.doWork(MyClass.java:25)\nat com.example.Service.process(Service.java:50)"
--- "com.example.MyClass|doWork\ncom.example.Service|process"
+-- "com.example.Service|process"
 --
 -- >>> normalizeStackTrace "unknown" "some random frame info"
 -- "some random frame info"
@@ -474,8 +474,7 @@ normalizeStackTrace runtime stackText =
   let frames = parseStackTrace runtime stackText
       inAppFrames = filter (.isInApp) frames
       framesToUse = if null inAppFrames then frames else inAppFrames
-      normalizedFrames = map normalizeFrame framesToUse
-   in T.intercalate "\n" normalizedFrames
+   in maybe "" normalizeFrame $ viaNonEmpty last framesToUse
   where
     normalizeFrame :: StackFrame -> Text
     normalizeFrame frame =
