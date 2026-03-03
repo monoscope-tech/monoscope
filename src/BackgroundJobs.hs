@@ -1148,6 +1148,7 @@ jobsWorkerInit logger appCtx tp = do
     jobLogger :: OddJobs.Job.LogLevel -> LogEvent -> IO ()
     jobLogger logLevel logEvent = runLogT "OddJobs" logger LogAttention $ LogLegacy.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent)
 
+
 -- | Ensure a DailyJob is queued for today. Safe to call from multiple pods —
 -- uses INSERT ... WHERE NOT EXISTS to atomically skip if one already exists.
 ensureDailyJobScheduled :: Config.AuthContext -> IO ()
