@@ -181,6 +181,7 @@ unlessStale jobName scheduledTime buffer action = do
   now <- Time.currentTime
   bool action (Log.logTrace ("Skipping stale " <> jobName) scheduledTime) $ diffUTCTime now scheduledTime > buffer
 
+
 -- | Process a background job - extracted so it can be run with different effect interpreters
 processBackgroundJob :: Config.AuthContext -> BgJobs -> ATBackgroundCtx ()
 processBackgroundJob authCtx bgJob =
@@ -383,8 +384,10 @@ processBackgroundJob authCtx bgJob =
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
-    LogPatternPeriodicProcessing scheduledTime pid -> unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60) $
-      tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid scheduledTime authCtx
+    LogPatternPeriodicProcessing scheduledTime pid ->
+      unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
+        $ tryLog "detectLogPatternSpikes"
+        $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
       tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
@@ -1383,12 +1386,13 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do
     now <- Time.currentTime
-    recentIssueCount :: [Only Int] <- PG.query
-      [sql| SELECT COUNT(*)::int FROM apis.issues
+    recentIssueCount :: [Only Int] <-
+      PG.query
+        [sql| SELECT COUNT(*)::int FROM apis.issues
             WHERE project_id = ? AND issue_type = 'api_change'
               AND created_at >= ?::timestamptz - INTERVAL '30 minutes'
               AND created_at < ?::timestamptz - INTERVAL '1 minute' |]
-      (pid, now, now)
+        (pid, now, now)
     Relude.unless (any ((> 0) . fromOnly) recentIssueCount) do
       projectM <- Projects.projectById pid
       whenJust projectM \project -> do

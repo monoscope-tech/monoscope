@@ -379,8 +379,9 @@ getErrorPatternsWithCurrentRates pid now =
 batchUpsertErrorPatterns :: DB es => Projects.ProjectId -> V.Vector ATError -> UTCTime -> Eff es [(Text, Text)]
 batchUpsertErrorPatterns _pid errors _now | V.null errors = pure []
 batchUpsertErrorPatterns pid errors now =
-  filter (\(_, s) -> s == "new" || s == "regressed") <$> PG.query
-    [sql| INSERT INTO apis.error_patterns (
+  filter (\(_, s) -> s == "new" || s == "regressed")
+    <$> PG.query
+      [sql| INSERT INTO apis.error_patterns (
             project_id, error_type, message, stacktrace, hash,
             environment, service, runtime, error_data,
             first_trace_id, recent_trace_id,
@@ -406,7 +407,7 @@ batchUpsertErrorPatterns pid errors now =
             state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
             regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN ? ELSE apis.error_patterns.regressed_at END
           RETURNING hash, state::text |]
-    (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts, now, now)
+      (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts, now, now)
   where
     -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
     grouped = HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors
