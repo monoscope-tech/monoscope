@@ -712,7 +712,7 @@ logsPatternExtraction scheduledTime pid = do
       if null otelEvents
         then pure (tree, meta)
         else do
-          Log.logInfo "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
+          Log.logTrace "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
           let newMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- otelEvents, i /= ""]
               batch = V.fromList [NewEvent logId content | (logId, content, _, _, _) <- otelEvents]
               tree' = processBatch True batch scheduledTime tree
