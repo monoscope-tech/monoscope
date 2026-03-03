@@ -55,6 +55,7 @@ module Utils (
   changeTypeFillColor,
   replaceAllFormats,
   truncateHour,
+  prettyTimeShort,
 )
 where
 
@@ -73,7 +74,7 @@ import Data.Scientific (toBoundedInteger)
 import Data.Text qualified as T
 import Data.Text.Lazy.Builder qualified as TLB
 import Data.Time (ZonedTime, addUTCTime, defaultTimeLocale, parseTimeM, secondsToNominalDiffTime)
-import Data.Time.Clock (UTCTime (..), secondsToDiffTime)
+import Data.Time.Clock (UTCTime (..), diffUTCTime, secondsToDiffTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
@@ -573,7 +574,7 @@ getSeriesColorHex name
   | isPercentile name = percentileColorHex name
   | otherwise = themeColorsHex V.! hashTextToIndex name
   where
-    isStatusCode t = T.length t == 3 && T.all isDigit t && T.head t `elem` ['2' .. '5']
+    isStatusCode t = T.length t == 3 && T.all isDigit t && T.head t `elem` ("2345" :: String)
     isPercentile t = T.isPrefixOf "p" (T.toLower t) || HS.member (T.toLower t) percentileNames
     hashTextToIndex t = fromIntegral (xxHash (encodeUtf8 t)) `mod` V.length themeColorsHex
     statusCodeColorHex code
@@ -1358,3 +1359,11 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 
 truncateHour :: UTCTime -> UTCTime
 truncateHour (UTCTime day dt) = UTCTime day (secondsToDiffTime $ floor dt `div` 3600 * 3600)
+
+prettyTimeShort :: UTCTime -> UTCTime -> Text
+prettyTimeShort now t = let s = max 0 $ floor (diffUTCTime now t) :: Int in
+  if | s < 60    -> T.show s <> " sec ago"
+     | s < 3600  -> T.show (s `div` 60) <> " min ago"
+     | s < 86400 -> T.show (s `div` 3600) <> " hrs ago"
+     | s < 604800 -> T.show (s `div` 86400) <> " days ago"
+     | otherwise  -> T.show (s `div` 604800) <> " wks ago"

@@ -45,7 +45,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast, redirectCS)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, faSprite_, formatWithCommas, toUriStr)
+import Utils (checkFreeTierExceeded, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 
 
 data UnifiedMonitorItem = UnifiedMonitorItem
@@ -329,7 +329,7 @@ alertDeleteH = monitorActionH Monitors.monitorSoftDeleteByIds "Monitor deleted"
 
 
 renderLastRunCol :: UnifiedMonitorItem -> Html ()
-renderLastRunCol item = span_ [class_ "text-sm text-textWeak whitespace-nowrap"] $ maybe "Never" (toHtml . prettyTimeAuto item.now) item.lastRun
+renderLastRunCol item = span_ [class_ "text-sm text-textWeak whitespace-nowrap"] $ maybe "Never" (toHtml . prettyTimeShort item.now) item.lastRun
 
 
 renderThresholdCol :: UnifiedMonitorItem -> Html ()
