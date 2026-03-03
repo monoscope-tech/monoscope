@@ -44,6 +44,7 @@ import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, G
 import Database.PostgreSQL.Entity.Types qualified as DAT
 import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.) (..))
 
+import Data.Map.Strict qualified as Map
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -55,7 +56,6 @@ import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
-import Data.Map.Strict qualified as Map
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (truncateHour)
