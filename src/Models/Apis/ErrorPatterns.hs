@@ -97,6 +97,7 @@ data ErrorPattern = ErrorPattern
   , assignedAt :: Maybe ZonedTime
   , resolvedAt :: Maybe ZonedTime
   , regressedAt :: Maybe ZonedTime
+  , regressionCount :: Int
   , subscribed :: Bool
   , notifyEveryMinutes :: Int
   , lastNotifiedAt :: Maybe ZonedTime
@@ -405,9 +406,15 @@ batchUpsertErrorPatterns pid errors now =
             occurrences_24h = apis.error_patterns.occurrences_24h + EXCLUDED.occurrences_1m,
             quiet_minutes = CASE WHEN apis.error_patterns.state = 'resolved' THEN 0 ELSE apis.error_patterns.quiet_minutes END,
             state = CASE WHEN apis.error_patterns.state = 'resolved' THEN 'regressed' ELSE apis.error_patterns.state END,
-            regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN ? ELSE apis.error_patterns.regressed_at END
-          RETURNING hash, state::text |]
-      (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts, now, now)
+            regressed_at = CASE WHEN apis.error_patterns.state = 'resolved' THEN ? ELSE apis.error_patterns.regressed_at END,
+            regression_count = CASE WHEN apis.error_patterns.state = 'resolved'
+                                    THEN apis.error_patterns.regression_count + 1
+                                    ELSE apis.error_patterns.regression_count END
+          RETURNING hash, CASE
+            WHEN xmax = 0 THEN 'new'
+            WHEN state = 'regressed' AND regressed_at = ? THEN 'regressed'
+            ELSE 'unchanged' END::text |]
+      (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts, now, now, now)
   where
     -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
     grouped = HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors

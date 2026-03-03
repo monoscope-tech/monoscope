@@ -310,6 +310,7 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatPost :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
+  , activityGet :: mode :- Capture "issueID" Anomalies.IssueId :> "activity" :> Get '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -547,6 +548,7 @@ anomaliesServer pid =
     , errorSubscriptionPost = AnomalyList.errorSubscriptionPostH pid
     , aiChatPost = AnomalyList.aiChatPostH pid
     , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
+    , activityGet = AnomalyList.issueActivityGetH pid
     }
 
 

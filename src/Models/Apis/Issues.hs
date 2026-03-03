@@ -37,6 +37,8 @@ module Models.Apis.Issues (
   updateIssueCriticality,
   acknowledgeIssue,
   selectIssueByHash,
+  selectLatestIssueByHash,
+  reopenIssue,
 
   -- * Conversion Functions
   createAPIChangeIssue,
@@ -68,6 +70,12 @@ module Models.Apis.Issues (
   -- * Thread ID Helpers
   slackThreadToConversationId,
   discordThreadToConversationId,
+
+  -- * Activity Log
+  IssueEvent (..),
+  IssueActivity (..),
+  logIssueActivity,
+  selectIssueActivity,
 
   -- * Reports
   Report (..),
@@ -313,6 +321,25 @@ selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
 selectIssueByHash pid targetHash = listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| target_hash |]]) (pid, targetHash)
+
+
+-- | Find most recent RuntimeException issue for a given hash (including acknowledged/archived)
+selectLatestIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
+selectLatestIssueByHash pid targetHash =
+  listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| target_hash |], [field| issue_type |]] <> " ORDER BY created_at DESC LIMIT 1") (pid, targetHash, RuntimeException)
+
+
+-- | Reopen a previously acknowledged/archived issue (clear ack/archive, bump occurrence count)
+reopenIssue :: (DB es, Time :> es) => IssueId -> Eff es ()
+reopenIssue issueId = do
+  now <- Time.currentTime
+  void $ PG.execute
+    [sql| UPDATE apis.issues SET
+            acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL, updated_at = ?,
+            issue_data = issue_data || jsonb_build_object('occurrence_count',
+              COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
+          WHERE id = ? |]
+    (now, issueId)
 
 
 -- | Select issues with filters, returns issues and total count for pagination
@@ -775,6 +802,43 @@ mkIssue opts = do
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
       }
+
+
+-- Activity Log
+
+data IssueEvent
+  = IECreated | IEAcknowledged | IEUnacknowledged
+  | IEArchived | IEUnarchived | IEResolved
+  | IEReopened | IERegressed | IEAssigned | IEUnassigned
+  | IEAutoResolved | IEEscalated
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (Display, FromField, ToField) via WrappedEnumSC "IE" IssueEvent
+
+
+data IssueActivity = IssueActivity
+  { id :: Int64, issueId :: IssueId, event :: IssueEvent
+  , createdBy :: Maybe Users.UserId, metadata :: Maybe (Aeson AE.Value), createdAt :: UTCTime }
+  deriving stock (Generic, Show)
+  deriving anyclass (FromRow, NFData)
+
+
+logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Users.UserId -> Maybe AE.Value -> Eff es ()
+logIssueActivity issueId event createdBy metadataM = do
+  now <- Time.currentTime
+  void $ PG.execute
+    [sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at) VALUES (?, ?, ?, ?, ?) |]
+    (issueId, event, createdBy, Aeson <$> metadataM, now)
+
+
+selectIssueActivity :: DB es => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
+selectIssueActivity pid issueId = PG.query
+  [sql| SELECT a.id, a.issue_id, a.event, a.created_by, a.metadata, a.created_at
+        FROM apis.issue_activity_log a
+        JOIN apis.issues i ON i.id = a.issue_id
+        WHERE a.issue_id = ? AND i.project_id = ?
+        ORDER BY a.created_at DESC LIMIT 200 |]
+  (issueId, pid)
 
 
 -- Reports

@@ -24,6 +24,8 @@ module Pages.Anomalies (
   AIChatForm (..),
   aiChatPostH,
   aiChatHistoryGetH,
+  -- Activity
+  issueActivityGetH,
 )
 where
 
@@ -86,7 +88,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, lookupValueText, methodFillColor, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -103,6 +105,7 @@ acknowledgeAnomalyGetH pid aid hostM = do
   appCtx <- ask @AuthContext
   let issueId = UUIDId aid.unUUIDId
   _ <- Issues.acknowledgeIssue issueId sess.user.id
+  Issues.logIssueActivity issueId Issues.IEAcknowledged (Just sess.user.id) Nothing
   let text_id = V.fromList [UUID.toText aid.unUUIDId]
   v <- Anomalies.acknowledgeAnomalies sess.user.id text_id
   _ <- Anomalies.acknowlegeCascade sess.user.id (V.fromList v)
@@ -116,6 +119,7 @@ unAcknowledgeAnomalyGetH pid aid = do
   let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
   _ <- PG.execute qI (Only aid)
   _ <- PG.execute q (Only aid)
+  Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEUnacknowledged (Just sess.user.id) Nothing
   addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) False
 
 
@@ -127,6 +131,7 @@ archiveAnomalyGetH pid aid = do
   let qI = [sql| update apis.issues set archived_at=? where id=? |]
   _ <- PG.execute qI (now, aid)
   _ <- PG.execute q (now, aid)
+  Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEArchived (Just sess.user.id) Nothing
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) True
 
 
@@ -137,6 +142,7 @@ unArchiveAnomalyGetH pid aid = do
   let qI = [sql| update apis.issues set archived_at=null where id=? |]
   _ <- PG.execute qI (Only aid)
   _ <- PG.execute q (Only aid)
+  Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEUnarchived (Just sess.user.id) Nothing
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) False
 
 
@@ -424,6 +430,15 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
               (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
               (not $ V.null withSessionIds)
 
+    -- Activity timeline (lazy-loaded)
+    let activityUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId <> "/activity"
+    div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+      div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+        faSprite_ "clock-rotate-left" "regular" "w-4 h-4 text-iconNeutral"
+        span_ [class_ "text-sm font-medium text-textStrong"] "Activity"
+      div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
+        $ div_ [class_ "p-4 flex justify-center"] $ loadingIndicator_ LdSM LdDots
+
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
 
@@ -517,7 +532,7 @@ newtype ErrorSubscriptionForm = ErrorSubscriptionForm
 
 assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuthCtx (RespHeaders (Html ()))
 assignErrorPostH pid errUuid form = do
-  (_sess, _project) <- Sessions.sessionAndProject pid
+  (sess, _project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let errId = ErrorPatterns.ErrorPatternId errUuid
       assigneeIdM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
@@ -537,6 +552,10 @@ assignErrorPostH pid errUuid form = do
           whenJust assigneeIdM \assigneeId ->
             void $ liftIO $ withResource appCtx.pool \conn ->
               createJob conn "background_jobs" $ BackgroundJobs.ErrorAssigned pid err.id assigneeId
+          issueM <- Issues.selectIssueByHash pid err.hash
+          let event = maybe Issues.IEUnassigned (const Issues.IEAssigned) assigneeIdM
+              meta = assigneeIdM <&> \uid -> AE.object ["assignee_id" AE..= uid]
+          whenJust issueM \issue -> Issues.logIssueActivity issue.id event (Just sess.user.id) meta
           addSuccessToast "Assignee updated" Nothing
           render (Just err.id) assigneeIdM
 
@@ -558,6 +577,8 @@ resolveErrorPostH pid errUuid = do
           when (err.state /= ErrorPatterns.ESResolved) do
             now <- Time.currentTime
             void $ ErrorPatterns.resolveErrorPattern err.id now
+            issueM <- Issues.selectIssueByHash pid err.hash
+            whenJust issueM \issue -> Issues.logIssueActivity issue.id Issues.IEResolved (Just sess.user.id) Nothing
           addSuccessToast "Error resolved" Nothing
           addRespHeaders $ errorResolveAction pid err.id ErrorPatterns.ESResolved True
 
@@ -1298,3 +1319,44 @@ issueTypeLabel issueType critical = span_ [class_ $ "flex items-center gap-1.5 t
       Issues.LogPatternRateChange -> ("text-fillWarning-strong", "activity", "Rate Change")
       Issues.ApiChange | critical -> ("text-fillError-strong", "exclamation-triangle", "Breaking")
       Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
+
+
+issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
+issueActivityGetH pid issueId = do
+  (_sess, _project) <- Sessions.sessionAndProject pid
+  activities <- Issues.selectIssueActivity pid issueId
+  now <- Time.currentTime
+  let userIds = ordNub $ mapMaybe (.createdBy) activities
+  users :: [Projects.User] <- if null userIds then pure [] else PG.query [sql| SELECT * FROM users.users WHERE id = ANY(?::uuid[]) |] (Only $ V.fromList userIds)
+  let userMap = Map.fromList $ map (\u -> (u.id, u)) users
+  addRespHeaders $ issueActivityTimeline_ userMap now activities
+
+
+issueActivityTimeline_ :: Map.Map Projects.UserId Projects.User -> UTCTime -> [Issues.IssueActivity] -> Html ()
+issueActivityTimeline_ userMap now activities
+  | null activities = div_ [class_ "p-4 text-sm text-textWeak text-center"] "No activity yet."
+  | otherwise = div_ [class_ "p-4 flex flex-col gap-0"] $ forM_ activities \a -> do
+      let (icon, color, label) = eventDisplay a.event
+          actorText = foldMap (\uid -> foldMap (\u -> " by " <> CI.original u.email) $ Map.lookup uid userMap) a.createdBy
+      div_ [class_ "flex items-start gap-3 relative pl-4 pb-4 border-l-2 border-strokeWeak ml-2"] do
+        div_ [class_ $ "absolute -left-[9px] top-0.5 w-4 h-4 rounded-full flex items-center justify-center " <> color]
+          $ faSprite_ icon "regular" "w-2.5 h-2.5"
+        div_ [class_ "flex flex-col gap-0.5 min-w-0"] do
+          span_ [class_ "text-sm text-textStrong"] $ toHtml $ label <> actorText
+          span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now a.createdAt
+
+
+eventDisplay :: Issues.IssueEvent -> (Text, Text, Text)
+eventDisplay = \case
+  Issues.IECreated -> ("plus", "bg-fillSuccess-weak text-fillSuccess-strong", "Created")
+  Issues.IEAcknowledged -> ("check", "bg-fillBrand-weak text-fillBrand-strong", "Acknowledged")
+  Issues.IEUnacknowledged -> ("rotate-left", "bg-fillWeaker text-textWeak", "Unacknowledged")
+  Issues.IEArchived -> ("box-archive", "bg-fillWeaker text-textWeak", "Archived")
+  Issues.IEUnarchived -> ("box-archive", "bg-fillWeaker text-textWeak", "Unarchived")
+  Issues.IEResolved -> ("check-double", "bg-fillSuccess-weak text-fillSuccess-strong", "Resolved")
+  Issues.IEReopened -> ("arrow-rotate-left", "bg-fillWarning-weak text-fillWarning-strong", "Reopened")
+  Issues.IERegressed -> ("arrow-trend-up", "bg-fillError-weak text-fillError-strong", "Regressed")
+  Issues.IEAssigned -> ("user-plus", "bg-fillBrand-weak text-fillBrand-strong", "Assigned")
+  Issues.IEUnassigned -> ("user-minus", "bg-fillWeaker text-textWeak", "Unassigned")
+  Issues.IEAutoResolved -> ("wand-magic-sparkles", "bg-fillSuccess-weak text-fillSuccess-strong", "Auto-resolved")
+  Issues.IEEscalated -> ("arrow-up", "bg-fillError-weak text-fillError-strong", "Escalated")

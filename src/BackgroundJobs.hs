@@ -936,7 +936,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
             AND e.state != 'resolved'
             AND i.issue_type = ? -- error patterns always create RuntimeException issues; alert type derives from error state
             AND (
-              (e.last_notified_at IS NULL AND e.created_at >= ?::timestamptz - INTERVAL '10 minutes')
+              (e.last_notified_at IS NULL AND e.created_at >= ?::timestamptz - INTERVAL '60 minutes')
               OR (e.subscribed = TRUE
                   AND ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
             )
@@ -968,7 +968,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).
--- Creates issues synchronously for new/regressed errors.
+-- Creates issues synchronously for new/regressed errors. Reopens existing issues on regression.
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
 processProjectErrors pid errors now = do
   result <- try $ ErrorPatterns.batchUpsertErrorPatterns pid errors now
@@ -982,13 +982,31 @@ processProjectErrors pid errors now = do
       forM_ newOrRegressed \(errorHash, errState) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err -> do
-          let runtimeAlertType = bool NewRuntimeError RegressedErrors (errState == "regressed")
-          issue <- Issues.createNewErrorIssue pid err
-          Issues.insertIssue issue
-          authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
-          liftIO $ withResource authCtx.jobsPool \conn ->
-            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-          Log.logInfo "Created issue for error" (pid, err.id, issue.id, show runtimeAlertType)
+          if errState == "regressed"
+            then do
+              -- Reopen existing issue instead of creating a new one
+              existingM <- Issues.selectLatestIssueByHash pid errorHash
+              case existingM of
+                Just existing -> do
+                  Issues.reopenIssue existing.id
+                  Issues.logIssueActivity existing.id Issues.IERegressed Nothing Nothing
+                  Issues.logIssueActivity existing.id Issues.IEReopened Nothing Nothing
+                  Log.logInfo "Reopened issue for regressed error" (pid, err.id, existing.id)
+                Nothing -> do
+                  -- No existing issue found, create a new one
+                  issue <- Issues.createNewErrorIssue pid err
+                  Issues.insertIssue issue
+                  Issues.logIssueActivity issue.id Issues.IECreated Nothing Nothing
+                  Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id)
+            else do
+              -- New error: create issue and queue LLM enhancement
+              issue <- Issues.createNewErrorIssue pid err
+              Issues.insertIssue issue
+              Issues.logIssueActivity issue.id Issues.IECreated Nothing Nothing
+              authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+              liftIO $ withResource authCtx.jobsPool \conn ->
+                void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
