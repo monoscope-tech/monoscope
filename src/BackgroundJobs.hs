@@ -1338,62 +1338,50 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Group by endpoint hash to consolidate related changes
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
 
-  -- Process each endpoint group
-  forM_ anomaliesByEndpoint \(endpointHash, anomalies) -> do
-    -- Check for existing open issue to avoid duplicates
+  -- Process each endpoint group, collecting info for newly created issues only
+  newEndpointInfos <- fmap catMaybes $ forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
     existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
-
     case existingIssueM of
       Just existingIssue -> do
-        -- Update existing issue with new anomaly data
         let apiChangeData =
               Issues.APIChangeData
                 { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
                 , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
                 , endpointHost = "Unknown"
                 , anomalyHashes = V.map (.targetHash) anomalies
-                , shapeChanges = V.empty -- Simplified for now
-                , formatChanges = V.empty -- Simplified for now
+                , shapeChanges = V.empty
+                , formatChanges = V.empty
                 , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
                 , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
                 , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
                 }
         Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
+        pure Nothing
       Nothing -> do
-        -- Create new issue
         issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
         Issues.insertIssue issue
-
-        -- Queue enhancement job
         _ <- liftIO $ withResource authCtx.jobsPool \conn ->
           createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        pass
+        let firstAnom = V.head anomalies
+        pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
 
-  -- Send notifications
-  projectM <- Projects.projectById pid
-  whenJust projectM \project -> do
-    users <- Projects.usersByProjectId pid
-    let endpointInfo =
-          map
-            ( \(_, anoms) ->
-                let firstAnom = V.head anoms
-                 in fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-            )
-            anomaliesByEndpoint
-    -- Only send notifications if we have valid endpoint info
-    Relude.when (project.endpointAlerts && not (null endpointInfo)) do
-      let alert = EndpointAlert{project = project.title, endpoints = V.fromList endpointInfo, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
-
-      forM_ project.notificationsChannel \case
-        Projects.NSlack -> void $ sendSlackAlert alert pid project.title Nothing
-        Projects.NDiscord -> void $ sendDiscordAlert alert pid project.title Nothing
-        Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
-        Projects.NPagerduty -> pass -- PagerDuty is only for monitor alerts
-        Projects.NEmail -> do
-          forM_ users \u -> do
-            let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
-                (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl endpointInfo
-            sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+  -- Only send notifications for newly created issues
+  Relude.when (not (null newEndpointInfos)) do
+    projectM <- Projects.projectById pid
+    whenJust projectM \project -> do
+      users <- Projects.usersByProjectId pid
+      Relude.when project.endpointAlerts do
+        let alert = EndpointAlert{project = project.title, endpoints = V.fromList newEndpointInfos, endpointHash = fromMaybe "" $ viaNonEmpty head $ V.toList targetHashes}
+        forM_ project.notificationsChannel \case
+          Projects.NSlack -> void $ sendSlackAlert alert pid project.title Nothing
+          Projects.NDiscord -> void $ sendDiscordAlert alert pid project.title Nothing
+          Projects.NPhone -> sendWhatsAppAlert alert pid project.title project.whatsappNumbers
+          Projects.NPagerduty -> pass
+          Projects.NEmail -> do
+            forM_ users \u -> do
+              let anomalyUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues"
+                  (subj, html) = ET.anomalyEndpointEmail u.firstName project.title anomalyUrl newEndpointInfos
+              sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
 
 
 -- | Group anomalies by endpoint hash
@@ -2017,9 +2005,7 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
         (subj, html) = emailFn project.title errorsUrl [errorData]
     (finalSlackTs, finalDiscordMsgId) <-
       sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
-    Relude.when (finalSlackTs /= existSlackTs || finalDiscordMsgId /= existDiscordId)
-      $ void
-      $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
+    void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
 
 
 -- | Process a new error and create an issue
