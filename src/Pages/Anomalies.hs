@@ -1180,7 +1180,7 @@ renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
 
 renderIssueDateCol :: IssueVM -> Html ()
 renderIssueDateCol (IssueVM _ _ currTime _ issue) =
-  span_ [class_ "text-xs text-textWeak"] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+  span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
 
 renderIssueChartCol :: IssueVM -> Html ()
