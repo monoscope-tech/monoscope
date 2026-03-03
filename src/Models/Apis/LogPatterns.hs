@@ -239,7 +239,10 @@ upsertHourlyStatBatch rows =
         VALUES (?, ?, ?, ?, ?)
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
         DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-    [(pid, sf, ph, truncateHour hb, ec) | (pid, sf, ph, hb, ec) <- rows]
+    (dedup [(pid, sf, ph, truncateHour hb, ec) | (pid, sf, ph, hb, ec) <- rows])
+  where
+    dedup = Map.elems . foldl' merge Map.empty
+    merge acc row@(pid, sf, ph, hb, ec) = Map.insertWith (\(_, _, _, _, ec1) (_, _, _, _, ec2) -> (pid, sf, ph, hb, ec1 + ec2)) (pid, sf, ph, hb) row acc
 
 
 -- | Batch: computes median + MAD for all patterns in one query.
