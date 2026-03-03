@@ -1,5 +1,7 @@
 module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError, notifyErrorSubscriptions) where
 
+import Control.Concurrent (threadDelay)
+import Control.Concurrent.Async (async)
 import Control.Lens (view, (.~), _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
@@ -25,6 +27,7 @@ import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
 import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException)
+import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
@@ -127,7 +130,6 @@ data BgJobs
   | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
   | MonoscopeAdminDaily
-  | QueryMonitorsTriggered [Monitors.QueryMonitorId] -- triggered by pg_cron SQL procedure
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -373,13 +375,6 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
-    QueryMonitorsTriggered monitorIds -> forM_ monitorIds \mid' -> do
-      monitor <- Monitors.queryMonitorById mid'
-      whenJust monitor \m -> do
-        startWall <- Time.currentTime
-        catch (evaluateQueryMonitor m startWall) \(err :: SomePostgreSqlException) -> do
-          Log.logWarn "Query monitor evaluation failed" (m.id, m.alertConfig.title, show err)
-          void $ Monitors.updateLastEvaluatedAt m.id startWall
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
@@ -1141,13 +1136,37 @@ dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailActi
 
 
 jobsWorkerInit :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
-jobsWorkerInit logger appCtx tp =
+jobsWorkerInit logger appCtx tp = do
+  Relude.when appCtx.config.enableDailyJobScheduling do
+    ensureDailyJobScheduled appCtx
+    void $ async $ forever do
+      threadDelay (30 * 60 * 1_000_000) -- 30 minutes
+      ensureDailyJobScheduled appCtx
   startJobRunner
     $ mkConfig jobLogger "background_jobs" appCtx.jobsPool (MaxConcurrentJobs appCtx.config.maxConcurrentJobs) (jobsRunner logger appCtx tp) id
   where
     jobLogger :: OddJobs.Job.LogLevel -> LogEvent -> IO ()
-    jobLogger logLevel logEvent = runLogT "OddJobs" logger LogAttention $ LogLegacy.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent) -- logger show (logLevel, logEvent)
-    -- jobLogger logLevel logEvent = print show (logLevel, logEvent) -- logger show (logLevel, logEvent)
+    jobLogger logLevel logEvent = runLogT "OddJobs" logger LogAttention $ LogLegacy.logInfo "Background jobs ping." (show @Text logLevel, show @Text logEvent)
+
+-- | Ensure a DailyJob is queued for today. Safe to call from multiple pods —
+-- uses INSERT ... WHERE NOT EXISTS to atomically skip if one already exists.
+ensureDailyJobScheduled :: Config.AuthContext -> IO ()
+ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
+  [Only (inserted :: Int)] <-
+    SimplePG.query_
+      conn
+      [sql|WITH ins AS (
+             INSERT INTO background_jobs (run_at, status, payload)
+             SELECT now(), 'queued', jsonb_build_object('tag', 'DailyJob')
+             WHERE NOT EXISTS (
+               SELECT 1 FROM background_jobs
+               WHERE payload->>'tag' IN ('DailyJob', 'HourlyJob')
+                 AND status IN ('queued', 'locked')
+                 AND run_at >= date_trunc('day', now())
+             )
+             RETURNING 1
+           ) SELECT COUNT(*)::int FROM ins|]
+  Relude.when (inserted > 0) $ putTextLn "Scheduled DailyJob for today"
 
 
 data ReportType = DailyReport | WeeklyReport
