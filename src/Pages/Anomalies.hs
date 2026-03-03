@@ -437,7 +437,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
         faSprite_ "clock-rotate-left" "regular" "w-4 h-4 text-iconNeutral"
         span_ [class_ "text-sm font-medium text-textStrong"] "Activity"
       div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
-        $ div_ [class_ "p-4 flex justify-center"] $ loadingIndicator_ LdSM LdDots
+        $ div_ [class_ "p-4 flex justify-center"]
+        $ loadingIndicator_ LdSM LdDots
 
     -- AI Chat section (inline with page content)
     anomalyAIChat_ pid issue.id
