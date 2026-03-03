@@ -1913,6 +1913,32 @@ code, pre, .code, .monospace {
     @apply rotate-90;
   }
 
+  /* Alerting status dot — sonar ping ring */
+  @keyframes alertPing {
+    0% { transform: scale(1); opacity: 0.6; }
+    100% { transform: scale(2.5); opacity: 0; }
+  }
+  .alert-dot {
+    position: relative;
+  }
+  .alert-dot::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: 9999px;
+    background: inherit;
+    animation: alertPing 2s cubic-bezier(0, 0, 0.2, 1) infinite;
+  }
+
+  /* Alerting badge — gentle opacity pulse */
+  @keyframes alertPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.65; }
+  }
+  .alert-badge {
+    animation: alertPulse 2.5s ease-in-out infinite;
+  }
+
   .b--b2 {
     border-color: oklch(var(--b2));
   }

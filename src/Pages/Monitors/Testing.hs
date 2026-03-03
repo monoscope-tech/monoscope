@@ -206,7 +206,7 @@ renderNameCol item = do
       isMuted = isJust item.mutedUntil
   div_ [class_ "flex flex-col gap-1 py-0.5"] do
     div_ [class_ "flex items-center gap-2"] do
-      span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> dotColor, term "data-tippy-content" $ bool "Inactive" "Active" isActive] ""
+      span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), term "data-tippy-content" $ bool "Inactive" "Active" isActive] ""
       a_ [href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
       when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False displayName
       whenJust item.mutedUntil \until' ->
@@ -382,7 +382,7 @@ statusBadge_ isLarge status = do
         _ -> ("badge-ghost", "circle")
       sizeClass = if isLarge then "" else "badge-sm"
       iconSize = if isLarge then "h-4 w-4" else "h-3 w-3"
-  span_ [class_ $ sizeClass <> " " <> badgeClass <> " gap-1 badge"] do
+  span_ [class_ $ sizeClass <> " " <> badgeClass <> " gap-1 badge" <> bool "" " alert-badge" (status `elem` ["Alerting", "alert"])] do
     faSprite_ icon "regular" iconSize
     toHtml status
 
