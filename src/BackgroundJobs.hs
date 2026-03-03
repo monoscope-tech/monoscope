@@ -988,9 +988,12 @@ processProjectErrors pid errors now = do
             then do
               existingM <- Issues.selectLatestIssueByHash pid errorHash
               maybe
-                (do issue <- createIssueForError pid err
-                    Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id))
-                (handleRegression pid err) existingM
+                ( do
+                    issue <- createIssueForError pid err
+                    Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id)
+                )
+                (handleRegression pid err)
+                existingM
             else do
               issue <- createIssueForError pid err
               authCtx <- Effectful.Reader.Static.ask @Config.AuthContext

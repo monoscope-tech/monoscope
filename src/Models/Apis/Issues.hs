@@ -348,12 +348,13 @@ reopenIssue issueId = do
 bumpIssueUpdatedAt :: (DB es, Time :> es) => IssueId -> Eff es ()
 bumpIssueUpdatedAt issueId = do
   now <- Time.currentTime
-  void $ PG.execute
-    [sql| UPDATE apis.issues SET updated_at = ?,
+  void
+    $ PG.execute
+      [sql| UPDATE apis.issues SET updated_at = ?,
             issue_data = issue_data || jsonb_build_object('occurrence_count',
               COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
           WHERE id = ? |]
-    (now, issueId)
+      (now, issueId)
 
 
 -- | Select issues with filters, returns issues and total count for pagination
