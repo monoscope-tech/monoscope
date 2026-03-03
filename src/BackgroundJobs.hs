@@ -1739,7 +1739,7 @@ evaluateQueryMonitor monitor startWall = do
       alertAt = if status == Monitors.MSAlerting && (statusChanged || shouldNotify) then Just startWall else monitor.alertLastTriggered
       (finalWarningAt, finalAlertAt) = if isRecovery then (Nothing, Nothing) else (warningAt, alertAt)
 
-  let isMuted = maybe False (> startWall) monitor.mutedUntil
+  let isMuted = ctx.config.pauseNotifications || maybe False (> startWall) monitor.mutedUntil
       newNotifCount
         | isRecovery = 0
         | shouldNotify && not isMuted = monitor.notificationCount + 1
@@ -1896,6 +1896,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid scheduledTime
   let anomalies = flip mapMaybe patternsWithRates \lpRate ->
+        guard (lpRate.logLevel `notElem` [Just "INFO", Just "TRACE" :: Maybe Text]) *>
         case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
           (BSEstablished, Just mean, Just mad) ->
             let projectedCount = round (fromIntegral lpRate.currentHourCount * scaleFactor)
@@ -1928,8 +1929,8 @@ processNewLogPatterns pid authCtx = do
     if totalEvents < minEventsForNewPatternAlerts
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
-        -- url_path patterns skip new-pattern issues (noise) but still get rate-change alerts
-        let issueWorthy = V.fromList $ filter (\lp -> lp.sourceField /= "url_path") newPatterns
+        -- url_path patterns and INFO/TRACE logs skip new-pattern issues (noise) but still get rate-change alerts
+        let issueWorthy = V.fromList $ filter (\lp -> lp.sourceField /= "url_path" && lp.logLevel `notElem` [Just "INFO", Just "TRACE" :: Maybe Text]) newPatterns
         issueIds <- V.forM issueWorthy \lp -> do
           issue <- Issues.createLogPatternIssue pid lp
           Issues.insertIssue issue
