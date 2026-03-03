@@ -132,6 +132,7 @@ data EnvConfig = EnvConfig
   , enableDailyJobScheduling :: Bool
   , maxConcurrentJobs :: Int
   , showDemoProject :: Bool
+  , pauseNotifications :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)
