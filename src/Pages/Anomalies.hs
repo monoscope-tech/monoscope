@@ -78,7 +78,7 @@ import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (err400, errBody)
@@ -1095,6 +1095,21 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , menuItem = Just "Changes & Errors"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.config
+          , headContent = Just do
+              link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-light.min.css"), media_ "screen", id_ "hljs-light"]
+              link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css"), media_ "screen", id_ "hljs-dark"]
+              script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
+              script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
+              script_ """
+                function setHljsTheme() {
+                  const dark = document.body.getAttribute('data-theme') === 'dark';
+                  document.getElementById('hljs-light').disabled = dark;
+                  document.getElementById('hljs-dark').disabled = !dark;
+                }
+                function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
+                document.addEventListener('DOMContentLoaded', () => { setHljsTheme(); highlightSnippets(document); });
+                document.addEventListener('htmx:afterSettle', e => highlightSnippets(e.detail.elt));
+              """
           , navTabs =
               Just
                 $ toHtml
@@ -1193,9 +1208,9 @@ renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
       isArchived = isJust issue.archivedAt
       issueUrl = "/p/" <> pid.toText <> "/anomalies/" <> Issues.issueIdText issue.id
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
-    div_ [class_ "flex items-center gap-2 min-w-0"] do
+    div_ [class_ "flex items-start gap-2 min-w-0"] do
       span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> statusColor] ""
-      a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] $ toHtml $ bool issue.title "(Untitled)" (T.null issue.title)
+      a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors line-clamp-2 break-all"] $ toHtml $ bool issue.title "(Untitled)" (T.null issue.title)
       severityBadge_ issue.severity
       when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
       div_ [class_ "flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] do
@@ -1228,7 +1243,7 @@ issuePreview_ issue = case issue.issueType of
   Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d ->
     previewSnippet $ d.endpointMethod <> " " <> d.endpointPath
   where
-    previewSnippet txt = div_ [class_ "text-xs text-textWeak font-mono truncate bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" txt] $ toHtml txt
+    previewSnippet txt = div_ [class_ "text-xs text-textWeak font-mono leading-relaxed line-clamp-3 break-all min-w-0 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5 [&_code.hljs]:!bg-transparent [&_code.hljs]:!p-0 [&_code.hljs]:!inline [&_code.hljs]:!overflow-visible", term "data-tippy-content" txt] $ code_ [] $ toHtml txt
 
 
 anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()
