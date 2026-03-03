@@ -1896,12 +1896,12 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
   -- so a fresh issue is created if the prior one was acknowledged — intentional.
   patternsWithRates <- LogPatterns.getPatternsWithCurrentRates pid scheduledTime
   let anomalies = flip mapMaybe patternsWithRates \lpRate ->
-        guard (lpRate.logLevel `notElem` [Just "INFO", Just "TRACE" :: Maybe Text]) *>
-        case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
-          (BSEstablished, Just mean, Just mad) ->
-            let projectedCount = round (fromIntegral lpRate.currentHourCount * scaleFactor)
-             in detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount <&> (lpRate,)
-          _ -> Nothing
+        guard (lpRate.logLevel `notElem` [Just "INFO", Just "TRACE" :: Maybe Text])
+          *> case (lpRate.baselineState, lpRate.baselineMean, lpRate.baselineMad) of
+            (BSEstablished, Just mean, Just mad) ->
+              let projectedCount = round (fromIntegral lpRate.currentHourCount * scaleFactor)
+               in detectSpikeOrDrop spikeZScoreThreshold spikeMinAbsoluteDelta mean mad projectedCount <&> (lpRate,)
+            _ -> Nothing
 
   issueIds <- forM anomalies \(lpRate, sr) -> do
     let dir = display sr.direction
