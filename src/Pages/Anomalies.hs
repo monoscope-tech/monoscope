@@ -52,10 +52,8 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField)
 import Lucid
-import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
-import Models.Apis.Anomalies (FieldChange (..), PayloadChange (..))
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -88,7 +86,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (changeTypeFillColor, checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, lookupValueText, methodFillColor, statusFillColor, toUriStr)
+import Utils (checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, lookupValueText, methodFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -1139,22 +1137,36 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
 
 issueColumns :: Projects.ProjectId -> [Column IssueVM]
 issueColumns pid =
-  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "py-4"]
-  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-36 text-center align-top pt-4"]
-  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-60 align-top pt-4"]
+  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0"]
+  , col "Type" renderIssueTypeCol & withAttrs [class_ "w-28"]
+  , col "Service" renderIssueServiceCol & withAttrs [class_ "w-28"]
+  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-20 text-right"]
+  , col "Last Seen" renderIssueDateCol & withAttrs [class_ "w-24"]
+  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-40"]
   ]
 
+
+renderIssueTypeCol :: IssueVM -> Html ()
+renderIssueTypeCol (IssueVM _ _ _ _ issue) = issueTypeLabel issue.issueType issue.critical
+
+renderIssueServiceCol :: IssueVM -> Html ()
+renderIssueServiceCol (IssueVM _ _ _ _ issue) =
+  span_ [class_ "text-sm text-textWeak truncate"] $ toHtml $ Issues.serviceLabel issue.service
 
 renderIssueEventsCol :: IssueVM -> Html ()
 renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
   unless isWidget
-    $ span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Issue in the last 14days"]
+    $ span_ [class_ "tabular-nums text-sm text-textStrong", term "data-tippy-content" "Events in the last 14 days"]
     $ show issue.eventCount
+
+renderIssueDateCol :: IssueVM -> Html ()
+renderIssueDateCol (IssueVM _ _ currTime _ issue) =
+  span_ [class_ "text-xs text-textWeak"] $ toHtml $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
 
 
 renderIssueChartCol :: IssueVM -> Html ()
 renderIssueChartCol (IssueVM _ _ _ _ issue) =
-  div_ [class_ "w-56 h-12 px-3"]
+  div_ [class_ "w-40 h-8"]
     $ Widget.widget_
     $ (def :: Widget.Widget)
       { Widget.standalone = Just True
@@ -1172,317 +1184,50 @@ renderIssueChartCol (IssueVM _ _ _ _ issue) =
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
-renderIssueMainCol pid (IssueVM hideByDefault isWidget currTime timeFilter issue) = do
-  let timeSinceString = prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
-      statusColor = anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt)
-
-  -- Title and badges row with status indicator
-  div_ [class_ $ "flex gap-3 mb-3 flex-wrap " <> if isWidget then "flex-col" else " items-center "] do
-    -- Status indicator dot
-    unless isWidget $ div_ [class_ $ statusColor <> " w-2 h-2 rounded-full shrink-0 mt-1.5"] ""
-    a_ [class_ "text-textStrong text-base", href_ $ "/p/" <> pid.toText <> "/anomalies/" <> Issues.issueIdText issue.id] $ toHtml issue.title
-    -- Issue type badge
-    div_ [class_ "flex items-center gap-2"] do
-      issueTypeBadge issue.issueType issue.critical
-      -- Severity badge
-      case issue.severity of
-        "critical" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
-        "warning" -> span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
-        _ -> pass
-
-  -- Metadata row (method, endpoint, service, time)
-  div_ [class_ "flex items-center gap-4 text-sm text-textWeak mb-3 flex-wrap"] do
-    -- Method and endpoint (for API changes)
-    when (issue.issueType == Issues.ApiChange) do
-      case AE.fromJSON (getAeson issue.issueData) of
-        AE.Success (apiData :: Issues.APIChangeData) -> do
-          div_ [class_ "flex items-center gap-2"] do
-            span_ [class_ $ "badge " <> methodFillColor apiData.endpointMethod] $ toHtml apiData.endpointMethod
-            span_ [class_ "monospace bg-fillWeak px-2 py-1 rounded text-xs text-textStrong"] $ toHtml apiData.endpointPath
-        _ -> pass
-    -- Service badge
-    span_ [class_ "flex items-center gap-1"] do
-      div_ [class_ "w-3 h-3 bg-fillYellow rounded-sm"] ""
-      span_ [class_ "text-textStrong"] $ toHtml $ Issues.serviceLabel issue.service
-    -- Time since
-    span_ [class_ "text-textWeak"] $ toHtml timeSinceString
-
-  -- Statistics row (only for API changes)
-  when (issue.issueType == Issues.ApiChange) do
-    let allChanges = getAeson issue.requestPayloads <> getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
-        countChange (!b, !i, !t) c = case c.changeType of
-          Anomalies.Breaking -> (b + 1, i, t + 1)
-          Anomalies.Incremental -> (b, i + 1, t + 1)
-          _ -> (b, i, t + 1)
-        (breakingChanges, incrementalChanges, totalChanges) = foldl' countChange (0, 0, 0) allChanges
-    div_ [class_ "flex items-center gap-4 text-sm mb-4 p-3 bg-fillWeak rounded-lg"] do
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-textStrong"] $ toHtml $ show totalChanges
-        " total changes"
-      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-fillError-strong"] $ toHtml $ show breakingChanges
-        " breaking"
-        when (breakingChanges > 0 && totalChanges > 0) $ span_ [class_ "text-xs tabular-nums ml-1 bg-fillError-weak text-fillError-strong px-1.5 py-0.5 rounded"] $ toHtml $ Issues.showPct (fromIntegral breakingChanges / fromIntegral totalChanges * 100 :: Float)
-      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-fillSuccess-strong"] $ toHtml $ show incrementalChanges
-        " incremental"
-      div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-      span_ [class_ "text-textWeak"] do
-        strong_ [class_ "text-textBrand"] $ toHtml $ show totalChanges
-        " payloads affected"
-
-  -- Stack trace for runtime exceptions or Query for alerts
-  case issue.issueType of
-    Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData ->
-      div_ [class_ "border border-strokeError-weak rounded-lg group/er mb-4"] do
-        label_ [class_ "text-sm text-textWeak font semibold rounded-lg p-2 flex gap-2 items-center"] do
-          faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.err-input:checked]/er:rotate-90"
-          "Stack trace"
-          input_ [class_ "err-input w-0 h-0 opacity-0", type_ "checkbox"]
-        div_ [class_ "bg-fillError-weak p-4 overflow-x-scroll hidden group-has-[.err-input:checked]/er:block text-sm monospace text-fillError-strong"] $ pre_ [class_ "whitespace-pre-wrap "] $ toHtml exceptionData.stackTrace
-    Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
-      div_ [class_ "mb-4"] do
-        span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-        div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm monospace text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
-    Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
-      div_ [class_ "border border-strokeWeak rounded-lg group/lp mb-4"] do
-        label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
-          faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lp-input:checked]/lp:rotate-90"
-          toHtml $ fromMaybe "LOG" d.logLevel <> " pattern (" <> show d.occurrenceCount <> " occurrences)"
-          input_ [class_ "lp-input w-0 h-0 opacity-0", type_ "checkbox"]
-        div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lp-input:checked]/lp:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
-    Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
-      div_ [class_ "border border-strokeWeak rounded-lg group/lpr mb-4"] do
-        label_ [class_ "text-sm text-textWeak font-semibold rounded-lg p-2 flex gap-2 items-center cursor-pointer"] do
-          faSprite_ "chevron-right" "regular" "h-3 w-3 group-has-[.lpr-input:checked]/lpr:rotate-90"
-          toHtml $ "Rate " <> display d.changeDirection <> " (" <> Issues.showPct d.changePercent <> ")"
-          input_ [class_ "lpr-input w-0 h-0 opacity-0", type_ "checkbox"]
-        div_ [class_ "bg-fillWeak p-4 overflow-x-scroll hidden group-has-[.lpr-input:checked]/lpr:block text-sm monospace text-textStrong"] $ pre_ [class_ "whitespace-pre-wrap"] $ toHtml d.logPattern
-    _ -> pass
-
-  -- Recommended action
-  div_ [class_ "border-l-4 border-strokeBrand pl-4 mb-4"] $ p_ [class_ "text-sm text-textStrong leading-relaxed"] $ toHtml issue.recommendedAction
-
-  -- Collapsible payload changes (only for API changes)
-  when (issue.issueType == Issues.ApiChange) $ details_ [class_ "group mb-4"] do
-    summary_ [class_ "inline-flex items-center cursor-pointer whitespace-nowrap text-sm font-medium transition-all rounded-md gap-1.5 text-textBrand hover:text-textBrand/80 list-none"] do
-      faSprite_ "chevron-right" "regular" "h-4 w-4 mr-1 transition-transform group-open:rotate-90"
-      "View detailed payload changes"
-    div_ [class_ "mt-4 border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised"] $ renderPayloadChanges issue
-
-  -- Action buttons
-  div_ [class_ "flex items-center gap-3 mt-4 pt-4 border-t border-strokeWeak"] do
-    button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 text-textBrand hover:text-textBrand/80 hover:bg-fillBrand-weak"] do
-      faSprite_ "eye" "regular" "w-4 h-4"
-      span_ [class_ "leading-none"] "view related logs"
-    button_ [class_ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 border bg-background hover:text-accent-foreground text-textBrand border-strokeBrand-strong hover:bg-fillBrand-weak"] do
-      faSprite_ "code" "regular" "w-4 h-4"
-      span_ [class_ "leading-none"] "View Full Schema"
-    -- Acknowledge button
-    let isAcknowledged = isJust issue.acknowledgedAt
-    let acknowledgeEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isAcknowledged then "/unacknowledge" else "/acknowledge"
-    button_
-      [ class_ $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <> if isAcknowledged then "bg-fillSuccess-weak text-fillSuccess-strong border border-strokeSuccess-weak hover:bg-fillSuccess-weak/80" else "bg-fillPrimary text-textInverse-strong hover:bg-fillPrimary/90"
-      , hxGet_ acknowledgeEndpoint
-      , hxSwap_ "outerHTML"
-      , hxTarget_ "closest .itemsListItem"
-      ]
-      do
-        faSprite_ "check" "regular" "w-4 h-4"
-        span_ [class_ "leading-none"] $ if isAcknowledged then "Acknowledged" else "Acknowledge"
-    -- Archive button
-    let isArchived = isJust issue.archivedAt
-    let archiveEndpoint = "/p/" <> issue.projectId.toText <> "/anomalies/" <> Issues.issueIdText issue.id <> if isArchived then "/unarchive" else "/archive"
-    button_
-      [ class_ $ "inline-flex items-center justify-center whitespace-nowrap text-sm font-medium transition-all h-8 rounded-md gap-1.5 px-3 " <> if isArchived then "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak hover:bg-fillWarning-weak/80" else "border border-strokeWeak text-textStrong hover:bg-fillWeak"
-      , hxGet_ archiveEndpoint
-      , hxSwap_ "outerHTML"
-      , hxTarget_ "closest .itemsListItem"
-      ]
-      do
-        faSprite_ "archive" "regular" "w-4 h-4"
-        span_ [class_ "leading-none"] $ if isArchived then "Unarchive" else "Archive"
+renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
+  let statusColor = anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt)
+      isAcknowledged = isJust issue.acknowledgedAt
+      isArchived = isJust issue.archivedAt
+      issueUrl = "/p/" <> pid.toText <> "/anomalies/" <> Issues.issueIdText issue.id
+  div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
+    div_ [class_ "flex items-center gap-2 min-w-0"] do
+      span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> statusColor] ""
+      a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] $ toHtml $ bool issue.title "(Untitled)" (T.null issue.title)
+      severityBadge_ issue.severity
+      when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
+      div_ [class_ "flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] do
+        inlineBtn (bool "Acknowledge" "Unacknowledge" isAcknowledged) "check" (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
+        inlineBtn (bool "Archive" "Unarchive" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
+    issuePreview_ issue
+  where
+    inlineBtn tip icon hxAction extraAttrs =
+      button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxAction] <> extraAttrs)
+        $ faSprite_ icon "regular" "h-3.5 w-3.5"
 
 
--- Render payload changes section
-renderPayloadChanges :: Issues.IssueL -> Html ()
-renderPayloadChanges issue =
-  when (issue.issueType == Issues.ApiChange) do
-    let requestChanges = getAeson issue.requestPayloads :: [Anomalies.PayloadChange]
-    let responseChanges = getAeson issue.responsePayloads :: [Anomalies.PayloadChange]
-
-    when (not (null requestChanges) || not (null responseChanges)) do
-      div_ [class_ "border border-strokeWeak rounded-lg overflow-hidden bg-bgRaised group/payloadtabs"] do
-        div_ [class_ "flex flex-col gap-2"] do
-          -- Tab navigation using radio buttons
-          div_ [role_ "tablist", Aria.orientation_ "horizontal", class_ "text-muted-foreground h-9 items-center justify-center rounded-xl p-[3px] w-full grid grid-cols-2 bg-fillWeak"] do
-            -- Response tab (default active)
-            label_
-              [ role_ "tab"
-              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong bg-transparent text-textWeak"
-              ]
-              do
-                input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issue.id), class_ "hidden payload-tab-response", checked_]
-                faSprite_ "arrow-right" "regular" "w-4 h-4"
-                span_ [] $ "Response Payloads (" <> show (length responseChanges) <> ")"
-
-            -- Request tab
-            label_
-              [ role_ "tab"
-              , class_ "h-[calc(100%-1px)] flex-1 justify-center rounded-xl border border-transparent px-2 py-1 text-sm font-medium whitespace-nowrap transition-all flex items-center gap-2 cursor-pointer has-[:checked]:bg-bgRaised has-[:checked]:text-textStrong bg-transparent text-textWeak"
-              ]
-              do
-                input_ [type_ "radio", name_ ("payload-tab-" <> Issues.issueIdText issue.id), class_ "hidden payload-tab-request"]
-                faSprite_ "arrow-right" "regular" "w-4 h-4 rotate-180"
-                span_ [] $ "Request Payloads (" <> show (length requestChanges) <> ")"
-
-          -- Tab panels
-          -- Response panel (visible when response tab is selected)
-          div_
-            [ role_ "tabpanel"
-            , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-response:checked]/payloadtabs:block"
-            ]
-            $ if null responseChanges
-              then div_ [class_ "text-center py-8 text-textWeak"] "No response payload changes"
-              else forM_ responseChanges (renderPayloadChange True)
-
-          -- Request panel (visible when request tab is selected)
-          div_
-            [ role_ "tabpanel"
-            , class_ "flex-1 outline-none p-4 space-y-4 hidden group-has-[.payload-tab-request:checked]/payloadtabs:block"
-            ]
-            $ if null requestChanges
-              then div_ [class_ "text-center py-8 text-textWeak"] "No request payload changes"
-              else forM_ requestChanges (renderPayloadChange False)
+severityBadge_ :: Text -> Html ()
+severityBadge_ = \case
+  "critical" -> span_ [class_ "badge badge-sm bg-fillError-weak text-fillError-strong border border-strokeError-strong"] "CRITICAL"
+  "warning" -> span_ [class_ "badge badge-sm bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak"] "WARNING"
+  _ -> pass
 
 
--- Render individual payload change
-renderPayloadChange :: Bool -> Anomalies.PayloadChange -> Html ()
-renderPayloadChange isResponse change =
-  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-fillWeak"] do
-    -- Status code/method badges and info
-    div_ [class_ "flex items-center gap-3 mb-3 flex-wrap"] do
-      -- Status code or method badge
-      case (change.statusCode, change.method) of
-        (Just statusCode, _) ->
-          span_ [class_ $ "badge " <> statusFillColor statusCode] $ toHtml $ show statusCode <> " " <> fromMaybe "" change.statusText
-        (_, Just method) ->
-          span_ [class_ "badge bg-fillInformation-strong"] $ toHtml method
-        _ -> pass
-
-      -- Content type badge
-      span_ [class_ "badge-outline border-strokeWeak text-textWeak bg-bgRaised"] $ toHtml change.contentType
-
-      -- Change type badge
-      case change.changeType of
-        Anomalies.Breaking ->
-          span_ [class_ "badge bg-fillError-strong"] do
-            faSprite_ "circle-x" "regular" "w-3 h-3 mr-1"
-            "Breaking"
-        Anomalies.Incremental ->
-          span_ [class_ "badge bg-fillInformation-strong"] do
-            faSprite_ "info" "regular" "w-3 h-3 mr-1"
-            "Incremental"
-        Anomalies.Safe ->
-          span_ [class_ "badge bg-fillSuccess-strong"] do
-            faSprite_ "circle-check" "regular" "w-3 h-3 mr-1"
-            "Safe"
-
-    -- Description
-    when (T.length change.description > 0) do
-      p_ [class_ "text-sm text-textWeak mb-4 leading-relaxed"] $ toHtml change.description
-
-    -- Field changes section
-    unless (null change.changes) do
-      div_ [class_ "space-y-3"] do
-        -- Section header
-        div_ [class_ "flex items-center gap-2 pb-2 border-b border-strokeWeak"] do
-          faSprite_ "code" "regular" "w-4 h-4 text-iconNeutral"
-          span_ [class_ "font-medium text-textStrong"]
-            $ case (change.statusCode, change.statusText) of
-              (Just code, Just txt) -> toHtml $ show code <> " Response Changes"
-              _ -> "Payload Changes"
-          span_ [class_ "badge-outline border-strokeWeak text-textWeak bg-fillWeak"] $ toHtml change.contentType
-
-        -- Individual field changes
-        div_ [class_ "space-y-3"] do
-          forM_ change.changes renderFieldChange
-
-    -- Examples section
-    when (T.length change.exampleBefore > 0 || T.length change.exampleAfter > 0) do
-      div_ [class_ "mt-4 space-y-3"] do
-        span_ [class_ "text-sm font-medium text-textStrong"] "Example Payloads:"
-        div_ [class_ "grid grid-cols-2 gap-4"] do
-          when (T.length change.exampleBefore > 0) do
-            div_ [] do
-              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Before:"
-              pre_ [class_ "bg-fillError-weak text-fillError-strong p-3 rounded text-xs overflow-x-auto border border-strokeError-weak"] do
-                toHtml change.exampleBefore
-          when (T.length change.exampleAfter > 0) do
-            div_ [] do
-              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "After:"
-              pre_ [class_ "bg-fillSuccess-weak text-fillSuccess-strong p-3 rounded text-xs overflow-x-auto border border-strokeSuccess-weak"] do
-                toHtml change.exampleAfter
+issuePreview_ :: Issues.IssueL -> Html ()
+issuePreview_ issue = case issue.issueType of
+  Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \d ->
+    previewSnippet $ d.errorType <> ": " <> d.errorMessage
+  Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \d ->
+    previewSnippet d.queryExpression
+  Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
+    previewSnippet d.logPattern
+  Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
+    previewSnippet d.logPattern
+  Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d ->
+    previewSnippet $ d.endpointMethod <> " " <> d.endpointPath
+  where
+    previewSnippet txt = div_ [class_ "text-xs text-textWeak font-mono truncate bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" txt] $ toHtml txt
 
 
--- Render individual field change
-renderFieldChange :: Anomalies.FieldChange -> Html ()
-renderFieldChange fieldChange =
-  div_ [class_ "border border-strokeWeak rounded-lg p-4 bg-bgRaised"] do
-    -- Field name and change kind badges
-    div_ [class_ "flex items-start justify-between gap-4 mb-3"] do
-      div_ [class_ "flex items-center gap-2 flex-wrap"] do
-        -- Field path in monospace
-        span_ [class_ "monospace text-sm bg-fillWeak px-2 py-1 rounded text-textStrong"] $ toHtml fieldChange.path
-
-        -- Change kind badge
-        let kindText = case fieldChange.changeKind of
-              Anomalies.Modified -> "modified"
-              Anomalies.Added -> "added"
-              Anomalies.Removed -> "removed"
-        span_ [class_ $ "badge-outline " <> changeTypeFillColor kindText] $ toHtml kindText
-
-        -- Breaking badge if applicable
-        when fieldChange.breaking do
-          span_ [class_ "badge bg-fillError-strong"] do
-            faSprite_ "triangle-alert" "regular" "w-3 h-3 mr-1"
-            "Breaking"
-
-    -- Change description
-    when (T.length fieldChange.changeDescription > 0) do
-      p_ [class_ "text-sm text-textWeak mb-3 leading-relaxed"] $ toHtml fieldChange.changeDescription
-
-    -- Type and value changes
-    div_ [class_ "space-y-3"] do
-      -- Type changes (if modified)
-      when (fieldChange.changeKind == Anomalies.Modified || fieldChange.changeKind == Anomalies.Added || fieldChange.changeKind == Anomalies.Removed) do
-        div_ [class_ "grid grid-cols-2 gap-4"] do
-          when (isJust fieldChange.oldType) do
-            div_ [] do
-              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Type:"
-              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs border border-strokeError-weak"] do
-                toHtml $ fromMaybe "" fieldChange.oldType
-          when (isJust fieldChange.newType) do
-            div_ [] do
-              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Type:"
-              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs border border-strokeSuccess-weak"] do
-                toHtml $ fromMaybe "" fieldChange.newType
-
-      -- Value examples (if available)
-      when (isJust fieldChange.oldValue || isJust fieldChange.newValue) do
-        div_ [class_ "grid grid-cols-2 gap-4"] do
-          when (isJust fieldChange.oldValue) do
-            div_ [] do
-              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "Previous Value:"
-              code_ [class_ "block bg-fillError-weak text-fillError-strong px-3 py-2 rounded text-xs monospace whitespace-pre-wrap border border-strokeError-weak"] do
-                toHtml $ fromMaybe "" fieldChange.oldValue
-          when (isJust fieldChange.newValue) do
-            div_ [] do
-              span_ [class_ "text-xs text-textWeak block mb-1 font-medium"] "New Value:"
-              code_ [class_ "block bg-fillSuccess-weak text-fillSuccess-strong px-3 py-2 rounded text-xs monospace whitespace-pre-wrap border border-strokeSuccess-weak"] do
-                toHtml $ fromMaybe "" fieldChange.newValue
 
 
 anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()
@@ -1514,14 +1259,25 @@ anomalyArchiveButton pid aid archived = do
 
 
 issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
-issueTypeBadge issueType critical = badge cls icon txt
+issueTypeBadge issueType critical = span_ [class_ $ "badge " <> bgCls] do faSprite_ icon "regular" "w-3 h-3"; toHtml txt
   where
-    (cls, icon, txt) = case issueType of
+    (bgCls, icon, txt) = case issueType of
       Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
       Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
       Issues.LogPattern -> ("bg-fillInformation-strong", "file-text", "LOG PATTERN")
       Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "activity", "RATE CHANGE")
-      Issues.ApiChange
-        | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
-        | otherwise -> ("bg-fillInformation-strong", "info", "Incremental")
-    badge c i t = span_ [class_ $ "badge " <> c] do faSprite_ i "regular" "w-3 h-3"; t
+      Issues.ApiChange | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
+      Issues.ApiChange -> ("bg-fillInformation-strong", "info", "Incremental")
+
+
+issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
+issueTypeLabel issueType critical = span_ [class_ $ "flex items-center gap-1.5 text-xs font-medium " <> color] do
+  faSprite_ icon "regular" "w-3 h-3"; toHtml txt
+  where
+    (color, icon, txt) = case issueType of
+      Issues.RuntimeException -> ("text-fillError-strong", "triangle-alert", "Error")
+      Issues.QueryAlert -> ("text-fillWarning-strong", "zap", "Alert")
+      Issues.LogPattern -> ("text-fillInformation-strong", "file-text", "Log Pattern")
+      Issues.LogPatternRateChange -> ("text-fillWarning-strong", "activity", "Rate Change")
+      Issues.ApiChange | critical -> ("text-fillError-strong", "exclamation-triangle", "Breaking")
+      Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
