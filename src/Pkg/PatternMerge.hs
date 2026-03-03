@@ -9,9 +9,9 @@ module Pkg.PatternMerge (
 )
 where
 
+import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
-import Control.Lens ((^?), (^..))
 import Data.List (maximumBy)
 import Data.Text qualified as T
 import Relude
@@ -58,6 +58,7 @@ cosineSimilarity xs ys
 autoMergeThreshold :: Float
 autoMergeThreshold = 0.95
 
+
 ambiguousThreshold :: Float
 ambiguousThreshold = 0.75
 
@@ -90,16 +91,17 @@ assignToCentroids centroids newPatterns = foldl' classify ([], []) newPatterns
 buildJudgePrompt :: [(Text, Text)] -> Text
 buildJudgePrompt pairs = systemPart <> "\n\n" <> pairsPart
   where
-    systemPart = T.unlines
-      [ "You are a pattern deduplication judge. For each pair of error/log patterns below,"
-      , "decide if they represent the same underlying issue (MERGE) or distinct issues (KEEP_SEPARATE)."
-      , ""
-      , "Respond with a JSON array of objects, one per pair, with fields:"
-      , "  - \"index\": the pair index (0-based)"
-      , "  - \"decision\": \"MERGE\" or \"KEEP_SEPARATE\""
-      , ""
-      , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
-      ]
+    systemPart =
+      T.unlines
+        [ "You are a pattern deduplication judge. For each pair of error/log patterns below,"
+        , "decide if they represent the same underlying issue (MERGE) or distinct issues (KEEP_SEPARATE)."
+        , ""
+        , "Respond with a JSON array of objects, one per pair, with fields:"
+        , "  - \"index\": the pair index (0-based)"
+        , "  - \"decision\": \"MERGE\" or \"KEEP_SEPARATE\""
+        , ""
+        , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
+        ]
     pairsPart = T.unlines $ zipWith formatPair [0 :: Int ..] pairs
     formatPair i (a, b) = "Pair " <> show i <> ":\n  A: " <> a <> "\n  B: " <> b
 

@@ -8,6 +8,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
@@ -40,6 +41,9 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import Langchain.DocumentLoader.Core qualified
+import Langchain.Embeddings.Core qualified
+import Langchain.Embeddings.OpenAI qualified
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
 import Lucid (Html)
@@ -51,9 +55,9 @@ import Models.Apis.Integrations (PagerdutyData (..), getPagerdutyByProjectId)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
@@ -74,16 +78,12 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
-import Data.Effectful.LLM qualified as ELLM
-import Langchain.DocumentLoader.Core qualified
-import Langchain.Embeddings.Core qualified
-import Langchain.Embeddings.OpenAI qualified
 import Pkg.Drain qualified as Drain
-import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
+import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.QueryCache qualified as QueryCache
 import ProcessMessage (processSpanToEntities)
 import PyF (fmtTrim)
@@ -1551,28 +1551,58 @@ patternEmbeddingAndMerge pid = do
 embedAndMergeErrors :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 embedAndMergeErrors pid ctx = do
   unembedded <- PatternMergeDB.getUnembeddedErrorPatterns pid
-  let fetchTexts = Map.fromList . map (\(eid, et, msg) -> (eid, PatternMerge.embeddingTextForError et msg))
-        <$> (PG.query [sql| SELECT id, error_type, message FROM apis.error_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
-            :: ATBackgroundCtx [(ErrorPatterns.ErrorPatternId, Text, Text)])
-  embedAndMerge pid ctx "error" unembedded
-    (\(_, et, msg) -> PatternMerge.embeddingTextForError et msg) (view _1)
-    PatternMergeDB.updateErrorEmbeddings (PatternMergeDB.getCanonicalErrorPatterns pid) PatternMergeDB.assignErrorsToCanonical fetchTexts
+  let fetchTexts =
+        Map.fromList
+          . map (\(eid, et, msg) -> (eid, PatternMerge.embeddingTextForError et msg))
+          <$> ( PG.query [sql| SELECT id, error_type, message FROM apis.error_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
+                  :: ATBackgroundCtx [(ErrorPatterns.ErrorPatternId, Text, Text)]
+              )
+  embedAndMerge
+    pid
+    ctx
+    "error"
+    unembedded
+    (\(_, et, msg) -> PatternMerge.embeddingTextForError et msg)
+    (view _1)
+    PatternMergeDB.updateErrorEmbeddings
+    (PatternMergeDB.getCanonicalErrorPatterns pid)
+    PatternMergeDB.assignErrorsToCanonical
+    fetchTexts
 
 
 embedAndMergeLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 embedAndMergeLogPatterns pid ctx = do
   unembedded <- PatternMergeDB.getUnembeddedLogPatterns pid
-  let fetchTexts = Map.fromList
-        <$> (PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
-            :: ATBackgroundCtx [(LogPatterns.LogPatternId, Text)])
-  embedAndMerge pid ctx "log" unembedded snd fst
-    PatternMergeDB.updateLogEmbeddings (PatternMergeDB.getCanonicalLogPatterns pid) PatternMergeDB.assignLogsToCanonical fetchTexts
+  let fetchTexts =
+        Map.fromList
+          <$> ( PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
+                  :: ATBackgroundCtx [(LogPatterns.LogPatternId, Text)]
+              )
+  embedAndMerge
+    pid
+    ctx
+    "log"
+    unembedded
+    snd
+    fst
+    PatternMergeDB.updateLogEmbeddings
+    (PatternMergeDB.getCanonicalLogPatterns pid)
+    PatternMergeDB.assignLogsToCanonical
+    fetchTexts
 
 
-embedAndMerge :: Ord k => Projects.ProjectId -> Config.AuthContext -> Text -> [a]
-  -> (a -> Text) -> (a -> k)
-  -> ([(k, [Float])] -> ATBackgroundCtx Int64) -> ATBackgroundCtx [(k, [Float])]
-  -> ([(k, k)] -> ATBackgroundCtx Int64) -> ATBackgroundCtx (Map k Text)
+embedAndMerge
+  :: Ord k
+  => Projects.ProjectId
+  -> Config.AuthContext
+  -> Text
+  -> [a]
+  -> (a -> Text)
+  -> (a -> k)
+  -> ([(k, [Float])] -> ATBackgroundCtx Int64)
+  -> ATBackgroundCtx [(k, [Float])]
+  -> ([(k, k)] -> ATBackgroundCtx Int64)
+  -> ATBackgroundCtx (Map k Text)
   -> ATBackgroundCtx ()
 embedAndMerge pid ctx label items itemText toId updateEmbs getCentroids assignCanonical fetchTexts = unless (null items) do
   let docs = map (\item -> Langchain.DocumentLoader.Core.Document (toLazy $ itemText item) mempty) items
@@ -1601,10 +1631,11 @@ embedAndMerge pid ctx label items itemText toId updateEmbs getCentroids assignCa
 
 
 embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
-embeddingConfig ctx = Langchain.Embeddings.OpenAI.defaultOpenAIEmbeddings
-  { Langchain.Embeddings.OpenAI.apiKey = ctx.config.openaiApiKey
-  , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (T.unpack ctx.config.openaiBaseUrl)
-  }
+embeddingConfig ctx =
+  Langchain.Embeddings.OpenAI.defaultOpenAIEmbeddings
+    { Langchain.Embeddings.OpenAI.apiKey = ctx.config.openaiApiKey
+    , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (T.unpack ctx.config.openaiBaseUrl)
+    }
 
 
 -- | Get access token for GitHub sync (either PAT or GitHub App installation token)

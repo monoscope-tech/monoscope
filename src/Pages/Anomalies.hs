@@ -57,19 +57,19 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField)
 import Lucid
-import Lucid.Base (TermRaw (termRaw))
 import Lucid.Aria qualified as Aria
+import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
-import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (sourceFieldLabel)
 import Models.Apis.Monitors qualified as Monitors
+import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
@@ -1386,11 +1386,16 @@ errorGroupMembersGetH pid errorId = do
             div_ [class_ "flex flex-col gap-1 min-w-0"] do
               span_ [class_ "text-sm font-medium text-textStrong truncate"] $ toHtml $ member.errorType <> ": " <> member.message
               span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Hash: " <> member.hash
-            button_ [ class_ "btn btn-xs btn-ghost tap-target", Aria.label_ "Unmerge pattern"
-                    , hxPost_ unmergeUrl, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML"
-                    ] do
-              faSprite_ "code-branch" "regular" "w-3 h-3"
-              "Unmerge"
+            button_
+              [ class_ "btn btn-xs btn-ghost tap-target"
+              , Aria.label_ "Unmerge pattern"
+              , hxPost_ unmergeUrl
+              , hxTarget_ $ "#member-" <> memberId
+              , hxSwap_ "outerHTML"
+              ]
+              do
+                faSprite_ "code-branch" "regular" "w-3 h-3"
+                "Unmerge"
 
 
 errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
@@ -1404,6 +1409,10 @@ similarPatternsSection_ :: Projects.ProjectId -> ErrorPatterns.ErrorPatternId ->
 similarPatternsSection_ pid errorId = do
   let errorIdText = UUID.toText errorId.unErrorPatternId
       groupUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> errorIdText <> "/group_members"
-  div_ [ hxGet_ groupUrl, hxTrigger_ "load", hxSwap_ "innerHTML"
-       , id_ $ "similar-patterns-" <> errorIdText
-       ] pass
+  div_
+    [ hxGet_ groupUrl
+    , hxTrigger_ "load"
+    , hxSwap_ "innerHTML"
+    , id_ $ "similar-patterns-" <> errorIdText
+    ]
+    pass
