@@ -603,7 +603,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           void $ createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.singleton pid) now
 
       -- Build preload URL using the same function that builds the JSON URLs
-      let preloadUrl = LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
+      let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
           -- Also preload the chart data request
           chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
           headContent = Just $ do

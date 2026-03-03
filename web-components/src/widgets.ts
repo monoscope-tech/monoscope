@@ -67,6 +67,14 @@ const updateChartConfiguration = (widgetData: WidGetData, opt: any, data: any) =
     opt.legend.data = cols;
   }
 
+  // Merge threshold markLines into first series to avoid a second setOption call
+  const thresholds: Record<string, number> = {};
+  if (widgetData.alertThreshold != null && !isNaN(widgetData.alertThreshold)) thresholds.alert = widgetData.alertThreshold;
+  if (widgetData.warningThreshold != null && !isNaN(widgetData.warningThreshold)) thresholds.warning = widgetData.warningThreshold;
+  if (Object.keys(thresholds).length > 0 && opt.series?.length) {
+    opt.series[0].markLine = { silent: true, symbol: 'none', data: createThresholdMarkLines(thresholds) };
+  }
+
   return opt;
 };
 
@@ -205,6 +213,8 @@ type WidGetData = {
   queryAST: string;
   legendPosition?: string;
   unit?: string;
+  alertThreshold?: number | null;
+  warningThreshold?: number | null;
 };
 
 // Global resize queue to batch chart resize operations

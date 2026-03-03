@@ -753,6 +753,8 @@ renderChart widget = do
             let wType = decodeUtf8 $ AE.encode widget.wType
             let legendPos = fromMaybe "bottom" widget.legendPosition
             let widgetUnit = maybeToMonoid widget.unit
+            let alertThresholdJS = maybe "null" show widget.alertThreshold
+            let warningThresholdJS = maybe "null" show widget.warningThreshold
             script_
               [type_ "text/javascript"]
               [text|
@@ -773,7 +775,9 @@ renderChart widget = do
                   summarizeBy: '${summarizeBy}',
                   summarizeByPrefix: '${summarizeByPfx}',
                   legendPosition: "${legendPos}",
-                  unit: "${widgetUnit}"
+                  unit: "${widgetUnit}",
+                  alertThreshold: ${alertThresholdJS},
+                  warningThreshold: ${warningThresholdJS}
                 };
 
                 // Function to initialize this specific widget
@@ -813,21 +817,7 @@ renderChart widget = do
                   }
                   
                   window.bindFunctionsToObjects(echartOpt, echartOpt);
-                  window.chartWidget({
-                    chartType: config.chartType,
-                    widgetType: config.widgetType,
-                    opt: echartOpt,
-                    chartId: config.chartId,
-                    query: config.query,
-                    querySQL: config.querySQL,
-                    theme: config.theme,
-                    yAxisLabel: config.yAxisLabel,
-                    pid: config.pid,
-                    summarizeBy: config.summarizeBy,
-                    summarizeByPrefix: config.summarizeByPrefix,
-                    legendPosition: config.legendPosition,
-                    unit: config.unit
-                  });
+                  window.chartWidget({ ...config, opt: echartOpt });
                 }
 
                 // Initialize on page load

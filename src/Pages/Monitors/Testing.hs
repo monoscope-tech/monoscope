@@ -552,7 +552,7 @@ monitorHistoryTab_ pid alertId = do
 -- | Alert sidebar with key details in a bordered card
 alertSidebar_ :: Text -> Monitors.QueryMonitorEvaled -> UTCTime -> Html ()
 alertSidebar_ displayName alert currTime = do
-  div_ [class_ "w-72 shrink-0 border border-strokeWeak rounded-lg divide-y divide-strokeWeak"] do
+  div_ [class_ "w-78 shrink-0 border border-strokeWeak rounded-lg divide-y divide-strokeWeak"] do
     sidebarItem_ "Status" $ statusBadge_ True displayName
     sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.evalResult
     sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textWeak overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
