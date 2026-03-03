@@ -124,9 +124,9 @@ data UpsertPattern = UpsertPattern
   deriving anyclass (ToRow)
 
 
--- | Get all log patterns for a project
+-- | Get all log patterns for a project (excludes merged patterns)
 getLogPatterns :: DB es => Projects.ProjectId -> Int -> Int -> Eff es [LogPattern]
-getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |]] <> " ORDER BY last_seen_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
+getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |]] <> " AND canonical_id IS NULL ORDER BY last_seen_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
 
 
 -- | All pattern templates for a source field, used to seed Drain trees.

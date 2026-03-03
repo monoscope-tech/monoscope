@@ -174,11 +174,11 @@ data ATError = ATError
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
--- | Get error patterns for a project with optional state filter
+-- | Get error patterns for a project with optional state filter (excludes merged patterns)
 getErrorPatterns :: DB es => Projects.ProjectId -> Maybe ErrorState -> Int -> Int -> Eff es [ErrorPattern]
 getErrorPatterns pid mstate limit offset = case mstate of
-  Nothing -> PG.query (_selectWhere @ErrorPattern [[field| project_id |]] <> " ORDER BY updated_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
-  Just st -> PG.query (_selectWhere @ErrorPattern [[field| project_id |], [field| state |]] <> " ORDER BY updated_at DESC LIMIT ? OFFSET ?") (pid, st, limit, offset)
+  Nothing -> PG.query (_selectWhere @ErrorPattern [[field| project_id |]] <> " AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
+  Just st -> PG.query (_selectWhere @ErrorPattern [[field| project_id |], [field| state |]] <> " AND canonical_id IS NULL ORDER BY updated_at DESC LIMIT ? OFFSET ?") (pid, st, limit, offset)
 
 
 -- | Get error pattern by ID

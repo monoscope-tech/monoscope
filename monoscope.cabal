@@ -60,6 +60,17 @@ extra-source-files:
     static/migrations/0032_log_patterns.sql
     static/migrations/0033_error.sql
     static/migrations/0034_drop_request_dumps.sql
+    static/migrations/0035_monitor_muted_at.sql
+    static/migrations/0036_monitor_muted_until.sql
+    static/migrations/0037_monitor_renotify_config.sql
+    static/migrations/0038_cleanup_dead_background_jobs.sql
+    static/migrations/0039_drop_error_triggers.sql
+    static/migrations/0040_clear_stale_queued_jobs.sql
+    static/migrations/0041_error_pattern_regression_fixes.sql
+    static/migrations/0042_issue_activity_log.sql
+    static/migrations/0043_error_pattern_auto_resolve_trigger.sql
+    static/migrations/0044_sentry_aligned_thresholds.sql
+    static/migrations/0045_pattern_embeddings.sql
 
 source-repository head
   type: git
@@ -89,6 +100,7 @@ library
       Models.Apis.LogPatterns
       Models.Apis.LogQueries
       Models.Apis.Monitors
+      Models.Apis.PatternMerge
       Models.Apis.Shapes
       Models.Projects.Dashboards
       Models.Projects.GitSync
@@ -138,6 +150,7 @@ library
       Pkg.Parser
       Pkg.Parser.Expr
       Pkg.Parser.Stats
+      Pkg.PatternMerge
       Pkg.QueryCache
       Pkg.Queue
       Pkg.TestUtils

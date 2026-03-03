@@ -2,7 +2,7 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
-import Control.Lens (view, (.~), _3)
+import Control.Lens (view, (.~), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
@@ -51,6 +51,7 @@ import Models.Apis.Integrations (PagerdutyData (..), getPagerdutyByProjectId)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.Shapes qualified as Shapes
@@ -73,7 +74,12 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
+import Data.Effectful.LLM qualified as ELLM
+import Langchain.DocumentLoader.Core qualified
+import Langchain.Embeddings.Core qualified
+import Langchain.Embeddings.OpenAI qualified
 import Pkg.Drain qualified as Drain
+import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.EmailTemplates qualified as ET
 import Pkg.GitHub qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
@@ -128,6 +134,7 @@ data BgJobs
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
+  | PatternEmbeddingAndMerge Projects.ProjectId
   | MonoscopeAdminDaily
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -384,6 +391,7 @@ processBackgroundJob authCtx bgJob =
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
+    PatternEmbeddingAndMerge pid -> patternEmbeddingAndMerge pid
     LogPatternPeriodicProcessing scheduledTime pid ->
       unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
         $ tryLog "detectLogPatternSpikes"
@@ -593,6 +601,7 @@ runHourlyJob scheduledTime hour = do
     forM_ activeProjects \pid -> do
       void $ createJob conn "background_jobs" $ ErrorBaselineCalculation pid
       void $ createJob conn "background_jobs" $ ErrorSpikeDetection pid
+      void $ createJob conn "background_jobs" $ PatternEmbeddingAndMerge pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -1527,6 +1536,75 @@ enhanceIssuesWithLLM pid issueIds = do
                     Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
                 Log.logInfo "Successfully enhanced issue" issueId
+
+
+patternEmbeddingAndMerge :: Projects.ProjectId -> ATBackgroundCtx ()
+patternEmbeddingAndMerge pid = do
+  ctx <- ask @Config.AuthContext
+  if T.null ctx.config.openaiApiKey
+    then Log.logAttention "OpenAI API key not configured, skipping pattern embedding" pid
+    else do
+      tryLog "errorPatternEmbedding" $ embedAndMergeErrors pid ctx
+      tryLog "logPatternEmbedding" $ embedAndMergeLogPatterns pid ctx
+
+
+embedAndMergeErrors :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+embedAndMergeErrors pid ctx = do
+  unembedded <- PatternMergeDB.getUnembeddedErrorPatterns pid
+  let fetchTexts = Map.fromList . map (\(eid, et, msg) -> (eid, PatternMerge.embeddingTextForError et msg))
+        <$> (PG.query [sql| SELECT id, error_type, message FROM apis.error_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
+            :: ATBackgroundCtx [(ErrorPatterns.ErrorPatternId, Text, Text)])
+  embedAndMerge pid ctx "error" unembedded
+    (\(_, et, msg) -> PatternMerge.embeddingTextForError et msg) (view _1)
+    PatternMergeDB.updateErrorEmbeddings (PatternMergeDB.getCanonicalErrorPatterns pid) PatternMergeDB.assignErrorsToCanonical fetchTexts
+
+
+embedAndMergeLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
+embedAndMergeLogPatterns pid ctx = do
+  unembedded <- PatternMergeDB.getUnembeddedLogPatterns pid
+  let fetchTexts = Map.fromList
+        <$> (PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
+            :: ATBackgroundCtx [(LogPatterns.LogPatternId, Text)])
+  embedAndMerge pid ctx "log" unembedded snd fst
+    PatternMergeDB.updateLogEmbeddings (PatternMergeDB.getCanonicalLogPatterns pid) PatternMergeDB.assignLogsToCanonical fetchTexts
+
+
+embedAndMerge :: Ord k => Projects.ProjectId -> Config.AuthContext -> Text -> [a]
+  -> (a -> Text) -> (a -> k)
+  -> ([(k, [Float])] -> ATBackgroundCtx Int64) -> ATBackgroundCtx [(k, [Float])]
+  -> ([(k, k)] -> ATBackgroundCtx Int64) -> ATBackgroundCtx (Map k Text)
+  -> ATBackgroundCtx ()
+embedAndMerge pid ctx label items itemText toId updateEmbs getCentroids assignCanonical fetchTexts = unless (null items) do
+  let docs = map (\item -> Langchain.DocumentLoader.Core.Document (toLazy $ itemText item) mempty) items
+  embedResult <- liftIO $ Langchain.Embeddings.Core.embedDocuments (embeddingConfig ctx) docs
+  case embedResult of
+    Left err -> Log.logAttention ("Failed to embed " <> label <> " patterns") (pid, show err)
+    Right embeddingsList -> do
+      void $ updateEmbs $ zipWith (\item emb -> (toId item, emb)) items embeddingsList
+      centroids <- getCentroids
+      let newWithEmbs = zip (map toId items) embeddingsList
+          (autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
+      void $ assignCanonical autoMerges
+      unless (null ambiguous) do
+        textMap <- fetchTexts
+        let pairs = mapMaybe (\(newId, canId) -> (,) <$> Map.lookup newId textMap <*> Map.lookup canId textMap) ambiguous
+            prompt = PatternMerge.buildJudgePrompt pairs
+        unless (null pairs) do
+          judgeResult <- ELLM.callLLM prompt ctx.config.openaiApiKey
+          case judgeResult of
+            Left err -> Log.logAttention ("LLM judge failed for " <> label <> " patterns") (pid, err)
+            Right response -> do
+              let decisions = PatternMerge.parseJudgeResponse response
+                  ambiguousV = V.fromList ambiguous
+                  merges = mapMaybe (\(idx, shouldMerge) -> bool Nothing (ambiguousV V.!? idx) shouldMerge) decisions
+              void $ assignCanonical merges
+
+
+embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
+embeddingConfig ctx = Langchain.Embeddings.OpenAI.defaultOpenAIEmbeddings
+  { Langchain.Embeddings.OpenAI.apiKey = ctx.config.openaiApiKey
+  , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (T.unpack ctx.config.openaiBaseUrl)
+  }
 
 
 -- | Get access token for GitHub sync (either PAT or GitHub App installation token)

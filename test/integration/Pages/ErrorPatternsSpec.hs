@@ -10,10 +10,12 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Models.Apis.ErrorPatterns (ErrorState (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..))
+import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies qualified
@@ -614,3 +616,58 @@ spec = aroundAll withTestResources do
 
       -- Run all background jobs to verify they execute successfully
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+    it "12. Pattern merge assigns canonical_id and hides merged patterns" \tr -> do
+      -- Ensure we have 2+ patterns (create if needed from earlier tests or fresh)
+      apiKey <- createTestAPIKey tr pid "merge-test-key"
+      ingestTraceWithException tr apiKey "GET /merge-a" "MergeTestA" "merge error A" "MergeTestA\n    at a (/app/a.js:1:1)" (addUTCTime (-30) frozenTime)
+      ingestTraceWithException tr apiKey "GET /merge-b" "MergeTestB" "merge error B" "MergeTestB\n    at b (/app/b.js:1:1)" (addUTCTime (-20) frozenTime)
+      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid
+
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
+      let countBefore = length patterns
+      case patterns of
+        (p1 : p2 : _) -> do
+          -- Pre-set embeddings: p1 and p2 get identical vectors (cosine sim = 1.0)
+          let emb = [1.0, 0.0, 0.0] :: [Float]
+          withResource tr.trPool \conn -> forM_ [p1.id, p2.id] \eid ->
+            void $ PGS.execute conn
+              [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
+              (PGArray emb, eid)
+          -- Merge p2 into p1 (p1 becomes canonical)
+          void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(p2.id, p1.id)]
+          -- getErrorPatterns filters canonical_id IS NULL, so merged pattern disappears
+          patternsAfter <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
+          length patternsAfter `shouldBe` (countBefore - 1)
+          -- Verify canonical_id is set via direct SQL
+          [PGS.Only canonId] <- withResource tr.trPool \conn ->
+            PGS.query conn [sql| SELECT canonical_id FROM apis.error_patterns WHERE id = ? |] (PGS.Only p2.id)
+          (canonId :: Maybe ErrorPatterns.ErrorPatternId) `shouldBe` Just p1.id
+          -- Verify group membership
+          members <- runTestBg frozenTime tr $ PatternMerge.getErrorPatternGroupMembers p1.id
+          length members `shouldSatisfy` (>= 1)
+        _ -> expectationFailure "need 2+ patterns for merge test"
+
+    it "12a. Unmerge override restores pattern and prevents re-merging" \tr -> do
+      -- Find a merged pattern (canonical_id IS NOT NULL) from test 12
+      merged <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT id, canonical_id FROM apis.error_patterns WHERE project_id = ? AND canonical_id IS NOT NULL LIMIT 1 |]
+          (PGS.Only pid) :: IO [(ErrorPatterns.ErrorPatternId, ErrorPatterns.ErrorPatternId)]
+      case merged of
+        ((mergedId, _canonId) : _) -> do
+          patternsBefore <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
+          -- Unmerge
+          void $ runTestBg frozenTime tr $ PatternMerge.unmergeErrorPattern mergedId
+          -- Pattern reappears in getErrorPatterns (canonical_id = NULL)
+          patternsAfter <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
+          length patternsAfter `shouldBe` (length patternsBefore + 1)
+          -- Verify merge_override = TRUE prevents re-embedding
+          unembedded <- runTestBg frozenTime tr $ PatternMerge.getUnembeddedErrorPatterns pid
+          let unembeddedIds = map (\(eid, _, _) -> eid) unembedded
+          mergedId `shouldSatisfy` (`notElem` unembeddedIds)
+          -- Verify merge_override = TRUE excludes from canonical candidates
+          canonicals <- runTestBg frozenTime tr $ PatternMerge.getCanonicalErrorPatterns pid
+          let canonicalIds = map fst canonicals
+          mergedId `shouldSatisfy` (`notElem` canonicalIds)
+        [] -> expectationFailure "no merged patterns found (test 12 may have failed)"

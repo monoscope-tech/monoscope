@@ -311,6 +311,8 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , aiChatPost :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> ReqBody '[FormUrlEncoded] AnomalyList.AIChatForm :> Post '[HTML] (RespHeaders (Html ()))
   , aiChatHistoryGet :: mode :- Capture "issueID" Anomalies.IssueId :> "ai_chat" :> "history" :> Get '[HTML] (RespHeaders (Html ()))
   , activityGet :: mode :- Capture "issueID" Anomalies.IssueId :> "activity" :> Get '[HTML] (RespHeaders (Html ()))
+  , errorGroupMembersGet :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "group_members" :> Get '[HTML] (RespHeaders (Html ()))
+  , errorUnmergePost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "unmerge" :> Post '[HTML] (RespHeaders (Html ()))
   }
   deriving stock (Generic)
 
@@ -549,6 +551,8 @@ anomaliesServer pid =
     , aiChatPost = AnomalyList.aiChatPostH pid
     , aiChatHistoryGet = AnomalyList.aiChatHistoryGetH pid
     , activityGet = AnomalyList.issueActivityGetH pid
+    , errorGroupMembersGet = AnomalyList.errorGroupMembersGetH pid
+    , errorUnmergePost = AnomalyList.errorUnmergePostH pid
     }
 
 

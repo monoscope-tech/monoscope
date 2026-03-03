@@ -26,6 +26,9 @@ module Pages.Anomalies (
   aiChatHistoryGetH,
   -- Activity
   issueActivityGetH,
+  -- Pattern group members
+  errorGroupMembersGetH,
+  errorUnmergePostH,
 )
 where
 
@@ -55,11 +58,13 @@ import Effectful.Time qualified as Time
 import GHC.Records (HasField)
 import Lucid
 import Lucid.Base (TermRaw (termRaw))
+import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
+import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Issues
@@ -335,6 +340,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
                     , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
                     ]
                     detailItem
+              similarPatternsSection_ pid err.id
           Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
             div_ [class_ "mb-4"] do
               span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
@@ -1361,3 +1367,43 @@ eventDisplay = \case
   Issues.IEUnassigned -> ("user-minus", "bg-fillWeaker text-textWeak", "Unassigned")
   Issues.IEAutoResolved -> ("wand-magic-sparkles", "bg-fillSuccess-weak text-fillSuccess-strong", "Auto-resolved")
   Issues.IEEscalated -> ("arrow-up", "bg-fillError-weak text-fillError-strong", "Escalated")
+
+
+errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+errorGroupMembersGetH pid errorId = do
+  members <- PatternMerge.getErrorPatternGroupMembers (ErrorPatternId errorId)
+  addRespHeaders $ unless (null members) do
+    div_ [class_ "surface-raised rounded-2xl overflow-hidden mt-4"] do
+      div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+        faSprite_ "layer-group" "regular" "w-4 h-4 text-iconNeutral"
+        span_ [class_ "text-sm font-medium text-textStrong"] "Similar Patterns"
+        span_ [class_ "badge badge-sm badge-ghost tabular-nums"] $ toHtml $ show (length members) <> " merged"
+      div_ [class_ "p-4 flex flex-col gap-2"] do
+        forM_ members \member -> do
+          let memberId = UUID.toText member.id.unErrorPatternId
+              unmergeUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> memberId <> "/unmerge"
+          div_ [class_ "flex items-center justify-between p-3 bg-fillWeaker rounded-lg", id_ $ "member-" <> memberId] do
+            div_ [class_ "flex flex-col gap-1 min-w-0"] do
+              span_ [class_ "text-sm font-medium text-textStrong truncate"] $ toHtml $ member.errorType <> ": " <> member.message
+              span_ [class_ "text-xs text-textWeak"] $ toHtml $ "Hash: " <> member.hash
+            button_ [ class_ "btn btn-xs btn-ghost tap-target", Aria.label_ "Unmerge pattern"
+                    , hxPost_ unmergeUrl, hxTarget_ $ "#member-" <> memberId, hxSwap_ "outerHTML"
+                    ] do
+              faSprite_ "code-branch" "regular" "w-3 h-3"
+              "Unmerge"
+
+
+errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
+errorUnmergePostH _pid errorId = do
+  void $ PatternMerge.unmergeErrorPattern (ErrorPatternId errorId)
+  addSuccessToast "Pattern unmerged" Nothing
+  addRespHeaders $ div_ [class_ "p-3 bg-fillSuccess-weak rounded-lg text-sm text-fillSuccess-strong"] "Pattern unmerged successfully"
+
+
+similarPatternsSection_ :: Projects.ProjectId -> ErrorPatterns.ErrorPatternId -> Html ()
+similarPatternsSection_ pid errorId = do
+  let errorIdText = UUID.toText errorId.unErrorPatternId
+      groupUrl = "/p/" <> pid.toText <> "/anomalies/errors/" <> errorIdText <> "/group_members"
+  div_ [ hxGet_ groupUrl, hxTrigger_ "load", hxSwap_ "innerHTML"
+       , id_ $ "similar-patterns-" <> errorIdText
+       ] pass
