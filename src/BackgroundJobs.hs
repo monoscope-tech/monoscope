@@ -787,7 +787,7 @@ processBatch isSummary batch now initial = Drain.buildDrainTree tokenize logId s
 -- processing delays and ensure no errors are missed.
 processOneMinuteErrors :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
 processOneMinuteErrors scheduledTime pid = do
-  Log.logInfo "Starting 1-minute error processing for project" ("project_id", AE.toJSON pid.toText)
+  Log.logTrace "Starting 1-minute error processing for project" ("project_id", AE.toJSON pid.toText)
   ctx <- ask @Config.AuthContext
   -- This processing might happen before the spans within the timestamp are stored in db
   -- hence will be missed and never get processed
