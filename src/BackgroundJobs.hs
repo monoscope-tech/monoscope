@@ -353,18 +353,18 @@ processBackgroundJob authCtx bgJob =
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
     ReportUsage pid -> whenJustM (Projects.projectById pid) \project -> do
-      Log.logInfo "Reporting usage for project" ("project_id", pid.toText)
+      Log.logTrace "Reporting usage for project" ("project_id", pid.toText)
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
         currentTime <- liftIO getZonedTime
         totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
         totalMetricsCount <- Telemetry.getTotalMetricsCount pid project.usageLastReported
-        Log.logInfo "Total events to report" ("events_count", totalToReport + totalMetricsCount)
+        Log.logTrace "Total events to report" ("events_count", totalToReport + totalMetricsCount)
         let totalUsage = totalToReport + totalMetricsCount
         Relude.when (totalUsage > 0) do
           liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
           void $ Projects.addDailyUsageReport pid totalUsage
           void $ Projects.updateUsageLastReported pid currentTime
-      Log.logInfo "Completed usage report for project" ("project_id", pid.toText)
+      Log.logTrace "Completed usage report for project" ("project_id", pid.toText)
     CleanupDemoProject -> do
       let pid = UUIDId UUID.nil
       void $ PG.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
@@ -576,7 +576,7 @@ runHourlyJob scheduledTime hour = do
         (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
-  Log.logInfo "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
+  Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
 
   -- Batch projects in groups of 10 (reduced from 100 to prevent timeouts)
   let batchSize = 10
@@ -602,14 +602,14 @@ runHourlyJob scheduledTime hour = do
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
 
-  Log.logInfo "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
+  Log.logTrace "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
 
 
 -- | Batch process facets generation for multiple projects using 24-hour window
 -- Processes projects concurrently with individual error handling to prevent batch failures
 generateOtelFacetsBatch :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
-  Log.logInfo "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
+  Log.logTrace "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 
   -- Process projects concurrently with individual error handling
   results <- Ki.scoped \scope -> do
@@ -637,7 +637,7 @@ generateOtelFacetsBatch projectIds timestamp = do
   let successes = V.length $ V.filter isRight results
       failures = V.length $ V.filter isLeft results
 
-  Log.logInfo "Completed batch OTLP facets generation"
+  Log.logTrace "Completed batch OTLP facets generation"
     $ AE.object
       [ "total_projects" AE..= V.length projectIds
       , "successes" AE..= successes
@@ -663,7 +663,7 @@ processFiveMinuteSpans scheduledTime pid = do
   let fiveMinutesAgo = addUTCTime (-300) scheduledTime
   Relude.when ctx.config.enableEventsTableUpdates $ do
     processSpansWithPagination fiveMinutesAgo 0
-  Log.logInfo "Completed 5-minute span processing" ()
+  Log.logTrace "Completed 5-minute span processing" ()
   where
     perPage = 250
     processSpansWithPagination :: UTCTime -> Int -> ATBackgroundCtx ()
@@ -694,7 +694,7 @@ logsPatternExtraction scheduledTime pid = do
     let startTime = addUTCTime (-300) scheduledTime
     extractSummaryPatterns tfEnabled startTime
     extractFieldPatterns tfEnabled startTime
-  Log.logInfo "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
+  Log.logTrace "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
   where
     limitVal = 250
     sourceField = "summary" :: Text
@@ -836,7 +836,7 @@ processOneMinuteErrors scheduledTime pid = do
             (pid, oneMinuteAgo, scheduledTime, skip)
       -- Only log if there are actually errors to process (reduces noise in tests)
       Relude.when (V.length spansWithErrors > 0)
-        $ Log.logInfo "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
+        $ Log.logTrace "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
       let allErrors = Telemetry.getAllATErrors spansWithErrors
       -- Group errors by (traceId, spanId) — must sort first since V.groupBy only groups consecutive elements
       let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
@@ -977,7 +977,7 @@ processProjectErrors pid errors now = do
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
     Right newOrRegressed -> do
       unless (V.null errors)
-        $ Log.logInfo "Successfully inserted errors for project"
+        $ Log.logTrace "Successfully inserted errors for project"
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
       forM_ newOrRegressed \(errorHash, errState) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
@@ -1447,7 +1447,7 @@ processIssuesEnhancement scheduledTime = do
               LIMIT 100 |]
         (oneHourAgo, scheduledTime)
 
-  Log.logInfo "Found issues to enhance with LLM" (V.length issuesToEnhance)
+  Log.logTrace "Found issues to enhance with LLM" (V.length issuesToEnhance)
 
   -- Group issues by project (SQL already sorts by project_id, but sort defensively for V.groupBy)
   let issuesByProject = V.groupBy (\a b -> snd a == snd b) $ V.modify (VA.sortBy (comparing snd)) issuesToEnhance
@@ -1864,7 +1864,7 @@ spikeMinAbsoluteDelta = 50 -- avoids alerting on tiny volumes (e.g. 20→35/hr)
 -- Uses hourly counts over the last 48 hours
 calculateLogPatternBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateLogPatternBaselines pid = do
-  Log.logInfo "Calculating log pattern baselines" pid
+  Log.logTrace "Calculating log pattern baselines" pid
   now <- Time.currentTime
   allStats <- LogPatterns.getBatchPatternStats pid now baselineWindowHours
   let statsMap = HM.fromList $ map (\s -> ((s.sourceField, s.patternHash), s)) allStats
@@ -1883,7 +1883,7 @@ calculateLogPatternBaselines pid = do
           then go (offset + baselinePageSize) newTotal newEstablished
           else pure (newTotal, newEstablished)
   (total, established) <- go 0 0 0
-  Log.logInfo "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
+  Log.logTrace "Finished calculating log pattern baselines" ("patterns" :: Text, total, "established" :: Text, established)
 
 
 -- | Pure spike/drop detection for a single pattern.
@@ -1903,7 +1903,7 @@ detectSpikeOrDrop zThreshold minDelta mean mad currentCount
 -- Projects partial-hour counts to hourly rate for sub-hourly detection.
 detectLogPatternSpikes :: Projects.ProjectId -> UTCTime -> Config.AuthContext -> ATBackgroundCtx ()
 detectLogPatternSpikes pid scheduledTime authCtx = do
-  Log.logInfo "Detecting log pattern spikes" pid
+  Log.logTrace "Detecting log pattern spikes" pid
   let totalSecs = truncate (utctDayTime scheduledTime) :: Int
       minutesIntoHour = max 15 $ (totalSecs `mod` 3600) `div` 60
       scaleFactor = 60.0 / fromIntegral minutesIntoHour :: Double
@@ -1927,7 +1927,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
     pure issue.id
   unless (null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
     void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.fromList issueIds)
-  Log.logInfo "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalies)
+  Log.logTrace "Finished log pattern spike detection" ("checked" :: Text, length patternsWithRates, "anomalies" :: Text, length anomalies)
 
 
 -- | Batch-process all state='new' log patterns for a project.
@@ -1964,15 +1964,15 @@ pruneStaleLogPatterns pid = do
   pruned <- LogPatterns.pruneStalePatterns pid now stalePatternDays
   statsPruned <- LogPatterns.pruneOldHourlyStats pid now (baselineWindowHours + 24)
   Relude.when (autoAcked > 0 || pruned > 0 || statsPruned > 0)
-    $ Log.logInfo "Pruned stale log patterns and old stats" (pid, "autoAcked" :: Text, autoAcked, "pruned" :: Text, pruned, "statsPruned" :: Text, statsPruned)
+    $ Log.logTrace "Pruned stale log patterns and old stats" (pid, "autoAcked" :: Text, autoAcked, "pruned" :: Text, pruned, "statsPruned" :: Text, statsPruned)
 
 
 calculateErrorBaselines :: Projects.ProjectId -> ATBackgroundCtx ()
 calculateErrorBaselines pid = do
   now <- Time.currentTime
-  Log.logInfo "Calculating error baselines" pid
+  Log.logTrace "Calculating error baselines" pid
   updated <- ErrorPatterns.bulkCalculateAndUpdateBaselines pid now
-  Log.logInfo "Finished calculating error baselines" (pid, updated)
+  Log.logTrace "Finished calculating error baselines" (pid, updated)
 
 
 -- | Detect error spikes and create issues
@@ -1980,7 +1980,7 @@ calculateErrorBaselines pid = do
 detectErrorSpikes :: Projects.ProjectId -> ATBackgroundCtx ()
 detectErrorSpikes pid = do
   now <- Time.currentTime
-  Log.logInfo "Detecting error spikes" pid
+  Log.logTrace "Detecting error spikes" pid
 
   -- Get all errors with their current hour counts in one query
   errorsWithRates <- ErrorPatterns.getErrorPatternsWithCurrentRates pid now
@@ -2004,7 +2004,7 @@ detectErrorSpikes pid = do
               $ void
               $ ErrorPatterns.updateErrorPatternState errRate.errorId ErrorPatterns.ESOngoing now
       _ -> pass -- Skip errors without established baseline
-  Log.logInfo "Finished error spike detection" pid
+  Log.logTrace "Finished error spike detection" pid
 
 
 -- | Insert an issue, queue LLM enhancement, and send alerts to all channels.
