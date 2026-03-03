@@ -2016,5 +2016,3 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
     (finalSlackTs, finalDiscordMsgId) <-
       sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
     void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
-
-
