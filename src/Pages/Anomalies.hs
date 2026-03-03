@@ -1100,7 +1100,8 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
               link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css"), media_ "screen", id_ "hljs-dark"]
               script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
               script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
-              script_ """
+              script_
+                """
                 function setHljsTheme() {
                   const dark = document.body.getAttribute('data-theme') === 'dark';
                   document.getElementById('hljs-light').disabled = dark;
@@ -1109,7 +1110,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                 function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
                 document.addEventListener('DOMContentLoaded', () => { setHljsTheme(); highlightSnippets(document); });
                 document.addEventListener('htmx:afterSettle', e => highlightSnippets(e.detail.elt));
-              """
+                """
           , navTabs =
               Just
                 $ toHtml
