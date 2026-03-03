@@ -37,6 +37,7 @@ module Pkg.Components.Table (
 import Data.Default (Default (..))
 import Data.List (lookup)
 import Data.Text qualified as T
+import Data.Text.Lazy qualified as TL
 import Data.Vector qualified as V
 import GHC.Records (HasField (getField))
 import Lucid
@@ -349,7 +350,7 @@ renderTable tbl =
   let tableContent = div_ [class_ $ tbl.config.containerClasses <> " pb-24", id_ $ tbl.config.elemID <> "_page"] do
         whenJust tbl.features.search $ renderSearch tbl.config.elemID
         whenJust tbl.features.header id
-        div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-raised", id_ $ tbl.config.elemID <> "_grid"] do
+        div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           let divCls = if tbl.config.noDividers then "" else " divide-y"
           form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
@@ -788,7 +789,7 @@ col :: Text -> (a -> Html ()) -> Column a
 col name render =
   Column
     { name = name
-    , render = render
+    , render = \row -> let content = render row in if TL.null (TL.strip $ renderText content) then span_ [class_ "text-textDisabled"] "-" else content
     , attrs = []
     , sortField = Nothing
     , align = Nothing

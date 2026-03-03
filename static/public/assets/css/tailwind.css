@@ -1608,6 +1608,20 @@ code, pre, .code, .monospace {
       0 4px 12px -4px rgba(0 0 0 / 0.3);
   }
 
+  /* Like surface-raised but transparent — border, radius, and shadow only */
+  .surface-table {
+    @apply border border-strokeWeak rounded-xl;
+    box-shadow:
+      0 2px 8px -2px rgba(0 0 0 / 0.08),
+      0 4px 12px -4px rgba(0 0 0 / 0.04);
+  }
+
+  [data-theme="dark"] .surface-table {
+    box-shadow:
+      0 2px 8px -2px rgba(0 0 0 / 0.4),
+      0 4px 12px -4px rgba(0 0 0 / 0.3);
+  }
+
   :root {
     --fallback-b2: var(--color-fillWeak); /* bg-fillWeak*/
     --tab-color: var(--color-textWeak); /* tab text color textWeak */
