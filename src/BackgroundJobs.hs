@@ -1,4 +1,4 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, processNewError, notifyErrorSubscriptions) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -127,7 +127,6 @@ data BgJobs
   | LogPatternHourlyProcessing UTCTime Projects.ProjectId
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
-  | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
   | MonoscopeAdminDaily
   deriving stock (Generic, Show)
@@ -379,7 +378,6 @@ processBackgroundJob authCtx bgJob =
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
-    NewErrorDetected pid errorHash -> processNewError pid errorHash
     LogPatternPeriodicProcessing scheduledTime pid ->
       tryLog "detectLogPatternSpikes" $ detectLogPatternSpikes pid scheduledTime authCtx
     LogPatternHourlyProcessing _scheduledTime pid -> do
@@ -915,62 +913,74 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
 notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
   ctx <- ask @Config.AuthContext
-  now <- Time.currentTime
-  dueErrors :: [ErrorSubscriptionDue] <-
-    PG.query
-      [sql|
-        SELECT DISTINCT ON (e.id)
-               e.id, e.error_data, e.state, i.id, i.title,
-               e.slack_thread_ts, e.discord_message_id
-        FROM apis.error_patterns e
-        JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
-        WHERE e.project_id = ?
-          AND e.hash = ANY(?::text[])
-          AND e.subscribed = TRUE
-          AND e.state != 'resolved'
-          AND i.issue_type = ? -- error patterns always create RuntimeException issues; alert type derives from error state
-          AND (
-            e.last_notified_at IS NULL
-            OR ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute')
-          )
-        ORDER BY e.id, i.created_at DESC
-      |]
-      (pid, errorHashes, Issues.RuntimeException, now)
-  unless (null dueErrors) do
-    Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
-    projectM <- Projects.projectById pid
-    whenJust projectM \project -> Relude.when project.errorAlerts do
-      users <- Projects.usersByProjectId pid
-      let alertTypeForState = \case
-            ErrorPatterns.ESEscalating -> EscalatingErrors
-            ErrorPatterns.ESRegressed -> RegressedErrors
-            _ -> NewRuntimeError
-      results <- forConcurrently dueErrors \sub -> do
-        let alertType = alertTypeForState sub.errorState
-            alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType}
-            errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-            ~(subj, html) = case alertType of
-              EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData]
-              RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData]
-              _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData]
-        (finalSlackTs, finalDiscordMsgId) <-
-          sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
-        pure (sub.errorId, finalSlackTs, finalDiscordMsgId)
-      forM_ results \(errorId, slackTs, discordMsgId) ->
-        void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorId slackTs discordMsgId now
+  Relude.unless ctx.config.pauseNotifications do
+    now <- Time.currentTime
+    dueErrors :: [ErrorSubscriptionDue] <-
+      PG.query
+        [sql|
+          SELECT DISTINCT ON (e.id)
+                 e.id, e.error_data, e.state, i.id, i.title,
+                 e.slack_thread_ts, e.discord_message_id
+          FROM apis.error_patterns e
+          JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
+          WHERE e.project_id = ?
+            AND e.hash = ANY(?::text[])
+            AND e.state != 'resolved'
+            AND i.issue_type = ? -- error patterns always create RuntimeException issues; alert type derives from error state
+            AND (
+              e.last_notified_at IS NULL
+              OR (e.subscribed = TRUE
+                  AND ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
+            )
+          ORDER BY e.id, i.created_at DESC
+        |]
+        (pid, errorHashes, Issues.RuntimeException, now)
+    unless (null dueErrors) do
+      Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
+      projectM <- Projects.projectById pid
+      whenJust projectM \project -> Relude.when project.errorAlerts do
+        users <- Projects.usersByProjectId pid
+        let alertTypeForState = \case
+              ErrorPatterns.ESEscalating -> EscalatingErrors
+              ErrorPatterns.ESRegressed -> RegressedErrors
+              _ -> NewRuntimeError
+        results <- forConcurrently dueErrors \sub -> do
+          let alertType = alertTypeForState sub.errorState
+              alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType}
+              errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
+              ~(subj, html) = case alertType of
+                EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData]
+                RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData]
+                _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData]
+          (finalSlackTs, finalDiscordMsgId) <-
+            sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
+          pure (sub.errorId, finalSlackTs, finalDiscordMsgId)
+        forM_ results \(errorId, slackTs, discordMsgId) ->
+          void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorId slackTs discordMsgId now
 
 
--- | Process and insert errors for a specific project (single batched round-trip via unnest)
+-- | Process and insert errors for a specific project (single batched round-trip via unnest).
+-- Creates issues synchronously for new/regressed errors.
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
 processProjectErrors pid errors now = do
   result <- try $ ErrorPatterns.batchUpsertErrorPatterns pid errors now
   case result of
     Left (e :: SomePostgreSqlException) ->
       Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
-    Right _ ->
+    Right newOrRegressed -> do
       unless (V.null errors)
         $ Log.logInfo "Successfully inserted errors for project"
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
+      forM_ newOrRegressed \(errorHash, errState) -> do
+        errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
+        whenJust errM \err -> do
+          let runtimeAlertType = bool NewRuntimeError RegressedErrors (errState == "regressed")
+          issue <- Issues.createNewErrorIssue pid err
+          Issues.insertIssue issue
+          authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+          liftIO $ withResource authCtx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+          Log.logInfo "Created issue for error" (pid, err.id, issue.id, show runtimeAlertType)
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
@@ -1366,7 +1376,7 @@ processAPIChangeAnomalies pid targetHashes = do
         pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
 
   -- Only send notifications for newly created issues
-  Relude.when (not (null newEndpointInfos)) do
+  Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do
     projectM <- Projects.projectById pid
     whenJust projectM \project -> do
       users <- Projects.usersByProjectId pid
@@ -1981,7 +1991,7 @@ detectErrorSpikes pid = do
 
 
 -- | Insert an issue, queue LLM enhancement, and send alerts to all channels.
--- Shared by detectErrorSpikes and processNewError.
+-- Shared by detectErrorSpikes and other error notification paths.
 createAndNotifyErrorIssue
   :: Projects.ProjectId
   -> Issues.Issue
@@ -2008,22 +2018,3 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
     void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
 
 
--- | Process a new error and create an issue
-processNewError :: Projects.ProjectId -> Text -> ATBackgroundCtx ()
-processNewError pid errorHash = do
-  Log.logInfo "Processing new error" (pid, errorHash)
-  errorM <- ErrorPatterns.getErrorPatternByHash pid errorHash
-  case errorM of
-    Nothing -> Log.logAttention "Error not found for new error processing" (pid, errorHash)
-    Just err -> do
-      let alertType = case err.state of
-            ErrorPatterns.ESNew -> Just NewRuntimeError
-            ErrorPatterns.ESRegressed -> Just RegressedErrors
-            _ -> Nothing
-      whenJust alertType \runtimeAlertType -> do
-        issue <- Issues.createNewErrorIssue pid err
-        let emailFn = case runtimeAlertType of
-              RegressedErrors -> ET.regressedErrorsEmail
-              _ -> ET.runtimeErrorsEmail
-        createAndNotifyErrorIssue pid issue runtimeAlertType err.errorData emailFn err.id (err.slackThreadTs, err.discordMessageId)
-        Log.logInfo "Created issue for error" (pid, err.id, issue.id, show runtimeAlertType)
