@@ -939,6 +939,8 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
               (e.last_notified_at IS NULL AND e.created_at >= ?::timestamptz - INTERVAL '60 minutes')
               OR (e.subscribed = TRUE
                   AND ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
+              OR (e.state = 'regressed'
+                  AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
             )
           ORDER BY e.id, i.created_at DESC
         |]
@@ -984,29 +986,33 @@ processProjectErrors pid errors now = do
         whenJust errM \err -> do
           if errState == "regressed"
             then do
-              -- Reopen existing issue instead of creating a new one
               existingM <- Issues.selectLatestIssueByHash pid errorHash
-              case existingM of
-                Just existing -> do
-                  Issues.reopenIssue existing.id
-                  Issues.logIssueActivity existing.id Issues.IERegressed Nothing Nothing
-                  Issues.logIssueActivity existing.id Issues.IEReopened Nothing Nothing
-                  Log.logInfo "Reopened issue for regressed error" (pid, err.id, existing.id)
-                Nothing -> do
-                  -- No existing issue found, create a new one
-                  issue <- Issues.createNewErrorIssue pid err
-                  Issues.insertIssue issue
-                  Issues.logIssueActivity issue.id Issues.IECreated Nothing Nothing
-                  Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id)
+              maybe
+                (do issue <- createIssueForError pid err
+                    Log.logInfo "Created new issue for regressed error (no prior issue)" (pid, err.id, issue.id))
+                (handleRegression pid err) existingM
             else do
-              -- New error: create issue and queue LLM enhancement
-              issue <- Issues.createNewErrorIssue pid err
-              Issues.insertIssue issue
-              Issues.logIssueActivity issue.id Issues.IECreated Nothing Nothing
+              issue <- createIssueForError pid err
               authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
               liftIO $ withResource authCtx.jobsPool \conn ->
                 void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
               Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
+  where
+    createIssueForError pid' err' = do
+      issue <- Issues.createNewErrorIssue pid' err'
+      Issues.insertIssue issue
+      Issues.logIssueActivity issue.id Issues.IECreated Nothing Nothing
+      pure issue
+    handleRegression pid' err' existing = do
+      let wasClosed = isJust existing.acknowledgedAt || isJust existing.archivedAt
+      if wasClosed
+        then do
+          Issues.reopenIssue existing.id
+          Issues.logIssueActivity existing.id Issues.IERegressed Nothing Nothing
+          Log.logInfo "Reopened issue for regressed error" (pid', err'.id, existing.id)
+        else do
+          Issues.bumpIssueUpdatedAt existing.id
+          Log.logTrace "Bumped already-open issue for regressed error" (pid', err'.id, existing.id)
 
 
 -- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance

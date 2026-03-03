@@ -206,7 +206,7 @@ getErrorPatternLByHash pid hash now = listToMaybe <$> PG.query q (now, pid, hash
 -- | Update occurrence counts (called periodically to decay counts)
 updateOccurrenceCounts :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
 updateOccurrenceCounts pid now =
-  PG.execute q (now, pid)
+  PG.execute q (now, now, pid)
   where
     q =
       [sql|
@@ -218,6 +218,7 @@ updateOccurrenceCounts pid now =
           quiet_minutes = CASE WHEN occurrences_1m = 0 THEN quiet_minutes + 1 ELSE 0 END,
           state = CASE
             WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN 'resolved'
+            WHEN state = 'regressed' AND regressed_at IS NOT NULL AND ?::timestamptz - regressed_at >= INTERVAL '7 days' THEN 'ongoing'
             ELSE state
           END,
           resolved_at = CASE
