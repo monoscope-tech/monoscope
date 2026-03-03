@@ -1360,10 +1360,13 @@ replaceAllFormats !input = toText . TLB.toLazyText $ go Nothing (replacePrePass 
 truncateHour :: UTCTime -> UTCTime
 truncateHour (UTCTime day dt) = UTCTime day (secondsToDiffTime $ floor dt `div` 3600 * 3600)
 
+
 prettyTimeShort :: UTCTime -> UTCTime -> Text
-prettyTimeShort now t = let s = max 0 $ floor (diffUTCTime now t) :: Int in
-  if | s < 60    -> T.show s <> " sec ago"
-     | s < 3600  -> T.show (s `div` 60) <> " min ago"
-     | s < 86400 -> T.show (s `div` 3600) <> " hrs ago"
-     | s < 604800 -> T.show (s `div` 86400) <> " days ago"
-     | otherwise  -> T.show (s `div` 604800) <> " wks ago"
+prettyTimeShort now t =
+  let s = max 0 $ floor (diffUTCTime now t) :: Int
+   in if
+        | s < 60 -> T.show s <> " sec ago"
+        | s < 3600 -> T.show (s `div` 60) <> " min ago"
+        | s < 86400 -> T.show (s `div` 3600) <> " hrs ago"
+        | s < 604800 -> T.show (s `div` 86400) <> " days ago"
+        | otherwise -> T.show (s `div` 604800) <> " wks ago"
