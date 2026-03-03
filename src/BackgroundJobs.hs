@@ -127,6 +127,7 @@ data BgJobs
   | NewErrorDetected Projects.ProjectId Text -- projectId, error hash - creates issue for new error
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
   | MonoscopeAdminDaily
+  | QueryMonitorsTriggered [Monitors.QueryMonitorId] -- triggered by pg_cron SQL procedure
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -372,6 +373,13 @@ processBackgroundJob authCtx bgJob =
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
+    QueryMonitorsTriggered monitorIds -> forM_ monitorIds \mid' -> do
+      monitor <- Monitors.queryMonitorById mid'
+      whenJust monitor \m -> do
+        startWall <- Time.currentTime
+        catch (evaluateQueryMonitor m startWall) \(err :: SomePostgreSqlException) -> do
+          Log.logWarn "Query monitor evaluation failed" (m.id, m.alertConfig.title, show err)
+          void $ Monitors.updateLastEvaluatedAt m.id startWall
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
