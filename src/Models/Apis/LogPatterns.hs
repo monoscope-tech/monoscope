@@ -55,6 +55,7 @@ import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
+import Data.Map.Strict qualified as Map
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (truncateHour)
@@ -196,6 +197,8 @@ updateBaselineBatch pid rows
 
 
 -- | Batch version of upsertLogPattern using executeMany.
+-- Pre-merges rows with the same (projectId, sourceField, hash) to avoid
+-- "ON CONFLICT DO UPDATE command cannot affect row a second time".
 upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
 upsertLogPatternBatch [] = pure 0
 upsertLogPatternBatch ups = do
@@ -211,7 +214,11 @@ upsertLogPatternBatch ups = do
           log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
   |]
-    (map (:. Only now) ups)
+    (map (:. Only now) $ dedup ups)
+  where
+    dedup = Map.elems . foldl' merge Map.empty
+    merge acc u = Map.insertWith mergeUp (u.projectId, u.sourceField, u.hash) u acc
+    mergeUp new old = old{eventCount = old.eventCount + new.eventCount, sampleMessage = old.sampleMessage <|> new.sampleMessage, serviceName = old.serviceName <|> new.serviceName, logLevel = old.logLevel <|> new.logLevel, traceId = old.traceId <|> new.traceId}
 
 
 -- | Upsert hourly event count for a pattern into the pre-aggregated stats table.
