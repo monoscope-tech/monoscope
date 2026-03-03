@@ -1149,15 +1149,18 @@ issueColumns pid =
 renderIssueTypeCol :: IssueVM -> Html ()
 renderIssueTypeCol (IssueVM _ _ _ _ issue) = issueTypeLabel issue.issueType issue.critical
 
+
 renderIssueServiceCol :: IssueVM -> Html ()
 renderIssueServiceCol (IssueVM _ _ _ _ issue) =
   span_ [class_ "text-sm text-textWeak truncate"] $ toHtml $ Issues.serviceLabel issue.service
+
 
 renderIssueEventsCol :: IssueVM -> Html ()
 renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
   unless isWidget
     $ span_ [class_ "tabular-nums text-sm text-textStrong", term "data-tippy-content" "Events in the last 14 days"]
     $ show issue.eventCount
+
 
 renderIssueDateCol :: IssueVM -> Html ()
 renderIssueDateCol (IssueVM _ _ currTime _ issue) =
@@ -1226,8 +1229,6 @@ issuePreview_ issue = case issue.issueType of
     previewSnippet $ d.endpointMethod <> " " <> d.endpointPath
   where
     previewSnippet txt = div_ [class_ "text-xs text-textWeak font-mono truncate bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" txt] $ toHtml txt
-
-
 
 
 anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()
