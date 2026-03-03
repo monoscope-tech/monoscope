@@ -81,8 +81,6 @@ spec = aroundAll withTestResources do
       r <- runTestBg frozenTime tr $ processMessages msgs HashMap.empty
       r `shouldBe` ["m1", "m2", "m4", "m5", "m5"]
 
-      _ <- withResource tr.trPool \conn -> PGS.execute conn [sql|CALL monitors.check_triggered_query_monitors(0, '{}'::jsonb)|] ()
-
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
 

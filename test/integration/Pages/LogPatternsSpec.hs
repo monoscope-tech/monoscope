@@ -156,7 +156,7 @@ spec = aroundAll withTestResources do
               srcField = "summary"
           void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
             { projectId = pid, logPattern = "Spike test <*> pattern", hash = patHash
-            , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "INFO"
+            , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "WARN"
             , traceId = Nothing, sampleMessage = Just "Spike test", eventCount = 50
             }
           -- Seed baseline: 48 hours at 600 events/hour with some variance
@@ -180,7 +180,7 @@ spec = aroundAll withTestResources do
           srcField = "summary"
       void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern LogPatterns.UpsertPattern
         { projectId = pid, logPattern = "Spike at :45 test <*>", hash = patHash
-        , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "INFO"
+        , sourceField = srcField, serviceName = Just "test-svc", logLevel = Just "WARN"
         , traceId = Nothing, sampleMessage = Just "Spike at 45 test", eventCount = 100
         }
       forM_ ([-48 .. -1] :: [Int]) \h ->
