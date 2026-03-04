@@ -24,7 +24,7 @@ import Database.PostgreSQL.Entity.Types (field)
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
-import Effectful (Eff, type (:>))
+import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId (..))
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
