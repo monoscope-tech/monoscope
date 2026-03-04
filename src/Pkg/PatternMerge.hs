@@ -6,6 +6,10 @@ module Pkg.PatternMerge (
   ambiguousThreshold,
   buildJudgePrompt,
   parseJudgeResponse,
+  jaccardSimilarity,
+  isPlaceholderToken,
+  jaccardMergeThreshold,
+  mergeByJaccard,
 )
 where
 
@@ -13,7 +17,11 @@ import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.List (maximumBy)
+import Data.Set qualified as Set
+import Data.Sequence qualified as Seq
 import Data.Text qualified as T
+import Data.Vector qualified as V
+import Pkg.Drain qualified as Drain
 import Relude
 
 
@@ -119,3 +127,68 @@ parseJudgeResponse txt = case AE.decodeStrict (encodeUtf8 cleaned) :: Maybe AE.V
       pure (idx, decision == "MERGE")
     asInt (AE.Number n) = Just (round n)
     asInt _ = Nothing
+
+
+-- | Token considered a placeholder (excluded from Jaccard comparison).
+--
+-- >>> isPlaceholderToken "<*>"
+-- True
+--
+-- >>> isPlaceholderToken "{integer}"
+-- True
+--
+-- >>> isPlaceholderToken "INFO"
+-- False
+isPlaceholderToken :: Text -> Bool
+isPlaceholderToken t = t == "<*>" || (T.isPrefixOf "{" t && T.isSuffixOf "}" t)
+
+
+-- | Extract non-placeholder content tokens as a Set (for reuse in hot loops).
+contentTokens :: Text -> Set.Set Text
+contentTokens = Set.fromList . filter (not . isPlaceholderToken) . words
+
+-- | Jaccard similarity on pre-computed token sets.
+jaccardOnSets :: Set.Set Text -> Set.Set Text -> Double
+jaccardOnSets tokA tokB =
+  let inter = Set.size $ Set.intersection tokA tokB
+      union_ = Set.size $ Set.union tokA tokB
+   in if union_ == 0 then 1.0 else fromIntegral inter / fromIntegral union_
+
+-- | Jaccard similarity on non-placeholder token sets.
+-- Returns 1.0 when both inputs have no content tokens.
+--
+-- >>> jaccardSimilarity "INFO user logged in" "INFO user logged in"
+-- 1.0
+--
+-- >>> jaccardSimilarity "INFO <*> logged in" "INFO <*> <*> logged in"
+-- 1.0
+--
+-- >>> jaccardSimilarity "INFO <*> <*> <*> done" "INFO <*> done"
+-- 1.0
+--
+-- >>> jaccardSimilarity "<*> <*> <*>" "<*>"
+-- 1.0
+--
+-- >>> jaccardSimilarity "INFO <*> <*> {uuid} done" "INFO <*> {integer} done"
+-- 1.0
+--
+-- >>> jaccardSimilarity "INFO started" "ERROR crashed"
+-- 0.0
+jaccardSimilarity :: Text -> Text -> Double
+jaccardSimilarity a b = jaccardOnSets (contentTokens a) (contentTokens b)
+
+
+jaccardMergeThreshold :: Double
+jaccardMergeThreshold = 0.90
+
+
+-- | Merge Drain results by Jaccard similarity of non-placeholder tokens.
+-- Keeps the first match's templateStr; combines logIds.
+mergeByJaccard :: Double -> V.Vector Drain.DrainResult -> V.Vector Drain.DrainResult
+mergeByJaccard threshold results = V.fromList $ map fst $ toList $ foldl' tryMerge Seq.empty tagged
+  where
+    tagged = V.toList results <&> \dr -> (dr, contentTokens dr.templateStr)
+    tryMerge acc (x, xToks) =
+      case Seq.findIndexL (\(_, aToks) -> jaccardOnSets aToks xToks >= threshold) acc of
+        Just idx -> let (a, aToks) = Seq.index acc idx in Seq.update idx (a{Drain.logIds = a.logIds <> x.logIds}, aToks) acc
+        Nothing -> acc Seq.|> (x, xToks)

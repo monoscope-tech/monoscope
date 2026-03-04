@@ -134,7 +134,7 @@ data BgJobs
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
-  | PatternEmbeddingAndMerge Projects.ProjectId
+  | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | MonoscopeAdminDaily
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -333,6 +333,10 @@ processBackgroundJob authCtx bgJob =
                 forM_ [0 .. 287] \interval -> do
                   let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
                   void $ scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteLogPatternExtraction scheduledTime p) scheduledTime
+                -- Schedule 15-minute embedding+merge (96 per day)
+                forM_ [0 .. 95] \interval -> do
+                  let scheduledTime = addUTCTime (fromIntegral $ interval * 900) currentTime
+                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.PatternEmbeddingAndMerge scheduledTime p) scheduledTime
                 -- Schedule 15-minute spike detection (96 per day)
                 forM_ [0 .. 95] \interval -> do
                   let scheduledTime = addUTCTime (fromIntegral $ interval * 900) currentTime
@@ -391,7 +395,7 @@ processBackgroundJob authCtx bgJob =
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
-    PatternEmbeddingAndMerge pid -> patternEmbeddingAndMerge pid
+    PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
     LogPatternPeriodicProcessing scheduledTime pid ->
       unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
         $ tryLog "detectLogPatternSpikes"
@@ -601,7 +605,6 @@ runHourlyJob scheduledTime hour = do
     forM_ activeProjects \pid -> do
       void $ createJob conn "background_jobs" $ ErrorBaselineCalculation pid
       void $ createJob conn "background_jobs" $ ErrorSpikeDetection pid
-      void $ createJob conn "background_jobs" $ PatternEmbeddingAndMerge pid
 
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
@@ -730,7 +733,8 @@ logsPatternExtraction scheduledTime pid = do
             else pure (tree', meta <> newMeta)
 
     persistSummaryPatterns tfEnabled tree eventMeta since = do
-      let allPatterns = Drain.getAllLogGroups tree
+      let allPatternsRaw = Drain.getAllLogGroups tree
+          allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let filteredIds = V.filter (/= "") dp.logIds
                 eventCount = fromIntegral $ V.length filteredIds :: Int64
@@ -806,6 +810,7 @@ processOneMinuteErrors scheduledTime pid = do
   Relude.when ctx.config.enableEventsTableUpdates $ do
     let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
     processErrorsPaginated oneMinuteAgo 0
+  void $ ErrorPatterns.propagateMergedCounts pid
   void $ ErrorPatterns.updateOccurrenceCounts pid scheduledTime
   where
     processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
@@ -2070,6 +2075,7 @@ detectLogPatternSpikes pid scheduledTime authCtx = do
 -- Runs as part of the hourly pipeline instead of per-insert trigger.
 processNewLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 processNewLogPatterns pid authCtx = do
+  void $ LogPatterns.acknowledgeMergedPatterns pid
   newPatterns <- LogPatterns.getNewLogPatterns pid maxNewPatternsPerRun
   Relude.when (length newPatterns >= maxNewPatternsPerRun) $ Log.logWarn "getNewLogPatterns hit limit, some patterns deferred" (pid, length newPatterns)
   unless (null newPatterns) do

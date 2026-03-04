@@ -277,6 +277,8 @@ tokenizeForDrain content
 -- | Markup-aware tokenizer for summary fields that preserves @field;style⇒value@ format.
 -- Splits by words (avoids looksLikeJson false positives on markup tokens).
 -- For tokens containing ⇒: preserves the prefix, normalizes only the value after ⇒.
+-- Filters out resource/attributes metadata blobs (high-cardinality container metadata).
+-- Collapses consecutive @\<*\>@ wildcards to prevent Drain level-1 branch fragmentation.
 --
 -- >>> import Data.Vector qualified as V
 -- >>> V.toList $ generateSummaryDrainTokens "status_code;badge-2xx⇒200"
@@ -287,13 +289,20 @@ tokenizeForDrain content
 --
 -- >>> V.toList $ generateSummaryDrainTokens "method;bold⇒GET path;code⇒/api/users/123 status_code;badge-2xx⇒200"
 -- ["method;bold\8658GET","path;code\8658/api/users/{integer}","status_code;badge-2xx\8658{integer}"]
+--
+-- >>> V.toList $ generateSummaryDrainTokens "method;bold⇒GET resource;text-textWeak⇒{\"container\":{\"id\":\"abc\"}} INFO started"
+-- ["method;bold\8658GET","INFO","started"]
 generateSummaryDrainTokens :: T.Text -> V.Vector T.Text
-generateSummaryDrainTokens content = V.fromList $ map normalizeMarkupToken $ words content
+generateSummaryDrainTokens content =
+  V.fromList $ map normalizeMarkupToken $ filter (not . isMetadataBlob) $ words content
   where
-    normalizeMarkupToken tok = case T.breakOn "⇒" tok of
+    isMetadataBlob tok = any (`T.isPrefixOf` tok)
+      ["resource;text-textWeak\8658", "attributes;text-textWeak\8658"]
+    normalizeMarkupToken tok = case T.breakOn "\8658" tok of
       (prefix, rest)
-        | Just val <- T.stripPrefix "⇒" rest -> prefix <> "⇒" <> replaceAllFormats val
+        | Just val <- T.stripPrefix "\8658" rest -> prefix <> "\8658" <> replaceAllFormats val
         | otherwise -> replaceAllFormats tok
+
 
 
 -- | Fold items into a DrainTree using a custom tokenizer.

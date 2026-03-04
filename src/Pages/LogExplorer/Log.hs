@@ -771,11 +771,12 @@ instance AE.ToJSON LogsGet where
           | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
           | otherwise = AE.toJSON (words pat)
         cols = ["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text]
-        rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern]) patterns
+        allCols = cols ++ ["merged_count"] :: [Text]
+        rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount]) patterns
      in AE.object
           [ "logsData" AE..= rows
           , "cols" AE..= cols
-          , "colIdxMap" AE..= HM.fromList (zip cols [0 :: Int ..])
+          , "colIdxMap" AE..= HM.fromList (zip allCols [0 :: Int ..])
           , "count" AE..= total
           , "totalPatterns" AE..= totalPatterns
           , "hasMore" AE..= (V.length patterns > 99)

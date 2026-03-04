@@ -8,6 +8,7 @@ module Models.Apis.LogPatterns (
   getLogPatternByHash,
   getNewLogPatterns,
   acknowledgeLogPatterns,
+  acknowledgeMergedPatterns,
   UpsertPattern (..),
   upsertLogPattern,
   upsertLogPatternBatch,
@@ -133,7 +134,7 @@ getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field
 -- No LIMIT: loading all patterns prevents duplicate clusters from forming.
 -- Scale ceiling: ~5k patterns/source_field. Beyond that, consider pagination or pruning stale patterns.
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
-getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ?|] (pid, sourceField)
+getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND canonical_id IS NULL|] (pid, sourceField)
 
 
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
@@ -142,8 +143,15 @@ getLogPatternByHash pid sourceField hash = listToMaybe <$> PG.query (_selectWher
 
 
 -- | Get new (unprocessed) log patterns for a project, for batch issue creation.
-getNewLogPatterns :: DB es => Projects.ProjectId -> Int -> Eff es [LogPattern]
-getNewLogPatterns pid limit = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]] <> " ORDER BY created_at ASC LIMIT ?") (pid, LPSNew, limit)
+-- Skips patterns already merged into a canonical and those younger than 10 minutes
+-- (gives the 5-min merge pass at least one full cycle before creating issues).
+getNewLogPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Int -> Eff es [LogPattern]
+getNewLogPatterns pid limit = do
+  now <- Time.currentTime
+  PG.query
+    (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]]
+      <> " AND canonical_id IS NULL AND created_at < ?::timestamptz - INTERVAL '10 minutes' ORDER BY created_at ASC LIMIT ?")
+    (pid, LPSNew, now, limit)
 
 
 -- | Acknowledge log patterns. Pass Nothing for system-triggered acknowledgments.
@@ -163,6 +171,16 @@ acknowledgeLogPatterns pid uid fieldHashPairs
         SET state = ?, acknowledged_by = ?, acknowledged_at = ?
         WHERE project_id = ? AND (source_field, pattern_hash) IN (SELECT unnest(?::text[]), unnest(?::text[]))
       |]
+
+
+-- | Acknowledge LPSNew patterns that have been merged (canonical_id set).
+-- No issues needed since their canonical pattern represents them.
+acknowledgeMergedPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Eff es Int64
+acknowledgeMergedPatterns pid = do
+  now <- Time.currentTime
+  PG.execute [sql|UPDATE apis.log_patterns SET state = ?, acknowledged_at = ?
+    WHERE project_id = ? AND state = ? AND canonical_id IS NOT NULL|]
+    (LPSAcknowledged, now, pid, LPSNew)
 
 
 upsertLogPattern :: (DB es, Time :> es) => UpsertPattern -> Eff es Int64
@@ -315,20 +333,29 @@ data LogPatternWithRate = LogPatternWithRate
 -- Scale ceiling: established patterns grow slowly (~weeks); expect <1k per project at steady state.
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid now =
-  PG.query q (now, pid, BSEstablished)
+  PG.query q (now, now, pid, BSEstablished)
   where
     q =
       [sql|
         SELECT lp.id, lp.project_id, lp.log_pattern, lp.pattern_hash, lp.source_field,
           lp.service_name, lp.log_level, lp.sample_message,
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
-          COALESCE(hs.event_count, 0)::BIGINT AS current_hour_count
+          COALESCE(hs.event_count, 0)::BIGINT + COALESCE(mhs.member_count, 0)::BIGINT AS current_hour_count
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
           AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', ?::timestamptz)
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(SUM(mh.event_count), 0) AS member_count
+          FROM apis.log_patterns m
+          JOIN apis.log_pattern_hourly_stats mh
+            ON mh.project_id = m.project_id AND mh.source_field = m.source_field
+            AND mh.pattern_hash = m.pattern_hash AND mh.hour_bucket = date_trunc('hour', ?::timestamptz)
+          WHERE m.canonical_id = lp.id
+        ) mhs ON TRUE
         WHERE lp.project_id = ?
           AND lp.baseline_state = ?
+          AND lp.canonical_id IS NULL
       |]
 
 

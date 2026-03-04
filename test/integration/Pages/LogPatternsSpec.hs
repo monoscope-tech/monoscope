@@ -11,6 +11,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..), LogPatternState (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
+import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (UUIDId (..))
@@ -48,6 +49,14 @@ countPatterns :: TestResources -> IO Int
 countPatterns tr = withResource tr.trPool \conn -> do
   [PGS.Only n] <- PGS.query conn [sql| SELECT COUNT(*)::INT FROM apis.log_patterns WHERE project_id = ? |] (PGS.Only pid)
   pure n
+
+
+-- | Build a test UpsertPattern with sensible defaults
+mkPattern :: Text -> Text -> Text -> Maybe Text -> Int64 -> LogPatterns.UpsertPattern
+mkPattern hash pat srcField lvl cnt = LogPatterns.UpsertPattern
+  { projectId = pid, logPattern = pat, hash, sourceField = srcField
+  , serviceName = Just "test-svc", logLevel = lvl
+  , traceId = Nothing, sampleMessage = Just pat, eventCount = cnt }
 
 
 -- | Count issues of a given type
@@ -198,6 +207,48 @@ spec = aroundAll withTestResources do
       issuesAfter <- countIssues tr Issues.LogPatternRateChange
       issuesAfter `shouldSatisfy` (> issuesBefore)
 
+    it "4b. getLogPatternTexts excludes merged member patterns" \tr -> do
+      let canonHash = "canon-drain-001"
+          memberHash = "member-drain-001"
+          srcField = "summary"
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern canonHash "Canonical drain <*>" srcField (Just "INFO") 10
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern memberHash "Member drain <*>" srcField (Just "INFO") 10
+      -- Look up their IDs and merge member into canonical
+      Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField canonHash
+      Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField memberHash
+      void $ runTestBg frozenTime tr $ PatternMerge.assignLogsToCanonical [(member.id, canon.id)]
+      -- getLogPatternTexts should return the canonical but not the member
+      texts <- runTestBg frozenTime tr $ LogPatterns.getLogPatternTexts pid srcField
+      texts `shouldSatisfy` elem "Canonical drain <*>"
+      texts `shouldSatisfy` (not . elem "Member drain <*>")
+
+    it "4c. getPatternsWithCurrentRates aggregates member stats and excludes members" \tr -> do
+      let canonHash = "canon-spike-agg-001"
+          memberHash = "member-spike-agg-001"
+          srcField = "summary"
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern canonHash "Canonical spike agg <*>" srcField (Just "WARN") 50
+      void $ runTestBg frozenTime tr $ LogPatterns.upsertLogPattern $ mkPattern memberHash "Member spike agg <*>" srcField (Just "WARN") 50
+      -- Establish baseline on canonical
+      forM_ ([-48 .. -1] :: [Int]) \h ->
+        insertHourlyStat tr srcField canonHash (addUTCTime (fromIntegral h * 3600) frozenTime) 600
+      runTestBg frozenTime tr $ BackgroundJobs.calculateLogPatternBaselines pid
+      -- Merge member into canonical
+      Just canon <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField canonHash
+      Just member <- runTestBg frozenTime tr $ LogPatterns.getLogPatternByHash pid srcField memberHash
+      void $ runTestBg frozenTime tr $ PatternMerge.assignLogsToCanonical [(member.id, canon.id)]
+      -- Insert hourly stats for both canonical and member in current hour
+      insertHourlyStat tr srcField canonHash frozenTime 100
+      insertHourlyStat tr srcField memberHash frozenTime 70
+      -- Query and verify
+      rates <- runTestBg frozenTime tr $ LogPatterns.getPatternsWithCurrentRates pid frozenTime
+      let canonRate = find (\r -> r.patternHash == canonHash) rates
+          memberRate = find (\r -> r.patternHash == memberHash) rates
+      -- Member should be excluded from results
+      memberRate `shouldSatisfy` isNothing
+      -- Canonical should have aggregated count (100 + 70 = 170)
+      canonRate `shouldSatisfy` isJust
+      forM_ canonRate \r -> r.currentHourCount `shouldBe` 170
+
     it "5. Process new patterns and create log_pattern issues" \tr -> do
       -- Insert patterns in 'new' state with enough volume to pass the low-volume check
       let patHashes = ["new-pat-001", "new-pat-002"] :: [Text]
@@ -218,6 +269,13 @@ spec = aroundAll withTestResources do
         }
       insertHourlyStat tr "url_path" urlPathHash frozenTime 1500
 
+      -- TODO: Remove this workaround once we can control DB now() in tests (frozen clock for DB).
+      -- created_at uses DB now() (wall-clock) not frozenTime, so we backdate manually.
+      withResource tr.trPool \conn ->
+        void $ PGS.execute conn
+          [sql| UPDATE apis.log_patterns SET created_at = ?::timestamptz - INTERVAL '15 minutes'
+                WHERE project_id = ? AND pattern_hash = ANY(?) |]
+          (frozenTime, pid, V.fromList $ patHashes <> [urlPathHash])
       issuesBefore <- countIssues tr Issues.LogPattern
       runTestBg frozenTime tr $ BackgroundJobs.processNewLogPatterns pid tr.trATCtx
       issuesAfter <- countIssues tr Issues.LogPattern

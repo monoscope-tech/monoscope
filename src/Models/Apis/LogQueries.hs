@@ -33,7 +33,7 @@ import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (Only), fromOnly)
+import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.FromField (FromField, fromField)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -443,7 +443,7 @@ valueToVector (Only val) = case val of
   _ -> Nothing
 
 
-data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int]}
+data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int}
 
 
 fetchLogPatterns :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (Int, [PatternRow])
@@ -460,20 +460,24 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
     $ AE.object
       ["project_id" AE..= pid, "target" AE..= target, "skip" AE..= skip, "date_range" AE..= show dateRange]
   let (dateFrom, dateTo) = dateRange
-  precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text)] <-
+  precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text, Int, Int)] <-
     if target `elem` map fst LogPatterns.knownPatternFields
-      then PG.query [sql|SELECT log_pattern, occurrence_count, log_level, service_name, pattern_hash FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?) ORDER BY occurrence_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
+      then PG.query [sql|SELECT lp.log_pattern, lp.occurrence_count + COALESCE(m.member_count, 0) as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = ? AND lp.source_field = ? AND lp.canonical_id IS NULL AND (? IS NULL OR lp.last_seen_at >= ?) AND (? IS NULL OR lp.last_seen_at <= ?) ORDER BY total_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
       else pure []
   if not (null precomputed)
     then do
       Log.logTrace "fetchLogPatterns: using precomputed" $ AE.object ["count" AE..= length precomputed]
-      totalPatterns <- maybe 0 fromOnly . listToMaybe <$> PG.query [sql|SELECT count(*)::INT FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND (? IS NULL OR last_seen_at >= ?) AND (? IS NULL OR last_seen_at <= ?)|] (pid, target, dateFrom, dateFrom, dateTo, dateTo)
-      let hashes = V.fromList $ map (view _5) precomputed
+      let totalPatterns = maybe 0 (\(_, _, _, _, _, _, n) -> n) $ listToMaybe precomputed
+          hashes = V.fromList $ map (view _5) precomputed
           hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
           hourlyTo = fromMaybe now dateTo
-      hourlyRows :: [(Text, UTCTime, Int)] <- PG.query [sql|SELECT pattern_hash, hour_bucket, event_count::INT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND source_field = ? AND pattern_hash = ANY(?) AND hour_bucket >= ? AND hour_bucket <= ? ORDER BY pattern_hash, hour_bucket|] (pid, target, hashes, hourlyFrom, hourlyTo)
+      -- Fetch member hashes for merged patterns so their hourly stats are included
+      memberHashMap :: HashMap.HashMap Text [Text] <- HashMap.fromListWith (++) . map (\(canonical, mHash) -> (canonical, [mHash])) <$> PG.query [sql|SELECT c.pattern_hash, m.pattern_hash FROM apis.log_patterns m JOIN apis.log_patterns c ON m.canonical_id = c.id WHERE c.project_id = ? AND c.source_field = ? AND c.pattern_hash = ANY(?)|] (pid, target, hashes)
+      let allHashes = V.fromList $ concatMap (\h -> h : fromMaybe [] (HashMap.lookup h memberHashMap)) $ V.toList hashes
+      hourlyRows :: [(Text, UTCTime, Int)] <- PG.query [sql|SELECT pattern_hash, hour_bucket, event_count::INT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND source_field = ? AND pattern_hash = ANY(?) AND hour_bucket >= ? AND hour_bucket <= ? ORDER BY pattern_hash, hour_bucket|] (pid, target, allHashes, hourlyFrom, hourlyTo)
       let volumeMap = HashMap.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
-      pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = buildHourlyBuckets now $ fromMaybe [] $ HashMap.lookup h volumeMap} | (pat, cnt, lvl, svc, h) <- precomputed])
+          lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> fromMaybe [] $ HashMap.lookup mh volumeMap) (h : fromMaybe [] (HashMap.lookup h memberHashMap))
+      pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = lookupVolume h, mergedCount = mc} | (pat, cnt, lvl, svc, h, mc, _) <- precomputed])
     else do
       Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
       authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
@@ -506,7 +510,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
           (minB, maxB) = case allBIs of [] -> (0, 0); xs -> (foldl' min maxBound xs, foldl' max minBound xs)
           buildVolume bs = let bMap = HashMap.fromListWith (+) bs in [fromMaybe 0 $ HashMap.lookup i bMap | i <- [minB .. maxB]]
       Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HashMap.size merged]
-      pure (HashMap.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = buildVolume bs} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+      pure (HashMap.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = buildVolume bs, mergedCount = 0} | (pat, (cnt, lvl, svc, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.

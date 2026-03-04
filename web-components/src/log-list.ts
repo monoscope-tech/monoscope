@@ -1423,12 +1423,14 @@ export class LogList extends LitElement {
     switch (key) {
       case 'pattern_count':
         const count = lookupVecValue<number>(dataArr, this.colIdxMap, key);
+        const mergedCount = lookupVecValue<number>(dataArr, this.colIdxMap, 'merged_count') || 0;
         const maxCount = this.mode === 'patterns' && this.visibleItems.length
           ? lookupVecValue<number>(this.visibleItems[0].data, this.colIdxMap, key) || 1
           : 1;
         const pct = (count / maxCount) * 100;
-        return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total">
+        return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}">
           <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatPatternCount(count)}</span>
+          ${mergedCount > 0 ? html`<span class="text-[10px] tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged">+${mergedCount}</span>` : ''}
           <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
             <div class="h-full bg-[#7ab8d0] rounded-sm" style="width:${pct}%"></div>
           </div>
