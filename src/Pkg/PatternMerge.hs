@@ -17,8 +17,8 @@ import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.List (maximumBy)
-import Data.Set qualified as Set
 import Data.Sequence qualified as Seq
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Pkg.Drain qualified as Drain
@@ -147,12 +147,14 @@ isPlaceholderToken t = t == "<*>" || (T.isPrefixOf "{" t && T.isSuffixOf "}" t)
 contentTokens :: Text -> Set.Set Text
 contentTokens = Set.fromList . filter (not . isPlaceholderToken) . words
 
+
 -- | Jaccard similarity on pre-computed token sets.
 jaccardOnSets :: Set.Set Text -> Set.Set Text -> Double
 jaccardOnSets tokA tokB =
   let inter = Set.size $ Set.intersection tokA tokB
       union_ = Set.size $ Set.union tokA tokB
    in if union_ == 0 then 1.0 else fromIntegral inter / fromIntegral union_
+
 
 -- | Jaccard similarity on non-placeholder token sets.
 -- Returns 1.0 when both inputs have no content tokens.

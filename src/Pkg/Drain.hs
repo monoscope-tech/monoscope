@@ -296,13 +296,14 @@ generateSummaryDrainTokens :: T.Text -> V.Vector T.Text
 generateSummaryDrainTokens content =
   V.fromList $ map normalizeMarkupToken $ filter (not . isMetadataBlob) $ words content
   where
-    isMetadataBlob tok = any (`T.isPrefixOf` tok)
-      ["resource;text-textWeak\8658", "attributes;text-textWeak\8658"]
+    isMetadataBlob tok =
+      any
+        (`T.isPrefixOf` tok)
+        ["resource;text-textWeak\8658", "attributes;text-textWeak\8658"]
     normalizeMarkupToken tok = case T.breakOn "\8658" tok of
       (prefix, rest)
         | Just val <- T.stripPrefix "\8658" rest -> prefix <> "\8658" <> replaceAllFormats val
         | otherwise -> replaceAllFormats tok
-
 
 
 -- | Fold items into a DrainTree using a custom tokenizer.

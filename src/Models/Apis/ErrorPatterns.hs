@@ -207,7 +207,8 @@ getErrorPatternLByHash pid hash now = listToMaybe <$> PG.query q (now, pid, hash
 -- | Propagate occurrence counts from merged patterns to their canonical patterns, then zero out the merged ones
 propagateMergedCounts :: DB es => Projects.ProjectId -> Eff es Int64
 propagateMergedCounts pid =
-  PG.execute [sql|
+  PG.execute
+    [sql|
     WITH zeroed AS (
       UPDATE apis.error_patterns SET occurrences_1m = 0, occurrences_5m = 0, occurrences_1h = 0, occurrences_24h = 0
       WHERE project_id = ? AND canonical_id IS NOT NULL
@@ -222,7 +223,8 @@ propagateMergedCounts pid =
     FROM (SELECT canonical_id, SUM(occurrences_1m) as sum_1m, SUM(occurrences_5m) as sum_5m,
             SUM(occurrences_1h) as sum_1h, SUM(occurrences_24h) as sum_24h
           FROM zeroed GROUP BY canonical_id) m
-    WHERE c.id = m.canonical_id AND c.project_id = ? |] (pid, pid)
+    WHERE c.id = m.canonical_id AND c.project_id = ? |]
+    (pid, pid)
 
 
 -- | Update occurrence counts (called periodically to decay counts)

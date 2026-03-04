@@ -149,8 +149,9 @@ getNewLogPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Int -> Eff es 
 getNewLogPatterns pid limit = do
   now <- Time.currentTime
   PG.query
-    (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]]
-      <> " AND canonical_id IS NULL AND created_at < ?::timestamptz - INTERVAL '10 minutes' ORDER BY created_at ASC LIMIT ?")
+    ( _selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]]
+        <> " AND canonical_id IS NULL AND created_at < ?::timestamptz - INTERVAL '10 minutes' ORDER BY created_at ASC LIMIT ?"
+    )
     (pid, LPSNew, now, limit)
 
 
@@ -178,7 +179,8 @@ acknowledgeLogPatterns pid uid fieldHashPairs
 acknowledgeMergedPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Eff es Int64
 acknowledgeMergedPatterns pid = do
   now <- Time.currentTime
-  PG.execute [sql|UPDATE apis.log_patterns SET state = ?, acknowledged_at = ?
+  PG.execute
+    [sql|UPDATE apis.log_patterns SET state = ?, acknowledged_at = ?
     WHERE project_id = ? AND state = ? AND canonical_id IS NOT NULL|]
     (LPSAcknowledged, now, pid, LPSNew)
 
