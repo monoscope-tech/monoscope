@@ -1230,7 +1230,7 @@ renderIssueChartCol (IssueVM _ _ _ _ issue) =
       }
 
 
-renderSummaryText_ :: (Monad m) => Text -> HtmlT m ()
+renderSummaryText_ :: Monad m => Text -> HtmlT m ()
 renderSummaryText_ txt = forM_ (T.words txt) \token ->
   case T.breakOn "⇒" token of
     (_, "") -> span_ [class_ "mr-1"] $ toHtml $ unesc token
@@ -1248,7 +1248,8 @@ renderSummaryText_ txt = forM_ (T.words txt) \token ->
             _ -> "cbadge-sm badge-neutral"
           tipAttr = [term "data-tippy-content" field | not (T.null field)]
       span_ ([class_ $ cls <> " mr-1 inline-block"] <> tipAttr) $ toHtml value
-  where unesc = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
+  where
+    unesc = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 
 
 renderIssueTitle_ :: Issues.IssueL -> Html ()
@@ -1296,7 +1297,8 @@ issueStateBadge_ = \case
   Just Issues.IEAutoResolved -> badge "bg-fillSuccess-weak text-fillSuccess-strong border-strokeSuccess-strong" "RESOLVED"
   Just Issues.IEReopened -> badge "bg-fillWarning-weak text-fillWarning-strong border-strokeWarning-weak" "REOPENED"
   _ -> pass
-  where badge cls lbl = span_ [class_ $ "badge badge-sm border " <> cls] lbl
+  where
+    badge cls lbl = span_ [class_ $ "badge badge-sm border " <> cls] lbl
 
 
 issuePreview_ :: Issues.IssueL -> Html ()
