@@ -1230,6 +1230,34 @@ renderIssueChartCol (IssueVM _ _ _ _ issue) =
       }
 
 
+renderSummaryText_ :: (Monad m) => Text -> HtmlT m ()
+renderSummaryText_ txt = forM_ (T.words txt) \token ->
+  case T.breakOn "⇒" token of
+    (_, "") -> span_ [class_ "mr-1"] $ toHtml $ unesc token
+    (left, rest) -> do
+      let value = unesc $ T.drop 1 rest
+          (field, style) = case T.breakOn ";" left of
+            (f, s) | not (T.null s) -> (f, T.drop 1 s)
+            _ -> ("", left)
+          cls = case style of
+            s | "badge-" `T.isPrefixOf` s -> "cbadge-sm " <> s
+            "neutral" -> "cbadge-sm badge-neutral"
+            "text-textWeak" -> "text-textWeak text-xs"
+            "text-weak" -> "text-textWeak text-xs"
+            "text-textStrong" -> "text-textStrong text-xs font-medium"
+            _ -> "cbadge-sm badge-neutral"
+          tipAttr = [term "data-tippy-content" field | not (T.null field)]
+      span_ ([class_ $ cls <> " mr-1 inline-block"] <> tipAttr) $ toHtml value
+  where unesc = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
+
+
+renderIssueTitle_ :: Issues.IssueL -> Html ()
+renderIssueTitle_ issue
+  | T.null issue.title = "(Untitled)"
+  | "⇒" `T.isInfixOf` issue.title = renderSummaryText_ issue.title
+  | otherwise = toHtml issue.title
+
+
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
 renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
   let statusColor = anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt)
@@ -1239,8 +1267,9 @@ renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
     div_ [class_ "flex items-start gap-2 min-w-0"] do
       span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> statusColor] ""
-      a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors line-clamp-2 break-all"] $ toHtml $ bool issue.title "(Untitled)" (T.null issue.title)
+      a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors line-clamp-2 break-all"] $ renderIssueTitle_ issue
       severityBadge_ issue.severity
+      issueStateBadge_ issue.latestStateEvent
       when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
       div_ [class_ "flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] do
         inlineBtn (bool "Acknowledge" "Unacknowledge" isAcknowledged) "check" (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
@@ -1259,6 +1288,17 @@ severityBadge_ = \case
   _ -> pass
 
 
+issueStateBadge_ :: Maybe Issues.IssueEvent -> Html ()
+issueStateBadge_ = \case
+  Just Issues.IERegressed -> badge "bg-fillError-weak text-fillError-strong border-strokeError-strong" "REGRESSED"
+  Just Issues.IEEscalated -> badge "bg-fillError-weak text-fillError-strong border-strokeError-strong" "ESCALATED"
+  Just Issues.IEResolved -> badge "bg-fillSuccess-weak text-fillSuccess-strong border-strokeSuccess-strong" "RESOLVED"
+  Just Issues.IEAutoResolved -> badge "bg-fillSuccess-weak text-fillSuccess-strong border-strokeSuccess-strong" "RESOLVED"
+  Just Issues.IEReopened -> badge "bg-fillWarning-weak text-fillWarning-strong border-strokeWarning-weak" "REOPENED"
+  _ -> pass
+  where badge cls lbl = span_ [class_ $ "badge badge-sm border " <> cls] lbl
+
+
 issuePreview_ :: Issues.IssueL -> Html ()
 issuePreview_ issue = case issue.issueType of
   Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \d ->
@@ -1266,13 +1306,15 @@ issuePreview_ issue = case issue.issueType of
   Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \d ->
     previewSnippet d.queryExpression
   Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
-    previewSnippet d.logPattern
+    bool previewSnippet summaryPreview ("⇒" `T.isInfixOf` d.logPattern) d.logPattern
   Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
-    previewSnippet d.logPattern
+    bool previewSnippet summaryPreview ("⇒" `T.isInfixOf` d.logPattern) d.logPattern
   Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d ->
     previewSnippet $ d.endpointMethod <> " " <> d.endpointPath
   where
-    previewSnippet txt = div_ [class_ "text-xs text-textWeak font-mono leading-relaxed line-clamp-3 break-all min-w-0 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5 [&_code.hljs]:!bg-transparent [&_code.hljs]:!p-0 [&_code.hljs]:!inline [&_code.hljs]:!overflow-visible", term "data-tippy-content" txt] $ code_ [] $ toHtml txt
+    previewSnippet txt = div_ [class_ "text-xs text-textWeak font-mono leading-relaxed line-clamp-3 break-all min-w-0 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5 [&_code.hljs]:!bg-transparent [&_code.hljs]:!p-0 [&_code.hljs]:!inline [&_code.hljs]:!overflow-visible", term "data-tippy-content" txt] $ code_ [] $ toHtml $ unescapeJson txt
+    summaryPreview txt = div_ [class_ "text-xs text-textWeak leading-relaxed line-clamp-3 break-all min-w-0 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5 flex flex-wrap items-center gap-0.5"] $ renderSummaryText_ txt
+    unescapeJson = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 
 
 anomalyAcknowledgeButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Text -> Html ()

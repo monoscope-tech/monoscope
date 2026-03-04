@@ -277,6 +277,7 @@ data IssueL = IssueL
   -- Aggregated data
   , eventCount :: Int
   , lastSeen :: UTCTime
+  , latestStateEvent :: Maybe IssueEvent
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -364,25 +365,36 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
   countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
   pure (issues, fromMaybe 0 countResult)
   where
-    timefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
-    ackF = maybe "" (\ack -> if ack then " AND acknowledged_at IS NOT NULL" else " AND acknowledged_at IS NULL") isAcknowledged
-    archF = maybe "" (\arch -> if arch then " AND archived_at IS NOT NULL" else " AND archived_at IS NULL") isArchived
+    timefilter = maybe "" (\(st, end) -> " AND i.created_at >= '" <> formatUTC st <> "' AND i.created_at <= '" <> formatUTC end <> "'") timeRangeM
+    ackF = maybe "" (\ack -> bool " AND i.acknowledged_at IS NULL" " AND i.acknowledged_at IS NOT NULL" ack) isAcknowledged
+    archF = maybe "" (\arch -> bool " AND i.archived_at IS NULL" " AND i.archived_at IS NOT NULL" arch) isArchived
     orderBy = case sortM of
-      Just "-created_at" -> "ORDER BY created_at DESC"
-      Just "+created_at" -> "ORDER BY created_at ASC"
-      Just "-updated_at" -> "ORDER BY updated_at DESC"
-      Just "+updated_at" -> "ORDER BY updated_at ASC"
-      Just "-title" -> "ORDER BY title DESC"
-      Just "+title" -> "ORDER BY title ASC"
-      _ -> "ORDER BY critical DESC, created_at DESC"
+      Just "-created_at" -> "ORDER BY i.created_at DESC"
+      Just "+created_at" -> "ORDER BY i.created_at ASC"
+      Just "-updated_at" -> "ORDER BY i.updated_at DESC"
+      Just "+updated_at" -> "ORDER BY i.updated_at ASC"
+      Just "-title" -> "ORDER BY i.title DESC"
+      Just "+title" -> "ORDER BY i.title ASC"
+      _ -> "ORDER BY i.critical DESC, i.created_at DESC"
+    -- Count query uses bare table without alias
+    cTimefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
+    cAckF = maybe "" (\ack -> bool " AND acknowledged_at IS NULL" " AND acknowledged_at IS NOT NULL" ack) isAcknowledged
+    cArchF = maybe "" (\arch -> bool " AND archived_at IS NULL" " AND archived_at IS NOT NULL" arch) isArchived
     q =
       [text|
-      SELECT id, created_at, updated_at, project_id, issue_type::text, target_hash, acknowledged_at, acknowledged_by, archived_at, title, service, critical,
-        CASE WHEN critical THEN 'critical' ELSE 'info' END, affected_requests, affected_clients, NULL::double precision,
-        recommended_action, migration_complexity, issue_data, request_payloads, response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, updated_at
-      FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
+      SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
+        CASE WHEN i.critical THEN 'critical' ELSE 'info' END, i.affected_requests, i.affected_clients, NULL::double precision,
+        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, i.updated_at,
+        lat.event
+      FROM apis.issues i
+      LEFT JOIN LATERAL (
+        SELECT a.event FROM apis.issue_activity_log a
+        WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
+        ORDER BY a.created_at DESC LIMIT 1
+      ) lat ON TRUE
+      WHERE i.project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
     |]
-    countQ = [text|SELECT COUNT(*) FROM apis.issues WHERE project_id = ? $timefilter $ackF $archF|]
+    countQ = [text|SELECT COUNT(*) FROM apis.issues WHERE project_id = ? $cTimefilter $cAckF $cArchF|]
 
 
 -- | Find open issue for endpoint
