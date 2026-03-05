@@ -730,8 +730,9 @@ logsPatternExtraction scheduledTime pid = do
       -- Fetch one sample row per pattern hash for metadata (traceId, serviceName, level)
       let patternHashes = [toXXHash dp.templateStr | dp <- V.toList allPatterns, not $ T.null dp.templateStr, dp.frequency > 0]
       sampleMeta :: [(Text, Maybe Text, Maybe Text, Maybe Text)] <-
-        if null patternHashes then pure []
-        else withTimefusion tfEnabled $ PG.query [sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(?::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|] (PGArray patternHashes, pid, since, scheduledTime)
+        if null patternHashes
+          then pure []
+          else withTimefusion tfEnabled $ PG.query [sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(?::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|] (PGArray patternHashes, pid, since, scheduledTime)
       let metaMap = HM.fromList [(h, (trId, sName, lvl)) | (h, trId, sName, lvl) <- sampleMeta]
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let eventCount = fromIntegral dp.frequency :: Int64
@@ -1652,15 +1653,16 @@ endpointTemplateDiscovery pid = do
                 let items = V.fromList eps
                     tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree items now
                     discoveredTemplates = V.filter (\r -> T.isInfixOf "<*>" r.templateStr) $ Drain.getAllLogGroups tree
-                    (!upd, !ins) = V.foldl'
-                      (\(!u, !i) result ->
-                          let templatePath = T.intercalate "/" $ map (\t -> if t == "<*>" then "{param}" else t) $ V.toList result.templateTokens
-                              canonicalHash = toXXHash $ pid.toText <> host <> method <> templatePath
-                              updates = V.toList result.logIds <&> \epHash -> (epHash, canonicalHash, templatePath)
-                           in (u <> updates, i <> [(pid, templatePath, method, host, canonicalHash)])
-                      )
-                      ([], [])
-                      discoveredTemplates
+                    (!upd, !ins) =
+                      V.foldl'
+                        ( \(!u, !i) result ->
+                            let templatePath = T.intercalate "/" $ map (\t -> if t == "<*>" then "{param}" else t) $ V.toList result.templateTokens
+                                canonicalHash = toXXHash $ pid.toText <> host <> method <> templatePath
+                                updates = V.toList result.logIds <&> \epHash -> (epHash, canonicalHash, templatePath)
+                             in (u <> updates, i <> [(pid, templatePath, method, host, canonicalHash)])
+                        )
+                        ([], [])
+                        discoveredTemplates
                  in (accUpd <> upd, accIns <> ins)
             )
             ([], [])

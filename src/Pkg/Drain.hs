@@ -128,7 +128,7 @@ updateTreeWithLogM tree tokenCount' firstToken tokensVec logId sampleContent now
   let (updatedChildren, wasUpdated, tpl) = updateOrCreateLevelOne (children tree) tokenCount' firstToken tokensVec logId sampleContent now (config tree)
       newTotalLogs = totalLogs tree + 1
       newTotalPatterns = if wasUpdated then totalPatterns tree else totalPatterns tree + 1
-   in ( tree{children = updatedChildren, totalLogs = newTotalLogs, totalPatterns = newTotalPatterns}, tpl)
+   in (tree{children = updatedChildren, totalLogs = newTotalLogs, totalPatterns = newTotalPatterns}, tpl)
 
 
 updateTreeWithLog :: DrainTree -> Int -> Text -> V.Vector Text -> Text -> Maybe Text -> UTCTime -> DrainTree
@@ -335,8 +335,9 @@ buildDrainTreeWithMapping tokenize logId sampleContent initial items now =
             lid = logId item
          in if V.null tokens || T.null lid
               then (tree, acc)
-              else let (!tree', tpl) = updateTreeWithLogM tree (V.length tokens) (V.head tokens) tokens lid (sampleContent item) now
-                    in (tree', V.snoc acc (lid, tpl))
+              else
+                let (!tree', tpl) = updateTreeWithLogM tree (V.length tokens) (V.head tokens) tokens lid (sampleContent item) now
+                 in (tree', V.snoc acc (lid, tpl))
     )
     (initial, V.empty)
     items
