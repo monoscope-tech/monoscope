@@ -75,8 +75,9 @@ jobs:
           path: |
             ~/.cabal/store
             dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ hashFiles('src/**', 'app/**', 'test/**') }}
           restore-keys: |
+            ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
             ${{ runner.os }}-cabal-
 
       - name: Download frontend artifacts
@@ -150,8 +151,9 @@ jobs:
           path: |
             ~/.cabal/store
             dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ hashFiles('src/**', 'app/**', 'test/**') }}
           restore-keys: |
+            ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
             ${{ runner.os }}-cabal-
 
       - name: Download frontend artifacts

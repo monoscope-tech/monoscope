@@ -104,10 +104,10 @@ jobs:
         with:
           path: |
             ~/.cabal/store
-            dist-newstyle/build
-            dist-newstyle/cache
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+            dist-newstyle
+          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ hashFiles('src/**', 'app/**', 'test/**') }}
           restore-keys: |
+            ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
             ${{ runner.os }}-cabal-
 
       - name: Download frontend artifacts
