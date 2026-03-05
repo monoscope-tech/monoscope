@@ -85,7 +85,7 @@ import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAler
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.QueryCache qualified as QueryCache
-import ProcessMessage (processSpanToEntities)
+import ProcessMessage (parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
 import PyF (fmtTrim)
 import Relude hiding (ask)
 import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
@@ -135,6 +135,7 @@ data BgJobs
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
   | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
+  | EndpointTemplateDiscovery UTCTime Projects.ProjectId
   | MonoscopeAdminDaily
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
@@ -329,30 +330,16 @@ processBackgroundJob authCtx bgJob =
             unless projectJobsExist $ do
               liftIO $ withResource authCtx.jobsPool \conn -> do
                 void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
-                -- Schedule 5-minute log pattern extraction (288 per day)
-                forM_ [0 .. 287] \interval -> do
-                  let scheduledTime = addUTCTime (fromIntegral $ interval * 300) currentTime
-                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteLogPatternExtraction scheduledTime p) scheduledTime
-                -- Schedule 15-minute embedding+merge (96 per day)
-                forM_ [0 .. 95] \interval -> do
-                  let scheduledTime = addUTCTime (fromIntegral $ interval * 900) currentTime
-                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.PatternEmbeddingAndMerge scheduledTime p) scheduledTime
-                -- Schedule 15-minute spike detection (96 per day)
-                forM_ [0 .. 95] \interval -> do
-                  let scheduledTime = addUTCTime (fromIntegral $ interval * 900) currentTime
-                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.LogPatternPeriodicProcessing scheduledTime p) scheduledTime
-                -- Schedule hourly baseline + new-pattern + prune processing (24 per day)
-                forM_ [0 .. 23] \h -> do
-                  let scheduledTime = addUTCTime (fromIntegral @Int $ h * 3600) currentTime
-                  void $ scheduleJob conn "background_jobs" (BackgroundJobs.LogPatternHourlyProcessing scheduledTime p) scheduledTime
-                -- Schedule 5-minute span processing jobs (288 jobs per day = 24 hours * 12 per hour)
-                forM_ [0 .. 287] \interval -> do
-                  let scheduledTime2 = addUTCTime (fromIntegral $ interval * 300) currentTime
-                  scheduleJob conn "background_jobs" (BackgroundJobs.FiveMinuteSpanProcessing scheduledTime2 p) scheduledTime2
-                -- Schedule 1-minute error processing jobs (1440 jobs per hour = 24 hours * 60 per hour)
-                forM_ [0 .. 1439] \interval -> do
-                  let scheduledTime3 = addUTCTime (fromIntegral $ interval * 60) currentTime
-                  scheduleJob conn "background_jobs" (BackgroundJobs.OneMinuteErrorProcessing scheduledTime3 p) scheduledTime3
+                let sched count secs mkJob = forM_ [0 .. count - 1] \i -> do
+                      let t = addUTCTime (fromIntegral @Int $ i * secs) currentTime
+                      void $ scheduleJob conn "background_jobs" (mkJob t) t
+                sched 288 300 \t -> BackgroundJobs.FiveMinuteLogPatternExtraction t p
+                sched 96 900 \t -> BackgroundJobs.PatternEmbeddingAndMerge t p
+                sched 96 900 \t -> BackgroundJobs.LogPatternPeriodicProcessing t p
+                sched 24 3600 \t -> BackgroundJobs.EndpointTemplateDiscovery t p
+                sched 24 3600 \t -> BackgroundJobs.LogPatternHourlyProcessing t p
+                sched 288 300 \t -> BackgroundJobs.FiveMinuteSpanProcessing t p
+                sched 1440 60 \t -> BackgroundJobs.OneMinuteErrorProcessing t p
                 Relude.when (dayOfWeek currentDay == Monday)
                   $ void
                   $ createJob conn "background_jobs"
@@ -396,6 +383,7 @@ processBackgroundJob authCtx bgJob =
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
+    EndpointTemplateDiscovery scheduledTime pid -> unlessStale "EndpointTemplateDiscovery" scheduledTime 3600 $ endpointTemplateDiscovery pid
     LogPatternPeriodicProcessing scheduledTime pid ->
       unlessStale "LogPatternPeriodicProcessing" scheduledTime (15 * 60)
         $ tryLog "detectLogPatternSpikes"
@@ -1062,7 +1050,8 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   !spanIds <- V.replicateM (V.length spans) UUID.genUUID
 
   -- Process each span to extract entities (pure computation)
-  let !results = V.zipWith (processSpanToEntities projectCacheVal) spans spanIds
+  let !canonicalTemplates = parseCanonicalPaths projectCacheVal.canonicalPaths
+  let !results = V.zipWith (processSpanToEntities canonicalTemplates projectCacheVal) spans spanIds
 
   -- Unzip and deduplicate extracted entities using HashMap for O(n) performance
   let !(endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
@@ -1123,16 +1112,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
         Log.logTrace "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
   where
     projectCacheDefault :: Projects.ProjectCache
-    projectCacheDefault =
-      Projects.ProjectCache
-        { hosts = []
-        , endpointHashes = []
-        , shapeHashes = []
-        , redactFieldslist = []
-        , dailyEventCount = 0
-        , dailyMetricCount = 0
-        , paymentPlan = ""
-        }
+    projectCacheDefault = Projects.defaultProjectCache
 
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
@@ -1641,6 +1621,44 @@ embeddingConfig ctx =
     { Langchain.Embeddings.OpenAI.apiKey = ctx.config.openaiApiKey
     , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (T.unpack ctx.config.openaiBaseUrl)
     }
+
+
+-- Endpoint template discovery ---------------------------------------------------
+
+endpointTemplateDiscovery :: Projects.ProjectId -> ATBackgroundCtx ()
+endpointTemplateDiscovery pid = do
+  -- Step 1: Drain-based deterministic template discovery
+  endpoints <- Endpoints.getUnmergedEndpoints pid
+  unless (null endpoints) do
+    now <- Time.currentTime
+    let grouped = HM.toList $ HM.fromListWith (<>) $ map (\(h, m, host, path) -> ((m, host), [(h, path)])) endpoints
+        (allUpdates, allInserts) = foldMap (\((method, host), eps) ->
+          let items = V.fromList eps
+              tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree items now
+              discoveredTemplates = V.filter (\r -> T.isInfixOf "<*>" r.templateStr) $ Drain.getAllLogGroups tree
+           in V.foldMap' (\result ->
+                let templatePath = T.intercalate "/" $ map (\t -> if t == "<*>" then "{param}" else t) $ V.toList result.templateTokens
+                    canonicalHash = toXXHash $ pid.toText <> host <> method <> templatePath
+                    updates = V.toList result.logIds <&> \epHash -> (epHash, canonicalHash, templatePath)
+                in (updates, [(pid, templatePath, method, host, canonicalHash)])
+              ) discoveredTemplates
+          ) grouped
+    void $ Endpoints.setEndpointCanonical allUpdates
+    Endpoints.insertCanonicalEndpoints allInserts
+    Log.logInfo "Endpoint template discovery complete" ("project_id", pid.toText, "endpoint_count", length endpoints)
+  -- Step 2: Embedding + LLM merge for remaining ambiguous endpoints
+  ctx <- ask @Config.AuthContext
+  unless (T.null ctx.config.openaiApiKey) $ tryLog "endpointEmbedding" do
+    unembedded <- Endpoints.getUnembeddedEndpoints pid
+    let fetchTexts = Map.fromList <$> Endpoints.getEmbeddedEndpointTexts pid
+    embedAndMerge
+      pid ctx "endpoint" unembedded
+      (\(_, _, path) -> path)
+      (view _1)
+      Endpoints.updateEndpointEmbeddings
+      (Endpoints.getCanonicalEndpoints pid)
+      Endpoints.assignEndpointsToCanonical
+      fetchTexts
 
 
 -- | Get access token for GitHub sync (either PAT or GitHub App installation token)

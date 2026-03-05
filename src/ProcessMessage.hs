@@ -13,11 +13,17 @@ module ProcessMessage (
   sortVector,
   ensureUrlParams,
   dedupFields,
+  isUrlIdLike,
+  matchCanonicalPath,
+  pathMatchesTemplate,
+  parseCanonicalPaths,
+  tokenizeUrlPath,
 )
 where
 
 import Control.Lens ((^?))
 import Control.Monad.ST (ST, runST)
+import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
 import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
@@ -130,19 +136,6 @@ import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFrom
     We could also maintain hashes of all the formats in the cache, and check each field format within this list.🤔
  --}
 
-defaultProjectCache :: Projects.ProjectCache
-defaultProjectCache =
-  Projects.ProjectCache
-    { hosts = []
-    , endpointHashes = []
-    , shapeHashes = []
-    , redactFieldslist = []
-    , dailyEventCount = 0
-    , dailyMetricCount = 0
-    , paymentPlan = "Free"
-    }
-
-
 processMessages
   :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
@@ -171,7 +164,7 @@ processMessages msgs attrs = do
         cachePairs <- forM projectIds $ \pid ->
           Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
             mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
-            pure $! fromMaybe defaultProjectCache mpjCache
+            pure $! fromMaybe Projects.defaultProjectCache mpjCache
         -- Force evaluation of cache pairs
         pure (zip projectIds cachePairs `using` parList rpar)
       let projectCaches = HashMap.fromList caches
@@ -220,8 +213,8 @@ jsonToMap _ = Nothing
 -- The extracted entities are compared against the project cache to avoid
 -- redundant database operations. New entities will trigger database inserts
 -- which fire PostgreSQL triggers to create anomaly records.
-processSpanToEntities :: Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text)
-processSpanToEntities pjc otelSpan dumpId =
+processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text)
+processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
   let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
       -- Extract HTTP attributes from nested JSON structure
@@ -249,7 +242,9 @@ processSpanToEntities pjc otelSpan dumpId =
       -- URL normalization and dynamic path parameter extraction
       !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
       !(!urlPathDyn, !pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
-      !(!urlPath, !pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn) else (urlPath', fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params")
+      !(!urlPath, !pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn)
+        else (fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath',
+              fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params")
 
       -- Extract query params and headers from attributes
       !queryParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "query_params"
@@ -867,7 +862,9 @@ ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
 parseUrlSegments :: [Text] -> ([Text], [Text]) -> ([Text], [Text])
 parseUrlSegments [] parsed = parsed
 parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
-  Nothing -> parseUrlSegments xs (segs ++ [x], vals)
+  Nothing
+    | isUrlIdLike x -> parseUrlSegments xs (addNewSegment segs "param", vals ++ [x])
+    | otherwise -> parseUrlSegments xs (segs ++ [x], vals)
   Just v
     | v == "{uuid}" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
     | v
@@ -906,6 +903,79 @@ buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
     param = case (acc, current) of
       (AE.Object a, AE.Object b) -> AE.Object $ a <> b
       _ -> acc
+
+
+-- | Detect ID-like URL segments that valueToFormatStr misses (compound IDs, tokens, etc.)
+--
+-- >>> map isUrlIdLike ["auth0|69a4b387381d604d626299ec", "google-oauth2|123456789"]
+-- [True,True]
+--
+-- >>> map isUrlIdLike ["type:value", "ns:resource:123"]
+-- [True,True]
+--
+-- >>> map isUrlIdLike ["users", "api", "v2", "profile", "health-check"]
+-- [False,False,False,False,False]
+--
+-- >>> map isUrlIdLike ["aG9sYS1tdW5kb0jb21v3", "dXNlci1wcm9maWxlLWR2dGE1"]
+-- [True,True]
+--
+-- >>> isUrlIdLike "abc123def456ghi789jkl"
+-- True
+--
+-- >>> map isUrlIdLike ["", "a", "v1", ":leading-colon"]
+-- [False,False,False,False]
+--
+-- >>> map isUrlIdLike ["best-restaurants-2025-guide", "GetUserProfileData"]
+-- [False,False]
+isUrlIdLike :: Text -> Bool
+isUrlIdLike seg
+  | T.null seg = False
+  | T.any (== '|') seg = True -- compound IDs: auth0|abc, google-oauth2|123
+  | not (T.isPrefixOf ":" seg) && T.any (== ':') seg = True -- namespaced: type:value
+  | len > 20 && hasMixed = True -- long mixed alphanumeric (no hyphens — excludes slugs)
+  | len > 16 && isBase64Url = True -- base64url-encoded token (requires digits)
+  | otherwise = False
+  where
+    len = T.length seg
+    hasMixed = T.any isAlpha seg && T.any isDigit seg && T.all isAlphaNum seg
+    isBase64Url = T.all (\c -> isAlphaNum c || c == '-' || c == '_') seg && T.any isUpper seg && T.any isLower seg && T.any isDigit seg
+
+
+-- | Check if a concrete URL path matches a pre-split template with {param} wildcards.
+--
+-- >>> pathMatchesTemplate (T.splitOn "/" "/api/v2/users/john_doe/profile") (T.splitOn "/" "/api/v2/users/{param}/profile")
+-- True
+--
+-- >>> pathMatchesTemplate (T.splitOn "/" "/api/v2/users/john_doe") (T.splitOn "/" "/api/v2/posts/{param}")
+-- False
+--
+-- >>> pathMatchesTemplate (T.splitOn "/" "/api/v2/users") (T.splitOn "/" "/api/v2/users/{param}")
+-- False
+pathMatchesTemplate :: [Text] -> [Text] -> Bool
+pathMatchesTemplate [] [] = True
+pathMatchesTemplate (p : ps) (t : ts) = (t == "{param}" || p == t) && pathMatchesTemplate ps ts
+pathMatchesTemplate _ _ = False
+
+
+-- | Find the first matching canonical template for a request path.
+-- Templates are indexed by (method, host) for O(1) lookup per span.
+matchCanonicalPath :: HM.HashMap (Text, Text) [([Text], Text)] -> Text -> Text -> Text -> Maybe Text
+matchCanonicalPath idx reqMethod reqHost reqPath =
+  let !reqSegs = T.splitOn "/" reqPath
+   in snd <$> find (pathMatchesTemplate reqSegs . fst) (fromMaybe [] $ HM.lookup (reqMethod, reqHost) idx)
+
+
+-- | Parse pipe-delimited canonical path entries ("method|host|template") into a HashMap keyed by (method, host).
+-- Call once per ProjectCache, not per span.
+parseCanonicalPaths :: V.Vector Text -> HM.HashMap (Text, Text) [([Text], Text)]
+parseCanonicalPaths = V.foldl' step HM.empty
+  where step m t = case T.splitOn "|" t of [method, host, p] -> HM.insertWith (<>) (method, host) [(T.splitOn "/" p, p)] m; _ -> m
+
+
+-- | Tokenize URL path for Drain: split by "/" and pre-normalize with valueToFormatStr/isUrlIdLike.
+tokenizeUrlPath :: Text -> V.Vector Text
+tokenizeUrlPath = V.fromList . map normalize . T.splitOn "/"
+  where normalize seg = fromMaybe (bool seg "<*>" $ isUrlIdLike seg) (valueToFormatStr seg)
 
 
 -- >>> valueToFormatNum 22.3

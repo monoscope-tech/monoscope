@@ -9,6 +9,17 @@ module Models.Apis.Endpoints (
   dependenciesAndEventsCount,
   endpointRequestStatsByProject,
   countEndpointInbox,
+  -- Endpoint template discovery
+  getUnmergedEndpoints,
+  setEndpointCanonical,
+  insertCanonicalEndpoints,
+  -- Endpoint embedding + merge
+  getUnembeddedEndpoints,
+  getEmbeddedEndpointTexts,
+  updateEndpointEmbeddings,
+  getCanonicalEndpoints,
+  assignEndpointsToCanonical,
+  unmergeEndpoint,
 )
 where
 
@@ -23,7 +34,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (toField)
-import Database.PostgreSQL.Simple.Types (Query (Query))
+import Database.PostgreSQL.Simple.Types (PGArray (..), Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.PostgreSQL (withConnection)
@@ -232,3 +243,96 @@ countEndpointInbox pid host requestType = do
             AND ann.acknowledged_at IS NULL
             AND host = ?
      |]
+
+
+-- Endpoint template discovery ---------------------------------------------------
+
+getUnmergedEndpoints :: DB es => Projects.ProjectId -> Eff es [(Text, Text, Text, Text)]
+getUnmergedEndpoints pid =
+  PG.query
+    [sql| SELECT hash, method, host, url_path FROM apis.endpoints
+        WHERE project_id = ? AND canonical_hash IS NULL AND merge_override = FALSE
+        ORDER BY created_at ASC LIMIT 5000 |]
+    (Only pid)
+
+
+setEndpointCanonical :: DB es => [(Text, Text, Text)] -> Eff es Int64
+setEndpointCanonical [] = pure 0
+setEndpointCanonical triples =
+  PG.execute
+    [sql| UPDATE apis.endpoints SET canonical_hash = u.chash, canonical_path = u.cpath
+        FROM (SELECT unnest(?::text[]) AS hash, unnest(?::text[]) AS chash, unnest(?::text[]) AS cpath) u
+        WHERE apis.endpoints.hash = u.hash |]
+    (V.fromList hashes, V.fromList chashes, V.fromList cpaths)
+  where
+    (hashes, chashes, cpaths) = unzip3 triples
+
+
+insertCanonicalEndpoints :: DB es => [(Projects.ProjectId, Text, Text, Text, Text)] -> Eff es ()
+insertCanonicalEndpoints [] = pure ()
+insertCanonicalEndpoints rows = void $
+  PG.executeMany
+    [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, canonical_hash, canonical_path)
+        VALUES (?, ?, '{}', ?, ?, ?, false, ?, ?)
+        ON CONFLICT (hash) DO UPDATE SET canonical_hash = EXCLUDED.canonical_hash, canonical_path = EXCLUDED.canonical_path |]
+    (map (\(pid, templatePath, method, host, hash) -> (pid, templatePath, method, host, hash, hash, templatePath)) rows)
+
+
+-- Endpoint embedding + merge ---------------------------------------------------
+
+getEmbeddedEndpointTexts :: DB es => Projects.ProjectId -> Eff es [(EndpointId, Text)]
+getEmbeddedEndpointTexts pid =
+  PG.query [sql| SELECT id, url_path FROM apis.endpoints WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
+
+
+getUnembeddedEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, Text, Text)]
+getUnembeddedEndpoints pid =
+  PG.query
+    [sql| SELECT id, hash, url_path FROM apis.endpoints
+        WHERE project_id = ? AND embedding IS NULL AND merge_override = FALSE
+        LIMIT 500 |]
+    (Only pid)
+
+
+updateEndpointEmbeddings :: DB es => [(EndpointId, [Float])] -> Eff es Int64
+updateEndpointEmbeddings [] = pure 0
+updateEndpointEmbeddings pairs =
+  PG.execute
+    [sql| UPDATE apis.endpoints SET
+          embedding = u.emb::float4[],
+          embedding_at = NOW()
+        FROM (SELECT unnest(?::uuid[]) AS id, unnest(?::float4[][]) AS emb) u
+        WHERE apis.endpoints.id = u.id |]
+    (V.fromList ids, V.fromList embs)
+  where
+    (ids, embs) = unzip $ map (\(eid, e) -> (eid, PGArray e)) pairs
+
+
+getCanonicalEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, [Float])]
+getCanonicalEndpoints pid =
+  map (\(eid, PGArray e) -> (eid, e))
+    <$> PG.query
+      [sql| SELECT id, embedding FROM apis.endpoints
+        WHERE project_id = ? AND canonical_hash IS NULL
+          AND embedding IS NOT NULL AND merge_override = FALSE |]
+      (Only pid)
+
+
+assignEndpointsToCanonical :: DB es => [(EndpointId, EndpointId)] -> Eff es Int64
+assignEndpointsToCanonical [] = pure 0
+assignEndpointsToCanonical pairs =
+  PG.execute
+    [sql| UPDATE apis.endpoints e SET canonical_hash = canon.hash
+        FROM (SELECT unnest(?::uuid[]) AS id, unnest(?::uuid[]) AS canonical) u
+        JOIN apis.endpoints canon ON canon.id = u.canonical
+        WHERE e.id = u.id |]
+    (V.fromList pids, V.fromList cids)
+  where
+    (pids, cids) = unzip pairs
+
+
+unmergeEndpoint :: DB es => EndpointId -> Eff es Int64
+unmergeEndpoint eid =
+  PG.execute
+    [sql| UPDATE apis.endpoints SET merge_override = TRUE, canonical_hash = NULL, canonical_path = NULL WHERE id = ? |]
+    (Only eid)

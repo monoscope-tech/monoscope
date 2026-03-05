@@ -154,20 +154,6 @@ minValidTimestampNanos :: Word64
 minValidTimestampNanos = 946684800000000000
 
 
--- | Default project cache for when none is found
-defaultProjectCache :: Projects.ProjectCache
-defaultProjectCache =
-  Projects.ProjectCache
-    { hosts = []
-    , endpointHashes = []
-    , shapeHashes = []
-    , redactFieldslist = []
-    , dailyEventCount = 0
-    , dailyMetricCount = 0
-    , paymentPlan = "Free"
-    }
-
-
 -- import Network.GRPC.Server.Service (Service, service, method, fromServices)
 
 -- | Generic lens-based attribute extraction from spans
@@ -329,7 +315,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
               cachePairs <- forM projectIds \pid ->
                 Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
                   mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
-                  pure $! fromMaybe defaultProjectCache mpjCache
+                  pure $! fromMaybe Projects.defaultProjectCache mpjCache
               pure (zip projectIds cachePairs `using` parList rpar)
             pure $ HashMap.fromList caches
           pure (keyToId, projectCaches)
@@ -1221,7 +1207,7 @@ processTraceRequest metadataApiKey req = do
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
         mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
-        pure $ fromMaybe defaultProjectCache mpjCache
+        pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HashMap.fromList caches
   let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
@@ -1290,7 +1276,7 @@ processLogsRequest metadataApiKey req = do
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
         mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
-        pure $ fromMaybe defaultProjectCache mpjCache
+        pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HashMap.fromList caches
 
@@ -1346,7 +1332,7 @@ processMetricsRequest metadataApiKey req = do
       -- Fetch project cache using cache pattern
       projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
         mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
-        pure $ fromMaybe defaultProjectCache mpjCache
+        pure $ fromMaybe Projects.defaultProjectCache mpjCache
       let !projectCaches = one (pid, projectCache)
           !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics
 

@@ -218,6 +218,7 @@ updateLogGroupWithTemplate group' newTemplate logId sampleContent now =
 data DrainResult = DrainResult
   { exampleLog :: Text
   , templateStr :: Text
+  , templateTokens :: V.Vector Text
   , logIds :: V.Vector Text
   }
   deriving stock (Generic, Show)
@@ -229,7 +230,7 @@ getAllLogGroups tree =
   let levelOnes = children tree
       levelTwos = V.concatMap nodes levelOnes
       allLogGroups = V.concatMap logGroups levelTwos
-   in V.map (\LogGroup{exampleLog, templateStr, logIds} -> DrainResult{..}) allLogGroups
+   in V.map (\LogGroup{exampleLog, templateStr, logIds, template} -> DrainResult{templateTokens = template, ..}) allLogGroups
 
 
 looksLikeJson :: T.Text -> Bool

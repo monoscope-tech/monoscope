@@ -30,6 +30,7 @@ module Models.Projects.Projects (
   projectCacheByIdIO,
   updateProjectReportNotif,
   ProjectCache (..),
+  defaultProjectCache,
   updateNotificationsChannel,
   updateUsageLastReported,
   updateProjectS3Bucket,
@@ -308,10 +309,14 @@ data ProjectCache = ProjectCache
   , -- Daily count of metrics for the last 24 hours
     dailyMetricCount :: Int
   , paymentPlan :: Text
+  , -- Canonical URL path templates for matching at ingestion: "method|host|template_path"
+    canonicalPaths :: V.Vector Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (Default, FromRow, NFData)
 
+defaultProjectCache :: ProjectCache
+defaultProjectCache = def{paymentPlan = "Free"}
 
 data CreateProject = CreateProject
   { id :: ProjectId
@@ -338,7 +343,7 @@ data CreateProject = CreateProject
 projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es (Maybe ProjectCache)
 projectCacheById pid = do
   now <- currentTime
-  listToMaybe <$> PG.query q (pid, now, pid, now, pid, pid)
+  listToMaybe <$> PG.query q (pid, now, pid, now, pid, pid, pid)
   where
     q =
       [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
@@ -351,7 +356,10 @@ projectCacheById pid = do
                     ( SELECT count(*) FROM telemetry.metrics
                      WHERE project_id=? AND timestamp > ?::timestamptz - INTERVAL '1' DAY
                     ) daily_metric_count,
-                    (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan
+                    (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan,
+                    (SELECT COALESCE(ARRAY_AGG(DISTINCT method || '|' || host || '|' || canonical_path), '{}')
+                     FROM apis.endpoints WHERE project_id = ? AND canonical_path IS NOT NULL
+                    ) canonical_paths
             from
               (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
                 from apis.endpoints e
