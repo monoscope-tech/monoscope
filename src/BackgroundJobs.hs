@@ -703,40 +703,45 @@ logsPatternExtraction scheduledTime pid = do
       Relude.when (length existingPatterns > 5000)
         $ Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
       let seedTree = processBatch True (V.fromList $ map SeedPattern existingPatterns) scheduledTime Drain.emptyDrainTree
-      (finalTree, eventMeta) <- paginateTree tfEnabled seedTree HM.empty 0 startTime
-      persistSummaryPatterns tfEnabled finalTree eventMeta startTime
+      finalTree <- paginateTree tfEnabled seedTree 0 startTime
+      persistSummaryPatterns tfEnabled finalTree startTime
 
-    paginateTree :: Bool -> Drain.DrainTree -> HM.HashMap Text (Maybe Text, Maybe Text, Maybe Text) -> Int -> UTCTime -> ATBackgroundCtx (Drain.DrainTree, HM.HashMap Text (Maybe Text, Maybe Text, Maybe Text))
-    paginateTree tfEnabled tree meta offset startTime = do
-      otelEvents :: [(Text, Text, Maybe Text, Maybe Text, Maybe Text)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),''), context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+    -- Tags otel events per-page using the mapping from buildDrainTreeWithMapping, avoiding unbounded accumulation
+    paginateTree :: Bool -> Drain.DrainTree -> Int -> UTCTime -> ATBackgroundCtx Drain.DrainTree
+    paginateTree tfEnabled tree offset startTime = do
+      otelEvents :: [(Text, Text)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
       if null otelEvents
-        then pure (tree, meta)
+        then pure tree
         else do
           Log.logTrace "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-          let newMeta = HM.fromList [(i, (trId, sName, lvl)) | (i, _, trId, sName, lvl) <- otelEvents, i /= ""]
-              batch = V.fromList [NewEvent logId content | (logId, content, _, _, _) <- otelEvents]
-              tree' = processBatch True batch scheduledTime tree
+          let batch = V.fromList [NewEvent logId content | (logId, content) <- otelEvents]
+              (!tree', mapping) = processBatchWithMapping True batch scheduledTime tree
+          -- Tag otel events with pattern hashes per-page
+          let hashToIds = HM.toList $ V.foldl' (\acc (lid, tpl) -> let h = "pat:" <> toXXHash tpl in HM.insertWith (<>) h [lid] acc) HM.empty mapping
+          forM_ hashToIds \(hashTag, ids) ->
+            void $ withTimefusion tfEnabled $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, startTime, PGArray ids, hashTag)
           if length otelEvents == limitVal
-            then paginateTree tfEnabled tree' (meta <> newMeta) (offset + limitVal) startTime
-            else pure (tree', meta <> newMeta)
+            then paginateTree tfEnabled tree' (offset + limitVal) startTime
+            else pure tree'
 
-    persistSummaryPatterns tfEnabled tree eventMeta since = do
+    persistSummaryPatterns tfEnabled tree since = do
       let allPatternsRaw = Drain.getAllLogGroups tree
           allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
+      -- Fetch one sample row per pattern hash for metadata (traceId, serviceName, level)
+      let patternHashes = [toXXHash dp.templateStr | dp <- V.toList allPatterns, not $ T.null dp.templateStr, dp.frequency > 0]
+      sampleMeta :: [(Text, Maybe Text, Maybe Text, Maybe Text)] <-
+        if null patternHashes then pure []
+        else withTimefusion tfEnabled $ PG.query [sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(?::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|] (PGArray patternHashes, pid, since, scheduledTime)
+      let metaMap = HM.fromList [(h, (trId, sName, lvl)) | (h, trId, sName, lvl) <- sampleMeta]
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
-            let filteredIds = V.filter (/= "") dp.logIds
-                eventCount = fromIntegral $ V.length filteredIds :: Int64
-             in if V.null filteredIds || T.null dp.templateStr
+            let eventCount = fromIntegral dp.frequency :: Int64
+                patternHash = toXXHash dp.templateStr
+             in if eventCount <= 0 || T.null dp.templateStr
                   then Nothing
                   else
-                    let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) (filteredIds V.!? 0 >>= (`HM.lookup` eventMeta))
-                        patternHash = toXXHash dp.templateStr
-                     in Just (filteredIds, patternHash, LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}, (pid, sourceField, patternHash, scheduledTime, eventCount))
-      let (idHashPairs, ups, hss) = unzip3 [((filteredIds, patternHash), up, hs) | (filteredIds, patternHash, up, hs) <- prepared]
-      -- Tag otel events with pattern hashes
-      forM_ idHashPairs \(filteredIds, patternHash) -> do
-        let hashTag = "pat:" <> patternHash
-        void $ withTimefusion tfEnabled $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, since, filteredIds, hashTag)
+                    let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) (HM.lookup patternHash metaMap)
+                     in Just (LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}, (pid, sourceField, patternHash, scheduledTime, eventCount))
+      let (ups, hss) = unzip prepared
       void $ LogPatterns.upsertLogPatternBatch ups
       void $ LogPatterns.upsertHourlyStatBatch hss
 
@@ -767,6 +772,15 @@ data DrainInput = SeedPattern Text | NewEvent Text Text
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
 processBatch isSummary batch now initial = Drain.buildDrainTree tokenize logId sampleContent initial batch now
+  where
+    tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
+    tokenize = tok . \case SeedPattern c -> c; NewEvent _ c -> c
+    logId = \case SeedPattern _ -> ""; NewEvent lid _ -> lid
+    sampleContent = \case SeedPattern _ -> Nothing; NewEvent _ c -> Just c
+
+
+processBatchWithMapping :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector (Text, Text))
+processBatchWithMapping isSummary batch now initial = Drain.buildDrainTreeWithMapping tokenize logId sampleContent initial batch now
   where
     tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
     tokenize = tok . \case SeedPattern c -> c; NewEvent _ c -> c
@@ -839,7 +853,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- Only log if there are actually errors to process (reduces noise in tests)
       Relude.when (V.length spansWithErrors > 0)
         $ Log.logTrace "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
-      let allErrors = Telemetry.getAllATErrors spansWithErrors
+      let !allErrors = Telemetry.getAllATErrors spansWithErrors
       -- Group errors by (traceId, spanId) — must sort first since V.groupBy only groups consecutive elements
       let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
           errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
@@ -872,7 +886,7 @@ processOneMinuteErrors scheduledTime pid = do
         Relude.when (fromIntegral rowsUpdated /= V.length updates)
           $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= V.length updates, "actual" AE..= rowsUpdated])
       -- Append "err:<hash>" to otel hashes using array_append + guard (same pattern as pat: hashes)
-      let hashToSpans = HM.toList $ V.foldl' (\acc e -> maybe acc (\sId -> HM.insertWith (<>) ("err:" <> e.hash) [sId] acc) e.spanId) HM.empty allErrors
+      let hashToSpans = HM.toList $ V.foldl' (\acc e -> maybe acc (\sId -> HM.insertWith (\new old -> let !r = new <> old in r) ("err:" <> e.hash) [sId] acc) e.spanId) HM.empty allErrors
       forM_ hashToSpans \(hashTag, sIds) ->
         void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, PGArray sIds, hashTag)
       Relude.when (V.length spansWithErrors == 2000)
@@ -1633,20 +1647,23 @@ endpointTemplateDiscovery pid = do
     now <- Time.currentTime
     let grouped = HM.toList $ HM.fromListWith (<>) $ map (\(h, m, host, path) -> ((m, host), [(h, path)])) endpoints
         (!allUpdates, !allInserts) =
-          foldMap
-            ( \((method, host), eps) ->
+          foldl'
+            ( \(!accUpd, !accIns) ((method, host), eps) ->
                 let items = V.fromList eps
                     tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree items now
                     discoveredTemplates = V.filter (\r -> T.isInfixOf "<*>" r.templateStr) $ Drain.getAllLogGroups tree
-                 in V.foldMap'
-                      ( \result ->
+                    (!upd, !ins) = V.foldl'
+                      (\(!u, !i) result ->
                           let templatePath = T.intercalate "/" $ map (\t -> if t == "<*>" then "{param}" else t) $ V.toList result.templateTokens
                               canonicalHash = toXXHash $ pid.toText <> host <> method <> templatePath
                               updates = V.toList result.logIds <&> \epHash -> (epHash, canonicalHash, templatePath)
-                           in (updates, [(pid, templatePath, method, host, canonicalHash)])
+                           in (u <> updates, i <> [(pid, templatePath, method, host, canonicalHash)])
                       )
+                      ([], [])
                       discoveredTemplates
+                 in (accUpd <> upd, accIns <> ins)
             )
+            ([], [])
             grouped
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts

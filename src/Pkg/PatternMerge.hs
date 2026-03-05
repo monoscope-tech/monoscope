@@ -216,5 +216,5 @@ mergeByJaccard threshold results = V.fromList $ map fst $ toList $ foldl' tryMer
     tagged = V.toList results <&> \dr -> (dr, contentTokens dr.templateStr)
     tryMerge acc (x, xToks) =
       case Seq.findIndexL (\(_, aToks) -> jaccardOnSets aToks xToks >= threshold) acc of
-        Just idx -> let (a, aToks) = Seq.index acc idx in Seq.update idx (a{Drain.logIds = a.logIds <> x.logIds}, aToks) acc
+        Just idx -> let (a, aToks) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency}, aToks) acc
         Nothing -> acc Seq.|> (x, xToks)
