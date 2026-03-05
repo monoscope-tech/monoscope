@@ -1667,6 +1667,11 @@ endpointTemplateDiscovery pid = do
       (Endpoints.getCanonicalEndpoints pid)
       Endpoints.assignEndpointsToCanonical
       fetchTexts
+  -- Step 3: Migrate data and delete all merged endpoints
+  mergedPairs <- Endpoints.getMergedEndpointPairs pid
+  Endpoints.migrateAndDeleteMergedEndpoints mergedPairs
+  unless (null mergedPairs) do
+    Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
 
 
 -- | Get access token for GitHub sync (either PAT or GitHub App installation token)

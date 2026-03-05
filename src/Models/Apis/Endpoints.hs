@@ -20,6 +20,8 @@ module Models.Apis.Endpoints (
   getCanonicalEndpoints,
   assignEndpointsToCanonical,
   unmergeEndpoint,
+  getMergedEndpointPairs,
+  migrateAndDeleteMergedEndpoints,
 )
 where
 
@@ -337,3 +339,96 @@ unmergeEndpoint eid =
   PG.execute
     [sql| UPDATE apis.endpoints SET merge_override = TRUE, canonical_hash = NULL, canonical_path = NULL WHERE id = ? |]
     (Only eid)
+
+
+getMergedEndpointPairs :: DB es => Projects.ProjectId -> Eff es [(Text, Text)]
+getMergedEndpointPairs pid =
+  PG.query
+    [sql| SELECT hash, canonical_hash FROM apis.endpoints
+          WHERE project_id = ? AND canonical_hash IS NOT NULL AND hash != canonical_hash
+          LIMIT 10000 |]
+    (Only pid)
+
+
+-- | Migrate shapes/fields/formats from old endpoints to canonical ones, remap anomalies/issues, then delete old data.
+migrateAndDeleteMergedEndpoints :: DB es => [(Text, Text)] -> Eff es ()
+migrateAndDeleteMergedEndpoints [] = pure ()
+migrateAndDeleteMergedEndpoints pairs = do
+  let (oldHashes, canonHashes) = unzip pairs
+      oldArr = V.fromList oldHashes
+      canonArr = V.fromList canonHashes
+      oldOnly = Only (PGArray oldHashes)
+  -- Step 1: Migrate shapes (prefix-replace endpoint_hash and hash, remap field_hashes array)
+  void $ PG.execute
+    [sql| INSERT INTO apis.shapes (id, created_at, updated_at, project_id, endpoint_hash, hash,
+            field_hashes, query_params_keypaths, request_body_keypaths, response_body_keypaths,
+            request_headers_keypaths, response_headers_keypaths, status_code,
+            response_description, request_description, new_unique_fields, deleted_fields, updated_field_formats)
+          SELECT gen_random_uuid(), s.created_at, s.updated_at, s.project_id,
+            m.canonical, m.canonical || substring(s.hash FROM 9),
+            array(SELECT m2.canonical || substring(fh FROM 9)
+                  FROM unnest(s.field_hashes) fh
+                  LEFT JOIN unnest(?::text[], ?::text[]) m2(old, canonical) ON LEFT(fh, 8) = m2.old),
+            s.query_params_keypaths, s.request_body_keypaths, s.response_body_keypaths,
+            s.request_headers_keypaths, s.response_headers_keypaths, s.status_code,
+            s.response_description, s.request_description, s.new_unique_fields, s.deleted_fields, s.updated_field_formats
+          FROM apis.shapes s
+          JOIN unnest(?::text[], ?::text[]) m(old, canonical) ON s.endpoint_hash = m.old
+          ON CONFLICT (hash) DO NOTHING |]
+    (oldArr, canonArr, oldArr, canonArr)
+  -- Step 2: Migrate fields
+  void $ PG.execute
+    [sql| INSERT INTO apis.fields (id, created_at, updated_at, project_id, endpoint_hash, key,
+            field_type, field_type_override, format, format_override, description, key_path,
+            field_category, hash, is_enum, is_required)
+          SELECT gen_random_uuid(), f.created_at, f.updated_at, f.project_id,
+            m.canonical, f.key, f.field_type, f.field_type_override, f.format, f.format_override,
+            f.description, f.key_path, f.field_category,
+            m.canonical || substring(f.hash FROM 9),
+            f.is_enum, f.is_required
+          FROM apis.fields f
+          JOIN unnest(?::text[], ?::text[]) m(old, canonical) ON f.endpoint_hash = m.old
+          ON CONFLICT (hash) DO NOTHING |]
+    (oldArr, canonArr)
+  -- Step 3: Migrate formats
+  void $ PG.execute
+    [sql| INSERT INTO apis.formats (id, created_at, updated_at, project_id, field_hash, field_type,
+            field_format, examples, hash)
+          SELECT gen_random_uuid(), fmt.created_at, fmt.updated_at, fmt.project_id,
+            m.canonical || substring(fmt.field_hash FROM 9),
+            fmt.field_type, fmt.field_format, fmt.examples,
+            m.canonical || substring(fmt.hash FROM 9)
+          FROM apis.formats fmt
+          JOIN unnest(?::text[], ?::text[]) m(old, canonical) ON LEFT(fmt.field_hash, 8) = m.old
+          ON CONFLICT (hash) DO NOTHING |]
+    (oldArr, canonArr)
+  -- Step 4: Remap anomalies (skip if canonical target already exists for same project)
+  void $ PG.execute
+    [sql| UPDATE apis.anomalies a
+          SET target_hash = m.canonical || substring(a.target_hash FROM 9)
+          FROM unnest(?::text[], ?::text[]) m(old, canonical)
+          WHERE LEFT(a.target_hash, 8) = m.old
+            AND NOT EXISTS (SELECT 1 FROM apis.anomalies a2
+                           WHERE a2.project_id = a.project_id
+                             AND a2.target_hash = m.canonical || substring(a.target_hash FROM 9)) |]
+    (oldArr, canonArr)
+  -- Step 5: Remap issues (skip if canonical target already exists for same project+type)
+  void $ PG.execute
+    [sql| UPDATE apis.issues i
+          SET endpoint_hash = m.canonical,
+              target_hash = m.canonical || substring(i.target_hash FROM 9)
+          FROM unnest(?::text[], ?::text[]) m(old, canonical)
+          WHERE LEFT(i.target_hash, 8) = m.old
+            AND NOT EXISTS (SELECT 1 FROM apis.issues i2
+                           WHERE i2.project_id = i.project_id
+                             AND i2.target_hash = m.canonical || substring(i.target_hash FROM 9)
+                             AND i2.issue_type = i.issue_type
+                             AND i2.acknowledged_at IS NULL AND i2.archived_at IS NULL) |]
+    (oldArr, canonArr)
+  -- Step 6: Delete old data (reverse dependency order)
+  void $ PG.execute [sql| DELETE FROM apis.formats WHERE LEFT(field_hash, 8) = ANY(?) |] oldOnly
+  void $ PG.execute [sql| DELETE FROM apis.fields WHERE endpoint_hash = ANY(?) |] oldOnly
+  void $ PG.execute [sql| DELETE FROM apis.shapes WHERE endpoint_hash = ANY(?) |] oldOnly
+  void $ PG.execute [sql| DELETE FROM apis.anomalies WHERE LEFT(target_hash, 8) = ANY(?) |] oldOnly
+  void $ PG.execute [sql| DELETE FROM apis.issues WHERE LEFT(target_hash, 8) = ANY(?) |] oldOnly
+  void $ PG.execute [sql| DELETE FROM apis.endpoints WHERE hash = ANY(?) |] oldOnly
