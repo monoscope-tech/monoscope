@@ -772,12 +772,7 @@ data DrainInput = SeedPattern Text | NewEvent Text Text
 
 
 processBatch :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> Drain.DrainTree
-processBatch isSummary batch now initial = Drain.buildDrainTree tokenize logId sampleContent initial batch now
-  where
-    tok = if isSummary then Drain.generateSummaryDrainTokens else Drain.generateDrainTokens
-    tokenize = tok . \case SeedPattern c -> c; NewEvent _ c -> c
-    logId = \case SeedPattern _ -> ""; NewEvent lid _ -> lid
-    sampleContent = \case SeedPattern _ -> Nothing; NewEvent _ c -> Just c
+processBatch isSummary batch now initial = fst $ processBatchWithMapping isSummary batch now initial
 
 
 processBatchWithMapping :: Bool -> V.Vector DrainInput -> UTCTime -> Drain.DrainTree -> (Drain.DrainTree, V.Vector (Text, Text))
