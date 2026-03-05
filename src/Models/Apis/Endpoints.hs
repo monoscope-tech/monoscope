@@ -359,8 +359,9 @@ migrateAndDeleteMergedEndpoints pairs = do
       canonArr = V.fromList canonHashes
       oldOnly = Only (PGArray oldHashes)
   -- Step 1: Migrate shapes (prefix-replace endpoint_hash and hash, remap field_hashes array)
-  void $ PG.execute
-    [sql| INSERT INTO apis.shapes (id, created_at, updated_at, project_id, endpoint_hash, hash,
+  void
+    $ PG.execute
+      [sql| INSERT INTO apis.shapes (id, created_at, updated_at, project_id, endpoint_hash, hash,
             field_hashes, query_params_keypaths, request_body_keypaths, response_body_keypaths,
             request_headers_keypaths, response_headers_keypaths, status_code,
             response_description, request_description, new_unique_fields, deleted_fields, updated_field_formats)
@@ -375,10 +376,11 @@ migrateAndDeleteMergedEndpoints pairs = do
           FROM apis.shapes s
           JOIN unnest(?::text[], ?::text[]) m(old, canonical) ON s.endpoint_hash = m.old
           ON CONFLICT (hash) DO NOTHING |]
-    (oldArr, canonArr, oldArr, canonArr)
+      (oldArr, canonArr, oldArr, canonArr)
   -- Step 2: Migrate fields
-  void $ PG.execute
-    [sql| INSERT INTO apis.fields (id, created_at, updated_at, project_id, endpoint_hash, key,
+  void
+    $ PG.execute
+      [sql| INSERT INTO apis.fields (id, created_at, updated_at, project_id, endpoint_hash, key,
             field_type, field_type_override, format, format_override, description, key_path,
             field_category, hash, is_enum, is_required)
           SELECT gen_random_uuid(), f.created_at, f.updated_at, f.project_id,
@@ -389,10 +391,11 @@ migrateAndDeleteMergedEndpoints pairs = do
           FROM apis.fields f
           JOIN unnest(?::text[], ?::text[]) m(old, canonical) ON f.endpoint_hash = m.old
           ON CONFLICT (hash) DO NOTHING |]
-    (oldArr, canonArr)
+      (oldArr, canonArr)
   -- Step 3: Migrate formats
-  void $ PG.execute
-    [sql| INSERT INTO apis.formats (id, created_at, updated_at, project_id, field_hash, field_type,
+  void
+    $ PG.execute
+      [sql| INSERT INTO apis.formats (id, created_at, updated_at, project_id, field_hash, field_type,
             field_format, examples, hash)
           SELECT gen_random_uuid(), fmt.created_at, fmt.updated_at, fmt.project_id,
             m.canonical || substring(fmt.field_hash FROM 9),
@@ -401,20 +404,22 @@ migrateAndDeleteMergedEndpoints pairs = do
           FROM apis.formats fmt
           JOIN unnest(?::text[], ?::text[]) m(old, canonical) ON LEFT(fmt.field_hash, 8) = m.old
           ON CONFLICT (hash) DO NOTHING |]
-    (oldArr, canonArr)
+      (oldArr, canonArr)
   -- Step 4: Remap anomalies (skip if canonical target already exists for same project)
-  void $ PG.execute
-    [sql| UPDATE apis.anomalies a
+  void
+    $ PG.execute
+      [sql| UPDATE apis.anomalies a
           SET target_hash = m.canonical || substring(a.target_hash FROM 9)
           FROM unnest(?::text[], ?::text[]) m(old, canonical)
           WHERE LEFT(a.target_hash, 8) = m.old
             AND NOT EXISTS (SELECT 1 FROM apis.anomalies a2
                            WHERE a2.project_id = a.project_id
                              AND a2.target_hash = m.canonical || substring(a.target_hash FROM 9)) |]
-    (oldArr, canonArr)
+      (oldArr, canonArr)
   -- Step 5: Remap issues (skip if canonical target already exists for same project+type)
-  void $ PG.execute
-    [sql| UPDATE apis.issues i
+  void
+    $ PG.execute
+      [sql| UPDATE apis.issues i
           SET endpoint_hash = m.canonical,
               target_hash = m.canonical || substring(i.target_hash FROM 9)
           FROM unnest(?::text[], ?::text[]) m(old, canonical)
@@ -424,7 +429,7 @@ migrateAndDeleteMergedEndpoints pairs = do
                              AND i2.target_hash = m.canonical || substring(i.target_hash FROM 9)
                              AND i2.issue_type = i.issue_type
                              AND i2.acknowledged_at IS NULL AND i2.archived_at IS NULL) |]
-    (oldArr, canonArr)
+      (oldArr, canonArr)
   -- Step 6: Delete old data (reverse dependency order)
   void $ PG.execute [sql| DELETE FROM apis.formats WHERE LEFT(field_hash, 8) = ANY(?) |] oldOnly
   void $ PG.execute [sql| DELETE FROM apis.fields WHERE endpoint_hash = ANY(?) |] oldOnly
