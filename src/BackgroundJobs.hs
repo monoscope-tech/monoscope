@@ -1632,7 +1632,7 @@ endpointTemplateDiscovery pid = do
   unless (null endpoints) do
     now <- Time.currentTime
     let grouped = HM.toList $ HM.fromListWith (<>) $ map (\(h, m, host, path) -> ((m, host), [(h, path)])) endpoints
-        (allUpdates, allInserts) =
+        (!allUpdates, !allInserts) =
           foldMap
             ( \((method, host), eps) ->
                 let items = V.fromList eps
