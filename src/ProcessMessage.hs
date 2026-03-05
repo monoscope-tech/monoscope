@@ -23,7 +23,6 @@ where
 
 import Control.Lens ((^?))
 import Control.Monad.ST (ST, runST)
-import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
 import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
@@ -35,6 +34,7 @@ import Data.Aeson.Types qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
+import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
@@ -242,9 +242,13 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
       -- URL normalization and dynamic path parameter extraction
       !urlPath' = LogQueries.normalizeUrlPath sdkType statusCode method routePath
       !(!urlPathDyn, !pathParamsDyn, !hasDyn) = ensureUrlParams urlPath'
-      !(!urlPath, !pathParams) = if hasDyn then (urlPathDyn, pathParamsDyn)
-        else (fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath',
-              fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params")
+      !(!urlPath, !pathParams) =
+        if hasDyn
+          then (urlPathDyn, pathParamsDyn)
+          else
+            ( fromMaybe urlPath' $ matchCanonicalPath canonicalTemplates method host urlPath'
+            , fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "path_params"
+            )
 
       -- Extract query params and headers from attributes
       !queryParams = fromMaybe AE.emptyObject $ attrValue ^? key "http" . key "request" . key "query_params"
@@ -969,13 +973,15 @@ matchCanonicalPath idx reqMethod reqHost reqPath =
 -- Call once per ProjectCache, not per span.
 parseCanonicalPaths :: V.Vector Text -> HM.HashMap (Text, Text) [([Text], Text)]
 parseCanonicalPaths = V.foldl' step HM.empty
-  where step m t = case T.splitOn "|" t of [method, host, p] -> HM.insertWith (<>) (method, host) [(T.splitOn "/" p, p)] m; _ -> m
+  where
+    step m t = case T.splitOn "|" t of [method, host, p] -> HM.insertWith (<>) (method, host) [(T.splitOn "/" p, p)] m; _ -> m
 
 
 -- | Tokenize URL path for Drain: split by "/" and pre-normalize with valueToFormatStr/isUrlIdLike.
 tokenizeUrlPath :: Text -> V.Vector Text
 tokenizeUrlPath = V.fromList . map normalize . T.splitOn "/"
-  where normalize seg = fromMaybe (bool seg "<*>" $ isUrlIdLike seg) (valueToFormatStr seg)
+  where
+    normalize seg = fromMaybe (bool seg "<*>" $ isUrlIdLike seg) (valueToFormatStr seg)
 
 
 -- >>> valueToFormatNum 22.3

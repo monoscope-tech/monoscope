@@ -315,8 +315,10 @@ data ProjectCache = ProjectCache
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromRow, NFData)
 
+
 defaultProjectCache :: ProjectCache
 defaultProjectCache = def{paymentPlan = "Free"}
+
 
 data CreateProject = CreateProject
   { id :: ProjectId

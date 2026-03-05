@@ -270,12 +270,13 @@ setEndpointCanonical triples =
 
 insertCanonicalEndpoints :: DB es => [(Projects.ProjectId, Text, Text, Text, Text)] -> Eff es ()
 insertCanonicalEndpoints [] = pure ()
-insertCanonicalEndpoints rows = void $
-  PG.executeMany
-    [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, canonical_hash, canonical_path)
+insertCanonicalEndpoints rows =
+  void
+    $ PG.executeMany
+      [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, canonical_hash, canonical_path)
         VALUES (?, ?, '{}', ?, ?, ?, false, ?, ?)
         ON CONFLICT (hash) DO UPDATE SET canonical_hash = EXCLUDED.canonical_hash, canonical_path = EXCLUDED.canonical_path |]
-    (map (\(pid, templatePath, method, host, hash) -> (pid, templatePath, method, host, hash, hash, templatePath)) rows)
+      (map (\(pid, templatePath, method, host, hash) -> (pid, templatePath, method, host, hash, hash, templatePath)) rows)
 
 
 -- Endpoint embedding + merge ---------------------------------------------------

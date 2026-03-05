@@ -1632,17 +1632,22 @@ endpointTemplateDiscovery pid = do
   unless (null endpoints) do
     now <- Time.currentTime
     let grouped = HM.toList $ HM.fromListWith (<>) $ map (\(h, m, host, path) -> ((m, host), [(h, path)])) endpoints
-        (allUpdates, allInserts) = foldMap (\((method, host), eps) ->
-          let items = V.fromList eps
-              tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree items now
-              discoveredTemplates = V.filter (\r -> T.isInfixOf "<*>" r.templateStr) $ Drain.getAllLogGroups tree
-           in V.foldMap' (\result ->
-                let templatePath = T.intercalate "/" $ map (\t -> if t == "<*>" then "{param}" else t) $ V.toList result.templateTokens
-                    canonicalHash = toXXHash $ pid.toText <> host <> method <> templatePath
-                    updates = V.toList result.logIds <&> \epHash -> (epHash, canonicalHash, templatePath)
-                in (updates, [(pid, templatePath, method, host, canonicalHash)])
-              ) discoveredTemplates
-          ) grouped
+        (allUpdates, allInserts) =
+          foldMap
+            ( \((method, host), eps) ->
+                let items = V.fromList eps
+                    tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree items now
+                    discoveredTemplates = V.filter (\r -> T.isInfixOf "<*>" r.templateStr) $ Drain.getAllLogGroups tree
+                 in V.foldMap'
+                      ( \result ->
+                          let templatePath = T.intercalate "/" $ map (\t -> if t == "<*>" then "{param}" else t) $ V.toList result.templateTokens
+                              canonicalHash = toXXHash $ pid.toText <> host <> method <> templatePath
+                              updates = V.toList result.logIds <&> \epHash -> (epHash, canonicalHash, templatePath)
+                           in (updates, [(pid, templatePath, method, host, canonicalHash)])
+                      )
+                      discoveredTemplates
+            )
+            grouped
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts
     Log.logInfo "Endpoint template discovery complete" ("project_id", pid.toText, "endpoint_count", length endpoints)
@@ -1652,7 +1657,10 @@ endpointTemplateDiscovery pid = do
     unembedded <- Endpoints.getUnembeddedEndpoints pid
     let fetchTexts = Map.fromList <$> Endpoints.getEmbeddedEndpointTexts pid
     embedAndMerge
-      pid ctx "endpoint" unembedded
+      pid
+      ctx
+      "endpoint"
+      unembedded
       (\(_, _, path) -> path)
       (view _1)
       Endpoints.updateEndpointEmbeddings
