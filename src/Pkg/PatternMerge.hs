@@ -21,6 +21,7 @@ import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Pkg.Drain qualified as Drain
 import Relude
 
@@ -53,14 +54,33 @@ embeddingTextForError errType msg
 -- >>> cosineSimilarity [] []
 -- 0.0
 cosineSimilarity :: [Float] -> [Float] -> Float
-cosineSimilarity xs ys
-  | null xs || length xs /= length ys = 0.0
+cosineSimilarity xs ys = cosineSimU (VU.fromList xs) (VU.fromList ys)
+
+
+-- | Fast cosine similarity on unboxed vectors with pre-rounded output.
+cosineSimU :: VU.Vector Float -> VU.Vector Float -> Float
+cosineSimU xs ys
+  | VU.null xs || VU.length xs /= VU.length ys = 0.0
   | normA == 0 || normB == 0 = 0.0
   | otherwise = fromIntegral (round (dotP / (normA * normB) * 100 :: Float) :: Int) / 100
   where
-    dotP = sum $ zipWith (*) xs ys
-    normA = sqrt $ sum $ map (^ (2 :: Int)) xs
-    normB = sqrt $ sum $ map (^ (2 :: Int)) ys
+    dotP = VU.sum $ VU.zipWith (*) xs ys
+    normA = sqrt $ VU.sum $ VU.map (^ (2 :: Int)) xs
+    normB = sqrt $ VU.sum $ VU.map (^ (2 :: Int)) ys
+
+
+-- | Cosine similarity using pre-computed norms for both vectors.
+cosineSimWithNorms :: (VU.Vector Float, Float) -> (VU.Vector Float, Float) -> Float
+cosineSimWithNorms (xs, normA) (ys, normB)
+  | VU.null xs || VU.length xs /= VU.length ys = 0.0
+  | normA == 0 || normB == 0 = 0.0
+  | otherwise = fromIntegral (round (dotP / (normA * normB) * 100 :: Float) :: Int) / 100
+  where
+    dotP = VU.sum $ VU.zipWith (*) xs ys
+
+
+vecNorm :: VU.Vector Float -> Float
+vecNorm v = sqrt $ VU.sum $ VU.map (^ (2 :: Int)) v
 
 
 autoMergeThreshold :: Float
@@ -74,6 +94,7 @@ ambiguousThreshold = 0.75
 -- | Assign new patterns to existing centroids based on cosine similarity.
 -- Returns (auto-merge assignments, ambiguous pairs needing LLM judge).
 -- Patterns below ambiguousThreshold remain standalone (not returned).
+-- Pre-computes centroid norms and uses unboxed vectors for O(n*m) with low constant factor.
 --
 -- >>> assignToCentroids [("c1", [1,0,0])] [("n1", [1,0,0])]
 -- ([("n1","c1")],[])
@@ -83,13 +104,16 @@ ambiguousThreshold = 0.75
 assignToCentroids :: [(a, [Float])] -> [(a, [Float])] -> ([(a, a)], [(a, a)])
 assignToCentroids centroids newPatterns = foldl' classify ([], []) newPatterns
   where
+    centroidsU = map (\(cid, emb) -> let v = VU.fromList emb in (cid, v, vecNorm v)) centroids
     classify (merges, ambiguous) (newId, newEmb) =
-      case bestMatch newEmb centroids of
-        Just (centId, sim)
-          | sim >= autoMergeThreshold -> ((newId, centId) : merges, ambiguous)
-          | sim >= ambiguousThreshold -> (merges, (newId, centId) : ambiguous)
-        _ -> (merges, ambiguous)
-    bestMatch emb cs = case mapMaybe (\(cid, cemb) -> let s = cosineSimilarity emb cemb in bool Nothing (Just (cid, s)) (s >= ambiguousThreshold)) cs of
+      let v = VU.fromList newEmb
+          newNormed = (v, vecNorm v)
+       in case bestMatch newNormed centroidsU of
+            Just (centId, sim)
+              | sim >= autoMergeThreshold -> ((newId, centId) : merges, ambiguous)
+              | sim >= ambiguousThreshold -> (merges, (newId, centId) : ambiguous)
+            _ -> (merges, ambiguous)
+    bestMatch newNormed cs = case mapMaybe (\(cid, cemb, cnorm) -> let s = cosineSimWithNorms newNormed (cemb, cnorm) in bool Nothing (Just (cid, s)) (s >= ambiguousThreshold)) cs of
       [] -> Nothing
       matches -> Just $ maximumBy (comparing snd) matches
 

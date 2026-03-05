@@ -1669,6 +1669,7 @@ endpointTemplateDiscovery pid = do
       fetchTexts
   -- Step 3: Migrate data and delete all merged endpoints
   mergedPairs <- Endpoints.getMergedEndpointPairs pid
+  Log.logInfo "Endpoint merge cleanup starting" ("project_id", pid.toText, "merged_count", length mergedPairs)
   Endpoints.migrateAndDeleteMergedEndpoints mergedPairs
   unless (null mergedPairs) do
     Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
