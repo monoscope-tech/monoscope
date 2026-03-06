@@ -18,8 +18,8 @@ import Data.HashMap.Strict qualified as HM
 import Data.List as L (foldl, partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
-import Data.Pool (withResource)
 import Data.Set qualified as Set
+import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -1394,27 +1394,41 @@ processAPIChangeAnomalies pid targetHashes = do
     existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
     case existingIssueM of
       Just existingIssue -> do
-        let apiChangeData =
-              Issues.APIChangeData
-                { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
-                , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
-                , endpointHost = "Unknown"
-                , anomalyHashes = V.map (.targetHash) anomalies
-                , shapeChanges = V.empty
-                , formatChanges = V.empty
-                , newFields = V.concatMap (.shapeNewUniqueFields) anomalies
-                , deletedFields = V.concatMap (.shapeDeletedFields) anomalies
-                , modifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
-                }
-        Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
+        let allNewFields = V.concatMap (.shapeNewUniqueFields) anomalies
+            allDeletedFields = V.concatMap (.shapeDeletedFields) anomalies
+            allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
+            hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+            hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
+        Relude.when hasChanges do
+          let apiChangeData =
+                Issues.APIChangeData
+                  { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
+                  , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
+                  , endpointHost = "Unknown"
+                  , anomalyHashes = V.map (.targetHash) anomalies
+                  , shapeChanges = V.empty
+                  , formatChanges = V.empty
+                  , newFields = allNewFields
+                  , deletedFields = allDeletedFields
+                  , modifiedFields = allModifiedFields
+                  }
+          Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
         pure Nothing
       Nothing -> do
-        issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
-        Issues.insertIssue issue
-        _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-          createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-        let firstAnom = V.head anomalies
-        pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
+        let allNewFields = V.concatMap (.shapeNewUniqueFields) anomalies
+            allDeletedFields = V.concatMap (.shapeDeletedFields) anomalies
+            allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
+            hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+            hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
+        if not hasChanges
+          then pure Nothing
+          else do
+            issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
+            Issues.insertIssue issue
+            _ <- liftIO $ withResource authCtx.jobsPool \conn ->
+              createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+            let firstAnom = V.head anomalies
+            pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
 
   -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do
@@ -1532,6 +1546,14 @@ enhanceIssuesWithLLM pid issueIds = do
                     _ <- Enhancement.updateIssueClassification issue.id isCritical breakingCount incrementalCount
                     Log.logInfo "Successfully enhanced and classified issue" (issueId, isCritical, breakingCount)
 
+                -- Analyze error patterns for root cause and category
+                analysisResult <- Enhancement.analyzeErrorPattern ctx issue
+                case analysisResult of
+                  Left _ -> pure () -- not a runtime exception or LLM failure
+                  Right (rootCause, category) -> do
+                    epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
+                    for_ epM \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id rootCause category
+
                 Log.logInfo "Successfully enhanced issue" issueId
 
 
@@ -1548,47 +1570,39 @@ patternEmbeddingAndMerge pid = do
 embedAndMergeErrors :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 embedAndMergeErrors pid ctx = do
   unembedded <- PatternMergeDB.getUnembeddedErrorPatterns pid
-  embedAndMerge
-    pid
-    ctx
-    MergeConfig
-      { label = "error"
-      , items = unembedded
-      , itemText = \(_, et, msg) -> PatternMerge.embeddingTextForError et msg
-      , normalizeEmb = id
-      , toId = view _1
-      , updateEmbs = PatternMergeDB.updateErrorEmbeddings
-      , getCentroids = PatternMergeDB.getCanonicalErrorPatterns pid
-      , assignCanonical = PatternMergeDB.assignErrorsToCanonical
-      , fetchTexts = PatternMergeDB.fetchErrorTexts
-      , canMerge = \_ _ -> True
-      , judgeFn = mkJudge PatternMerge.buildJudgePrompt
-      , onCanonicalPath = \_ _ -> pure ()
-      , verifyMerge = Nothing
-      }
+  embedAndMerge pid ctx MergeConfig
+    { label = "error", items = unembedded
+    , itemText = \(_, et, msg) -> PatternMerge.embeddingTextForError et msg
+    , normalizeEmb = PatternMerge.normalizeErrorForEmbedding
+    , toId = view _1
+    , updateEmbs = PatternMergeDB.updateErrorEmbeddings
+    , getCentroids = PatternMergeDB.getCanonicalErrorPatterns pid
+    , assignCanonical = PatternMergeDB.assignErrorsToCanonical
+    , fetchTexts = PatternMergeDB.fetchErrorTexts
+    , canMerge = PatternMerge.errorCanMerge
+    , judgeFn = mkJudge PatternMerge.buildErrorJudgePrompt
+    , onCanonicalPath = \_ _ -> pure ()
+    , verifyMerge = Nothing
+    }
 
 
 embedAndMergeLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 embedAndMergeLogPatterns pid ctx = do
   unembedded <- PatternMergeDB.getUnembeddedLogPatterns pid
-  embedAndMerge
-    pid
-    ctx
-    MergeConfig
-      { label = "log"
-      , items = unembedded
-      , itemText = snd
-      , normalizeEmb = PatternMerge.normalizeForEmbedding
-      , toId = fst
-      , updateEmbs = PatternMergeDB.updateLogEmbeddings
-      , getCentroids = PatternMergeDB.getCanonicalLogPatterns pid
-      , assignCanonical = PatternMergeDB.assignLogsToCanonical
-      , fetchTexts = PatternMergeDB.fetchLogTexts
-      , canMerge = PatternMerge.logCanMerge
-      , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
-      , onCanonicalPath = \_ _ -> pure ()
-      , verifyMerge = Just PatternMergeDB.fetchLogSamples
-      }
+  embedAndMerge pid ctx MergeConfig
+    { label = "log", items = unembedded
+    , itemText = snd
+    , normalizeEmb = PatternMerge.normalizeForEmbedding
+    , toId = fst
+    , updateEmbs = PatternMergeDB.updateLogEmbeddings
+    , getCentroids = PatternMergeDB.getCanonicalLogPatterns pid
+    , assignCanonical = PatternMergeDB.assignLogsToCanonical
+    , fetchTexts = PatternMergeDB.fetchLogTexts
+    , canMerge = PatternMerge.logCanMerge
+    , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
+    , onCanonicalPath = \_ _ -> pure ()
+    , verifyMerge = Just PatternMergeDB.fetchLogSamples
+    }
 
 
 -- | Build a judge from a prompt builder. Calls LLM and parses the response.
@@ -1602,7 +1616,7 @@ data MergeConfig k a = MergeConfig
   { label :: Text
   , items :: [a]
   , itemText :: a -> Text
-  , normalizeEmb :: Text -> Text -- normalize text before embedding (e.g. unify placeholders)
+  , normalizeEmb :: Text -> Text  -- normalize text before embedding (e.g. unify placeholders)
   , toId :: a -> k
   , updateEmbs :: [(k, [Float])] -> ATBackgroundCtx Int64
   , getCentroids :: ATBackgroundCtx [(k, [Float])]
@@ -1714,24 +1728,20 @@ endpointTemplateDiscovery pid = do
   ctx <- ask @Config.AuthContext
   unless (T.null ctx.config.openaiApiKey) $ tryLog "endpointEmbedding" do
     unembedded <- Endpoints.getUnembeddedEndpoints pid
-    embedAndMerge
-      pid
-      ctx
-      MergeConfig
-        { label = "endpoint"
-        , items = unembedded
-        , itemText = \(_, _, path) -> path
-        , normalizeEmb = id
-        , toId = view _1
-        , updateEmbs = Endpoints.updateEndpointEmbeddings
-        , getCentroids = Endpoints.getCanonicalEndpoints pid
-        , assignCanonical = Endpoints.assignEndpointsToCanonical
-        , fetchTexts = Endpoints.fetchEndpointTexts
-        , canMerge = sameSegmentCount
-        , judgeFn = mkJudge PatternMerge.buildEndpointJudgePrompt
-        , onCanonicalPath = \eid path -> void $ Endpoints.setEndpointCanonicalTemplate eid path
-        , verifyMerge = Nothing
-        }
+    embedAndMerge pid ctx MergeConfig
+      { label = "endpoint", items = unembedded
+      , itemText = \(_, _, path) -> path
+      , normalizeEmb = id
+      , toId = view _1
+      , updateEmbs = Endpoints.updateEndpointEmbeddings
+      , getCentroids = Endpoints.getCanonicalEndpoints pid
+      , assignCanonical = Endpoints.assignEndpointsToCanonical
+      , fetchTexts = Endpoints.fetchEndpointTexts
+      , canMerge = sameSegmentCount
+      , judgeFn = mkJudge PatternMerge.buildEndpointJudgePrompt
+      , onCanonicalPath = \eid path -> void $ Endpoints.setEndpointCanonicalTemplate eid path
+      , verifyMerge = Nothing
+      }
   -- Step 3: Migrate data and delete all merged endpoints
   mergedPairs <- Endpoints.getMergedEndpointPairs pid
   Log.logInfo "Endpoint merge cleanup starting" ("project_id", pid.toText, "merged_count", length mergedPairs)

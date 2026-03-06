@@ -4,6 +4,7 @@ module Models.Apis.Issues.Enhancement (
   generateEnhancedDescription,
   classifyIssueCriticality,
   updateIssueClassification,
+  analyzeErrorPattern,
   IssueEnhancement (..),
 ) where
 
@@ -73,7 +74,13 @@ buildTitlePrompt issue =
           withIssueData @Issues.APIChangeData
             issue
             ( \d ->
-                [fmtTrim|Generate a concise, descriptive title for this API change.
+                let isNewEndpoint = V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
+                 in if isNewEndpoint
+                      then [fmtTrim|Generate a concise title for this newly discovered API endpoint.
+            Endpoint: {d.endpointMethod} {d.endpointPath}
+            Service: {Issues.serviceLabel issue.service}
+            This is a brand new endpoint that was just detected for the first time.|]
+                      else [fmtTrim|Generate a concise, descriptive title for this API change.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
@@ -150,7 +157,13 @@ buildDescriptionPrompt issue =
           withIssueData @Issues.APIChangeData
             issue
             ( \d ->
-                [fmtTrim|Describe this API change and its impact.
+                let isNewEndpoint = V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
+                 in if isNewEndpoint
+                      then [fmtTrim|Describe this newly discovered API endpoint.
+            Endpoint: {d.endpointMethod} {d.endpointPath}
+            Service: {Issues.serviceLabel issue.service}
+            This endpoint was just detected for the first time. Summarize what it likely does based on its path and method.|]
+                      else [fmtTrim|Describe this API change and its impact.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {show $ V.toList d.newFields}
             Deleted fields: {show $ V.toList d.deletedFields}
@@ -300,3 +313,36 @@ updateIssueClassification issueId isCritical breakingCount incrementalCount = do
         | breakingCount > 0 = "warning"
         | otherwise = "info"
   Issues.updateIssueCriticality issueId isCritical severity
+
+
+-- | Analyze a RuntimeException issue to extract root cause and error category.
+-- Returns (rootCause, category) on success.
+analyzeErrorPattern :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text))
+analyzeErrorPattern authCtx issue
+  | issue.issueType /= Issues.RuntimeException = pure $ Left "not a runtime exception"
+  | otherwise = runExceptT do
+      r <- ExceptT $ ELLM.callLLM authCtx.config.openaiSmallModel (buildAnalysisPrompt issue) authCtx.config.openaiApiKey
+      case lines (T.strip r) of
+        (rootCause : category : _) -> pure (T.strip rootCause, T.toLower $ T.strip category)
+        _ -> hoistEither $ Left "Invalid response format from LLM"
+
+
+buildAnalysisPrompt :: Issues.Issue -> Text
+buildAnalysisPrompt issue =
+  [text|Analyze this runtime error and respond with exactly 2 lines:
+Line 1: Root cause - a 1-2 sentence explanation of WHY this error occurs
+Line 2: Category - exactly one of: network, auth, validation, resource, config, dependency, runtime, data, timeout, permissions
+
+Error type: $errType
+Message: $msg
+Stack trace: $stack
+Request: $req
+
+Example response:
+The database connection pool is exhausted because queries are not being released back to the pool after completion.
+resource|]
+  where
+    errType = withIssueData @Issues.RuntimeExceptionData issue (.errorType) ""
+    msg = withIssueData @Issues.RuntimeExceptionData issue (T.take 300 . (.errorMessage)) ""
+    stack = withIssueData @Issues.RuntimeExceptionData issue (T.take 500 . (.stackTrace)) ""
+    req = withIssueData @Issues.RuntimeExceptionData issue (\d -> fromMaybe "Unknown" d.requestMethod <> " " <> fromMaybe "Unknown" d.requestPath) "Unknown"

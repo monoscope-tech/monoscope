@@ -492,7 +492,9 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
       , critical = isCritical
       , severity = if isCritical then "critical" else "warning"
-      , title = "API structure has changed"
+      , title = if V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+          then "New endpoint detected: " <> apiChangeData.endpointMethod <> " " <> apiChangeData.endpointPath
+          else "API structure has changed"
       , recommendedAction = "Review the API changes and update your integration accordingly."
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
       , issueData = apiChangeData
