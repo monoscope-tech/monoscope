@@ -158,6 +158,10 @@ jobs:
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
+        with:
+          # Use docker driver so --mount=type=cache volumes persist on the self-hosted runner.
+          # The default docker-container driver creates ephemeral builders that lose cache mounts.
+          driver: docker
 
       - name: Login to Container Registry
         uses: docker/login-action@v3
@@ -175,13 +179,16 @@ jobs:
           tags: |
             ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:${{ github.sha }}
             ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:latest
-          cache-from: |
-            type=gha
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache
-          cache-to: |
-            type=gha,mode=max
-            type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache,mode=max
-          platforms: linux/amd64
+          # cache-from/cache-to and platforms are incompatible with docker driver.
+          # Caching is handled by --mount=type=cache in Dockerfile instead.
+          # Re-enable these if switching back to docker-container driver (ubuntu-latest).
+          # cache-from: |
+          #   type=gha
+          #   type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache
+          # cache-to: |
+          #   type=gha,mode=max
+          #   type=registry,ref=ghcr.io/${{ github.repository_owner }}/${{ github.event.repository.name }}:buildcache,mode=max
+          # platforms: linux/amd64
           provenance: false
           build-args: |
             BUILDKIT_INLINE_CACHE=1
