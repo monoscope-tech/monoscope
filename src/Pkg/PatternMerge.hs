@@ -5,12 +5,16 @@ module Pkg.PatternMerge (
   autoMergeThreshold,
   ambiguousThreshold,
   buildJudgePrompt,
+  buildLogClusterJudgePrompt,
   buildEndpointJudgePrompt,
   parseJudgeResponse,
   jaccardSimilarity,
   isPlaceholderToken,
   jaccardMergeThreshold,
   mergeByJaccard,
+  logCanMerge,
+  verifyMergeDecision,
+  normalizeForEmbedding,
 )
 where
 
@@ -27,6 +31,7 @@ import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Pkg.Drain qualified as Drain
 import Relude
+import Text.Regex.TDFA ((=~))
 
 
 -- | Construct embedding text for an error pattern.
@@ -197,6 +202,7 @@ buildEndpointJudgePrompt pairs = systemPart <> "\n\n" <> pathsPart <> "\n" <> pa
 
 
 -- | Token considered a placeholder (excluded from Jaccard comparison).
+-- Matches any `{…}` token broadly — suitable for Jaccard where any braced token is a placeholder.
 --
 -- >>> isPlaceholderToken "<*>"
 -- True
@@ -208,6 +214,32 @@ buildEndpointJudgePrompt pairs = systemPart <> "\n\n" <> pathsPart <> "\n" <> pa
 -- False
 isPlaceholderToken :: Text -> Bool
 isPlaceholderToken t = t == "<*>" || (T.isPrefixOf "{" t && T.isSuffixOf "}" t)
+
+
+-- | Normalize a log pattern for embedding by replacing known Drain placeholders
+-- with a uniform `<*>` token. This ensures patterns that differ only in
+-- placeholder type (e.g. `{uuid}` vs `<*>`) produce identical embedding text.
+-- JSON blobs and URL path segments in braces are preserved.
+--
+-- >>> normalizeForEmbedding "user {uuid} logged in from {ipv4}"
+-- "user <*> logged in from <*>"
+--
+-- >>> normalizeForEmbedding "user <*> logged in from <*>"
+-- "user <*> logged in from <*>"
+--
+-- >>> normalizeForEmbedding "balance {integer} from {hex} to {hex}"
+-- "balance <*> from <*> to <*>"
+--
+-- >>> normalizeForEmbedding "no placeholders here"
+-- "no placeholders here"
+--
+-- >>> normalizeForEmbedding "{\"context\":\"NestApplication\"}"
+-- "{\"context\":\"NestApplication\"}"
+--
+-- >>> normalizeForEmbedding "error {/payments} not found"
+-- "error {/payments} not found"
+normalizeForEmbedding :: Text -> Text
+normalizeForEmbedding = T.unwords . map Drain.normalizePlaceholder . T.words
 
 
 -- | Extract non-placeholder content tokens as a Set (for reuse in hot loops).
@@ -261,3 +293,94 @@ mergeByJaccard threshold results = V.fromList $ map fst $ toList $ foldl' tryMer
       case Seq.findIndexL (\(_, aToks) -> jaccardOnSets aToks xToks >= threshold) acc of
         Just idx -> let (a, aToks) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency}, aToks) acc
         Nothing -> acc Seq.|> (x, xToks)
+
+
+-- | Cluster-aware LLM judge prompt inspired by LogBatcher (batch-as-demonstration)
+-- and Lemur (Chain-of-Thought reasoning). Shows all templates in context with sample logs,
+-- then asks for structured Structure→Semantics→Decision reasoning per pair.
+buildLogClusterJudgePrompt :: [(Text, Text)] -> Text
+buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n" <> pairsPart
+  where
+    allTemplates = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
+    templateIndex = Map.fromList $ zip allTemplates [0 :: Int ..]
+    systemPart =
+      T.unlines
+        [ "You are a log pattern deduplication judge. Below is a numbered list of log pattern"
+        , "templates, followed by candidate pairs to evaluate."
+        , ""
+        , "Placeholders like <*>, {uuid}, {integer}, {ipv4}, {hex} represent variable parameters."
+        , "Differences in placeholder TYPE alone (e.g. <*> vs {uuid}) do NOT warrant separation —"
+        , "they are all parameter slots. Focus on the fixed tokens that define the pattern's meaning."
+        , ""
+        , "For each pair, reason through these steps:"
+        , "1. STRUCTURE: What fixed tokens differ between the templates?"
+        , "2. SEMANTICS: Do the differing tokens change the operational meaning?"
+        , "3. DECISION: MERGE if same operation with cosmetic differences; KEEP_SEPARATE if genuinely distinct."
+        , ""
+        , "MERGE examples:"
+        , "  'middleware - <*> <*> get <*> µs' vs 'middleware - <*> <*> post <*> µs'"
+        , "    → KEEP_SEPARATE (different HTTP methods are semantically distinct operations)"
+        , "  'user <*> logged in from <*>' vs 'user {uuid} logged in from {ipv4}'"
+        , "    → MERGE (same event, only placeholder types differ)"
+        , ""
+        , "Respond with a JSON array of objects, one per pair:"
+        , "  - \"index\": the pair index (0-based)"
+        , "  - \"decision\": \"MERGE\" or \"KEEP_SEPARATE\""
+        , ""
+        , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
+        ]
+    templatesPart = T.unlines $ "Templates:" : zipWith (\i t -> "  [" <> show i <> "] " <> t) [0 :: Int ..] allTemplates
+    pairsPart = T.unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
+    formatPair i (a, b) =
+      let aIdx = fromMaybe 0 $ Map.lookup a templateIndex
+          bIdx = fromMaybe 0 $ Map.lookup b templateIndex
+       in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
+
+
+-- | Pre-filter gate: patterns must share at least one meaningful non-placeholder token.
+-- Excludes log levels, common prepositions, and single-char punctuation.
+--
+-- >>> logCanMerge "INFO user <*> logged in" "INFO user <*> signed in"
+-- True
+--
+-- >>> logCanMerge "middleware <*> GET <*>" "payment <*> processed <*>"
+-- False
+--
+-- >>> logCanMerge "<*> <*> <*>" "<*> <*>"
+-- True
+logCanMerge :: Text -> Text -> Bool
+logCanMerge a b =
+  let toksA = meaningfulTokens a
+      toksB = meaningfulTokens b
+   in (Set.null toksA && Set.null toksB) || not (Set.null $ Set.intersection toksA toksB)
+  where
+    meaningfulTokens = Set.filter (not . isTrivial) . contentTokens
+    isTrivial t = Set.member (T.toLower t) trivialTokens || T.length t <= 1
+    trivialTokens =
+      Set.fromList
+        [ "info", "warn", "error", "debug", "trace", "fatal"
+        , "the", "a", "an", "in", "on", "at", "to", "for", "of", "from", "with", "by", "is", "was"
+        , "-", "--", "->", "=", "==", ":", "::", "|"
+        ]
+
+
+-- | AdaParser-inspired post-merge verification. Converts templateA to a regex and checks
+-- if sampleLogB matches it. Catches nonsensical LLM merge decisions.
+--
+-- >>> verifyMergeDecision "user <*> logged in from <*>" "user alice logged in from 10.0.0.1"
+-- True
+--
+-- >>> verifyMergeDecision "user <*> logged in" "payment processed for order 123"
+-- False
+--
+-- >>> verifyMergeDecision "GET /api/<*>/users" "GET /api/v2/users"
+-- True
+--
+-- >>> verifyMergeDecision "error in <*> module" "error in auth module"
+-- True
+verifyMergeDecision :: Text -> Text -> Bool
+verifyMergeDecision template sampleLog = (toString sampleLog :: String) =~ (toString regexPattern :: String)
+  where
+    regexPattern = "^" <> T.intercalate ".+" (map escapeRegex $ T.splitOn "<*>" expanded) <> "$"
+    expanded = normalizeForEmbedding template
+    escapeRegex = T.concatMap \c -> if c `elem` (".+*?^${}()|[]\\" :: String) then "\\" <> one c else one c

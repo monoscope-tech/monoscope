@@ -13,9 +13,12 @@ module Pkg.Drain (
   generateSummaryDrainTokens,
   tokenizeForDrain,
   getAllLogGroups,
+  normalizePlaceholder,
+  drainPlaceholders,
 ) where
 
 import Data.Char (isSpace)
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
@@ -79,8 +82,8 @@ data DrainConfig = DrainConfig
 defaultDrainConfig :: DrainConfig
 defaultDrainConfig =
   DrainConfig
-    { similarityThreshold = 0.5
-    , maxLogGroups = 50
+    { similarityThreshold = 0.7
+    , maxLogGroups = 1000
     , wildcardToken = "<*>"
     }
 
@@ -267,19 +270,52 @@ tokenizeJsonLike txt
            in chunk : go rest
 
 
+-- | Known typed placeholders produced by 'replaceAllFormats'. Normalized to @\<*\>@
+-- before Drain tokenization so patterns differing only in placeholder type
+-- (e.g. @{uuid}@ vs @{integer}@) route to the same Drain tree branch.
+drainPlaceholders :: Set.Set Text
+drainPlaceholders = Set.fromList
+  [ "{integer}", "{float}", "{hex}", "{uuid}", "{ipv4}", "{port}", "{email}"
+  , "{jwt}", "{ssn}", "{sha256}", "{sha1}", "{md5}"
+  , "{YYYY-MM-DD}", "{YYYY-MM-DD HH:MM:SS}", "{YYYY-MM-DDThh:mm:ss.sTZD}"
+  , "{HH:MM:SS}", "{HH:MM:SS.mmm}", "{Mon DD, YYYY}", "{DD-Mon-YYYY}"
+  ]
+
+
+-- | Replace a known Drain placeholder with @\<*\>@, pass other tokens through.
+--
+-- >>> normalizePlaceholder "{uuid}"
+-- "<*>"
+--
+-- >>> normalizePlaceholder "{integer}"
+-- "<*>"
+--
+-- >>> normalizePlaceholder "<*>"
+-- "<*>"
+--
+-- >>> normalizePlaceholder "hello"
+-- "hello"
+--
+-- >>> normalizePlaceholder "{\"context\":\"Nest\"}"
+-- "{\"context\":\"Nest\"}"
+normalizePlaceholder :: Text -> Text
+normalizePlaceholder t = if Set.member t drainPlaceholders then "<*>" else t
+
+
 generateDrainTokens :: T.Text -> V.Vector T.Text
 generateDrainTokens content =
   let replaced = replaceAllFormats content
-   in if looksLikeJson replaced
+   in V.map normalizePlaceholder $ if looksLikeJson replaced
         then V.fromList (tokenizeJsonLike replaced)
         else V.fromList $ words replaced
 
 
 -- | Tokenize already-normalized text for Drain without re-running replaceAllFormats.
 tokenizeForDrain :: T.Text -> V.Vector T.Text
-tokenizeForDrain content
-  | looksLikeJson content = V.fromList (tokenizeJsonLike content)
-  | otherwise = V.fromList $ words content
+tokenizeForDrain content = V.map normalizePlaceholder $
+  if looksLikeJson content
+    then V.fromList (tokenizeJsonLike content)
+    else V.fromList $ words content
 
 
 -- | Markup-aware tokenizer for summary fields that preserves @field;style⇒value@ format.
@@ -290,13 +326,13 @@ tokenizeForDrain content
 --
 -- >>> import Data.Vector qualified as V
 -- >>> V.toList $ generateSummaryDrainTokens "status_code;badge-2xx⇒200"
--- ["status_code;badge-2xx\8658{integer}"]
+-- ["status_code;badge-2xx\8658<*>"]
 --
 -- >>> V.toList $ generateSummaryDrainTokens "user logged in at 192.168.1.1"
--- ["user","logged","in","at","{ipv4}"]
+-- ["user","logged","in","at","<*>"]
 --
 -- >>> V.toList $ generateSummaryDrainTokens "method;bold⇒GET path;code⇒/api/users/123 status_code;badge-2xx⇒200"
--- ["method;bold\8658GET","path;code\8658/api/users/{integer}","status_code;badge-2xx\8658{integer}"]
+-- ["method;bold\8658GET","path;code\8658/api/users/{integer}","status_code;badge-2xx\8658<*>"]
 --
 -- >>> V.toList $ generateSummaryDrainTokens "method;bold⇒GET resource;text-textWeak⇒{\"container\":{\"id\":\"abc\"}} INFO started"
 -- ["method;bold\8658GET","INFO","started"]
@@ -310,8 +346,9 @@ generateSummaryDrainTokens content =
         ["resource;text-textWeak\8658", "attributes;text-textWeak\8658"]
     normalizeMarkupToken tok = case T.breakOn "\8658" tok of
       (prefix, rest)
-        | Just val <- T.stripPrefix "\8658" rest -> prefix <> "\8658" <> replaceAllFormats val
-        | otherwise -> replaceAllFormats tok
+        | Just val <- T.stripPrefix "\8658" rest -> prefix <> "\8658" <> normalizePlaceholders (replaceAllFormats val)
+        | otherwise -> normalizePlaceholders (replaceAllFormats tok)
+    normalizePlaceholders = T.unwords . map normalizePlaceholder . T.words
 
 
 -- | Fold items into a DrainTree using a custom tokenizer.

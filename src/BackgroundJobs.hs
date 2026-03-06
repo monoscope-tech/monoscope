@@ -1551,6 +1551,7 @@ embedAndMergeErrors pid ctx = do
   embedAndMerge pid ctx MergeConfig
     { label = "error", items = unembedded
     , itemText = \(_, et, msg) -> PatternMerge.embeddingTextForError et msg
+    , normalizeEmb = id
     , toId = view _1
     , updateEmbs = PatternMergeDB.updateErrorEmbeddings
     , getCentroids = PatternMergeDB.getCanonicalErrorPatterns pid
@@ -1559,6 +1560,7 @@ embedAndMergeErrors pid ctx = do
     , canMerge = \_ _ -> True
     , judgeFn = mkJudge PatternMerge.buildJudgePrompt
     , onCanonicalPath = \_ _ -> pure ()
+    , verifyMerge = Nothing
     }
 
 
@@ -1568,14 +1570,16 @@ embedAndMergeLogPatterns pid ctx = do
   embedAndMerge pid ctx MergeConfig
     { label = "log", items = unembedded
     , itemText = snd
+    , normalizeEmb = PatternMerge.normalizeForEmbedding
     , toId = fst
     , updateEmbs = PatternMergeDB.updateLogEmbeddings
     , getCentroids = PatternMergeDB.getCanonicalLogPatterns pid
     , assignCanonical = PatternMergeDB.assignLogsToCanonical
     , fetchTexts = PatternMergeDB.fetchLogTexts
-    , canMerge = \_ _ -> True
-    , judgeFn = mkJudge PatternMerge.buildJudgePrompt
+    , canMerge = PatternMerge.logCanMerge
+    , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
     , onCanonicalPath = \_ _ -> pure ()
+    , verifyMerge = Just PatternMergeDB.fetchLogSamples
     }
 
 
@@ -1590,6 +1594,7 @@ data MergeConfig k a = MergeConfig
   { label :: Text
   , items :: [a]
   , itemText :: a -> Text
+  , normalizeEmb :: Text -> Text  -- normalize text before embedding (e.g. unify placeholders)
   , toId :: a -> k
   , updateEmbs :: [(k, [Float])] -> ATBackgroundCtx Int64
   , getCentroids :: ATBackgroundCtx [(k, [Float])]
@@ -1598,12 +1603,13 @@ data MergeConfig k a = MergeConfig
   , canMerge :: Text -> Text -> Bool
   , judgeFn :: [(Text, Text)] -> ATBackgroundCtx (Either Text [(Int, Bool, Maybe Text)])
   , onCanonicalPath :: k -> Text -> ATBackgroundCtx ()
+  , verifyMerge :: Maybe ([k] -> ATBackgroundCtx (Map k Text))
   }
 
 
 embedAndMerge :: Ord k => Projects.ProjectId -> Config.AuthContext -> MergeConfig k a -> ATBackgroundCtx ()
 embedAndMerge pid ctx cfg = unless (null cfg.items) do
-  let docs = map (\item -> Langchain.DocumentLoader.Core.Document (toLazy $ cfg.itemText item) mempty) cfg.items
+  let docs = map (\item -> Langchain.DocumentLoader.Core.Document (toLazy $ cfg.normalizeEmb $ cfg.itemText item) mempty) cfg.items
   embedResult <- ELLM.embedDocuments (embeddingConfig ctx) docs
   case embedResult of
     Left err -> Log.logAttention ("Failed to embed " <> cfg.label <> " patterns") (pid, err)
@@ -1620,7 +1626,14 @@ embedAndMerge pid ctx cfg = unless (null cfg.items) do
       let allTexts = newTextMap <> textMap
           validMerge (newId, canId) = fromMaybe False $ cfg.canMerge <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts
           !validAutoMerges = filter validMerge autoMerges
-      void $ cfg.assignCanonical validAutoMerges
+      -- Verify auto-merges against sample logs when verification is available
+      verifiedAutoMerges <- case cfg.verifyMerge of
+        Nothing -> pure validAutoMerges
+        Just fetchSamples -> do
+          let mergeNewIds = map fst validAutoMerges
+          samples <- fetchSamples mergeNewIds
+          pure $ filter (\(newId, canId) -> fromMaybe True $ PatternMerge.verifyMergeDecision <$> Map.lookup canId allTexts <*> Map.lookup newId samples) validAutoMerges
+      void $ cfg.assignCanonical verifiedAutoMerges
       let !validAmbiguous = filter validMerge ambiguous
       unless (null validAmbiguous) do
         let pairs = mapMaybe (\(newId, canId) -> (,) <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts) validAmbiguous
@@ -1631,7 +1644,14 @@ embedAndMerge pid ctx cfg = unless (null cfg.items) do
             Right decisions -> do
               let ambiguousV = V.fromList validAmbiguous
                   merges = mapMaybe (\(idx, shouldMerge, _) -> bool Nothing (ambiguousV V.!? idx) shouldMerge) decisions
-              void $ cfg.assignCanonical merges
+              -- Verify LLM judge merges against sample logs
+              verifiedMerges <- case cfg.verifyMerge of
+                Nothing -> pure merges
+                Just fetchSamples -> do
+                  let mergeNewIds = map fst merges
+                  samples <- fetchSamples mergeNewIds
+                  pure $ filter (\(newId, canId) -> fromMaybe True $ PatternMerge.verifyMergeDecision <$> Map.lookup canId allTexts <*> Map.lookup newId samples) merges
+              void $ cfg.assignCanonical verifiedMerges
               forM_ decisions \(idx, shouldMerge, mPath) ->
                 when shouldMerge $ for_ ((,) <$> (snd <$> ambiguousV V.!? idx) <*> mPath) (uncurry cfg.onCanonicalPath)
 
@@ -1689,6 +1709,7 @@ endpointTemplateDiscovery pid = do
     embedAndMerge pid ctx MergeConfig
       { label = "endpoint", items = unembedded
       , itemText = \(_, _, path) -> path
+      , normalizeEmb = id
       , toId = view _1
       , updateEmbs = Endpoints.updateEndpointEmbeddings
       , getCentroids = Endpoints.getCanonicalEndpoints pid
@@ -1697,6 +1718,7 @@ endpointTemplateDiscovery pid = do
       , canMerge = sameSegmentCount
       , judgeFn = mkJudge PatternMerge.buildEndpointJudgePrompt
       , onCanonicalPath = \eid path -> void $ Endpoints.setEndpointCanonicalTemplate eid path
+      , verifyMerge = Nothing
       }
   -- Step 3: Migrate data and delete all merged endpoints
   mergedPairs <- Endpoints.getMergedEndpointPairs pid

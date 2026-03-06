@@ -27,19 +27,19 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       length logGroups `shouldBe` 3
       let patterns = V.map (.templateStr) logGroups
       V.toList patterns `shouldMatchList`
-        [ "DELETE /api/users/{integer} HTTP/{float} {integer}"
-        , "POST /api/users HTTP/{float} {integer}"
-        , "GET <*> HTTP/{float} {integer}"
+        [ "DELETE /api/users/{integer} HTTP/{float} <*>"
+        , "POST /api/users HTTP/{float} <*>"
+        , "GET <*> HTTP/{float} <*>"
         ]
-      let log1 = V.find (\g -> g.templateStr ==  "GET <*> HTTP/{float} {integer}") logGroups
+      let log1 = V.find (\g -> g.templateStr ==  "GET <*> HTTP/{float} <*>") logGroups
       case log1 of
         Just g -> g.logIds `shouldBe` V.fromList ["log5", "log3", "log2", "log1"]
         Nothing -> error "log1 pattern not found"
-      let log2 = V.find (\g -> g.templateStr ==  "POST /api/users HTTP/{float} {integer}") logGroups
+      let log2 = V.find (\g -> g.templateStr ==  "POST /api/users HTTP/{float} <*>") logGroups
       case log2 of
         Just g -> g.logIds `shouldBe` V.fromList ["log4"]
         Nothing -> error "log2 pattern not found"
-      let log3 = V.find (\g -> g.templateStr ==  "DELETE /api/users/{integer} HTTP/{float} {integer}") logGroups
+      let log3 = V.find (\g -> g.templateStr ==  "DELETE /api/users/{integer} HTTP/{float} <*>") logGroups
       case log3 of
         Just g -> g.logIds `shouldBe` V.fromList ["log6"]
         Nothing -> error "log3 pattern not found"
@@ -79,9 +79,9 @@ spec = describe "DRAIN updateTreeWithLog" $ do
         [ "Initializing Redis connection <*>"
         , "Application ready to serve requests"
         , "Loading configuration from <*>"
-        , "Starting application on port {integer}"
+        , "Starting application on port <*>"
         ]
-      let log1 = V.find (\g -> g.templateStr == "Starting application on port {integer}") logGroups
+      let log1 = V.find (\g -> g.templateStr == "Starting application on port <*>") logGroups
       case log1 of
         Just g -> V.toList g.logIds `shouldMatchList` ["start3", "start2", "start1"]
         Nothing -> error "start1 pattern not found"
@@ -106,16 +106,16 @@ spec = describe "DRAIN updateTreeWithLog" $ do
       length logGroups `shouldBe` 4
       let patterns = V.map (.templateStr) logGroups
       V.toList patterns `shouldMatchList`
-        [ "ERROR Failed to authenticate user {email}"
+        [ "ERROR Failed to authenticate user <*>"
         , "ERROR Database connection timeout after {integer}ms"
-        , "WARN Retrying failed request attempt {integer} of {integer}"
+        , "WARN Retrying failed request attempt <*> of <*>"
         , "FATAL Out of memory heap size {integer}MB exceeded"
         ]
-      let log1 = V.find (\g -> g.templateStr == "WARN Retrying failed request attempt {integer} of {integer}") logGroups
+      let log1 = V.find (\g -> g.templateStr == "WARN Retrying failed request attempt <*> of <*>") logGroups
       case log1 of
         Just g -> V.toList g.logIds `shouldMatchList` ["err7", "err6", "err5"]
         Nothing -> error "err1 pattern not found"
-      let log2 = V.find (\g -> g.templateStr == "ERROR Failed to authenticate user {email}") logGroups
+      let log2 = V.find (\g -> g.templateStr == "ERROR Failed to authenticate user <*>") logGroups
       case log2 of
         Just g -> V.toList g.logIds `shouldMatchList` ["err2", "err1"]
         Nothing -> error "err2 pattern not found"
@@ -135,21 +135,22 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           logGroups = getAllLogGroups updatedTree
       let patterns = V.map (.templateStr) logGroups
       V.toList patterns `shouldMatchList`
-        [  "{YYYY-MM-DDThh:mm:ss.sTZD} INFO User <*> <*> <*>"
-        , "{YYYY-MM-DDThh:mm:ss.sTZD} ERROR Invalid token provided <*>"
-        , "{YYYY-MM-DDThh:mm:ss.sTZD} WARN Rate limit exceeded client={ipv4}"
+        [ "<*> INFO User login successful userId={integer}"
+        , "<*> INFO User logout userId={integer} sessionTime={integer}s"
+        , "<*> ERROR Invalid token provided <*>"
+        , "<*> WARN Rate limit exceeded client={ipv4}"
         ]
-      let log1 = V.find (\g -> g.templateStr == "{YYYY-MM-DDThh:mm:ss.sTZD} INFO User <*> <*> <*>") logGroups
+      let log1 = V.find (\g -> g.templateStr == "<*> INFO User login successful userId={integer}") logGroups
       case log1 of
         Just g -> do
           "ts1" `V.elem` g.logIds `shouldBe` True
           "ts2" `V.elem` g.logIds `shouldBe` True
         Nothing -> error "ts1 pattern not found"
-      let log3 = V.find (\g -> g.templateStr == "{YYYY-MM-DDThh:mm:ss.sTZD} ERROR Invalid token provided <*>") logGroups
+      let log3 = V.find (\g -> g.templateStr == "<*> ERROR Invalid token provided <*>") logGroups
       case log3 of
         Just g -> V.toList g.logIds `shouldMatchList` ["ts5", "ts6"]
         Nothing -> error "ts5 pattern not found"
-      let log4 = V.find (\g -> g.templateStr == "{YYYY-MM-DDThh:mm:ss.sTZD} WARN Rate limit exceeded client={ipv4}") logGroups
+      let log4 = V.find (\g -> g.templateStr == "<*> WARN Rate limit exceeded client={ipv4}") logGroups
       case log4 of
         Just g -> V.toList g.logIds `shouldMatchList` ["ts7", "ts8"]
         Nothing -> error "ts7 pattern not found"
@@ -163,11 +164,12 @@ spec = describe "DRAIN updateTreeWithLog" $ do
         [ "payment-service processing payment amount={float} <*>"
         , "auth-service JWT validation successful for user <*>"
         , "user-service database query SELECT * FROM users WHERE id={integer} took {integer}ms"
-        , "user-service received request <*> <*> <*>"
+        , "user-service received request GET /users/profile traceId=abc{integer}"
+        , "user-service received request POST /users/create traceId=def{integer}"
         ]
-      let log1 = V.find (\g -> g.templateStr == "user-service received request <*> <*> <*>" ) logGroups
+      let log1 = V.find (\g -> g.templateStr == "user-service received request GET /users/profile traceId=abc{integer}") logGroups
       case log1 of
-        Just g -> V.toList g.logIds `shouldMatchList` ["svc2", "svc1"]
+        Just g -> V.toList g.logIds `shouldMatchList` ["svc1"]
         Nothing -> error "svc1 pattern not found"
       let log3 = V.find (\g -> g.templateStr == "user-service database query SELECT * FROM users WHERE id={integer} took {integer}ms") logGroups
       case log3 of
@@ -191,8 +193,11 @@ spec = describe "DRAIN updateTreeWithLog" $ do
           tree3 = processSum "s3" "method;bold⇒GET path;code⇒/api/orders/789 status_code;badge-2xx⇒200" testTime tree2
           logGroups = getAllLogGroups tree3
           patterns = V.toList $ V.map (.templateStr) logGroups
-      length logGroups `shouldBe` 1
-      patterns `shouldMatchList` ["method;bold⇒GET <*> status_code;badge-2xx⇒{integer}"]
+      length logGroups `shouldBe` 2
+      patterns `shouldMatchList`
+        [ "method;bold⇒GET path;code⇒/api/users/{integer} status_code;badge-2xx⇒<*>"
+        , "method;bold⇒GET path;code⇒/api/orders/{integer} status_code;badge-2xx⇒<*>"
+        ]
 
 basicHttpLogs :: [(Text, Text)]
 basicHttpLogs = 

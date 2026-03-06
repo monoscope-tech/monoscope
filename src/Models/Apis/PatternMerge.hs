@@ -17,6 +17,7 @@ module Models.Apis.PatternMerge (
   getLogPatternGroupMembers,
   getLogPatternMemberCount,
   fetchLogTexts,
+  fetchLogSamples,
 )
 where
 
@@ -186,3 +187,10 @@ fetchLogTexts [] = pure mempty
 fetchLogTexts ids =
   Map.fromList
     <$> PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
+
+
+fetchLogSamples :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
+fetchLogSamples [] = pure mempty
+fetchLogSamples ids =
+  Map.fromList . mapMaybe (\(pid, mSample) -> (pid,) <$> mSample)
+    <$> PG.query [sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
