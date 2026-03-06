@@ -178,7 +178,8 @@ getLogPatternMemberCount lid =
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
 fetchErrorTexts [] = pure mempty
 fetchErrorTexts ids =
-  Map.fromList . map (\(eid, et, msg) -> (eid, embeddingTextForError et msg))
+  Map.fromList
+    . map (\(eid, et, msg) -> (eid, embeddingTextForError et msg))
     <$> PG.query [sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
 
 
@@ -192,5 +193,6 @@ fetchLogTexts ids =
 fetchLogSamples :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogSamples [] = pure mempty
 fetchLogSamples ids =
-  Map.fromList . mapMaybe (\(pid, mSample) -> (pid,) <$> mSample)
+  Map.fromList
+    . mapMaybe (\(pid, mSample) -> (pid,) <$> mSample)
     <$> PG.query [sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)

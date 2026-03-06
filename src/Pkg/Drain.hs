@@ -274,12 +274,28 @@ tokenizeJsonLike txt
 -- before Drain tokenization so patterns differing only in placeholder type
 -- (e.g. @{uuid}@ vs @{integer}@) route to the same Drain tree branch.
 drainPlaceholders :: Set.Set Text
-drainPlaceholders = Set.fromList
-  [ "{integer}", "{float}", "{hex}", "{uuid}", "{ipv4}", "{port}", "{email}"
-  , "{jwt}", "{ssn}", "{sha256}", "{sha1}", "{md5}"
-  , "{YYYY-MM-DD}", "{YYYY-MM-DD HH:MM:SS}", "{YYYY-MM-DDThh:mm:ss.sTZD}"
-  , "{HH:MM:SS}", "{HH:MM:SS.mmm}", "{Mon DD, YYYY}", "{DD-Mon-YYYY}"
-  ]
+drainPlaceholders =
+  Set.fromList
+    [ "{integer}"
+    , "{float}"
+    , "{hex}"
+    , "{uuid}"
+    , "{ipv4}"
+    , "{port}"
+    , "{email}"
+    , "{jwt}"
+    , "{ssn}"
+    , "{sha256}"
+    , "{sha1}"
+    , "{md5}"
+    , "{YYYY-MM-DD}"
+    , "{YYYY-MM-DD HH:MM:SS}"
+    , "{YYYY-MM-DDThh:mm:ss.sTZD}"
+    , "{HH:MM:SS}"
+    , "{HH:MM:SS.mmm}"
+    , "{Mon DD, YYYY}"
+    , "{DD-Mon-YYYY}"
+    ]
 
 
 -- | Replace a known Drain placeholder with @\<*\>@, pass other tokens through.
@@ -305,17 +321,19 @@ normalizePlaceholder t = if Set.member t drainPlaceholders then "<*>" else t
 generateDrainTokens :: T.Text -> V.Vector T.Text
 generateDrainTokens content =
   let replaced = replaceAllFormats content
-   in V.map normalizePlaceholder $ if looksLikeJson replaced
-        then V.fromList (tokenizeJsonLike replaced)
-        else V.fromList $ words replaced
+   in V.map normalizePlaceholder
+        $ if looksLikeJson replaced
+          then V.fromList (tokenizeJsonLike replaced)
+          else V.fromList $ words replaced
 
 
 -- | Tokenize already-normalized text for Drain without re-running replaceAllFormats.
 tokenizeForDrain :: T.Text -> V.Vector T.Text
-tokenizeForDrain content = V.map normalizePlaceholder $
-  if looksLikeJson content
-    then V.fromList (tokenizeJsonLike content)
-    else V.fromList $ words content
+tokenizeForDrain content =
+  V.map normalizePlaceholder
+    $ if looksLikeJson content
+      then V.fromList (tokenizeJsonLike content)
+      else V.fromList $ words content
 
 
 -- | Markup-aware tokenizer for summary fields that preserves @field;style⇒value@ format.

@@ -7,7 +7,7 @@ module Devel (dev2) where
 --
 
 import Data.UUID qualified as UUID
-import GHC.Stats (getRTSStats, gcdetails_live_bytes, gc)
+import GHC.Stats (gc, gcdetails_live_bytes, getRTSStats)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import System.Mem (performMajorGC)
@@ -39,10 +39,10 @@ dev2 = do
     run "patternEmbeddingAndMerge" $ BackgroundJobs.patternEmbeddingAndMerge pid
   pass
 
+
 printMem :: Text -> IO ()
 printMem label = do
   performMajorGC
   stats <- getRTSStats
   let liveMB = gcdetails_live_bytes (gc stats) `div` (1024 * 1024)
   putTextLn $ label <> ": " <> show liveMB <> " MB live"
-

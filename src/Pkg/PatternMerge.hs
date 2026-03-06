@@ -20,7 +20,6 @@ where
 
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
-import Pkg.AI qualified as AI
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
@@ -29,6 +28,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
+import Pkg.AI qualified as AI
 import Pkg.Drain qualified as Drain
 import Relude
 import Text.Regex.TDFA ((=~))
@@ -358,9 +358,34 @@ logCanMerge a b =
     isTrivial t = Set.member (T.toLower t) trivialTokens || T.length t <= 1
     trivialTokens =
       Set.fromList
-        [ "info", "warn", "error", "debug", "trace", "fatal"
-        , "the", "a", "an", "in", "on", "at", "to", "for", "of", "from", "with", "by", "is", "was"
-        , "-", "--", "->", "=", "==", ":", "::", "|"
+        [ "info"
+        , "warn"
+        , "error"
+        , "debug"
+        , "trace"
+        , "fatal"
+        , "the"
+        , "a"
+        , "an"
+        , "in"
+        , "on"
+        , "at"
+        , "to"
+        , "for"
+        , "of"
+        , "from"
+        , "with"
+        , "by"
+        , "is"
+        , "was"
+        , "-"
+        , "--"
+        , "->"
+        , "="
+        , "=="
+        , ":"
+        , "::"
+        , "|"
         ]
 
 

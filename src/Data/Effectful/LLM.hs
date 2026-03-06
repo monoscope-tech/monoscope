@@ -261,7 +261,10 @@ getOrCreateEmbeddingGoldenResponse goldenDir config docs = do
     else
       if not exists && not updateGolden
         then
-          error $ fromString $ "Golden file not found: " <> filePath
+          error
+            $ fromString
+            $ "Golden file not found: "
+            <> filePath
             <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
             <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
         else do

@@ -244,6 +244,7 @@ hashFile path = do
   let hash = fromString $ showHex (xxHash content) ""
   [|$(TH.lift (toString hash))|]
 
+
 -- | Format a list of Floats as a PostgreSQL array literal, e.g. "{1.0,2.0,3.0}"
 --
 -- >>> showPGFloatArray [1.0, 2.5, 3.0]
@@ -253,7 +254,6 @@ hashFile path = do
 -- "{}"
 showPGFloatArray :: [Float] -> Text
 showPGFloatArray xs = "{" <> T.intercalate "," (map show xs) <> "}"
-
 
 -- Default instances (orphans)
 
