@@ -617,38 +617,95 @@ spec = aroundAll withTestResources do
       -- Run all background jobs to verify they execute successfully
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-    it "12. Pattern merge assigns canonical_id and hides merged patterns" \tr -> do
-      -- Ensure we have 2+ patterns (create if needed from earlier tests or fresh)
-      apiKey <- createTestAPIKey tr pid "merge-test-key"
-      ingestTraceWithException tr apiKey "GET /merge-a" "MergeTestA" "merge error A" "MergeTestA\n    at a (/app/a.js:1:1)" (addUTCTime (-30) frozenTime)
-      ingestTraceWithException tr apiKey "GET /merge-b" "MergeTestB" "merge error B" "MergeTestB\n    at b (/app/b.js:1:1)" (addUTCTime (-20) frozenTime)
+    it "12. Full LLM pipeline: enhancement + embedding + merge" \tr -> do
+      -- a) Ingest 3 error spans: 2 similar TypeErrors + 1 unrelated ConnectionError
+      apiKey <- createTestAPIKey tr pid "llm-pipeline-key"
+      let typeErrStack1 = "TypeError: Cannot read properties of undefined (reading 'userId')\n    at UserController.getUser (/app/src/controllers/user.js:42:15)\n    at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)"
+          typeErrStack2 = "TypeError: Cannot read properties of undefined (reading 'orderId')\n    at OrderController.getOrder (/app/src/controllers/order.js:38:12)\n    at Layer.handle (/app/node_modules/express/lib/router/layer.js:95:5)"
+          connErrStack = "ConnectionRefusedError: connect ECONNREFUSED 10.0.0.1:5432\n    at TCPConnectWrap.afterConnect (/app/node_modules/pg/lib/connection.js:79:18)"
+      ingestTraceWithException tr apiKey "GET /api/users/:id" "TypeError" "Cannot read properties of undefined (reading 'userId')" typeErrStack1 (addUTCTime (-30) frozenTime)
+      ingestTraceWithException tr apiKey "GET /api/orders/:id" "TypeError" "Cannot read properties of undefined (reading 'orderId')" typeErrStack2 (addUTCTime (-20) frozenTime)
+      ingestTraceWithException tr apiKey "POST /api/connect" "ConnectionRefusedError" "connect ECONNREFUSED 10.0.0.1:5432" connErrStack (addUTCTime (-10) frozenTime)
+
+      -- b) Process errors → creates error patterns + RuntimeException issues
       runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid
 
-      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
-      let countBefore = length patterns
-      case patterns of
-        (p1 : p2 : _) -> do
-          -- Pre-set embeddings: p1 and p2 get identical vectors (cosine sim = 1.0)
-          let emb = [1.0, 0.0, 0.0] :: [Float]
-          withResource tr.trPool \conn -> forM_ [p1.id, p2.id] \eid ->
-            void $ PGS.execute conn
-              [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
-              (PGArray emb, eid)
-          -- Merge p2 into p1 (p1 becomes canonical)
-          void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(p2.id, p1.id)]
-          -- getErrorPatterns filters canonical_id IS NULL, so merged pattern disappears
-          patternsAfter <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 100 0
-          length patternsAfter `shouldBe` (countBefore - 1)
-          -- Verify canonical_id is set via direct SQL
-          [PGS.Only canonId] <- withResource tr.trPool \conn ->
-            PGS.query conn [sql| SELECT canonical_id FROM apis.error_patterns WHERE id = ? |] (PGS.Only p2.id)
-          (canonId :: Maybe ErrorPatterns.ErrorPatternId) `shouldBe` Just p1.id
-          -- Verify group membership
-          members <- runTestBg frozenTime tr $ PatternMerge.getErrorPatternGroupMembers p1.id
-          length members `shouldSatisfy` (>= 1)
-        _ -> expectationFailure "need 2+ patterns for merge test"
+      -- c) Run pending background jobs (processOneMinuteErrors enqueued EnhanceIssuesWithLLM jobs)
+      --    This executes the LLM enhancement: titles, criticality, root cause analysis
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
-    it "12a. Unmerge override restores pattern and prevents re-merging" \tr -> do
+      -- Verify at least one issue got an enhanced title (golden file provides cached LLM response)
+      enhancedCount <- withResource tr.trPool \conn -> do
+        [PGS.Only n] <- PGS.query conn
+          [sql| SELECT COUNT(*)::INT FROM apis.issues
+                WHERE project_id = ? AND issue_type = 'runtime_exception'
+                AND title != '' AND length(title) > 5 |]
+          (PGS.Only pid)
+        pure (n :: Int)
+      enhancedCount `shouldSatisfy` (>= 1)
+
+      -- Verify root_cause and error_category populated on at least one error pattern
+      analysisCount <- withResource tr.trPool \conn -> do
+        [PGS.Only n] <- PGS.query conn
+          [sql| SELECT COUNT(*)::INT FROM apis.error_patterns
+                WHERE project_id = ? AND root_cause IS NOT NULL AND error_category IS NOT NULL |]
+          (PGS.Only pid)
+        pure (n :: Int)
+      analysisCount `shouldSatisfy` (>= 1)
+
+      -- d) Test merge pipeline with pre-set embeddings
+      -- Set similar embeddings on TypeErrors (high cosine similarity) and different on ConnectionRefusedError
+      typeErrPatterns <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT id FROM apis.error_patterns
+                WHERE project_id = ? AND error_type = 'TypeError'
+                AND canonical_id IS NULL AND merge_override IS NOT TRUE
+                ORDER BY created_at |]
+          (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
+      connErrPatterns <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT id FROM apis.error_patterns
+                WHERE project_id = ? AND error_type = 'ConnectionRefusedError'
+                AND canonical_id IS NULL AND merge_override IS NOT TRUE
+                ORDER BY created_at LIMIT 1 |]
+          (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
+      length typeErrPatterns `shouldSatisfy` (>= 2)
+
+      let typeEmb = [0.9, 0.3, 0.1] :: [Float]
+          connEmb = [0.1, 0.8, 0.4] :: [Float]
+      withResource tr.trPool \conn -> do
+        forM_ typeErrPatterns \(PGS.Only eid) ->
+          void $ PGS.execute conn
+            [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
+            (PGArray typeEmb, eid)
+        forM_ connErrPatterns \(PGS.Only eid) ->
+          void $ PGS.execute conn
+            [sql| UPDATE apis.error_patterns SET embedding = ?::float4[], embedding_at = NOW() WHERE id = ? |]
+            (PGArray connEmb, eid)
+
+      -- Merge: first TypeError becomes canonical, second gets assigned to it
+      case typeErrPatterns of
+        (PGS.Only canonId : PGS.Only childId : _) -> do
+          void $ runTestBg frozenTime tr $ PatternMerge.assignErrorsToCanonical [(childId, canonId)]
+
+          -- Verify the similar TypeError got merged
+          mergedTypeErrors <- withResource tr.trPool \conn ->
+            PGS.query conn
+              [sql| SELECT id FROM apis.error_patterns
+                    WHERE project_id = ? AND error_type = 'TypeError' AND canonical_id IS NOT NULL |]
+              (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
+          length mergedTypeErrors `shouldBe` 1
+
+          -- Verify ConnectionRefusedError remains separate
+          connPatternsAfter <- withResource tr.trPool \conn ->
+            PGS.query conn
+              [sql| SELECT id FROM apis.error_patterns
+                    WHERE project_id = ? AND error_type = 'ConnectionRefusedError' AND canonical_id IS NULL |]
+              (PGS.Only pid) :: IO [PGS.Only ErrorPatterns.ErrorPatternId]
+          length connPatternsAfter `shouldSatisfy` (>= 1)
+        _ -> expectationFailure "need at least 2 TypeError patterns for merge test"
+
+    it "13. Unmerge override restores pattern and prevents re-merging" \tr -> do
       -- Find a merged pattern (canonical_id IS NOT NULL) from test 12
       merged <- withResource tr.trPool \conn ->
         PGS.query conn

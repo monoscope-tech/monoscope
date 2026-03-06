@@ -21,6 +21,7 @@ module Models.Apis.ErrorPatterns (
   updateErrorPatternThreadIds,
   updateErrorPatternThreadIdsAndNotifiedAt,
   setErrorPatternAssignee,
+  updateErrorPatternAnalysis,
   -- Error spike detection
   ErrorPatternWithCurrentRate (..),
   getErrorPatternsWithCurrentRates,
@@ -117,6 +118,8 @@ data ErrorPattern = ErrorPattern
   , ignoredUntil :: Maybe ZonedTime
   , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
+  , rootCause :: Maybe Text
+  , errorCategory :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -285,6 +288,11 @@ setErrorPatternAssignee eid assigneeIdM now =
           updated_at = ?
         WHERE id = ?
       |]
+
+
+updateErrorPatternAnalysis :: DB es => ErrorPatternId -> Text -> Text -> Eff es Int64
+updateErrorPatternAnalysis eid rootCause errorCategory =
+  PG.execute [sql| UPDATE apis.error_patterns SET root_cause = ?, error_category = ? WHERE id = ? |] (rootCause, errorCategory, eid)
 
 
 updateErrorPatternSubscription :: DB es => ErrorPatternId -> Bool -> Int -> UTCTime -> Eff es Int64

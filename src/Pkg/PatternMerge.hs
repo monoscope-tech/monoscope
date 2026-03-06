@@ -7,19 +7,23 @@ module Pkg.PatternMerge (
   buildJudgePrompt,
   buildLogClusterJudgePrompt,
   buildEndpointJudgePrompt,
+  buildErrorJudgePrompt,
   parseJudgeResponse,
   jaccardSimilarity,
   isPlaceholderToken,
   jaccardMergeThreshold,
   mergeByJaccard,
   logCanMerge,
+  errorCanMerge,
   verifyMergeDecision,
   normalizeForEmbedding,
+  normalizeErrorForEmbedding,
 )
 where
 
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
+import Pkg.AI qualified as AI
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
@@ -28,8 +32,8 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
-import Pkg.AI qualified as AI
 import Pkg.Drain qualified as Drain
+import Pkg.ErrorFingerprint qualified as EF
 import Relude
 import Text.Regex.TDFA ((=~))
 
@@ -337,6 +341,37 @@ buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n"
        in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
 
 
+-- | Shared trivial tokens excluded from meaningful comparison across all pattern types.
+trivialTokens :: Set.Set Text
+trivialTokens =
+  Set.fromList
+    [ "info", "warn", "error", "debug", "trace", "fatal"
+    , "exception", "failed", "invalid", "null", "undefined"
+    , "the", "a", "an", "in", "on", "at", "to", "for", "of", "from", "with", "by", "is", "was"
+    , "-", "--", "->", "=", "==", ":", "::", "|"
+    ]
+
+
+-- | Extract meaningful (non-placeholder, non-trivial) tokens from a pattern.
+meaningfulTokens :: Text -> Set.Set Text
+meaningfulTokens = Set.filter (\t -> not (Set.member (T.toLower t) trivialTokens) && T.length t > 1) . contentTokens
+
+
+-- | Check if two patterns share meaningful tokens (or both have none).
+shareMeaningfulTokens :: Text -> Text -> Bool
+shareMeaningfulTokens a b =
+  let toksA = meaningfulTokens a
+      toksB = meaningfulTokens b
+   in (Set.null toksA && Set.null toksB) || not (Set.null $ Set.intersection toksA toksB)
+
+
+-- | Split "ErrorType: message" into (errorType, message). Returns ("", full) if no ": " separator.
+splitErrorType :: Text -> (Text, Text)
+splitErrorType t = case T.breakOn ": " t of
+  (et, rest) | not (T.null rest) -> (et, T.drop 2 rest)
+  _ -> ("", t)
+
+
 -- | Pre-filter gate: patterns must share at least one meaningful non-placeholder token.
 -- Excludes log levels, common prepositions, and single-char punctuation.
 --
@@ -349,44 +384,7 @@ buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n"
 -- >>> logCanMerge "<*> <*> <*>" "<*> <*>"
 -- True
 logCanMerge :: Text -> Text -> Bool
-logCanMerge a b =
-  let toksA = meaningfulTokens a
-      toksB = meaningfulTokens b
-   in (Set.null toksA && Set.null toksB) || not (Set.null $ Set.intersection toksA toksB)
-  where
-    meaningfulTokens = Set.filter (not . isTrivial) . contentTokens
-    isTrivial t = Set.member (T.toLower t) trivialTokens || T.length t <= 1
-    trivialTokens =
-      Set.fromList
-        [ "info"
-        , "warn"
-        , "error"
-        , "debug"
-        , "trace"
-        , "fatal"
-        , "the"
-        , "a"
-        , "an"
-        , "in"
-        , "on"
-        , "at"
-        , "to"
-        , "for"
-        , "of"
-        , "from"
-        , "with"
-        , "by"
-        , "is"
-        , "was"
-        , "-"
-        , "--"
-        , "->"
-        , "="
-        , "=="
-        , ":"
-        , "::"
-        , "|"
-        ]
+logCanMerge = shareMeaningfulTokens
 
 
 -- | AdaParser-inspired post-merge verification. Converts templateA to a regex and checks
@@ -409,3 +407,92 @@ verifyMergeDecision template sampleLog = (toString sampleLog :: String) =~ (toSt
     regexPattern = "^" <> T.intercalate ".+" (map escapeRegex $ T.splitOn "<*>" expanded) <> "$"
     expanded = normalizeForEmbedding template
     escapeRegex = T.concatMap \c -> if c `elem` (".+*?^${}()|[]\\" :: String) then "\\" <> one c else one c
+
+
+-- | Normalize an error pattern for embedding. Splits on ": " to separate the
+-- error type from the message, applies normalizeMessage to the message part
+-- (replacing UUIDs, IPs, timestamps, numbers with placeholders), keeps error type verbatim.
+--
+-- >>> normalizeErrorForEmbedding "TypeError: Cannot read property of user c73bcdcc-2669-4bf6-81d3-e4ae73fb11fd"
+-- "TypeError: Cannot read property of user {uuid}"
+--
+-- >>> normalizeErrorForEmbedding "Connection refused to 192.168.1.100:5432"
+-- "Connection refused to {ipv4}{port}"
+--
+-- >>> normalizeErrorForEmbedding "NullPointerException: value at index 42"
+-- "NullPointerException: value at index {integer}"
+normalizeErrorForEmbedding :: Text -> Text
+normalizeErrorForEmbedding txt = let (errType, msg) = splitErrorType txt
+  in if T.null errType then EF.normalizeMessage txt else errType <> ": " <> EF.normalizeMessage msg
+
+
+-- | Pre-filter gate for error pattern merging. Candidates must either share the
+-- same error type OR share a meaningful non-placeholder token in the message.
+--
+-- >>> errorCanMerge "TypeError: Cannot read x" "TypeError: Cannot read y"
+-- True
+--
+-- >>> errorCanMerge "TypeError: Cannot read x" "ValueError: invalid input"
+-- False
+--
+-- >>> errorCanMerge "Connection refused to host" "Connection refused to server"
+-- True
+--
+-- >>> errorCanMerge "NullPointerException: foo" "TimeoutError: bar"
+-- False
+errorCanMerge :: Text -> Text -> Bool
+errorCanMerge a b =
+  let (typeA, msgA) = splitErrorType a
+      (typeB, msgB) = splitErrorType b
+  in (not (T.null typeA) && typeA == typeB) || shareMeaningfulTokens msgA msgB
+
+
+-- | Error-aware CoT judge prompt. Shows all error patterns in a numbered list,
+-- then pairs. Reasoning: Structure (error type match?) -> Semantics (same root cause?) -> Decision.
+buildErrorJudgePrompt :: [(Text, Text)] -> Text
+buildErrorJudgePrompt pairs = systemPart <> "\n\n" <> patternsPart <> "\n" <> pairsPart
+  where
+    allPatterns = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
+    patternIndex = Map.fromList $ zip allPatterns [0 :: Int ..]
+    systemPart =
+      T.unlines
+        [ "You are an error pattern deduplication judge. Below is a numbered list of error"
+        , "patterns, followed by candidate pairs to evaluate."
+        , ""
+        , "For each pair, reason through these steps:"
+        , "1. STRUCTURE: Do they share the same error type (e.g. TypeError, NullPointerException)?"
+        , "2. SEMANTICS: Do they point to the same root cause, differing only in variable values"
+        , "   (IDs, timestamps, hostnames, file paths, line numbers)?"
+        , "3. DECISION: MERGE if same root cause with cosmetic differences; KEEP_SEPARATE if genuinely distinct."
+        , ""
+        , "MERGE when the same error/exception differs only in runtime variables (dates, line numbers,"
+        , "IDs, timestamps, counts, file paths) — these are the same bug producing slightly different messages:"
+        , "  'NullPointerException at com.app.Service.process(Service.java:42)'"
+        , "    vs 'NullPointerException at com.app.Service.process(Service.java:87)'"
+        , "    → MERGE (same exception, only line number differs)"
+        , "  'TypeError: Cannot read properties of undefined (reading userId)'"
+        , "    vs 'TypeError: Cannot read properties of undefined (reading userId)'"
+        , "    → MERGE (identical error with different runtime values normalized away)"
+        , "  'Query timeout after 30000ms on 2024-01-15' vs 'Query timeout after 30000ms on 2024-02-20'"
+        , "    → MERGE (same timeout error, only date differs)"
+        , ""
+        , "KEEP_SEPARATE when errors represent genuinely different bugs or failure modes:"
+        , "  'TypeError: x is not a function' vs 'TypeError: Cannot read properties of undefined'"
+        , "    → KEEP_SEPARATE (same type but different bugs — wrong call vs null access)"
+        , "  'Auth token expired' vs 'Database connection timeout'"
+        , "    → KEEP_SEPARATE (unrelated failure modes)"
+        , "  'OutOfMemoryError: heap space' vs 'StackOverflowError: infinite recursion'"
+        , "    → KEEP_SEPARATE (different resource exhaustion issues)"
+        , ""
+        , "Respond with a JSON array of objects, one per pair:"
+        , "  - \"index\": the pair index (0-based)"
+        , "  - \"decision\": \"MERGE\" or \"KEEP_SEPARATE\""
+        , ""
+        , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
+        ]
+    patternsPart = T.unlines $ "Error patterns:" : zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPatterns
+    pairsPart = T.unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
+    formatPair i (a, b) =
+      let aIdx = fromMaybe 0 $ Map.lookup a patternIndex
+          bIdx = fromMaybe 0 $ Map.lookup b patternIndex
+       in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
