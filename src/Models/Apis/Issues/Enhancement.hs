@@ -76,11 +76,13 @@ buildTitlePrompt issue =
             ( \d ->
                 let isNewEndpoint = V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
                  in if isNewEndpoint
-                      then [fmtTrim|Generate a concise title for this newly discovered API endpoint.
+                      then
+                        [fmtTrim|Generate a concise title for this newly discovered API endpoint.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             Service: {Issues.serviceLabel issue.service}
             This is a brand new endpoint that was just detected for the first time.|]
-                      else [fmtTrim|Generate a concise, descriptive title for this API change.
+                      else
+                        [fmtTrim|Generate a concise, descriptive title for this API change.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {V.length d.newFields}
             Deleted fields: {V.length d.deletedFields}
@@ -159,11 +161,13 @@ buildDescriptionPrompt issue =
             ( \d ->
                 let isNewEndpoint = V.null d.newFields && V.null d.deletedFields && V.null d.modifiedFields
                  in if isNewEndpoint
-                      then [fmtTrim|Describe this newly discovered API endpoint.
+                      then
+                        [fmtTrim|Describe this newly discovered API endpoint.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             Service: {Issues.serviceLabel issue.service}
             This endpoint was just detected for the first time. Summarize what it likely does based on its path and method.|]
-                      else [fmtTrim|Describe this API change and its impact.
+                      else
+                        [fmtTrim|Describe this API change and its impact.
             Endpoint: {d.endpointMethod} {d.endpointPath}
             New fields: {show $ V.toList d.newFields}
             Deleted fields: {show $ V.toList d.deletedFields}
