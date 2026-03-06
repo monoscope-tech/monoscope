@@ -11,6 +11,7 @@ module Pages.Bots.BotTestHelpers (
 
   -- * Config Helpers
   getOpenAIKey,
+  getOpenAIModel,
 
   -- * Golden File Helpers
   assertJsonGolden,
@@ -109,6 +110,10 @@ testPid = UUIDId UUID.nil
 
 getOpenAIKey :: TestResources -> Text
 getOpenAIKey tr = tr.trATCtx.env.openaiApiKey
+
+
+getOpenAIModel :: TestResources -> Text
+getOpenAIModel tr = tr.trATCtx.env.openaiModel
 
 
 -- * Setup Helpers

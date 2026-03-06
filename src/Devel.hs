@@ -7,29 +7,42 @@ module Devel (dev2) where
 --
 
 import Data.UUID qualified as UUID
-import Data.Vector qualified as V
+import GHC.Stats (getRTSStats, gcdetails_live_bytes, gc)
 import Relude
 import Relude.Unsafe qualified as Unsafe
+import System.Mem (performMajorGC)
 
 import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
 import Control.Exception.Safe qualified as Safe
-import Data.Time (getCurrentTime)
 import Effectful
 import Effectful.Fail (runFailIO)
+import Log.Backend.StandardOutput.Bulk qualified as LogBulk
+import OpenTelemetry.Trace (getGlobalTracerProvider)
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.TestUtils (runTestBackground)
 import System.Config qualified as Cfg
+import System.Types (runBackground)
 
 
 dev2 :: IO ()
 dev2 = do
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
   ctx <- runEff $ runFailIO Cfg.getAppContext
-  -- traceShowM ctx
-  now <- getCurrentTime
-  -- _ <- runTestBackground ctx $ BackgroundJobs.runHourlyJob now 18
-  let pids = V.singleton $ UUIDId $ Unsafe.fromJust $ UUID.fromString "00000000-0000-0000-0000-000000000000"
-  _ <- runTestBackground now ctx $ BackgroundJobs.generateOtelFacetsBatch pids now
-
+  tp <- getGlobalTracerProvider
+  let pid = UUIDId $ Unsafe.fromJust $ UUID.fromString "be87ebc1-08b9-4293-a390-283460fa6202"
+  LogBulk.withBulkStdOutLogger \logger -> do
+    let run label action = do
+          printMem $ "Before " <> label
+          void (runBackground logger ctx tp action) `Safe.catchAny` \e -> putTextLn $ label <> " error: " <> show e
+          printMem $ "After " <> label
+    run "endpointTemplateDiscovery" $ BackgroundJobs.endpointTemplateDiscovery pid
+    run "patternEmbeddingAndMerge" $ BackgroundJobs.patternEmbeddingAndMerge pid
   pass
+
+printMem :: Text -> IO ()
+printMem label = do
+  performMajorGC
+  stats <- getRTSStats
+  let liveMB = gcdetails_live_bytes (gc stats) `div` (1024 * 1024)
+  putTextLn $ label <> ": " <> show liveMB <> " MB live"
+

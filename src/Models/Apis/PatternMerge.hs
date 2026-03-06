@@ -7,6 +7,7 @@ module Models.Apis.PatternMerge (
   unmergeErrorPattern,
   getErrorPatternGroupMembers,
   getErrorPatternMemberCount,
+  fetchErrorTexts,
   -- Log pattern operations
   getUnembeddedLogPatterns,
   getCanonicalLogPatterns,
@@ -15,9 +16,11 @@ module Models.Apis.PatternMerge (
   unmergeLogPattern,
   getLogPatternGroupMembers,
   getLogPatternMemberCount,
+  fetchLogTexts,
 )
 where
 
+import Data.Map.Lazy qualified as Map
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_selectWhere)
 import Database.PostgreSQL.Entity.Types (field)
@@ -29,6 +32,8 @@ import Effectful.PostgreSQL qualified as PG
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId (..))
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
+import Pkg.DeriveUtils (showPGFloatArray)
+import Pkg.PatternMerge (embeddingTextForError)
 import Relude hiding (id)
 import System.Types (DB)
 
@@ -58,11 +63,11 @@ updateErrorEmbeddings pairs =
     [sql| UPDATE apis.error_patterns SET
           embedding = u.emb::float4[],
           embedding_at = NOW()
-        FROM (SELECT unnest(?::uuid[]) AS id, unnest(?::float4[][]) AS emb) u
+        FROM ROWS FROM (unnest(?::uuid[]), unnest(?::text[])) AS u(id, emb)
         WHERE apis.error_patterns.id = u.id |]
     (V.fromList ids, V.fromList embs)
   where
-    (ids, embs) = unzip $ map (\(eid, e) -> (eid, PGArray e)) pairs
+    (ids, embs) = unzip $ map (\(eid, e) -> (eid, showPGFloatArray e)) pairs
 
 
 updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
@@ -72,11 +77,11 @@ updateLogEmbeddings pairs =
     [sql| UPDATE apis.log_patterns SET
           embedding = u.emb::float4[],
           embedding_at = NOW()
-        FROM (SELECT unnest(?::bigint[]) AS id, unnest(?::float4[][]) AS emb) u
+        FROM ROWS FROM (unnest(?::bigint[]), unnest(?::text[])) AS u(id, emb)
         WHERE apis.log_patterns.id = u.id |]
     (V.fromList ids, V.fromList embs)
   where
-    (ids, embs) = unzip $ map (\(lid, e) -> (lid, PGArray e)) pairs
+    (ids, embs) = unzip $ map (\(lid, e) -> (lid, showPGFloatArray e)) pairs
 
 
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
@@ -85,7 +90,8 @@ getCanonicalErrorPatterns pid =
     <$> PG.query
       [sql| SELECT id, embedding FROM apis.error_patterns
         WHERE project_id = ? AND canonical_id IS NULL
-          AND embedding IS NOT NULL AND merge_override = FALSE |]
+          AND embedding IS NOT NULL AND merge_override = FALSE
+        LIMIT 10000 |]
       (Only pid)
 
 
@@ -95,7 +101,8 @@ getCanonicalLogPatterns pid =
     <$> PG.query
       [sql| SELECT id, embedding FROM apis.log_patterns
         WHERE project_id = ? AND canonical_id IS NULL
-          AND embedding IS NOT NULL AND merge_override = FALSE |]
+          AND embedding IS NOT NULL AND merge_override = FALSE
+        LIMIT 10000 |]
       (Only pid)
 
 
@@ -165,3 +172,17 @@ getLogPatternMemberCount lid =
     <$> PG.query
       [sql| SELECT COUNT(*)::int FROM apis.log_patterns WHERE canonical_id = ? |]
       (Only lid)
+
+
+fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
+fetchErrorTexts [] = pure mempty
+fetchErrorTexts ids =
+  Map.fromList . map (\(eid, et, msg) -> (eid, embeddingTextForError et msg))
+    <$> PG.query [sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
+
+
+fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
+fetchLogTexts [] = pure mempty
+fetchLogTexts ids =
+  Map.fromList
+    <$> PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)

@@ -103,7 +103,7 @@ whatsappIncomingPostH val = do
             Left err -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just err)
             Right (report, _, _) -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ formatReportForWhatsApp report project.id envCfg)
         GeneralQueryIntent -> do
-          result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiApiKey
+          result <- processAIQuery project.id reqBody.body Nothing envCfg.openaiModel envCfg.openaiApiKey
           case result of
             Left _ -> sendWhatsappResponse (AE.object []) reqBody.from envCfg.whatsappBotText (Just $ botEmoji "error" <> " Something went wrong. Please try again.")
             Right resp -> do

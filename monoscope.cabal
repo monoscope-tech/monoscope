@@ -472,6 +472,7 @@ test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      EndpointDiscoverySpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec

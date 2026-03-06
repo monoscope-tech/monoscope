@@ -568,13 +568,13 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
               , enableDailyJobScheduling = False
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
-                discordPublicKey = bool testDiscordPublicKeyHex envConfig.discordPublicKey (T.null envConfig.discordPublicKey)
-              , twilioAccountSid = bool "ACtest_account_sid_for_tests_only" envConfig.twilioAccountSid (T.null envConfig.twilioAccountSid)
-              , twilioAuthToken = bool "test_auth_token_for_tests_only" envConfig.twilioAuthToken (T.null envConfig.twilioAuthToken)
-              , whatsappFromNumber = bool "+15555551234" envConfig.whatsappFromNumber (T.null envConfig.whatsappFromNumber)
-              , slackBotToken = bool "xoxb-test-token-not-real" envConfig.slackBotToken (T.null envConfig.slackBotToken)
-              , discordBotToken = bool "test-discord-bot-token" envConfig.discordBotToken (T.null envConfig.discordBotToken)
-              , openaiApiKey = bool "sk-test-key-not-real" envConfig.openaiApiKey (T.null envConfig.openaiApiKey)
+                discordPublicKey = bool envConfig.discordPublicKey testDiscordPublicKeyHex (T.null envConfig.discordPublicKey)
+              , twilioAccountSid = bool envConfig.twilioAccountSid "ACtest_account_sid_for_tests_only" (T.null envConfig.twilioAccountSid)
+              , twilioAuthToken = bool envConfig.twilioAuthToken "test_auth_token_for_tests_only" (T.null envConfig.twilioAuthToken)
+              , whatsappFromNumber = bool envConfig.whatsappFromNumber "+15555551234" (T.null envConfig.whatsappFromNumber)
+              , slackBotToken = bool envConfig.slackBotToken "xoxb-test-token-not-real" (T.null envConfig.slackBotToken)
+              , discordBotToken = bool envConfig.discordBotToken "test-discord-bot-token" (T.null envConfig.discordBotToken)
+              , openaiApiKey = bool envConfig.openaiApiKey "sk-test-key-not-real" (T.null envConfig.openaiApiKey)
               }
           )
   f

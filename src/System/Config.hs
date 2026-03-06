@@ -87,6 +87,8 @@ data EnvConfig = EnvConfig
   , postmarkFromEmail :: Text
   , lemonSqueezyWebhookSecret :: Text
   , openaiApiKey :: Text
+  , openaiModel :: Text
+  , openaiSmallModel :: Text
   , openaiBaseUrl :: Text
   , hostUrl :: Text
   , monoscopePusherServiceAccountB64 :: Text
@@ -153,6 +155,8 @@ instance DefConfig EnvConfig where
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       , showDemoProject = False -- Default to hidden
       , postmarkFromEmail = "hello@monoscope.tech"
+      , openaiModel = "gpt-4.1-mini"
+      , openaiSmallModel = "gpt-4.1-nano"
       }
 
 

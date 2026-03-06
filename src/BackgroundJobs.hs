@@ -1,4 +1,6 @@
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions) where
+{-# LANGUAGE StrictData #-}
+
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -16,6 +18,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List as L (foldl, partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
+import Data.Set qualified as Set
 import Data.Pool (withResource)
 import Data.Text qualified as T
 import Data.Text.Display (display)
@@ -42,7 +45,6 @@ import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Langchain.DocumentLoader.Core qualified
-import Langchain.Embeddings.Core qualified
 import Langchain.Embeddings.OpenAI qualified
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogLegacy
@@ -336,7 +338,7 @@ processBackgroundJob authCtx bgJob =
                 sched 288 300 \t -> BackgroundJobs.FiveMinuteLogPatternExtraction t p
                 sched 96 900 \t -> BackgroundJobs.PatternEmbeddingAndMerge t p
                 sched 96 900 \t -> BackgroundJobs.LogPatternPeriodicProcessing t p
-                sched 24 3600 \t -> BackgroundJobs.EndpointTemplateDiscovery t p
+                sched 4 21600 \t -> BackgroundJobs.EndpointTemplateDiscovery t p
                 sched 24 3600 \t -> BackgroundJobs.LogPatternHourlyProcessing t p
                 sched 288 300 \t -> BackgroundJobs.FiveMinuteSpanProcessing t p
                 sched 1440 60 \t -> BackgroundJobs.OneMinuteErrorProcessing t p
@@ -1546,83 +1548,92 @@ patternEmbeddingAndMerge pid = do
 embedAndMergeErrors :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 embedAndMergeErrors pid ctx = do
   unembedded <- PatternMergeDB.getUnembeddedErrorPatterns pid
-  let fetchTexts =
-        Map.fromList
-          . map (\(eid, et, msg) -> (eid, PatternMerge.embeddingTextForError et msg))
-          <$> ( PG.query [sql| SELECT id, error_type, message FROM apis.error_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
-                  :: ATBackgroundCtx [(ErrorPatterns.ErrorPatternId, Text, Text)]
-              )
-  embedAndMerge
-    pid
-    ctx
-    "error"
-    unembedded
-    (\(_, et, msg) -> PatternMerge.embeddingTextForError et msg)
-    (view _1)
-    PatternMergeDB.updateErrorEmbeddings
-    (PatternMergeDB.getCanonicalErrorPatterns pid)
-    PatternMergeDB.assignErrorsToCanonical
-    fetchTexts
+  embedAndMerge pid ctx MergeConfig
+    { label = "error", items = unembedded
+    , itemText = \(_, et, msg) -> PatternMerge.embeddingTextForError et msg
+    , toId = view _1
+    , updateEmbs = PatternMergeDB.updateErrorEmbeddings
+    , getCentroids = PatternMergeDB.getCanonicalErrorPatterns pid
+    , assignCanonical = PatternMergeDB.assignErrorsToCanonical
+    , fetchTexts = PatternMergeDB.fetchErrorTexts
+    , canMerge = \_ _ -> True
+    , judgeFn = mkJudge PatternMerge.buildJudgePrompt
+    , onCanonicalPath = \_ _ -> pure ()
+    }
 
 
 embedAndMergeLogPatterns :: Projects.ProjectId -> Config.AuthContext -> ATBackgroundCtx ()
 embedAndMergeLogPatterns pid ctx = do
   unembedded <- PatternMergeDB.getUnembeddedLogPatterns pid
-  let fetchTexts =
-        Map.fromList
-          <$> ( PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
-                  :: ATBackgroundCtx [(LogPatterns.LogPatternId, Text)]
-              )
-  embedAndMerge
-    pid
-    ctx
-    "log"
-    unembedded
-    snd
-    fst
-    PatternMergeDB.updateLogEmbeddings
-    (PatternMergeDB.getCanonicalLogPatterns pid)
-    PatternMergeDB.assignLogsToCanonical
-    fetchTexts
+  embedAndMerge pid ctx MergeConfig
+    { label = "log", items = unembedded
+    , itemText = snd
+    , toId = fst
+    , updateEmbs = PatternMergeDB.updateLogEmbeddings
+    , getCentroids = PatternMergeDB.getCanonicalLogPatterns pid
+    , assignCanonical = PatternMergeDB.assignLogsToCanonical
+    , fetchTexts = PatternMergeDB.fetchLogTexts
+    , canMerge = \_ _ -> True
+    , judgeFn = mkJudge PatternMerge.buildJudgePrompt
+    , onCanonicalPath = \_ _ -> pure ()
+    }
 
 
-embedAndMerge
-  :: Ord k
-  => Projects.ProjectId
-  -> Config.AuthContext
-  -> Text
-  -> [a]
-  -> (a -> Text)
-  -> (a -> k)
-  -> ([(k, [Float])] -> ATBackgroundCtx Int64)
-  -> ATBackgroundCtx [(k, [Float])]
-  -> ([(k, k)] -> ATBackgroundCtx Int64)
-  -> ATBackgroundCtx (Map k Text)
-  -> ATBackgroundCtx ()
-embedAndMerge pid ctx label items itemText toId updateEmbs getCentroids assignCanonical fetchTexts = unless (null items) do
-  let docs = map (\item -> Langchain.DocumentLoader.Core.Document (toLazy $ itemText item) mempty) items
-  embedResult <- liftIO $ Langchain.Embeddings.Core.embedDocuments (embeddingConfig ctx) docs
+-- | Build a judge from a prompt builder. Calls LLM and parses the response.
+mkJudge :: ([(Text, Text)] -> Text) -> [(Text, Text)] -> ATBackgroundCtx (Either Text [(Int, Bool, Maybe Text)])
+mkJudge buildPrompt pairs = do
+  ctx <- ask @Config.AuthContext
+  ELLM.callLLM ctx.config.openaiSmallModel (buildPrompt pairs) ctx.config.openaiApiKey <&> fmap PatternMerge.parseJudgeResponse
+
+
+data MergeConfig k a = MergeConfig
+  { label :: Text
+  , items :: [a]
+  , itemText :: a -> Text
+  , toId :: a -> k
+  , updateEmbs :: [(k, [Float])] -> ATBackgroundCtx Int64
+  , getCentroids :: ATBackgroundCtx [(k, [Float])]
+  , assignCanonical :: [(k, k)] -> ATBackgroundCtx Int64
+  , fetchTexts :: [k] -> ATBackgroundCtx (Map k Text)
+  , canMerge :: Text -> Text -> Bool
+  , judgeFn :: [(Text, Text)] -> ATBackgroundCtx (Either Text [(Int, Bool, Maybe Text)])
+  , onCanonicalPath :: k -> Text -> ATBackgroundCtx ()
+  }
+
+
+embedAndMerge :: Ord k => Projects.ProjectId -> Config.AuthContext -> MergeConfig k a -> ATBackgroundCtx ()
+embedAndMerge pid ctx cfg = unless (null cfg.items) do
+  let docs = map (\item -> Langchain.DocumentLoader.Core.Document (toLazy $ cfg.itemText item) mempty) cfg.items
+  embedResult <- ELLM.embedDocuments (embeddingConfig ctx) docs
   case embedResult of
-    Left err -> Log.logAttention ("Failed to embed " <> label <> " patterns") (pid, show err)
+    Left err -> Log.logAttention ("Failed to embed " <> cfg.label <> " patterns") (pid, err)
     Right embeddingsList -> do
-      void $ updateEmbs $ zipWith (\item emb -> (toId item, emb)) items embeddingsList
-      centroids <- getCentroids
-      let newWithEmbs = zip (map toId items) embeddingsList
-          (autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
-      void $ assignCanonical autoMerges
-      unless (null ambiguous) do
-        textMap <- fetchTexts
-        let pairs = mapMaybe (\(newId, canId) -> (,) <$> Map.lookup newId textMap <*> Map.lookup canId textMap) ambiguous
-            prompt = PatternMerge.buildJudgePrompt pairs
+      void $ cfg.updateEmbs $ zipWith (\item emb -> (cfg.toId item, emb)) cfg.items embeddingsList
+      allCentroids <- cfg.getCentroids
+      let newIds = Set.fromList $ map cfg.toId cfg.items
+          centroids = filter (\(cid, _) -> not $ Set.member cid newIds) allCentroids
+          newWithEmbs = zip (map cfg.toId cfg.items) embeddingsList
+          !(autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
+      let newTextMap = Map.fromList $ map (\item -> (cfg.toId item, cfg.itemText item)) cfg.items
+          neededIds = ordNub $ map snd autoMerges <> map snd ambiguous
+      textMap <- if null neededIds then pure mempty else cfg.fetchTexts neededIds
+      let allTexts = newTextMap <> textMap
+          validMerge (newId, canId) = fromMaybe False $ cfg.canMerge <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts
+          !validAutoMerges = filter validMerge autoMerges
+      void $ cfg.assignCanonical validAutoMerges
+      let !validAmbiguous = filter validMerge ambiguous
+      unless (null validAmbiguous) do
+        let pairs = mapMaybe (\(newId, canId) -> (,) <$> Map.lookup newId allTexts <*> Map.lookup canId allTexts) validAmbiguous
         unless (null pairs) do
-          judgeResult <- ELLM.callLLM prompt ctx.config.openaiApiKey
+          judgeResult <- cfg.judgeFn pairs
           case judgeResult of
-            Left err -> Log.logAttention ("LLM judge failed for " <> label <> " patterns") (pid, err)
-            Right response -> do
-              let decisions = PatternMerge.parseJudgeResponse response
-                  ambiguousV = V.fromList ambiguous
-                  merges = mapMaybe (\(idx, shouldMerge) -> bool Nothing (ambiguousV V.!? idx) shouldMerge) decisions
-              void $ assignCanonical merges
+            Left err -> Log.logAttention ("LLM judge failed for " <> cfg.label <> " patterns") (pid, err)
+            Right decisions -> do
+              let ambiguousV = V.fromList validAmbiguous
+                  merges = mapMaybe (\(idx, shouldMerge, _) -> bool Nothing (ambiguousV V.!? idx) shouldMerge) decisions
+              void $ cfg.assignCanonical merges
+              forM_ decisions \(idx, shouldMerge, mPath) ->
+                when shouldMerge $ for_ ((,) <$> (snd <$> ambiguousV V.!? idx) <*> mPath) (uncurry cfg.onCanonicalPath)
 
 
 embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
@@ -1631,6 +1642,18 @@ embeddingConfig ctx =
     { Langchain.Embeddings.OpenAI.apiKey = ctx.config.openaiApiKey
     , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (T.unpack ctx.config.openaiBaseUrl)
     }
+
+
+-- | Only merge endpoints with the same number of path segments.
+-- Prevents e.g. /api/v2/users/auth0|abc from merging into /api/v2/users.
+--
+-- >>> sameSegmentCount "/api/v1/users/{param}" "/api/v1/users/123"
+-- True
+--
+-- >>> sameSegmentCount "/api/users" "/api/users/{param}"
+-- False
+sameSegmentCount :: Text -> Text -> Bool
+sameSegmentCount a b = T.count "/" a == T.count "/" b
 
 
 -- Endpoint template discovery ---------------------------------------------------
@@ -1649,7 +1672,7 @@ endpointTemplateDiscovery pid = do
                    in ((m, host, tp), [h])
               )
               endpoints
-        (allUpdates, allInserts) =
+        (!allUpdates, !allInserts) =
           foldMap
             ( \((method, host, tp), hs) ->
                 let ch = toXXHash $ pid.toText <> host <> method <> tp
@@ -1663,18 +1686,18 @@ endpointTemplateDiscovery pid = do
   ctx <- ask @Config.AuthContext
   unless (T.null ctx.config.openaiApiKey) $ tryLog "endpointEmbedding" do
     unembedded <- Endpoints.getUnembeddedEndpoints pid
-    let fetchTexts = Map.fromList <$> Endpoints.getEmbeddedEndpointTexts pid
-    embedAndMerge
-      pid
-      ctx
-      "endpoint"
-      unembedded
-      (\(_, _, path) -> path)
-      (view _1)
-      Endpoints.updateEndpointEmbeddings
-      (Endpoints.getCanonicalEndpoints pid)
-      Endpoints.assignEndpointsToCanonical
-      fetchTexts
+    embedAndMerge pid ctx MergeConfig
+      { label = "endpoint", items = unembedded
+      , itemText = \(_, _, path) -> path
+      , toId = view _1
+      , updateEmbs = Endpoints.updateEndpointEmbeddings
+      , getCentroids = Endpoints.getCanonicalEndpoints pid
+      , assignCanonical = Endpoints.assignEndpointsToCanonical
+      , fetchTexts = Endpoints.fetchEndpointTexts
+      , canMerge = sameSegmentCount
+      , judgeFn = mkJudge PatternMerge.buildEndpointJudgePrompt
+      , onCanonicalPath = \eid path -> void $ Endpoints.setEndpointCanonicalTemplate eid path
+      }
   -- Step 3: Migrate data and delete all merged endpoints
   mergedPairs <- Endpoints.getMergedEndpointPairs pid
   Log.logInfo "Endpoint merge cleanup starting" ("project_id", pid.toText, "merged_count", length mergedPairs)

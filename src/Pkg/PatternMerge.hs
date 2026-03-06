@@ -5,6 +5,7 @@ module Pkg.PatternMerge (
   autoMergeThreshold,
   ambiguousThreshold,
   buildJudgePrompt,
+  buildEndpointJudgePrompt,
   parseJudgeResponse,
   jaccardSimilarity,
   isPlaceholderToken,
@@ -15,8 +16,10 @@ where
 
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
+import Pkg.AI qualified as AI
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.List (maximumBy)
+import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
 import Data.Set qualified as Set
 import Data.Text qualified as T
@@ -138,19 +141,59 @@ buildJudgePrompt pairs = systemPart <> "\n\n" <> pairsPart
     formatPair i (a, b) = "Pair " <> show i <> ":\n  A: " <> a <> "\n  B: " <> b
 
 
--- | Parse the LLM judge response into a list of (index, shouldMerge) pairs.
-parseJudgeResponse :: Text -> [(Int, Bool)]
-parseJudgeResponse txt = case AE.decodeStrict (encodeUtf8 cleaned) :: Maybe AE.Value of
+-- | Parse the LLM judge response. Returns (index, shouldMerge, maybeCanonicalPath).
+-- The canonical field is only present in endpoint-specific responses.
+parseJudgeResponse :: Text -> [(Int, Bool, Maybe Text)]
+parseJudgeResponse txt = case AE.decodeStrict (encodeUtf8 $ AI.stripCodeBlock txt) :: Maybe AE.Value of
   Just arr -> mapMaybe parseDecision (arr ^.. _Array . traverse)
   Nothing -> []
   where
-    cleaned = fromMaybe txt $ (T.stripPrefix "```json" txt <|> T.stripPrefix "```" txt) >>= T.stripSuffix "```" <&> T.strip
     parseDecision v = do
-      idx <- v ^? key "index" >>= asInt
+      idx <- v ^? key "index" >>= \case AE.Number n -> Just (round n); _ -> Nothing
       decision <- v ^? key "decision" . _String
-      pure (idx, decision == "MERGE")
-    asInt (AE.Number n) = Just (round n)
-    asInt _ = Nothing
+      let canonical = v ^? key "canonical" . _String
+      pure (idx, decision == "MERGE", bool Nothing canonical (decision == "MERGE"))
+
+
+-- | Build an LLM judge prompt for ambiguous endpoint URL pairs.
+-- Deduplicates all paths into a numbered list so the LLM can see the full picture
+-- and cluster endpoints that share centroids, rather than evaluating pairs in isolation.
+buildEndpointJudgePrompt :: [(Text, Text)] -> Text
+buildEndpointJudgePrompt pairs = systemPart <> "\n\n" <> pathsPart <> "\n" <> pairsPart
+  where
+    -- Deduplicate all paths and assign indices
+    allPaths = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
+    pathIndex = Map.fromList $ zip allPaths [0 :: Int ..]
+    systemPart =
+      T.unlines
+        [ "You are an API route deduplication judge for an API monitoring tool."
+        , "Below is a numbered list of HTTP endpoint URL paths, followed by candidate pairs."
+        , "Your job is to identify URL paths that are the same route but differ only in dynamic"
+        , "segments — user IDs, resource slugs, numeric IDs, UUIDs, auth provider prefixes, etc."
+        , "These variable segments should be collapsed into a single canonical template."
+        , "Multiple pairs may share the same centroid — consider them together as a cluster."
+        , ""
+        , "MERGE when paths differ only in segments that look like identifiers or variable parameters:"
+        , "  /api/v1/users/get-all vs /api/v1/users/list-all → MERGE (synonymous list operations)"
+        , "  /api/v1/orders/12345 vs /api/v1/orders/67890 → MERGE (numeric IDs)"
+        , "  /api/v1/users/auth0|abc vs /api/v1/users/google|xyz → MERGE (auth provider IDs)"
+        , "KEEP_SEPARATE when paths serve genuinely different functions:"
+        , "  /api/v1/users vs /api/v1/orders → KEEP_SEPARATE (different resources)"
+        , "  /api/v1/users/profile vs /api/v1/users/settings → KEEP_SEPARATE (different sub-resources)"
+        , ""
+        , "Respond with a JSON array of objects, one per pair, with fields:"
+        , "  - \"index\": the pair index (0-based)"
+        , "  - \"decision\": \"MERGE\" or \"KEEP_SEPARATE\""
+        , "  - \"canonical\": (only when MERGE) the canonical template path using {param} for variable segments"
+        , ""
+        , "Example: [{\"index\": 0, \"decision\": \"MERGE\", \"canonical\": \"/api/v1/users/{param}\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
+        ]
+    pathsPart = T.unlines $ "Endpoints:" : zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPaths
+    pairsPart = T.unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
+    formatPair i (a, b) =
+      let aIdx = fromMaybe 0 $ Map.lookup a pathIndex
+          bIdx = fromMaybe 0 $ Map.lookup b pathIndex
+       in "  Pair " <> show i <> ": [" <> show aIdx <> "] vs [" <> show bIdx <> "]"
 
 
 -- | Token considered a placeholder (excluded from Jaccard comparison).

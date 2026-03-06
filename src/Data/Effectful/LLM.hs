@@ -2,6 +2,7 @@ module Data.Effectful.LLM (
   LLM (..),
   callLLM,
   callAgenticChat,
+  embedDocuments,
   callOpenAIAPI,
   runLLMReal,
   runLLMGolden,
@@ -14,6 +15,9 @@ import Data.Text qualified as T
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Dispatch.Dynamic
+import Langchain.DocumentLoader.Core qualified as DocLoader
+import Langchain.Embeddings.Core qualified as EmbCore
+import Langchain.Embeddings.OpenAI qualified as EmbOAI
 import Langchain.LLM.Core qualified as LLMCore
 import Langchain.LLM.OpenAI qualified as OpenAI
 import OpenAI.V1.Chat.Completions qualified as OpenAIV1
@@ -21,11 +25,6 @@ import OpenAI.V1.Models qualified as Models
 import Relude
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
-
-
--- Default model used for all LLM calls
-defaultModel :: Text
-defaultModel = "gpt-4o-mini"
 
 
 -- Manual JSON instances for LLMCore.Message (can't use Generic due to type structure)
@@ -59,16 +58,17 @@ data AgenticChatCache = AgenticChatCache
 
 type role LLM phantom nominal
 data LLM :: Effect where
-  CallLLM :: Text -> Text -> LLM m (Either Text Text)
+  CallLLM :: Text -> Text -> Text -> LLM m (Either Text Text)
   CallAgenticChat :: LLMCore.ChatHistory -> OpenAIV1.CreateChatCompletion -> Text -> LLM m (Either Text LLMCore.Message)
+  EmbedDocuments :: EmbOAI.OpenAIEmbeddings -> [DocLoader.Document] -> LLM m (Either Text [[Float]])
 
 
 type instance DispatchOf LLM = 'Dynamic
 
 
--- | API function to call LLM
-callLLM :: LLM :> es => Text -> Text -> Eff es (Either Text Text)
-callLLM prompt apiKey = send (CallLLM prompt apiKey)
+-- | API function to call LLM with a specific model
+callLLM :: LLM :> es => Text -> Text -> Text -> Eff es (Either Text Text)
+callLLM model prompt apiKey = send (CallLLM model prompt apiKey)
 
 
 -- | API function to call agentic chat
@@ -76,35 +76,38 @@ callAgenticChat :: LLM :> es => LLMCore.ChatHistory -> OpenAIV1.CreateChatComple
 callAgenticChat history params apiKey = send (CallAgenticChat history params apiKey)
 
 
+-- | API function to embed documents via OpenAI embeddings
+embedDocuments :: LLM :> es => EmbOAI.OpenAIEmbeddings -> [DocLoader.Document] -> Eff es (Either Text [[Float]])
+embedDocuments config docs = send (EmbedDocuments config docs)
+
+
 -- | Real interpreter that makes actual OpenAI API calls
 runLLMReal :: IOE :> es => Eff (LLM ': es) a -> Eff es a
 runLLMReal = interpret $ \_ -> \case
-  CallLLM prompt apiKey -> liftIO $ callOpenAIAPI prompt apiKey
+  CallLLM model prompt apiKey -> liftIO $ callOpenAIAPI model prompt apiKey
   CallAgenticChat history params apiKey -> liftIO do
     let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
     result <- LLMCore.chat openAI history (Just params)
     pure $ first show result
+  EmbedDocuments config docs -> liftIO $ first show <$> EmbCore.embedDocuments config docs
 
 
 -- | Golden test interpreter that caches responses
 runLLMGolden :: IOE :> es => FilePath -> Eff (LLM ': es) a -> Eff es a
 runLLMGolden goldenDir = interpret $ \_ -> \case
-  CallLLM prompt apiKey -> liftIO $ getOrCreateGoldenResponse goldenDir prompt apiKey
+  CallLLM model prompt apiKey -> liftIO $ getOrCreateGoldenResponse goldenDir model prompt apiKey
   CallAgenticChat history params apiKey -> liftIO $ getOrCreateAgenticGoldenResponse goldenDir history params apiKey
+  EmbedDocuments config docs -> liftIO $ getOrCreateEmbeddingGoldenResponse goldenDir config docs
 
 
--- | Helper function to sanitize prompt for filename
-sanitizePrompt :: Text -> String
-sanitizePrompt prompt =
-  let cleaned = T.replace "\n" "_" $ T.replace " " "_" $ T.take 50 prompt
-   in toString cleaned
+-- | Sanitize text for use in filenames (replaces special chars with underscores)
+sanitizeForFilename :: Text -> String
+sanitizeForFilename = toString . T.replace "/" "_" . T.replace "|" "_" . T.replace " " "_" . T.replace "\n" "_" . T.take 50
 
 
 -- | Helper function to generate cache filename from prompt
 promptToFilename :: Text -> String
-promptToFilename prompt =
-  let sanitized = sanitizePrompt prompt
-   in "llm_" <> sanitized <> ".json"
+promptToFilename prompt = "llm_" <> sanitizeForFilename prompt <> ".json"
 
 
 -- | Data type for storing LLM responses
@@ -117,8 +120,8 @@ data LLMResponse = LLMResponse
 
 
 -- | Get or create a golden response for an LLM call
-getOrCreateGoldenResponse :: FilePath -> Text -> Text -> IO (Either Text Text)
-getOrCreateGoldenResponse goldenDir prompt apiKey = do
+getOrCreateGoldenResponse :: FilePath -> Text -> Text -> Text -> IO (Either Text Text)
+getOrCreateGoldenResponse goldenDir model prompt apiKey = do
   let fileName = promptToFilename prompt
       filePath = goldenDir </> fileName
   exists <- doesFileExist filePath
@@ -143,22 +146,21 @@ getOrCreateGoldenResponse goldenDir prompt apiKey = do
         else do
           -- UPDATE_GOLDEN=true: create or update golden file
           createDirectoryIfMissing True goldenDir
-          response <- callOpenAIAPI prompt apiKey
+          response <- callOpenAIAPI model prompt apiKey
           let llmResp = LLMResponse{llmPrompt = prompt, llmResponse = response}
           writeFileLBS filePath (AE.encode llmResp)
           return response
 
 
 -- | Actual OpenAI API call implementation
-callOpenAIAPI :: Text -> Text -> IO (Either Text Text)
-callOpenAIAPI fullPrompt apiKey = do
+callOpenAIAPI :: Text -> Text -> Text -> IO (Either Text Text)
+callOpenAIAPI model fullPrompt apiKey = do
   let openAI =
         OpenAI.OpenAI
           { OpenAI.apiKey = apiKey
           , OpenAI.callbacks = []
           , OpenAI.baseUrl = Nothing
           }
-      -- Create chat completion parameters with model name
       userMessage =
         OpenAIV1.User
           { OpenAIV1.content = V.fromList [OpenAIV1.Text{OpenAIV1.text = fullPrompt}]
@@ -166,7 +168,7 @@ callOpenAIAPI fullPrompt apiKey = do
           }
       params =
         OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model defaultModel
+          { OpenAIV1.model = Models.Model model
           , OpenAIV1.messages = V.fromList [userMessage]
           }
   -- Use langchain-hs to generate response
@@ -185,13 +187,13 @@ cacheKeyFromQuery messages hasTools =
       AE.String role -> role == "User"
       _ -> False
     userQuery = case find isUserMessage messages of
-      Just msg -> T.take 50 $ T.replace " " "_" $ T.replace "\n" "_" $ LLMCore.content msg
+      Just msg -> sanitizeForFilename $ LLMCore.content msg
       Nothing -> "unknown_query"
     -- Count messages to determine iteration (2=initial, 4=after tools, etc)
     iterNum = length messages
     toolSuffix = if hasTools then "_with_tools" else ""
    in
-    "agentic_" <> toString userQuery <> "_iter" <> show iterNum <> toolSuffix
+    "agentic_" <> userQuery <> "_iter" <> show iterNum <> toolSuffix
 
 
 -- Helper to check if CreateChatCompletion has tools (via JSON inspection)
@@ -213,9 +215,7 @@ getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
     then do
       content <- readFileLBS filePath
       case AE.decode content of
-        Just (cached :: AgenticChatCache) -> case cached.accResponse of
-          Left err -> return $ Left err
-          Right msg -> return $ Right msg
+        Just (cached :: AgenticChatCache) -> return cached.accResponse
         Nothing -> error $ toText $ "Failed to decode agentic chat cache from: " <> filePath
     else
       if not exists && not updateGolden
@@ -229,13 +229,43 @@ getOrCreateAgenticGoldenResponse goldenDir history params apiKey = do
         else do
           createDirectoryIfMissing True goldenDir
           let openAI = OpenAI.OpenAI{apiKey, callbacks = [], baseUrl = Nothing}
-          result <- LLMCore.chat openAI history (Just params)
-          case result of
-            Left err -> do
-              let cached = AgenticChatCache{accHistory = historyMessages, accModel = defaultModel, accHasTools = hasTools, accResponse = Left (show err)}
-              writeFileLBS filePath (AE.encode cached)
-              return $ Left $ show err
-            Right responseMsg -> do
-              let cached = AgenticChatCache{accHistory = historyMessages, accModel = defaultModel, accHasTools = hasTools, accResponse = Right responseMsg}
-              writeFileLBS filePath (AE.encode cached)
-              return $ Right responseMsg
+              Models.Model modelName = params.model
+          response <- first show <$> LLMCore.chat openAI history (Just params)
+          let cached = AgenticChatCache{accHistory = historyMessages, accModel = modelName, accHasTools = hasTools, accResponse = response}
+          writeFileLBS filePath (AE.encode cached)
+          return response
+
+
+-- Embedding golden cache
+data EmbeddingCache = EmbeddingCache
+  { texts :: [Text]
+  , result :: Either Text [[Float]]
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+getOrCreateEmbeddingGoldenResponse :: FilePath -> EmbOAI.OpenAIEmbeddings -> [DocLoader.Document] -> IO (Either Text [[Float]])
+getOrCreateEmbeddingGoldenResponse goldenDir config docs = do
+  let texts = map (toStrict . DocLoader.pageContent) docs
+      cacheKey = "emb_" <> sanitizeForFilename (T.intercalate "__" $ take 3 texts) <> "_n" <> show (length docs)
+      filePath = goldenDir </> cacheKey <> ".json"
+  exists <- doesFileExist filePath
+  updateGolden <- isJust <$> lookupEnv "UPDATE_GOLDEN"
+  if exists && not updateGolden
+    then do
+      content <- readFileLBS filePath
+      case AE.decode content of
+        Just (cached :: EmbeddingCache) -> return cached.result
+        Nothing -> error $ fromString $ "Failed to decode embedding cache from: " <> filePath
+    else
+      if not exists && not updateGolden
+        then
+          error $ fromString $ "Golden file not found: " <> filePath
+            <> "\nRun tests with UPDATE_GOLDEN=true to create it:\n"
+            <> "  UPDATE_GOLDEN=true USE_EXTERNAL_DB=true cabal test integration-tests"
+        else do
+          createDirectoryIfMissing True goldenDir
+          result <- first show <$> EmbCore.embedDocuments config docs
+          writeFileLBS filePath $ AE.encode EmbeddingCache{texts, result}
+          return result

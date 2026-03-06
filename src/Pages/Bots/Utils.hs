@@ -282,13 +282,13 @@ data Channel = Channel
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "channel", DAE.CamelToSnake]] Channel
 
 
-processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Eff es (Either Text AI.LLMResponse)
-processAIQuery pid userQuery threadCtx apiKey = do
+processAIQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Eff es (Either Text AI.LLMResponse)
+processAIQuery pid userQuery threadCtx model apiKey = do
   now <- Time.currentTime
   let dayAgo = addUTCTime (-86400) now
   facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
   let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.customContext = threadCtx}
-  result <- AI.runAgenticQuery config userQuery apiKey
+  result <- AI.runAgenticQuery config userQuery model apiKey
   case result of
     Left err -> do
       Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]

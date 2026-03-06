@@ -45,7 +45,7 @@ enhanceIssueWithLLM authCtx issue = runExceptT do
 -- | Generate an enhanced title using LLM
 generateEnhancedTitle :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text Text)
 generateEnhancedTitle authCtx issue = runExceptT do
-  r <- ExceptT $ AI.callOpenAIAPIEff (buildTitlePrompt issue) authCtx.config.openaiApiKey
+  r <- ExceptT $ AI.callOpenAIAPIEff authCtx.config.openaiSmallModel (buildTitlePrompt issue) authCtx.config.openaiApiKey
   (title, _) <- hoistEither $ AI.getNormalTupleReponse r
   pure $ T.take 200 title
 
@@ -53,7 +53,7 @@ generateEnhancedTitle authCtx issue = runExceptT do
 -- | Generate enhanced description with recommended actions
 generateEnhancedDescription :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Text, Text, Text))
 generateEnhancedDescription authCtx issue = runExceptT do
-  r <- ExceptT $ AI.callOpenAIAPIEff (buildDescriptionPrompt issue) authCtx.config.openaiApiKey
+  r <- ExceptT $ AI.callOpenAIAPIEff authCtx.config.openaiSmallModel (buildDescriptionPrompt issue) authCtx.config.openaiApiKey
   (response, _) <- hoistEither $ AI.getNormalTupleReponse r
   let lines' = lines response
   pure (fromMaybe "" $ viaNonEmpty head lines', fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1, fromMaybe "medium" $ lines' !!? 2)
@@ -240,7 +240,7 @@ buildDescriptionPrompt issue =
 -- | Classify issue as critical/safe and count breaking/incremental changes
 classifyIssueCriticality :: ELLM.LLM :> es => AuthContext -> Issues.Issue -> Eff es (Either Text (Bool, Int, Int))
 classifyIssueCriticality authCtx issue = runExceptT do
-  res <- ExceptT $ AI.callOpenAIAPIEff (buildCriticalityPrompt issue) authCtx.config.openaiApiKey
+  res <- ExceptT $ AI.callOpenAIAPIEff authCtx.config.openaiSmallModel (buildCriticalityPrompt issue) authCtx.config.openaiApiKey
   (response, _) <- hoistEither $ AI.getNormalTupleReponse res
   case lines response of
     [criticalStr, breakingStr, incrementalStr] ->

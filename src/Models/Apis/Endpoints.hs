@@ -15,10 +15,11 @@ module Models.Apis.Endpoints (
   insertCanonicalEndpoints,
   -- Endpoint embedding + merge
   getUnembeddedEndpoints,
-  getEmbeddedEndpointTexts,
+  fetchEndpointTexts,
   updateEndpointEmbeddings,
   getCanonicalEndpoints,
   assignEndpointsToCanonical,
+  setEndpointCanonicalTemplate,
   unmergeEndpoint,
   getMergedEndpointPairs,
   migrateAndDeleteMergedEndpoints,
@@ -27,6 +28,7 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default (Default)
+import Data.Map.Lazy qualified as Map
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types
@@ -45,7 +47,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), showPGFloatArray)
 import Relude
 import System.Types (DB)
 import Utils (formatUTC)
@@ -276,16 +278,18 @@ insertCanonicalEndpoints rows =
   void
     $ PG.executeMany
       [sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, canonical_hash, canonical_path)
-        VALUES (?, ?, '{}', ?, ?, ?, false, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (hash) DO UPDATE SET canonical_hash = EXCLUDED.canonical_hash, canonical_path = EXCLUDED.canonical_path |]
-      (map (\(pid, templatePath, method, host, hash) -> (pid, templatePath, method, host, hash, hash, templatePath)) rows)
+      (map (\(pid, templatePath, method, host, hash) -> (pid, templatePath, AE.object [], method, host, hash, False :: Bool, hash, templatePath)) rows)
 
 
 -- Endpoint embedding + merge ---------------------------------------------------
 
-getEmbeddedEndpointTexts :: DB es => Projects.ProjectId -> Eff es [(EndpointId, Text)]
-getEmbeddedEndpointTexts pid =
-  PG.query [sql| SELECT id, url_path FROM apis.endpoints WHERE project_id = ? AND embedding IS NOT NULL |] (Only pid)
+fetchEndpointTexts :: DB es => [EndpointId] -> Eff es (Map EndpointId Text)
+fetchEndpointTexts [] = pure mempty
+fetchEndpointTexts ids =
+  Map.fromList
+    <$> PG.query [sql| SELECT id, url_path FROM apis.endpoints WHERE id = ANY(?) |] (Only $ PGArray ids)
 
 
 getUnembeddedEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, Text, Text)]
@@ -293,6 +297,7 @@ getUnembeddedEndpoints pid =
   PG.query
     [sql| SELECT id, hash, url_path FROM apis.endpoints
         WHERE project_id = ? AND embedding IS NULL AND merge_override = FALSE
+          AND url_path != ''
         LIMIT 500 |]
     (Only pid)
 
@@ -304,11 +309,11 @@ updateEndpointEmbeddings pairs =
     [sql| UPDATE apis.endpoints SET
           embedding = u.emb::float4[],
           embedding_at = NOW()
-        FROM (SELECT unnest(?::uuid[]) AS id, unnest(?::float4[][]) AS emb) u
+        FROM ROWS FROM (unnest(?::uuid[]), unnest(?::text[])) AS u(id, emb)
         WHERE apis.endpoints.id = u.id |]
     (V.fromList ids, V.fromList embs)
   where
-    (ids, embs) = unzip $ map (\(eid, e) -> (eid, PGArray e)) pairs
+    (ids, embs) = unzip $ map (\(eid, e) -> (eid, showPGFloatArray e)) pairs
 
 
 getCanonicalEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, [Float])]
@@ -317,7 +322,8 @@ getCanonicalEndpoints pid =
     <$> PG.query
       [sql| SELECT id, embedding FROM apis.endpoints
         WHERE project_id = ? AND canonical_hash IS NULL
-          AND embedding IS NOT NULL AND merge_override = FALSE |]
+          AND embedding IS NOT NULL AND merge_override = FALSE
+        LIMIT 10000 |]
       (Only pid)
 
 
@@ -332,6 +338,12 @@ assignEndpointsToCanonical pairs =
     (V.fromList pids, V.fromList cids)
   where
     (pids, cids) = unzip pairs
+
+
+-- | Set a centroid endpoint's url_path and canonical_path to an LLM-suggested template.
+setEndpointCanonicalTemplate :: DB es => EndpointId -> Text -> Eff es Int64
+setEndpointCanonicalTemplate eid path =
+  PG.execute [sql| UPDATE apis.endpoints SET url_path = ?, canonical_path = ? WHERE id = ? |] (path, path, eid)
 
 
 unmergeEndpoint :: DB es => EndpointId -> Eff es Int64

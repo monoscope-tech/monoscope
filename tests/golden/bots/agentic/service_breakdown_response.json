@@ -1,5 +1,5 @@
 {
-    "explanation": "The analysis of service logs shows that there are 2 services generating warnings, while only 1 service is recording errors. This indicates that warnings are more widespread across multiple services, which could require attention to ensure system stability and prevent potential escalation to errors.",
+    "explanation": "The warning counts by service show 5 occurrences for one service and 6 for another, leading to a total of 11 warnings. Additionally, there was a total of 21 errors recorded across all services. This indicates a significant presence of errors that may need further investigation to improve system reliability.",
     "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
     "time_range": {
         "from": null,
@@ -9,8 +9,13 @@
     "visualization": "distribution",
     "widgets": [
         {
-            "query": "level in (\"WARN\", \"ERROR\") | summarize count() by resource.service.name",
-            "title": "Warning and Error Counts by Service",
+            "query": "level == \"WARN\" | summarize count() by resource.service.name",
+            "title": "Warning Counts by Service",
+            "type": "distribution"
+        },
+        {
+            "query": "level == \"ERROR\" | summarize count() by resource.service.name",
+            "title": "Error Counts by Service",
             "type": "distribution"
         }
     ]

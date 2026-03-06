@@ -1051,7 +1051,7 @@ aiSearchH pid requestBody = do
           let dayAgo = addUTCTime (-86400) now
           facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
           let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM}
-          result <- AI.runAgenticQuery config inputText envCfg.openaiApiKey
+          result <- AI.runAgenticQuery config inputText envCfg.openaiModel envCfg.openaiApiKey
 
           case result of
             Left errMsg -> do

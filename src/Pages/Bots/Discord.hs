@@ -344,7 +344,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                    in Issues.insertChatMessage discordData.projectId convId role m.content Nothing Nothing
             dbMessages <- Issues.selectChatHistory convId
             let threadContext = formatHistoryAsContext "Discord" $ map AI.dbMessageToLLMMessage dbMessages
-            result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiApiKey
+            result <- processAIQuery discordData.projectId userQuery (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey
             Issues.insertChatMessage discordData.projectId convId "user" userQuery Nothing Nothing
             case result of
               Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
@@ -352,7 +352,7 @@ discordInteractionsH rawBody signatureM timestampM = do
                 whenJust resp.query \q -> Issues.insertChatMessage discordData.projectId convId "assistant" q Nothing Nothing
                 sendDiscordResponse options interaction envCfg authCtx discordData resp now
           _ -> do
-            result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiApiKey
+            result <- processAIQuery discordData.projectId userQuery Nothing envCfg.openaiModel envCfg.openaiApiKey
             case result of
               Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord ServiceError)
               Right resp -> sendDiscordResponse options interaction envCfg authCtx discordData resp now

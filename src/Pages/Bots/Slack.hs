@@ -220,7 +220,7 @@ slackInteractionsH interaction = do
               Log.logTrace ("Slack followup response (report)" :: Text) resp
               sendSlackFollowupResponse inter.response_url resp
         GeneralQueryIntent -> do
-          result <- processAIQuery slackData.projectId inter.text Nothing envCfg.openaiApiKey
+          result <- processAIQuery slackData.projectId inter.text Nothing envCfg.openaiModel envCfg.openaiApiKey
           case result of
             Left _ -> do
               let resp = formatBotError Slack ServiceError
@@ -696,7 +696,7 @@ slackEventsPostH payload = do
       let threadContext = formatHistoryAsContext "Slack" $ map AI.dbMessageToLLMMessage dbMessages
 
       -- Use processAIQuery with thread context
-      result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiApiKey
+      result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey
       case result of
         Left _ -> sendSlackChatMessage envCfg.slackBotToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
         Right resp -> do

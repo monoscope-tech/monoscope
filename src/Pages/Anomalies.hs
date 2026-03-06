@@ -670,7 +670,7 @@ aiChatPostH pid issueId form
       fullSystemPrompt <- buildSystemPromptForIssue pid issue now
       let systemPrompt = anomalySystemPrompt now
           config = (AI.defaultAgenticConfig pid){AI.facetContext = Nothing, AI.customContext = Just fullSystemPrompt, AI.conversationId = Just convId, AI.conversationType = Just Issues.CTAnomaly, AI.systemPromptOverride = Just systemPrompt}
-      result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiApiKey
+      result <- AI.runAgenticChatWithHistory config form.query appCtx.config.openaiModel appCtx.config.openaiApiKey
       either
         (\err -> respond (Just fullSystemPrompt) convId ("I encountered an error while analyzing this issue: " <> err) Nothing Nothing False)
         (handleChatResult (Just fullSystemPrompt) convId)

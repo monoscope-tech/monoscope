@@ -4,7 +4,7 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Text qualified as T
 import Effectful qualified as Eff
-import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, testPid)
+import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel, testPid)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
 import Pages.Bots.Utils (processAIQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
@@ -77,7 +77,7 @@ spec = aroundAll withTestResources do
       it "processes error trend query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "plot error trend over time" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -88,7 +88,7 @@ spec = aroundAll withTestResources do
       it "processes service breakdown query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "show warning and error counts grouped by service" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -98,7 +98,7 @@ spec = aroundAll withTestResources do
       it "processes explanation-only query and saves golden response" \tr -> do
         cleanupTelemetryData tr
         seedTelemetryData tr
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "what services have the most errors?" Nothing (getOpenAIKey tr)
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "what services have the most errors?" Nothing (getOpenAIModel tr) (getOpenAIKey tr)
         case result of
           Left err -> expectationFailure $ "API call failed: " <> toString err
           Right agenticResp -> do
@@ -107,7 +107,7 @@ spec = aroundAll withTestResources do
             isJust agenticResp.explanation || not (null agenticResp.widgets) `shouldBe` True
 
       it "handles empty API key gracefully" \tr -> do
-        result <- runTestBg frozenTime tr $ processAIQuery testPid "show errors" Nothing ""
+        result <- runTestBg frozenTime tr $ processAIQuery testPid "show errors" Nothing (getOpenAIModel tr) ""
         case result of
           Left err -> T.isInfixOf "unavailable" err || T.isInfixOf "error" (T.toLower err) `shouldBe` True
           Right _ -> pass

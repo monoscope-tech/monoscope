@@ -116,7 +116,7 @@ data LLMResponse = LLMResponse
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] LLMResponse
 
 
-callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Eff es (Either Text Text)
+callOpenAIAPIEff :: ELLM.LLM :> es => Text -> Text -> Text -> Eff es (Either Text Text)
 callOpenAIAPIEff = ELLM.callLLM
 
 
@@ -624,8 +624,8 @@ parseResponse :: Text -> Either Text LLMResponse
 parseResponse = parseLLMResponse . stripCodeBlock
 
 
-runAgenticQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Eff es (Either Text LLMResponse)
-runAgenticQuery config userQuery apiKey = do
+runAgenticQuery :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es) => AgenticConfig -> Text -> Text -> Text -> Eff es (Either Text LLMResponse)
+runAgenticQuery config userQuery model apiKey = do
   now <- Time.currentTime
   let sysPrompt = buildSystemPrompt config now
       systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
@@ -633,7 +633,7 @@ runAgenticQuery config userQuery apiKey = do
       chatHistory = systemMsg :| [userMsg]
       params =
         OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model "gpt-4o-mini"
+          { OpenAIV1.model = Models.Model model
           , OpenAIV1.tools = Just $ V.fromList allToolDefs
           , OpenAIV1.messages = V.empty
           }
@@ -660,14 +660,15 @@ runAgenticQueryWithHistory
   => AgenticConfig
   -> Text
   -> Text
+  -> Text
   -> Eff es (Either Text LLMResponse)
-runAgenticQueryWithHistory config userQuery apiKey = do
+runAgenticQueryWithHistory config userQuery model apiKey = do
   now <- Time.currentTime
   let systemMsg = LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       params =
         OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model "gpt-4o-mini"
+          { OpenAIV1.model = Models.Model model
           , OpenAIV1.tools = Just $ V.fromList allToolDefs
           , OpenAIV1.messages = V.empty
           }
@@ -689,15 +690,16 @@ runAgenticChatWithHistory
   => AgenticConfig
   -> Text
   -> Text
+  -> Text
   -> Eff es (Either Text AgenticChatResult)
-runAgenticChatWithHistory config userQuery apiKey = do
+runAgenticChatWithHistory config userQuery model apiKey = do
   now <- Time.currentTime
   let sysPrompt = buildSystemPrompt config now
       systemMsg = LLM.Message LLM.System sysPrompt LLM.defaultMessageData
       userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
       params =
         OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model "gpt-4o-mini"
+          { OpenAIV1.model = Models.Model model
           , OpenAIV1.tools = Just $ V.fromList allToolDefs
           , OpenAIV1.messages = V.empty
           }
