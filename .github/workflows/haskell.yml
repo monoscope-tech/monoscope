@@ -148,7 +148,7 @@ jobs:
 
   build-and-deploy:
     name: Build and Deploy Docker Image
-    runs-on: ubuntu-latest
+    runs-on: self-hosted
     if: always()
     permissions:
       contents: 'read'
