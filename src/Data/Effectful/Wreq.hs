@@ -40,6 +40,7 @@ import Network.Wreq.Types qualified as W
 import Relude hiding (get, put)
 import System.Directory (createDirectoryIfMissing, doesFileExist)
 import System.FilePath ((</>))
+import Text.Regex.TDFA ((=~))
 import UnliftIO.Exception (throwIO, try)
 
 
@@ -148,7 +149,16 @@ runHTTPGolden goldenDir = interpret $ \_ -> \case
 
 -- Helper functions
 sanitizeFileName :: String -> String
-sanitizeFileName = map (\c -> if c `elem` (['/', ':', '?', '&'] :: [Char]) then '_' else c)
+sanitizeFileName = redactSecrets . map (\c -> if c `elem` (['/', ':', '?', '&'] :: [Char]) then '_' else c)
+
+
+-- | Redact known secret patterns from golden file names and content to prevent
+-- accidentally committing credentials. Replaces Twilio Account SIDs (AC...)
+-- and Auth Tokens with fixed placeholders.
+redactSecrets :: String -> String
+redactSecrets s = case s =~ ("AC[a-f0-9]{32}" :: String) :: (String, String, String) of
+  (_, "", _) -> s
+  (before, _, after) -> before <> "ACREDACTED00000000000000000000000" <> redactSecrets after
 
 
 data WreqResponse = WreqResponse
@@ -178,11 +188,15 @@ fromWreqResponse r =
   WreqResponse
     { statusCode = r.responseStatus.statusCode
     , statusMessage = decodeUtf8 r.responseStatus.statusMessage
-    , respBody = decodeUtf8 r.responseBody
+    , respBody = redactSecretsT $ decodeUtf8 r.responseBody
     , responseHeaders = convertHeaders r.responseHeaders
-    , originalRequest = fromString (show r.responseOriginalRequest)
+    , originalRequest = redactSecretsT $ fromString (show r.responseOriginalRequest)
     , responseEarlyHints = convertHeaders r.responseEarlyHints
     }
+
+
+redactSecretsT :: Text -> Text
+redactSecretsT = fromString . redactSecrets . toString
 
 
 -- Convert from WreqResponse to Response LBS.ByteString
