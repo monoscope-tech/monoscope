@@ -1640,14 +1640,22 @@ endpointTemplateDiscovery pid = do
   -- Step 1: Deterministic template discovery via tokenization grouping
   endpoints <- Endpoints.getUnmergedEndpoints pid
   unless (null endpoints) do
-    let grouped = HM.toList $ HM.fromListWith (<>) $ map (\(h, m, host, path) ->
-            let tp = T.intercalate "/" $ map (\t -> bool "{param}" t (t /= "<*>")) $ V.toList $ tokenizeUrlPath path
-            in ((m, host, tp), [h])
-          ) endpoints
-        (allUpdates, allInserts) = foldMap (\((method, host, tp), hs) ->
-            let ch = toXXHash $ pid.toText <> host <> method <> tp
-            in (map (\h -> (h, ch, tp)) hs, [(pid, tp, method, host, ch)])
-          ) $ filter (\((_, _, tp), hs) -> length hs >= 2 && T.isInfixOf "{param}" tp) grouped
+    let grouped =
+          HM.toList
+            $ HM.fromListWith (<>)
+            $ map
+              ( \(h, m, host, path) ->
+                  let tp = T.intercalate "/" $ map (\t -> bool "{param}" t (t /= "<*>")) $ V.toList $ tokenizeUrlPath path
+                   in ((m, host, tp), [h])
+              )
+              endpoints
+        (allUpdates, allInserts) =
+          foldMap
+            ( \((method, host, tp), hs) ->
+                let ch = toXXHash $ pid.toText <> host <> method <> tp
+                 in (map (\h -> (h, ch, tp)) hs, [(pid, tp, method, host, ch)])
+            )
+            $ filter (\((_, _, tp), hs) -> length hs >= 2 && T.isInfixOf "{param}" tp) grouped
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts
     Log.logInfo "Endpoint template discovery complete" ("project_id", pid.toText, "endpoint_count", length endpoints)
