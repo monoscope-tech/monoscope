@@ -71,6 +71,8 @@ extra-source-files:
     static/migrations/0043_error_pattern_auto_resolve_trigger.sql
     static/migrations/0044_sentry_aligned_thresholds.sql
     static/migrations/0045_pattern_embeddings.sql
+    static/migrations/0046_endpoint_path_templates.sql
+    static/migrations/0047_fix_anomaly_trigger_conflict.sql
 
 source-repository head
   type: git
