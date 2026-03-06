@@ -2205,8 +2205,8 @@ processNewLogPatterns pid authCtx = do
     if totalEvents < minEventsForNewPatternAlerts
       then Log.logInfo "Skipping new log pattern issue creation due to low event volume" (pid, length newPatterns, totalEvents)
       else do
-        -- url_path patterns and INFO/TRACE logs skip new-pattern issues (noise) but still get rate-change alerts
-        let issueWorthy = V.fromList $ filter (\lp -> lp.sourceField /= "url_path" && lp.logLevel `notElem` [Just "INFO", Just "TRACE" :: Maybe Text]) newPatterns
+        -- Filter out infrastructure noise; errors/exceptions/app logs still create issues
+        let issueWorthy = V.fromList $ filter isIssueWorthy newPatterns
         issueIds <- V.forM issueWorthy \lp -> do
           issue <- Issues.createLogPatternIssue pid lp
           Issues.insertIssue issue
@@ -2214,6 +2214,25 @@ processNewLogPatterns pid authCtx = do
           pure issue.id
         unless (V.null issueIds) $ liftIO $ withResource authCtx.jobsPool \conn ->
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid issueIds
+
+
+-- | Should a new log pattern create an issue? Filters out infrastructure noise
+-- (DB spans, internal spans, successful HTTP requests) unless they have error status.
+isIssueWorthy :: LogPatterns.LogPattern -> Bool
+isIssueWorthy lp
+  | lp.sourceField == "url_path" = False
+  | lp.logLevel `elem` [Just "INFO", Just "TRACE" :: Maybe Text] = False
+  | hasErrorStatus pat = True
+  | isDbSpan pat = False
+  | isInternalSpan pat = False
+  | isSuccessfulRequest pat = False
+  | otherwise = True
+  where
+    pat = lp.logPattern
+    hasErrorStatus p = "status;badge-error⇒ERROR" `T.isInfixOf` p || "status_code;badge-4xx" `T.isInfixOf` p || "status_code;badge-5xx" `T.isInfixOf` p
+    isDbSpan p = "kind;neutral⇒database" `T.isPrefixOf` p
+    isInternalSpan p = "kind;neutral⇒internal" `T.isPrefixOf` p
+    isSuccessfulRequest p = "request_type;neutral⇒" `T.isInfixOf` p && not (hasErrorStatus p)
 
 
 -- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,
