@@ -1637,32 +1637,17 @@ embeddingConfig ctx =
 
 endpointTemplateDiscovery :: Projects.ProjectId -> ATBackgroundCtx ()
 endpointTemplateDiscovery pid = do
-  -- Step 1: Drain-based deterministic template discovery
+  -- Step 1: Deterministic template discovery via tokenization grouping
   endpoints <- Endpoints.getUnmergedEndpoints pid
   unless (null endpoints) do
-    now <- Time.currentTime
-    let grouped = HM.toList $ HM.fromListWith (<>) $ map (\(h, m, host, path) -> ((m, host), [(h, path)])) endpoints
-        (!allUpdates, !allInserts) =
-          foldl'
-            ( \(!accUpd, !accIns) ((method, host), eps) ->
-                let items = V.fromList eps
-                    urlDrainConfig = Drain.defaultDrainConfig{Drain.similarityThreshold = 0.9}
-                    tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree{Drain.config = urlDrainConfig} items now
-                    discoveredTemplates = V.filter (\r -> T.isInfixOf "<*>" r.templateStr) $ Drain.getAllLogGroups tree
-                    (!upd, !ins) =
-                      V.foldl'
-                        ( \(!u, !i) result ->
-                            let templatePath = T.intercalate "/" $ map (\t -> if t == "<*>" then "{param}" else t) $ V.toList result.templateTokens
-                                canonicalHash = toXXHash $ pid.toText <> host <> method <> templatePath
-                                updates = V.toList result.logIds <&> \epHash -> (epHash, canonicalHash, templatePath)
-                             in (u <> updates, i <> [(pid, templatePath, method, host, canonicalHash)])
-                        )
-                        ([], [])
-                        discoveredTemplates
-                 in (accUpd <> upd, accIns <> ins)
-            )
-            ([], [])
-            grouped
+    let grouped = HM.toList $ HM.fromListWith (<>) $ map (\(h, m, host, path) ->
+            let tp = T.intercalate "/" $ map (\t -> bool "{param}" t (t /= "<*>")) $ V.toList $ tokenizeUrlPath path
+            in ((m, host, tp), [h])
+          ) endpoints
+        (allUpdates, allInserts) = foldMap (\((method, host, tp), hs) ->
+            let ch = toXXHash $ pid.toText <> host <> method <> tp
+            in (map (\h -> (h, ch, tp)) hs, [(pid, tp, method, host, ch)])
+          ) $ filter (\((_, _, tp), hs) -> length hs >= 2 && T.isInfixOf "{param}" tp) grouped
     void $ Endpoints.setEndpointCanonical allUpdates
     Endpoints.insertCanonicalEndpoints allInserts
     Log.logInfo "Endpoint template discovery complete" ("project_id", pid.toText, "endpoint_count", length endpoints)
