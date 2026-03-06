@@ -23,7 +23,6 @@ where
 
 import Control.Lens ((^..), (^?))
 import Data.Aeson qualified as AE
-import Pkg.AI qualified as AI
 import Data.Aeson.Lens (key, _Array, _String)
 import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
@@ -32,6 +31,7 @@ import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
+import Pkg.AI qualified as AI
 import Pkg.Drain qualified as Drain
 import Pkg.ErrorFingerprint qualified as EF
 import Relude
@@ -345,10 +345,39 @@ buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n"
 trivialTokens :: Set.Set Text
 trivialTokens =
   Set.fromList
-    [ "info", "warn", "error", "debug", "trace", "fatal"
-    , "exception", "failed", "invalid", "null", "undefined"
-    , "the", "a", "an", "in", "on", "at", "to", "for", "of", "from", "with", "by", "is", "was"
-    , "-", "--", "->", "=", "==", ":", "::", "|"
+    [ "info"
+    , "warn"
+    , "error"
+    , "debug"
+    , "trace"
+    , "fatal"
+    , "exception"
+    , "failed"
+    , "invalid"
+    , "null"
+    , "undefined"
+    , "the"
+    , "a"
+    , "an"
+    , "in"
+    , "on"
+    , "at"
+    , "to"
+    , "for"
+    , "of"
+    , "from"
+    , "with"
+    , "by"
+    , "is"
+    , "was"
+    , "-"
+    , "--"
+    , "->"
+    , "="
+    , "=="
+    , ":"
+    , "::"
+    , "|"
     ]
 
 
@@ -422,8 +451,9 @@ verifyMergeDecision template sampleLog = (toString sampleLog :: String) =~ (toSt
 -- >>> normalizeErrorForEmbedding "NullPointerException: value at index 42"
 -- "NullPointerException: value at index {integer}"
 normalizeErrorForEmbedding :: Text -> Text
-normalizeErrorForEmbedding txt = let (errType, msg) = splitErrorType txt
-  in if T.null errType then EF.normalizeMessage txt else errType <> ": " <> EF.normalizeMessage msg
+normalizeErrorForEmbedding txt =
+  let (errType, msg) = splitErrorType txt
+   in if T.null errType then EF.normalizeMessage txt else errType <> ": " <> EF.normalizeMessage msg
 
 
 -- | Pre-filter gate for error pattern merging. Candidates must either share the
@@ -444,7 +474,7 @@ errorCanMerge :: Text -> Text -> Bool
 errorCanMerge a b =
   let (typeA, msgA) = splitErrorType a
       (typeB, msgB) = splitErrorType b
-  in (not (T.null typeA) && typeA == typeB) || shareMeaningfulTokens msgA msgB
+   in (not (T.null typeA) && typeA == typeB) || shareMeaningfulTokens msgA msgB
 
 
 -- | Error-aware CoT judge prompt. Shows all error patterns in a numbered list,
