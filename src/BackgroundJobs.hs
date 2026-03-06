@@ -1646,7 +1646,8 @@ endpointTemplateDiscovery pid = do
           foldl'
             ( \(!accUpd, !accIns) ((method, host), eps) ->
                 let items = V.fromList eps
-                    tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree items now
+                    urlDrainConfig = Drain.defaultDrainConfig{Drain.similarityThreshold = 0.9}
+                    tree = Drain.buildDrainTree (tokenizeUrlPath . snd) fst (const Nothing) Drain.emptyDrainTree{Drain.config = urlDrainConfig} items now
                     discoveredTemplates = V.filter (\r -> T.isInfixOf "<*>" r.templateStr) $ Drain.getAllLogGroups tree
                     (!upd, !ins) =
                       V.foldl'

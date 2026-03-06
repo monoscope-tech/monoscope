@@ -2,6 +2,7 @@
 
 module Pkg.Drain (
   DrainTree (..),
+  DrainConfig (..),
   DrainResult (..),
   defaultDrainConfig,
   emptyDrainTree,
