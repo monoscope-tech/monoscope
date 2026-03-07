@@ -307,142 +307,147 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
       severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
       severityBadge _ = pass
   div_ [class_ "flex h-full overflow-hidden"] do
-   -- LEFT: scrollable main content
-   div_ [class_ "flex-1 min-w-0 overflow-auto pt-8 px-4 pb-8 flex flex-col gap-4"] do
-    -- Header: title + badges
-    div_ [class_ "flex items-center gap-3"] do
-      h3_ [class_ "text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
-      issueTypeLabel issue.issueType issue.critical
-      severityBadge issue.severity
-    p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
-    -- Metadata chips + issue type content
-    let metadataChip_ icon label = span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak bg-fillWeaker rounded-full px-2.5 py-1"] do
-          faSprite_ icon "regular" "h-3 w-3"
-          toHtml @Text label
-        createdChip = metadataChip_ "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
-        logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
-          _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-            div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-              span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-              span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
-            renderLogContent_ logPattern
-          whenJust sampleMessage \msg ->
-            div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-              div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
-              renderLogContent_ msg
-    div_ [class_ "flex flex-wrap gap-2 items-center"] do
-      createdChip
-      case issue.issueType of
-        Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
-          metadataChip_ "circle-dot" $ fromMaybe "Unknown" d.logLevel
-          metadataChip_ "server" $ fromMaybe "Unknown" d.serviceName
-          metadataChip_ "tally" $ show d.occurrenceCount <> " occurrences"
-          metadataChip_ "clock" $ "First seen " <> compactTimeAgo (toText $ prettyTimeAuto now d.firstSeenAt)
-        Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
-          metadataChip_ "arrow-trend-up" $ display d.changeDirection
-          metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
-          metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
-          metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
-        _ -> pass
-    -- Volume chart for log pattern issues
-    whenJust (nonEmpty hourlyStats) \neStats -> do
-      let utcToMs t = floor $ POSIX.utcTimeToPOSIXSeconds t * 1000 :: Int
-          dataset = Widget.WidgetDataset
-            { source = AE.toJSON $ V.fromList $
-                (AE.toJSON <$> V.fromList ["timestamp" :: Text, "count"]) :
-                [AE.toJSON <$> V.fromList [AE.toJSON (utcToMs ts), AE.toJSON cnt] | (ts, cnt) <- hourlyStats]
-            , rowsPerMin = Nothing, value = Nothing
-            , from = Just $ utcToMs $ fst $ head neStats
-            , to = Just $ utcToMs $ fst $ last neStats
-            , stats = Nothing
-            }
-      div_ [class_ "border border-strokeWeak rounded-lg p-3", style_ "aspect-ratio: 5/2; max-height: 300px;"] $
-        Widget.widget_ (def :: Widget.Widget)
-          { Widget.standalone = Just True
-          , Widget.id = Just $ issueId <> "-pattern-volume"
-          , Widget.naked = Just True
-          , Widget.wType = Widget.WTTimeseries
-          , Widget.title = Just "Pattern Volume"
-          , Widget.showTooltip = Just True
-          , Widget.dataset = Just dataset
-          , Widget._projectId = Just issue.projectId
-          , Widget.hideLegend = Just True
-          , Widget.eager = Just True
-          }
-    -- Issue type content
-    case issue.issueType of
-      Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
-        logPatternCards d.sourceField d.logPattern d.sampleMessage
-      Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
-        logPatternCards d.sourceField d.logPattern d.sampleMessage
-      Issues.RuntimeException -> do
-        let cardSection icon title content = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-              _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
-                span_ [class_ "text-sm font-medium text-textStrong"] title
-              content
-        div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
-          withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
-            cardSection "code" "Stack Trace"
-              $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
-              $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
-              $ toHtml exceptionData.stackTrace
-            whenJust errM \errL -> do
-              let err = errL.base
-                  detailItem :: (Text, Text, Text) -> HtmlT Identity ()
-                  detailItem (icon, lbl, value) = div_ [class_ "flex items-center gap-2"] do
-                    faSprite_ icon "regular" "w-3 h-3"
-                    div_ [] do
-                      span_ [class_ "text-xs text-textWeak"] $ toHtml $ lbl <> ":"
-                      span_ [class_ "ml-2 text-xs"] $ toHtml value
-              cardSection "circle-info" "Error Details" $ div_ [class_ "p-4 flex flex-col gap-4"] do
-                whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
-                  div_ [class_ "mb-2"] do
-                    span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
-                    span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
-                div_ [class_ "flex items-center gap-4"]
-                  $ forM_
-                    [ ("calendar" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
-                    , ("calendar" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
-                    ]
-                    detailItem
-                div_ [class_ "flex items-center gap-4"]
-                  $ forM_
-                    [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
-                    , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
-                    ]
-                    detailItem
-              similarPatternsSection_ pid err.id
-      Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
-        div_ [class_ "mb-4"] do
-          span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-          div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
-      Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
-        div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
-          span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
-          span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
-          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-          span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
-            faSprite_ "server" "regular" "h-3 w-3"
-            toHtml d.endpointHost
-        div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
-          timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
-          div_ [class_ "col-span-4"]
-            $ Widget.widget_
-            $ (def :: Widget.Widget)
+    -- LEFT: scrollable main content
+    div_ [class_ "flex-1 min-w-0 overflow-auto pt-8 px-4 pb-8 flex flex-col gap-4"] do
+      -- Header: title + badges
+      div_ [class_ "flex items-center gap-3"] do
+        h3_ [class_ "text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
+        issueTypeLabel issue.issueType issue.critical
+        severityBadge issue.severity
+      p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
+      -- Metadata chips + issue type content
+      let metadataChip_ icon label = span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak bg-fillWeaker rounded-full px-2.5 py-1"] do
+            faSprite_ icon "regular" "h-3 w-3"
+            toHtml @Text label
+          createdChip = metadataChip_ "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
+          logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
+            _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
+              renderLogContent_ logPattern
+            whenJust sampleMessage \msg ->
+              div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
+                renderLogContent_ msg
+      div_ [class_ "flex flex-wrap gap-2 items-center"] do
+        createdChip
+        case issue.issueType of
+          Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
+            metadataChip_ "circle-dot" $ fromMaybe "Unknown" d.logLevel
+            metadataChip_ "server" $ fromMaybe "Unknown" d.serviceName
+            metadataChip_ "tally" $ show d.occurrenceCount <> " occurrences"
+            metadataChip_ "clock" $ "First seen " <> compactTimeAgo (toText $ prettyTimeAuto now d.firstSeenAt)
+          Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
+            metadataChip_ "arrow-trend-up" $ display d.changeDirection
+            metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
+            metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
+            metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
+          _ -> pass
+      -- Volume chart for log pattern issues
+      whenJust (nonEmpty hourlyStats) \neStats -> do
+        let utcToMs t = floor $ POSIX.utcTimeToPOSIXSeconds t * 1000 :: Int
+            dataset =
+              Widget.WidgetDataset
+                { source =
+                    AE.toJSON
+                      $ V.fromList
+                      $ (AE.toJSON <$> V.fromList ["timestamp" :: Text, "count"])
+                      : [AE.toJSON <$> V.fromList [AE.toJSON (utcToMs ts), AE.toJSON cnt] | (ts, cnt) <- hourlyStats]
+                , rowsPerMin = Nothing
+                , value = Nothing
+                , from = Just $ utcToMs $ fst $ head neStats
+                , to = Just $ utcToMs $ fst $ last neStats
+                , stats = Nothing
+                }
+        div_ [class_ "border border-strokeWeak rounded-lg p-3", style_ "aspect-ratio: 5/2; max-height: 300px;"]
+          $ Widget.widget_
+            (def :: Widget.Widget)
               { Widget.standalone = Just True
-              , Widget.id = Just $ issueId <> "-api-change-timeline"
+              , Widget.id = Just $ issueId <> "-pattern-volume"
               , Widget.naked = Just True
               , Widget.wType = Widget.WTTimeseries
-              , Widget.title = Just "Request trend"
+              , Widget.title = Just "Pattern Volume"
               , Widget.showTooltip = Just True
-              , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
-              , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-              , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
+              , Widget.dataset = Just dataset
               , Widget._projectId = Just issue.projectId
               , Widget.hideLegend = Just True
+              , Widget.eager = Just True
               }
-    div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
+      -- Issue type content
+      case issue.issueType of
+        Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
+          logPatternCards d.sourceField d.logPattern d.sampleMessage
+        Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
+          logPatternCards d.sourceField d.logPattern d.sampleMessage
+        Issues.RuntimeException -> do
+          let cardSection icon title content = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+                _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+                  faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
+                  span_ [class_ "text-sm font-medium text-textStrong"] title
+                content
+          div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
+            withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
+              cardSection "code" "Stack Trace"
+                $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
+                $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
+                $ toHtml exceptionData.stackTrace
+              whenJust errM \errL -> do
+                let err = errL.base
+                    detailItem :: (Text, Text, Text) -> HtmlT Identity ()
+                    detailItem (icon, lbl, value) = div_ [class_ "flex items-center gap-2"] do
+                      faSprite_ icon "regular" "w-3 h-3"
+                      div_ [] do
+                        span_ [class_ "text-xs text-textWeak"] $ toHtml $ lbl <> ":"
+                        span_ [class_ "ml-2 text-xs"] $ toHtml value
+                cardSection "circle-info" "Error Details" $ div_ [class_ "p-4 flex flex-col gap-4"] do
+                  whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
+                    div_ [class_ "mb-2"] do
+                      span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
+                      span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
+                  div_ [class_ "flex items-center gap-4"]
+                    $ forM_
+                      [ ("calendar" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
+                      , ("calendar" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
+                      ]
+                      detailItem
+                  div_ [class_ "flex items-center gap-4"]
+                    $ forM_
+                      [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
+                      , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
+                      ]
+                      detailItem
+                similarPatternsSection_ pid err.id
+        Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
+          div_ [class_ "mb-4"] do
+            span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+            div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+        Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
+          div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+            span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+            span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+            div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+            span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+              faSprite_ "server" "regular" "h-3 w-3"
+              toHtml d.endpointHost
+          div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
+            timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
+            div_ [class_ "col-span-4"]
+              $ Widget.widget_
+              $ (def :: Widget.Widget)
+                { Widget.standalone = Just True
+                , Widget.id = Just $ issueId <> "-api-change-timeline"
+                , Widget.naked = Just True
+                , Widget.wType = Widget.WTTimeseries
+                , Widget.title = Just "Request trend"
+                , Widget.showTooltip = Just True
+                , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
+                , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+                , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
+                , Widget._projectId = Just issue.projectId
+                , Widget.hideLegend = Just True
+                }
+      div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
         div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
           div_ [class_ "flex items-center gap-2"] do
             faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4 text-iconNeutral"
@@ -481,31 +486,32 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
               (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
               (not $ V.null withSessionIds)
 
-    -- Activity timeline (lazy-loaded)
-    let activityUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId <> "/activity"
-    div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-      div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-        faSprite_ "clock-rotate-left" "regular" "w-4 h-4 text-iconNeutral"
-        span_ [class_ "text-sm font-medium text-textStrong"] "Activity"
-      div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
-        $ div_ [class_ "p-4 flex justify-center"]
-        $ loadingIndicator_ LdSM LdDots
+      -- Activity timeline (lazy-loaded)
+      let activityUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId <> "/activity"
+      div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+        div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+          faSprite_ "clock-rotate-left" "regular" "w-4 h-4 text-iconNeutral"
+          span_ [class_ "text-sm font-medium text-textStrong"] "Activity"
+        div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
+          $ div_ [class_ "p-4 flex justify-center"]
+          $ loadingIndicator_ LdSM LdDots
 
-   -- RESIZER + RIGHT: AI chat panel
-   resizer_ "ai_chat_container" "ai_chat_width" False
-   div_ [id_ "ai_chat_container", class_ "shrink-0 overflow-hidden flex flex-col h-full border-l border-strokeWeak", style_ "width: 420px;"] do
-    anomalyAIChat_ pid issue.id
-    script_ """
-      (function() {
-        const c = document.getElementById('ai_chat_container');
-        if (!c) return;
-        const q = new URLSearchParams(window.location.search).get('ai_chat_width');
-        const s = localStorage.getItem('resizer-ai_chat_width');
-        if (q) c.style.width = q + 'px';
-        else if (s && !s.endsWith('px')) c.style.width = s + 'px';
-        else if (s) c.style.width = s;
-      })();
-    """
+    -- RESIZER + RIGHT: AI chat panel
+    resizer_ "ai_chat_container" "ai_chat_width" False
+    div_ [id_ "ai_chat_container", class_ "shrink-0 overflow-hidden flex flex-col h-full border-l border-strokeWeak", style_ "width: 420px;"] do
+      anomalyAIChat_ pid issue.id
+      script_
+        """
+        (function() {
+          const c = document.getElementById('ai_chat_container');
+          if (!c) return;
+          const q = new URLSearchParams(window.location.search).get('ai_chat_width');
+          const s = localStorage.getItem('resizer-ai_chat_width');
+          if (q) c.style.width = q + 'px';
+          else if (s && !s.endsWith('px')) c.style.width = s + 'px';
+          else if (s) c.style.width = s;
+        })();
+        """
 
 
 errorAssigneeSection :: Projects.ProjectId -> Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
@@ -1500,7 +1506,6 @@ anomalyArchiveButton pid aid archived = do
     do
       faSprite_ "archive" "regular" "w-4 h-4"
       if archived then "Unarchive" else "Archive"
-
 
 
 issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
