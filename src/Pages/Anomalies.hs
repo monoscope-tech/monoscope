@@ -52,6 +52,7 @@ import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Effectful (Eff)
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
@@ -80,7 +81,7 @@ import Models.Users.Sessions qualified as Sessions
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (BadgeColor (..), PanelCfg (..), emptyState_, iconBadgeSq_, panel_, resizer_, statBox_)
+import Pages.Components (BadgeColor (..), PanelCfg (..), emptyState_, iconBadgeSq_, panel_, resizer_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -92,7 +93,7 @@ import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
+import System.Types (ATAuthCtx, DB, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
 import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, deleteParam, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, toUriStr)
@@ -230,7 +231,8 @@ anomalyDetailCore pid firstM fetchIssue = do
         Nothing -> pure (V.empty, False)
       let bwconf =
             baseBwconf
-              { pageActions = Just $ div_ [class_ "flex gap-2"] do
+              { headContent = Just highlightJsHead_
+              , pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
                   when (issue.issueType == Issues.RuntimeException) do
@@ -248,7 +250,16 @@ anomalyDetailCore pid firstM fetchIssue = do
           traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId (Just tme) now
           spanRecs' <- lift $ Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
           pure (Just traceItem, V.fromList spanRecs')
-      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members
+      hourlyStats <- case issue.issueType of
+        Issues.LogPattern -> fetchPatternHourlyStats pid issue.targetHash now
+        Issues.LogPatternRateChange -> fetchPatternHourlyStats pid issue.targetHash now
+        _ -> pure []
+      addRespHeaders $ PageCtx bwconf $ anomalyDetailPage pid issue trItem spanRecs errorM now (isJust firstM) members hourlyStats
+
+
+fetchPatternHourlyStats :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es [(UTCTime, Int64)]
+fetchPatternHourlyStats pid patternHash now =
+  PG.query [sql| SELECT hour_bucket, event_count FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND pattern_hash = ? AND hour_bucket >= ? AND hour_bucket <= ? ORDER BY hour_bucket |] (pid, patternHash, addUTCTime (-7 * 86400) now, now)
 
 
 -- | Abbreviate time unit (e.g., "hours" → "hrs")
@@ -288,31 +299,90 @@ timeStatBox_ title timeStr
   | otherwise = pass
 
 
-anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
-anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
+anomalyDetailPage :: Projects.ProjectId -> Issues.Issue -> Maybe Telemetry.Trace -> V.Vector Telemetry.OtelLogsAndSpans -> Maybe ErrorPatterns.ErrorPatternL -> UTCTime -> Bool -> V.Vector ProjectMembers.ProjectMemberVM -> [(UTCTime, Int64)] -> Html ()
+anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = do
   let spanRecs = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> otellogs
       issueId = UUID.toText issue.id.unUUIDId
       severityBadge "critical" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
       severityBadge "warning" = span_ [class_ "inline-flex items-center justify-center rounded-md px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
       severityBadge _ = pass
-  div_ [class_ "pt-8 mx-auto px-4 w-full flex flex-col gap-4 overflow-auto pb-32"] do
-    -- Header
-    div_ [class_ "flex flex-col gap-3"] do
-      div_ [class_ "flex gap-2 flex-wrap items-center"] do
-        issueTypeBadge issue.issueType issue.critical
-        severityBadge issue.severity
-      h3_ [class_ "text-textStrong text-2xl font-semibold"] $ toHtml issue.title
-      p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
-    -- Two Column Layout
-    div_ [class_ "flex flex-col gap-4"] do
-      div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
+  div_ [class_ "flex h-full overflow-hidden"] do
+   -- LEFT: scrollable main content
+   div_ [class_ "flex-1 min-w-0 overflow-auto pt-8 px-4 pb-8 flex flex-col gap-4"] do
+    -- Header: title + badges
+    div_ [class_ "flex items-center gap-3"] do
+      h3_ [class_ "text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
+      issueTypeLabel issue.issueType issue.critical
+      severityBadge issue.severity
+    p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
+    -- Metadata chips + issue type content
+    let metadataChip_ icon label = span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak bg-fillWeaker rounded-full px-2.5 py-1"] do
+          faSprite_ icon "regular" "h-3 w-3"
+          toHtml @Text label
+        createdChip = metadataChip_ "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
+        logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
+          _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+            div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+              span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+              span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
+            renderLogContent_ logPattern
+          whenJust sampleMessage \msg ->
+            div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
+              div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
+              renderLogContent_ msg
+    div_ [class_ "flex flex-wrap gap-2 items-center"] do
+      createdChip
+      case issue.issueType of
+        Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
+          metadataChip_ "circle-dot" $ fromMaybe "Unknown" d.logLevel
+          metadataChip_ "server" $ fromMaybe "Unknown" d.serviceName
+          metadataChip_ "tally" $ show d.occurrenceCount <> " occurrences"
+          metadataChip_ "clock" $ "First seen " <> compactTimeAgo (toText $ prettyTimeAuto now d.firstSeenAt)
+        Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
+          metadataChip_ "arrow-trend-up" $ display d.changeDirection
+          metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
+          metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
+          metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
+        _ -> pass
+    -- Volume chart for log pattern issues
+    whenJust (nonEmpty hourlyStats) \neStats -> do
+      let utcToMs t = floor $ POSIX.utcTimeToPOSIXSeconds t * 1000 :: Int
+          dataset = Widget.WidgetDataset
+            { source = AE.toJSON $ V.fromList $
+                (AE.toJSON <$> V.fromList ["timestamp" :: Text, "count"]) :
+                [AE.toJSON <$> V.fromList [AE.toJSON (utcToMs ts), AE.toJSON cnt] | (ts, cnt) <- hourlyStats]
+            , rowsPerMin = Nothing, value = Nothing
+            , from = Just $ utcToMs $ fst $ head neStats
+            , to = Just $ utcToMs $ fst $ last neStats
+            , stats = Nothing
+            }
+      div_ [class_ "border border-strokeWeak rounded-lg p-3", style_ "aspect-ratio: 5/2; max-height: 300px;"] $
+        Widget.widget_ (def :: Widget.Widget)
+          { Widget.standalone = Just True
+          , Widget.id = Just $ issueId <> "-pattern-volume"
+          , Widget.naked = Just True
+          , Widget.wType = Widget.WTTimeseries
+          , Widget.title = Just "Pattern Volume"
+          , Widget.showTooltip = Just True
+          , Widget.dataset = Just dataset
+          , Widget._projectId = Just issue.projectId
+          , Widget.hideLegend = Just True
+          , Widget.eager = Just True
+          }
+    -- Issue type content
+    case issue.issueType of
+      Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
+        logPatternCards d.sourceField d.logPattern d.sampleMessage
+      Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
+        logPatternCards d.sourceField d.logPattern d.sampleMessage
+      Issues.RuntimeException -> do
         let cardSection icon title content = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
               _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
                 faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
                 span_ [class_ "text-sm font-medium text-textStrong"] title
               content
-        case issue.issueType of
-          Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
+        div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
+          withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
             cardSection "code" "Stack Trace"
               $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
               $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
@@ -343,63 +413,36 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
                     ]
                     detailItem
               similarPatternsSection_ pid err.id
-          Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
-            div_ [class_ "mb-4"] do
-              span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
-              div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
-          Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
-            div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
-              span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
-              span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
-              div_ [class_ "w-px h-4 bg-strokeWeak"] ""
-              span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
-                faSprite_ "server" "regular" "h-3 w-3"
-                toHtml d.endpointHost
-            div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
-              timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
-              div_ [class_ "col-span-4"]
-                $ Widget.widget_
-                $ (def :: Widget.Widget)
-                  { Widget.standalone = Just True
-                  , Widget.id = Just $ issueId <> "-api-change-timeline"
-                  , Widget.naked = Just True
-                  , Widget.wType = Widget.WTTimeseries
-                  , Widget.title = Just "Request trend"
-                  , Widget.showTooltip = Just True
-                  , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
-                  , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-                  , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
-                  , Widget._projectId = Just issue.projectId
-                  , Widget.hideLegend = Just True
-                  }
-          Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d -> do
-            div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-              statBox_ (Just pid) Nothing "Log Level" "" (fromMaybe "Unknown" d.logLevel) Nothing Nothing
-              statBox_ (Just pid) Nothing "Service" "" (fromMaybe "Unknown" d.serviceName) Nothing Nothing
-              statBox_ (Just pid) Nothing "Occurrences" "" (show d.occurrenceCount) Nothing Nothing
-              timeStatBox_ "First Seen" $ prettyTimeAuto now d.firstSeenAt
-            div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
-              div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
-            whenJust d.sampleMessage \msg ->
-              div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
-                div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml msg
-          Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d -> do
-            div_ [class_ "grid grid-cols-2 lg:grid-cols-4 gap-4 mb-4"] do
-              statBox_ (Just pid) Nothing "Direction" "" (display d.changeDirection) Nothing Nothing
-              statBox_ (Just pid) Nothing "Change" "" (Issues.showPct d.changePercent) Nothing Nothing
-              statBox_ (Just pid) Nothing "Current Rate" "" (Issues.showRate d.currentRatePerHour) Nothing Nothing
-              statBox_ (Just pid) Nothing "Baseline" "" (Issues.showRate d.baselineMean) Nothing Nothing
-            div_ [class_ "surface-raised rounded-2xl overflow-hidden mb-4"] do
-              div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
-                span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel d.sourceField
-              div_ [class_ "p-4"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap"] $ toHtml d.logPattern
-
-      div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
+      Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
+        div_ [class_ "mb-4"] do
+          span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+          div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
+      Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
+        div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
+          span_ [class_ $ "badge " <> methodFillColor d.endpointMethod] $ toHtml d.endpointMethod
+          span_ [class_ "monospace bg-fillWeaker px-2 py-1 rounded text-sm text-textStrong"] $ toHtml d.endpointPath
+          div_ [class_ "w-px h-4 bg-strokeWeak"] ""
+          span_ [class_ "flex items-center gap-1.5 text-sm text-textWeak"] do
+            faSprite_ "server" "regular" "h-3 w-3"
+            toHtml d.endpointHost
+        div_ [class_ "grid grid-cols-4 lg:grid-cols-8 gap-4 mb-4"] do
+          timeStatBox_ "First Seen" $ prettyTimeAuto now (zonedTimeToUTC issue.createdAt)
+          div_ [class_ "col-span-4"]
+            $ Widget.widget_
+            $ (def :: Widget.Widget)
+              { Widget.standalone = Just True
+              , Widget.id = Just $ issueId <> "-api-change-timeline"
+              , Widget.naked = Just True
+              , Widget.wType = Widget.WTTimeseries
+              , Widget.title = Just "Request trend"
+              , Widget.showTooltip = Just True
+              , Widget.xAxis = Just (def{Widget.showAxisLabel = Just True})
+              , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
+              , Widget.query = Just $ "attributes.http.request.method==\"" <> d.endpointMethod <> "\" AND attributes.http.route==\"" <> d.endpointPath <> "\" | summarize count(*) by bin_auto(timestamp)"
+              , Widget._projectId = Just issue.projectId
+              , Widget.hideLegend = Just True
+              }
+    div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
         div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
           div_ [class_ "flex items-center gap-2"] do
             faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4 text-iconNeutral"
@@ -448,8 +491,21 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members = do
         $ div_ [class_ "p-4 flex justify-center"]
         $ loadingIndicator_ LdSM LdDots
 
-    -- AI Chat section (inline with page content)
+   -- RESIZER + RIGHT: AI chat panel
+   resizer_ "ai_chat_container" "ai_chat_width" False
+   div_ [id_ "ai_chat_container", class_ "shrink-0 overflow-hidden flex flex-col h-full border-l border-strokeWeak", style_ "width: 420px;"] do
     anomalyAIChat_ pid issue.id
+    script_ """
+      (function() {
+        const c = document.getElementById('ai_chat_container');
+        if (!c) return;
+        const q = new URLSearchParams(window.location.search).get('ai_chat_width');
+        const s = localStorage.getItem('resizer-ai_chat_width');
+        if (q) c.style.width = q + 'px';
+        else if (s && !s.endsWith('px')) c.style.width = s + 'px';
+        else if (s) c.style.width = s;
+      })();
+    """
 
 
 errorAssigneeSection :: Projects.ProjectId -> Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
@@ -983,46 +1039,47 @@ parseStoredContent content storedWidgets =
     Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
--- | AI Chat Component with inline responses and floating input
+-- | AI Chat Component as a right-side panel
 anomalyAIChat_ :: Projects.ProjectId -> Issues.IssueId -> Html ()
 anomalyAIChat_ pid issueId = do
   let issueIdT = UUID.toText issueId.unUUIDId
-  -- Response container (inline with page content)
+  -- Panel header
+  div_ [class_ "shrink-0 px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
+    iconBadgeSq_ BrandBadge "sparkles"
+    span_ [class_ "text-sm font-medium text-textStrong"] "AI Assistant"
+  -- Scrollable response container
   div_
     [ id_ "ai-response-container"
-    , class_ "flex flex-col gap-4"
+    , class_ "flex-1 overflow-y-auto flex flex-col gap-4 p-4"
     , hxGet_ $ "/p/" <> pid.toText <> "/anomalies/" <> issueIdT <> "/ai_chat/history"
     , hxTrigger_ "load"
     , term "hx-on::after-swap" "window.evalScriptsFromContent && window.evalScriptsFromContent(event.detail.elt === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: 'smooth', block: 'start'})"
     ]
     ""
-  -- Floating input bar
-  div_ [class_ "fixed bottom-6 left-1/2 -translate-x-1/2 w-full max-w-2xl px-4", style_ "z-index: 9999;"] do
-    div_ [class_ "!bg-bgRaised/95 !surface-raised rounded-2xl p-4 shadow-2xl shadow-fillBrand-strong/20 border border-strokeBrand-weak ring-1 ring-fillBrand-weak/30"] do
-      form_
-        [ hxPost_ $ "/p/" <> pid.toText <> "/anomalies/" <> issueIdT <> "/ai_chat"
-        , hxTarget_ "#ai-response-container"
-        , hxSwap_ "beforeend"
-        , hxIndicator_ "#ai-chat-loader"
-        , term "hx-on::after-request" "this.reset()"
-        ]
-        do
-          div_ [class_ "flex items-center gap-3"] do
-            iconBadgeSq_ BrandBadge "sparkles"
-            input_
-              [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
-              , placeholder_ "Ask about this issue... e.g., 'What could cause this error?'"
-              , name_ "query"
-              , id_ "ai-chat-input"
-              , autocomplete_ "off"
-              ]
-            span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
-            button_ [type_ "submit", class_ "p-2 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity"] $ faSprite_ "arrow-right" "regular" "w-4 h-4"
-          -- Suggested prompts
-          div_ [class_ "flex gap-2 mt-3 pt-3 border-t border-strokeWeak flex-wrap"] do
-            suggestionBtn_ "What could cause this?"
-            suggestionBtn_ "Show related logs"
-            suggestionBtn_ "Suggest a fix"
+  -- Input bar pinned to bottom
+  div_ [class_ "shrink-0 border-t border-strokeWeak p-3"] do
+    form_
+      [ hxPost_ $ "/p/" <> pid.toText <> "/anomalies/" <> issueIdT <> "/ai_chat"
+      , hxTarget_ "#ai-response-container"
+      , hxSwap_ "beforeend"
+      , hxIndicator_ "#ai-chat-loader"
+      , term "hx-on::after-request" "this.reset()"
+      ]
+      do
+        div_ [class_ "flex items-center gap-2"] do
+          input_
+            [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
+            , placeholder_ "Ask about this issue..."
+            , name_ "query"
+            , id_ "ai-chat-input"
+            , autocomplete_ "off"
+            ]
+          span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
+          button_ [type_ "submit", class_ "p-2 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity"] $ faSprite_ "arrow-right" "regular" "w-4 h-4"
+        div_ [class_ "flex gap-2 mt-2 pt-2 border-t border-strokeWeak flex-wrap"] do
+          suggestionBtn_ "What could cause this?"
+          suggestionBtn_ "Show related logs"
+          suggestionBtn_ "Suggest a fix"
   where
     suggestionBtn_ txt =
       button_
@@ -1128,22 +1185,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , menuItem = Just "Changes & Errors"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.config
-          , headContent = Just do
-              link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-light.min.css"), media_ "screen", id_ "hljs-light"]
-              link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css"), media_ "screen", id_ "hljs-dark"]
-              script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
-              script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
-              script_
-                """
-                function setHljsTheme() {
-                  const dark = document.body.getAttribute('data-theme') === 'dark';
-                  document.getElementById('hljs-light').disabled = dark;
-                  document.getElementById('hljs-dark').disabled = !dark;
-                }
-                function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
-                document.addEventListener('DOMContentLoaded', () => { setHljsTheme(); highlightSnippets(document); });
-                document.addEventListener('htmx:afterSettle', e => highlightSnippets(e.detail.elt));
-                """
+          , headContent = Just highlightJsHead_
           , navTabs =
               Just
                 $ toHtml
@@ -1317,6 +1359,32 @@ sparkline_ buckets
       | otherwise = show n
 
 
+highlightJsHead_ :: Monad m => HtmlT m ()
+highlightJsHead_ = do
+  link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-light.min.css"), media_ "screen", id_ "hljs-light"]
+  link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css"), media_ "screen", id_ "hljs-dark"]
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
+  script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/sql.min.js")] ("" :: Text)
+  script_
+    """
+    function setHljsTheme() {
+      const dark = document.body.getAttribute('data-theme') === 'dark';
+      document.getElementById('hljs-light').disabled = dark;
+      document.getElementById('hljs-dark').disabled = !dark;
+    }
+    function highlightSnippets(root) { root.querySelectorAll('code:not(.hljs)').forEach(el => hljs.highlightElement(el)); }
+    document.addEventListener('DOMContentLoaded', () => { setHljsTheme(); highlightSnippets(document); });
+    document.addEventListener('htmx:afterSettle', e => highlightSnippets(e.detail.elt));
+    """
+
+
+renderLogContent_ :: Monad m => Text -> HtmlT m ()
+renderLogContent_ txt =
+  if "⇒" `T.isInfixOf` txt
+    then div_ [class_ "flex flex-wrap items-center gap-1 p-4 max-h-80 overflow-y-auto"] $ renderSummaryText_ txt
+    else div_ [class_ "p-4 max-h-80 overflow-y-auto"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap [&_code.hljs]:!bg-transparent [&_code.hljs]:!p-0"] $ code_ [] $ toHtml txt
+
+
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()
 renderSummaryText_ txt = forM_ (T.words txt) \token ->
   case T.breakOn "⇒" token of
@@ -1433,17 +1501,6 @@ anomalyArchiveButton pid aid archived = do
       faSprite_ "archive" "regular" "w-4 h-4"
       if archived then "Unarchive" else "Archive"
 
-
-issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
-issueTypeBadge issueType critical = span_ [class_ $ "badge " <> bgCls] do faSprite_ icon "regular" "w-3 h-3"; toHtml txt
-  where
-    (bgCls, icon, txt) = case issueType of
-      Issues.RuntimeException -> ("bg-fillError-strong", "triangle-alert", "ERROR")
-      Issues.QueryAlert -> ("bg-fillWarning-strong", "zap", "ALERT")
-      Issues.LogPattern -> ("bg-fillInformation-strong", "file-text", "LOG PATTERN")
-      Issues.LogPatternRateChange -> ("bg-fillWarning-strong", "activity", "RATE CHANGE")
-      Issues.ApiChange | critical -> ("bg-fillError-strong", "exclamation-triangle", "BREAKING")
-      Issues.ApiChange -> ("bg-fillInformation-strong", "info", "Incremental")
 
 
 issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
