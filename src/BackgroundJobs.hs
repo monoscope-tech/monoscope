@@ -1009,11 +1009,18 @@ processProjectErrors pid errors now = do
                 (handleRegression pid err)
                 existingM
             else do
-              issue <- createIssueForError pid err
-              authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
-              liftIO $ withResource authCtx.jobsPool \conn ->
-                void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
-              Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
+              -- Fast pre-merge: skip issue creation if an identical canonical pattern already exists
+              canonicalM <- ErrorPatterns.findCanonicalMatch pid err.service err.errorType err.message
+              case canonicalM of
+                Just canonicalId | canonicalId /= err.id -> do
+                  void $ PatternMergeDB.setCanonicalId err.id canonicalId
+                  Log.logTrace "Pre-merged new error into canonical" (pid, err.id, canonicalId)
+                _ -> do
+                  issue <- createIssueForError pid err
+                  authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
+                  liftIO $ withResource authCtx.jobsPool \conn ->
+                    void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid (V.singleton issue.id)
+                  Log.logInfo "Created issue for new error" (pid, err.id, issue.id)
   where
     createIssueForError pid' err' = do
       issue <- Issues.createNewErrorIssue pid' err'

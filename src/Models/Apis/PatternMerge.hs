@@ -8,6 +8,7 @@ module Models.Apis.PatternMerge (
   getErrorPatternGroupMembers,
   getErrorPatternMemberCount,
   fetchErrorTexts,
+  setCanonicalId,
   -- Log pattern operations
   getUnembeddedLogPatterns,
   getCanonicalLogPatterns,
@@ -129,6 +130,12 @@ assignLogsToCanonical pairs =
     (V.fromList pids, V.fromList cids)
   where
     (pids, cids) = unzip pairs
+
+
+-- | Set canonical_id on a single pattern, respecting merge_override
+setCanonicalId :: DB es => ErrorPatternId -> ErrorPatternId -> Eff es Int64
+setCanonicalId patternId canonicalId =
+  PG.execute [sql| UPDATE apis.error_patterns SET canonical_id = ? WHERE id = ? AND merge_override = FALSE |] (canonicalId, patternId)
 
 
 unmergeErrorPattern :: DB es => ErrorPatternId -> Eff es Int64

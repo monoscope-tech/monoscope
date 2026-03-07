@@ -197,7 +197,7 @@ spec = aroundAll withTestResources do
           void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing frozenTime
 
       -- Acknowledge existing issues so ON CONFLICT doesn't deduplicate the new spike issue
-      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+      (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h"
       forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
 
       -- Find an established pattern with stddev > 0
@@ -262,7 +262,7 @@ spec = aroundAll withTestResources do
               (PGS.Only errRate.errorId)
           -- Acknowledge existing RuntimeException issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
-          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h"
           forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
 
           -- Insert a massive spike (200, well above mean=100 + minAbsoluteDelta=50)
@@ -302,7 +302,7 @@ spec = aroundAll withTestResources do
 
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
-          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h"
           forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
 
           issuesBefore <- countIssues tr Issues.RuntimeException
@@ -324,7 +324,7 @@ spec = aroundAll withTestResources do
           forM_ [r1, r2] \r -> void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing frozenTime
           -- Acknowledge existing issues to avoid ON CONFLICT dedup
           let sess = Servant.getResponse tr.trSessAndHeader
-          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing
+          (issues, _) <- runTestBg frozenTime tr $ Issues.selectIssues pid Nothing (Just False) Nothing 100 0 Nothing Nothing "24h"
           forM_ issues \issue -> runTestBg frozenTime tr $ Issues.acknowledgeIssue issue.id sess.user.id
           -- Spike both patterns in the same hour bucket
           let concurrentTime = addUTCTime 14400 frozenTime
@@ -728,3 +728,27 @@ spec = aroundAll withTestResources do
           let canonicalIds = map fst canonicals
           mergedId `shouldSatisfy` (`notElem` canonicalIds)
         [] -> expectationFailure "no merged patterns found (test 12 may have failed)"
+
+    it "14. Same error from different spans creates only one issue (pre-merge)" \tr -> do
+      apiKey <- createTestAPIKey tr pid "premerge-key"
+      let ioMsg = "openBinaryFile: does not exist (No such file or directory)"
+          -- Ingest same IOException from 4 different span names (simulates cross-cutting error)
+          spans = ["GET /api/users", "POST /api/orders", "GET /api/reports", "DELETE /api/sessions"]
+      issuesBefore <- countIssues tr Issues.RuntimeException
+      forM_ spans \sp ->
+        ingestTraceWithException tr apiKey sp "IOException" ioMsg "" (addUTCTime 300 frozenTime)
+      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 360 frozenTime) pid
+      -- Should create exactly 1 new issue, not 4
+      issuesAfter <- countIssues tr Issues.RuntimeException
+      (issuesAfter - issuesBefore) `shouldBe` 1
+      -- Verify 4 error patterns exist but 3 are merged under canonical
+      ioPatterns <- withResource tr.trPool \conn ->
+        PGS.query conn
+          [sql| SELECT id, canonical_id FROM apis.error_patterns
+                WHERE project_id = ? AND error_type = 'IOException' AND message = ? |]
+          (pid, ioMsg) :: IO [(ErrorPatterns.ErrorPatternId, Maybe ErrorPatterns.ErrorPatternId)]
+      length ioPatterns `shouldBe` 4
+      let canonicals = filter (isNothing . snd) ioPatterns
+          merged = filter (isJust . snd) ioPatterns
+      length canonicals `shouldBe` 1
+      length merged `shouldBe` 3

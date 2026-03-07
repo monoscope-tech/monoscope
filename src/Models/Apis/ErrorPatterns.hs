@@ -25,6 +25,7 @@ module Models.Apis.ErrorPatterns (
   -- Error spike detection
   ErrorPatternWithCurrentRate (..),
   getErrorPatternsWithCurrentRates,
+  findCanonicalMatch,
   -- Error Fingerprinting (re-exported from Pkg.ErrorFingerprint)
   EF.StackFrame (..),
   EF.parseStackTrace,
@@ -405,6 +406,19 @@ getErrorPatternsWithCurrentRates pid now =
           AND counts.hour_bucket = ?
         WHERE e.project_id = ? AND e.state != 'resolved' AND NOT e.is_ignored
       |]
+
+
+-- | Find an existing canonical error pattern with matching (project_id, service, error_type, message).
+-- Used for fast pre-merge before issue creation to prevent notification spam from identical errors across different spans.
+findCanonicalMatch :: DB es => Projects.ProjectId -> Maybe Text -> Text -> Text -> Eff es (Maybe ErrorPatternId)
+findCanonicalMatch pid service errorType msg =
+  fmap (fmap fromOnly . listToMaybe) $ PG.query
+    [sql| SELECT id FROM apis.error_patterns
+        WHERE project_id = ? AND service IS NOT DISTINCT FROM ?
+          AND error_type = ? AND message = ?
+          AND canonical_id IS NULL AND merge_override = FALSE
+        ORDER BY created_at ASC LIMIT 1 |]
+    (pid, service, errorType, msg)
 
 
 -- | Batch upsert error patterns using unnest arrays (single round-trip instead of N+1)
