@@ -191,12 +191,12 @@ SELECT
 from
     apis.anomalies an
     LEFT JOIN apis.issues iss ON iss.target_hash = an.target_hash AND iss.project_id = an.project_id
-    LEFT JOIN apis.formats on (target_hash = formats.hash AND an.project_id = formats.project_id)
+    LEFT JOIN apis.formats on (an.target_hash = formats.hash AND an.project_id = formats.project_id)
     LEFT JOIN apis.fields on (
         ((fields.hash = formats.field_hash ) AND an.project_id = fields.project_id)
         OR fields.hash = formats.field_hash
     )
-    LEFT JOIN apis.shapes on (target_hash = shapes.hash AND an.project_id = shapes.project_id)
+    LEFT JOIN apis.shapes on (an.target_hash = shapes.hash AND an.project_id = shapes.project_id)
     LEFT JOIN apis.endpoints ON (starts_with(an.target_hash, endpoints.hash) AND an.project_id = endpoints.project_id)
 where
   ((an.anomaly_type = 'endpoint')
