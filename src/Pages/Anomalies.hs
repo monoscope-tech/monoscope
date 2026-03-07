@@ -51,6 +51,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
@@ -58,8 +59,8 @@ import Effectful.Time qualified as Time
 import GHC.Records (HasField)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (TermRaw (termRaw))
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Base (TermRaw (termRaw), makeAttribute, makeElement)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -83,9 +84,10 @@ import Pages.Components (BadgeColor (..), PanelCfg (..), emptyState_, iconBadgeS
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
+import PyF (fmt)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import Servant (err400, errBody)
@@ -93,7 +95,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, deleteParam, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -1043,8 +1045,9 @@ anomalyListGetH
   -> Maybe Endpoints.EndpointId
   -> Maybe Text
   -> Maybe Text
+  -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
-anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM hxRequestM hxBoostedM = do
+anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM periodM hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
@@ -1061,9 +1064,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
   currTime <- liftIO getCurrentTime
 
-  (issues, totalCount) <- Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort)
+  let period = fromMaybe "24h" periodM
+  (issues, totalCount) <- Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period
 
-  let baseUrl = "/p/" <> pid.toText <> "/anomalies?filter=" <> currentFilterTab <> "&sort=" <> currentSort
+  let baseUrl = "/p/" <> pid.toText <> "/anomalies?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period
       paginationConfig =
         Pagination
           { currentPage = pageInt
@@ -1087,11 +1091,12 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , currentSort
           , filterMenus = []
           , activeFilters = []
+          , headerExtra = Nothing
           }
   let issuesTable =
         Table
           { config = def{elemID = "anomalyListForm", containerId = Just "anomalyListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
-          , columns = issueColumns pid
+          , columns = issueColumnsWithToggle pid period (Just $ periodToggle_ baseUrl "anomalyListContainer" period)
           , rows = issuesVM
           , features =
               def
@@ -1154,7 +1159,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                   }
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = if totalCount > 0 then Just paginationConfig else Nothing}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -1179,14 +1184,37 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
-issueColumns :: Projects.ProjectId -> [Column IssueVM]
-issueColumns pid =
+periodToggle_ :: Text -> Text -> Text -> Html ()
+periodToggle_ baseUrl targetId currentPeriod =
+  span_ [class_ "inline-flex rounded-md border border-strokeWeak overflow-hidden"] do
+    forM_ [("24h" :: Text), ("7d" :: Text)] \val ->
+      let url = deleteParam "period" baseUrl <> "&period=" <> val
+       in button_
+            [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillStrong text-textInverse-strong" (val == currentPeriod)
+            , type_ "button"
+            , hxGet_ url
+            , hxTarget_ $ "#" <> targetId
+            , hxSelect_ $ "#" <> targetId
+            , hxSwap_ "outerHTML"
+            , hxPushUrl_ "true"
+            ]
+            $ toHtml val
+
+
+issueColumns :: Projects.ProjectId -> Text -> [Column IssueVM]
+issueColumns pid period = issueColumnsWithToggle pid period Nothing
+
+
+issueColumnsWithToggle :: Projects.ProjectId -> Text -> Maybe (Html ()) -> [Column IssueVM]
+issueColumnsWithToggle pid period toggleM =
   [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0"]
   , col "Type" renderIssueTypeCol & withAttrs [class_ "w-28"]
   , col "Service" renderIssueServiceCol & withAttrs [class_ "w-28"]
-  , col "Events" renderIssueEventsCol & withAttrs [class_ "w-20 text-right"]
+  , col "Events" renderIssueEventsCol
+      & withAttrs [class_ "w-24"]
+      & withColHeaderExtra (span_ [class_ "text-[10px] font-normal text-textWeak"] $ toHtml $ "(" <> period <> ")")
   , col "Last Seen" renderIssueDateCol & withAttrs [class_ "w-24"]
-  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-40"]
+  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-40"] & maybe identity withColHeaderExtra toggleM
   ]
 
 
@@ -1202,8 +1230,13 @@ renderIssueServiceCol (IssueVM _ _ _ _ issue) =
 renderIssueEventsCol :: IssueVM -> Html ()
 renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
   unless isWidget
-    $ span_ [class_ "tabular-nums text-sm text-textStrong", term "data-tippy-content" "Events in the last 14 days"]
-    $ show issue.eventCount
+    $ span_ [class_ "tabular-nums text-sm text-textStrong"]
+    $ toHtml
+    $ formatWithCommas issue.eventCount
+  where
+    formatWithCommas n = reverse $ go $ reverse (show n)
+    go [] = []
+    go xs = case splitAt 3 xs of (chunk, []) -> chunk; (chunk, rest) -> chunk ++ "," ++ go rest
 
 
 renderIssueDateCol :: IssueVM -> Html ()
@@ -1212,22 +1245,76 @@ renderIssueDateCol (IssueVM _ _ currTime _ issue) =
 
 
 renderIssueChartCol :: IssueVM -> Html ()
-renderIssueChartCol (IssueVM _ _ _ _ issue) =
-  div_ [class_ "w-40 h-8"]
-    $ Widget.widget_
-    $ (def :: Widget.Widget)
-      { Widget.standalone = Just True
-      , Widget.id = Just $ Issues.issueIdText issue.id
-      , Widget.wType = Widget.WTTimeseries
-      , Widget.title = Just $ Issues.issueIdText issue.id
-      , Widget.showTooltip = Just False
-      , Widget.naked = Just True
-      , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
-      , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-      , Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin(timestamp, 1h)"
-      , Widget._projectId = Just issue.projectId
-      , Widget.hideLegend = Just True
-      }
+renderIssueChartCol (IssueVM _ _ _ _ issue) = sparkline_ buckets
+  where
+    PGArray buckets = issue.activityBuckets
+
+
+sparkline_ :: [Int] -> Html ()
+sparkline_ buckets
+  | null buckets || all (== 0) buckets = span_ [class_ "text-textWeak text-xs"] "-"
+  | otherwise = do
+      let peakVal = foldr max 1 buckets
+          peak = fromIntegral @Int @Double peakVal
+          n = length buckets
+          h = 40 :: Int
+          barZone = 32 :: Int
+          peakLabel = formatCompact peakVal
+          labelW = T.length peakLabel * 9 + 4
+          gap = 2 :: Int
+          barW = max 2 (120 `div` n - gap)
+          barsEnd = n * (barW + gap)
+          topPad = h - barZone
+          peakIdx = fromMaybe 0 $ fmap fst $ viaNonEmpty head $ filter ((== peakVal) . snd) $ zip [0 ..] buckets
+          lineX1 = peakIdx * (barW + gap) + barW
+          lineX2 = barsEnd + 2
+          w = lineX2 + labelW
+      with
+        (makeElement "svg")
+        [ makeAttribute "viewBox" $ toText [fmt|0 0 {w} {h}|]
+        , style_ [fmt|width:100%;height:{h}px|]
+        , makeAttribute "preserveAspectRatio" "xMinYMid meet"
+        ]
+        $ do
+          forM_ (zip [0 ..] buckets) \(i, v) -> do
+            let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
+            with
+              (makeElement "rect")
+              [ makeAttribute "x" $ show $ i * (barW + gap)
+              , makeAttribute "y" $ show $ h - barH
+              , makeAttribute "width" $ show barW
+              , makeAttribute "height" $ show barH
+              , makeAttribute "rx" "1.5"
+              , makeAttribute "fill" "var(--color-fillBrand-strong)"
+              , makeAttribute "opacity" "0.45"
+              ]
+              ""
+          with
+            (makeElement "line")
+            [ makeAttribute "x1" $ show lineX1
+            , makeAttribute "y1" $ show topPad
+            , makeAttribute "x2" $ show lineX2
+            , makeAttribute "y2" $ show topPad
+            , makeAttribute "stroke" "var(--color-textWeak)"
+            , makeAttribute "stroke-width" "0.7"
+            , makeAttribute "stroke-dasharray" "3,2"
+            ]
+            ""
+          with
+            (makeElement "text")
+            [ makeAttribute "x" $ show (lineX2 + 1)
+            , makeAttribute "y" $ show (topPad + 4)
+            , makeAttribute "text-anchor" "start"
+            , makeAttribute "fill" "var(--color-textWeak)"
+            , makeAttribute "font-size" "11"
+            , makeAttribute "font-family" "system-ui"
+            ]
+            $ toHtml peakLabel
+  where
+    formatCompact n
+      | n >= 1000000 = toText [fmt|{fromIntegral @Int @Double n / 1000000:.1f}M|]
+      | n >= 1000 = toText [fmt|{fromIntegral @Int @Double n / 1000:.1f}K|]
+      | otherwise = show n
 
 
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()

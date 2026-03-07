@@ -56,6 +56,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           , currentSort
           , filterMenus = []
           , activeFilters = []
+          , headerExtra = Nothing
           }
   let catalogTable =
         Table
@@ -226,6 +227,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , currentSort
           , filterMenus = []
           , activeFilters = []
+          , headerExtra = Nothing
           }
   let endpointsTable =
         Table

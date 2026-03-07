@@ -301,23 +301,23 @@ export const renderSparkline = (buckets: number[]): TemplateResult => {
   if (!buckets?.length) return html`<span class="text-textWeak text-xs">-</span>`;
   const peak = Math.max(...buckets, 1);
   const n = buckets.length;
-  const gap = 1, barW = 5;
-  const barsW = n * (barW + gap), h = 32, barZone = 24, topPad = h - barZone;
+  const h = 40, barZone = 32, topPad = h - barZone;
   const peakLabel = formatPatternCount(peak);
-  const labelW = peakLabel.length * 6 + 4;
-  const w = barsW + labelW + 4;
-  const peakY = topPad;
+  const labelW = peakLabel.length * 7 + 4;
+  const gap = 2, barW = Math.max(2, Math.floor(120 / n) - gap);
+  const barsEnd = n * (barW + gap);
+  const lineX2 = barsEnd + 2;
+  const w = lineX2 + labelW;
   let peakIdx = 0;
   const bars = buckets.map((v, i) => {
     if (v >= buckets[peakIdx]) peakIdx = i;
-    const barH = Math.max(v > 0 ? 1 : 0, (v / peak) * barZone);
-    return svg`<rect x="${i * (barW + gap)}" y="${h - barH}" width="${barW}" height="${barH}" rx="0.5" fill="var(--color-fillBrand-strong)" opacity="0.45"/>`;
+    const barH = Math.max(2, (v / peak) * barZone);
+    return svg`<rect x="${i * (barW + gap)}" y="${h - barH}" width="${barW}" height="${barH}" rx="1.5" fill="var(--color-fillBrand-strong)" opacity="0.45"/>`;
   });
   const lineX1 = peakIdx * (barW + gap) + barW;
-  return html`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:32px" preserveAspectRatio="xMinYMid meet">
+  return html`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px" preserveAspectRatio="xMinYMid meet">
     ${bars}
-    <line x1="0" y1="${h}" x2="${barsW}" y2="${h}" stroke="var(--color-textWeak)" stroke-width="0.7"/>
-    <line x1="${lineX1}" y1="${peakY}" x2="${w - labelW - 1}" y2="${peakY}" stroke="var(--color-textWeak)" stroke-width="0.7" stroke-dasharray="3,2"/>
-    <text x="${w}" y="${peakY + 3.5}" text-anchor="end" fill="var(--color-textWeak)" font-size="9" font-family="system-ui">${peakLabel}</text>
+    <line x1="${lineX1}" y1="${topPad}" x2="${lineX2}" y2="${topPad}" stroke="var(--color-textWeak)" stroke-width="0.7" stroke-dasharray="3,2"/>
+    <text x="${lineX2 + 1}" y="${topPad + 4}" text-anchor="start" fill="var(--color-textWeak)" font-size="11" font-family="system-ui">${peakLabel}</text>
   </svg>`;
 };

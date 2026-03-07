@@ -30,6 +30,7 @@ module Pkg.Components.Table (
   withSort,
   withAttrs,
   withAlign,
+  withColHeaderExtra,
   renderRowWithColumns,
   simpleZeroState,
 ) where
@@ -59,6 +60,7 @@ data Column a where
        , attrs :: [Attribute]
        , sortField :: Maybe Text
        , align :: Maybe Text
+       , headerExtra :: Maybe (Html ()) -- Extra content rendered after column name in th
        }
     -> Column a
 
@@ -221,8 +223,8 @@ data TableHeaderActions = TableHeaderActions
   , currentSort :: Text
   , filterMenus :: [FilterMenu]
   , activeFilters :: [(Text, [Text])] -- (category, [values])
+  , headerExtra :: Maybe (Html ()) -- Custom content before sort/filter
   }
-  deriving stock (Eq, Show)
 
 
 data FilterMenu = FilterMenu
@@ -405,6 +407,7 @@ renderRows tbl =
               th_ (c.attrs <> baseAttrs <> sortAttrs) do
                 span_ [class_ "flex items-center gap-2"] do
                   toHtml c.name
+                  whenJust c.headerExtra id
                   when isSorted $ case sortOrder of
                     Just Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
                     Just Desc -> faSprite_ "arrow-down" "regular" "w-3 h-3"
@@ -479,6 +482,7 @@ renderHeaderBulkActions bulkActions =
 
 renderHeaderTableActions :: TableHeaderActions -> Html ()
 renderHeaderTableActions actions = span_ [class_ "inline-flex gap-2 ml-2"] do
+  whenJust actions.headerExtra id
   unless (null actions.sortOptions) $ renderSortDropdown actions
   unless (null actions.filterMenus) $ renderFilterDropdown actions
 
@@ -793,6 +797,7 @@ col name render =
     , attrs = []
     , sortField = Nothing
     , align = Nothing
+    , headerExtra = Nothing
     }
 
 
@@ -806,6 +811,10 @@ withAttrs as column = column{attrs = as}
 
 withAlign :: Text -> Column a -> Column a
 withAlign a column = column{align = Just a}
+
+
+withColHeaderExtra :: Html () -> Column a -> Column a
+withColHeaderExtra h column = column{headerExtra = Just h}
 
 
 -- Helper to render a row using columns

@@ -187,9 +187,10 @@ SELECT
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
     an.archived_at,
-    0,?::timestamptz
+    COALESCE(iss.affected_requests, 0),?::timestamptz
 from
     apis.anomalies an
+    LEFT JOIN apis.issues iss ON iss.target_hash = an.target_hash AND iss.project_id = an.project_id
     LEFT JOIN apis.formats on (target_hash = formats.hash AND an.project_id = formats.project_id)
     LEFT JOIN apis.fields on (
         ((fields.hash = formats.field_hash ) AND an.project_id = fields.project_id)

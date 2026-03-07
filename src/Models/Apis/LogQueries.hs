@@ -462,7 +462,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
   let (dateFrom, dateTo) = dateRange
   precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text, Int, Int)] <-
     if target `elem` map fst LogPatterns.knownPatternFields
-      then PG.query [sql|SELECT lp.log_pattern, lp.occurrence_count + COALESCE(m.member_count, 0) as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = ? AND lp.source_field = ? AND lp.canonical_id IS NULL AND (? IS NULL OR lp.last_seen_at >= ?) AND (? IS NULL OR lp.last_seen_at <= ?) ORDER BY total_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
+      then PG.query [sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = ? AND lp.source_field = ? AND lp.canonical_id IS NULL AND (? IS NULL OR lp.last_seen_at >= ?) AND (? IS NULL OR lp.last_seen_at <= ?) ORDER BY total_count DESC OFFSET ? LIMIT 100|] (pid, target, dateFrom, dateFrom, dateTo, dateTo, skip)
       else pure []
   if not (null precomputed)
     then do

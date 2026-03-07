@@ -102,6 +102,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -248,6 +249,8 @@ data Issue = Issue
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
 
 
+deriving newtype instance NFData a => NFData (PGArray a)
+
 -- | Issue with aggregated event data (for list views)
 data IssueL = IssueL
   { id :: IssueId
@@ -278,6 +281,7 @@ data IssueL = IssueL
   , eventCount :: Int
   , lastSeen :: UTCTime
   , latestStateEvent :: Maybe IssueEvent
+  , activityBuckets :: PGArray Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -359,8 +363,9 @@ bumpIssueUpdatedAt issueId = do
 
 
 -- | Select issues with filters, returns issues and total count for pagination
-selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Eff es ([IssueL], Int)
-selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM = do
+-- period: "24h" = 24 hourly buckets, "7d" = 7 daily buckets (default)
+selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> Eff es ([IssueL], Int)
+selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM period = do
   issues <- PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
   countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
   pure (issues, fromMaybe 0 countResult)
@@ -380,13 +385,48 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     cTimefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
     cAckF = maybe "" (\ack -> bool " AND acknowledged_at IS NULL" " AND acknowledged_at IS NOT NULL" ack) isAcknowledged
     cArchF = maybe "" (\arch -> bool " AND archived_at IS NULL" " AND archived_at IS NOT NULL" arch) isArchived
+    -- period controls bucket granularity: "24h" = hourly, "7d" = daily
+    (seriesStart, seriesStep, bucketSize) = case period of
+      "24h" -> ("NOW() - INTERVAL '23 hours'" :: Text, "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)
+      _ -> ("CURRENT_DATE - INTERVAL '6 days'", "'1 day'", "INTERVAL '1 day'")
     q =
       [text|
       SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
         CASE WHEN i.critical THEN 'critical' ELSE 'info' END, i.affected_requests, i.affected_clients, NULL::double precision,
-        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int, 0::bigint, i.updated_at,
-        lat.event
+        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int,
+        CASE
+          WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
+          WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
+          ELSE i.affected_requests
+        END::bigint,
+        i.updated_at, lat.event,
+        CASE
+          WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.buckets, '{}'::int[])
+          WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.buckets, '{}'::int[])
+          ELSE '{}'::int[]
+        END
       FROM apis.issues i
+      LEFT JOIN LATERAL (
+        SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
+          SELECT d AS day, COALESCE(SUM(ehs.event_count), 0)::int AS day_cnt
+          FROM generate_series($seriesStart, NOW(), $seriesStep) d
+          LEFT JOIN (apis.error_hourly_stats ehs
+            JOIN apis.error_patterns ep ON ep.id = ehs.error_id AND ep.project_id = ehs.project_id
+              AND ep.hash = i.target_hash AND ep.project_id = i.project_id
+          ) ON ehs.hour_bucket >= d AND ehs.hour_bucket < d + $bucketSize
+          GROUP BY d
+        ) sub
+      ) err_ev ON i.issue_type = 'runtime_exception'
+      LEFT JOIN LATERAL (
+        SELECT SUM(day_cnt)::bigint AS cnt, array_agg(day_cnt ORDER BY day) AS buckets FROM (
+          SELECT d AS day, COALESCE(SUM(lhs.event_count), 0)::int AS day_cnt
+          FROM generate_series($seriesStart, NOW(), $seriesStep) d
+          LEFT JOIN apis.log_pattern_hourly_stats lhs
+            ON lhs.pattern_hash = i.target_hash AND lhs.project_id = i.project_id
+            AND lhs.hour_bucket >= d AND lhs.hour_bucket < d + $bucketSize
+          GROUP BY d
+        ) sub
+      ) lp_ev ON i.issue_type IN ('log_pattern', 'log_pattern_rate_change')
       LEFT JOIN LATERAL (
         SELECT a.event FROM apis.issue_activity_log a
         WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
