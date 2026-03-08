@@ -4,7 +4,6 @@ on: pull_request
 
 env:
   LANG: C.UTF-8
-  GHC_VERSION: 9.12.2
 
 jobs:
   # Build frontend once and share via artifacts
@@ -43,72 +42,15 @@ jobs:
             static/public/assets/web-components/dist
           retention-days: 1
 
-  build:
-    name: Build
+  build-and-test:
+    name: Build and Test
     needs: frontend
-    runs-on: ubuntu-24.04
-    permissions:
-      contents: 'read'
-      id-token: 'write'
-    steps:
-      - uses: actions/checkout@v6
-
-      - name: Install system dependencies
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libssl-dev librdkafka-dev libgrpc-dev protobuf-compiler libsnappy-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
-          version: 1.0
-
-      - name: Set OpenSSL environment variables
-        run: |
-          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
-
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ env.GHC_VERSION }}
-          cabal-version: 'latest'
-
-      - name: Cache Haskell dependencies
-        uses: actions/cache@v5
-        with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ hashFiles('src/**', 'app/**', 'test/**') }}
-          restore-keys: |
-            ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
-            ${{ runner.os }}-cabal-
-
-      - name: Download frontend artifacts
-        uses: actions/download-artifact@v8
-        with:
-          name: frontend-assets
-          path: static/public/assets
-
-      - name: Setup static directories
-        run: |
-          mkdir -p static/public/assets/css
-          mkdir -p static/public/assets/web-components/dist/js
-          mkdir -p static/public/assets/web-components/dist/css
-
-      - name: Update cabal index
-        run: cabal update
-
-      - name: Configure project
-        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
-
-      - name: Build dependencies
-        run: cabal build --only-dependencies all -j
-
-      - name: Build project
-        run: cabal build all -j
-
-  test:
-    name: Test ${{ matrix.test-suite }}
-    needs: build
-    if: always()
-    runs-on: ubuntu-24.04
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/monoscope-tech/monoscope-deps:latest
+      credentials:
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GH_TOKEN }}
     services:
       postgres:
         image: timescale/timescaledb-ha:pg16-all
@@ -120,41 +62,17 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-        ports:
-          - 5432:5432
-    strategy:
-      fail-fast: false
-      matrix:
-        test-suite: [doctests, unit-tests, integration-tests]
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install system dependencies
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libssl-dev librdkafka-dev libgrpc-dev protobuf-compiler libsnappy-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
-          version: 1.0
-
-      - name: Set OpenSSL environment variables
-        run: |
-          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
-
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ env.GHC_VERSION }}
-          cabal-version: 'latest'
-
-      - name: Cache Haskell dependencies
+      - name: Cache dist-newstyle
         uses: actions/cache@v5
         with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ hashFiles('src/**', 'app/**', 'test/**') }}
+          path: dist-newstyle
+          key: ${{ runner.os }}-container-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
-            ${{ runner.os }}-cabal-
+            ${{ runner.os }}-container-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
+            ${{ runner.os }}-container-cabal-
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -168,28 +86,26 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
 
-      - name: Update cabal index
-        run: cabal update
+      - name: Build
+        run: |
+          cabal update
+          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
+          cabal build all -j
 
-      - name: Configure project
-        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
+      - name: Run doctests
+        run: cabal test doctests --ghc-options="-O0" --test-show-details=direct
 
-      - name: Build dependencies
-        run: cabal build --only-dependencies all -j
+      - name: Run unit-tests
+        run: cabal test unit-tests --ghc-options="-O0" --test-show-details=direct
 
-      - name: Build ${{ matrix.test-suite }}
-        run: cabal build ${{ matrix.test-suite }} -j
-
-      - name: Run ${{ matrix.test-suite }}
+      - name: Run integration-tests
         env:
           USE_EXTERNAL_DB: true
-          LOG_LEVEL: ${{ matrix.test-suite == 'integration-tests' && 'warn' || '' }}
+          DB_HOST: postgres
           TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
           DISCORD_CLIENT_ID: "1328384474395967631"
-        run: |
-          echo "::group::Running ${{ matrix.test-suite }}"
-          cabal test ${{ matrix.test-suite }} --ghc-options="-O0" --test-show-details=direct
-          echo "::endgroup::"
+          LOG_LEVEL: warn
+        run: cabal test integration-tests --ghc-options="-O0" --test-show-details=direct
 
   lint:
     name: Lint (hlint)

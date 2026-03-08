@@ -30,9 +30,6 @@ RUN rm -rf /var/lib/apt/lists/* || true
 
 WORKDIR /build
 
-# Copy git metadata for GitHash
-COPY .git .git
-
 # Copy cabal files for dependency caching
 COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
 
@@ -64,6 +61,11 @@ RUN --mount=type=cache,target=/root/.cabal/store \
 
 # Final runtime image
 FROM debian:12-slim
+
+ARG GIT_HASH=dev
+ARG GIT_COMMIT_DATE=dev
+ENV GIT_HASH=$GIT_HASH
+ENV GIT_COMMIT_DATE=$GIT_COMMIT_DATE
 
 # Install runtime dependencies
 # Graphics libs needed for @napi-rs/canvas in chart-cli

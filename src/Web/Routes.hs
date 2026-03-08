@@ -27,7 +27,6 @@ import Effectful.State.Static.Local qualified as State
 import Effectful.Time qualified as Time
 
 -- Web and server imports
-import GitHash (giCommitDate, giHash, tGitInfoCwd)
 import Log (Logger, UTCTime)
 import Lucid
 import Network.HTTP.Types (notFound404)
@@ -642,15 +641,10 @@ data Status = Status
 
 statusH :: ATBaseCtx Status
 statusH = do
-  let q = [sql| select version(); |]
-  versionM <- listToMaybe <$> PG.query_ q
-  let gi = $$tGitInfoCwd
-  pure
-    Status
-      { dbVersion = versionM <&> \(PGS.Only v) -> v
-      , gitHash = toText $ giHash gi
-      , gitCommitDate = toText $ giCommitDate gi
-      }
+  versionM <- listToMaybe <$> PG.query_ [sql| select version(); |]
+  hash <- maybe "dev" toText <$> lookupEnv "GIT_HASH"
+  commitDate <- maybe "dev" toText <$> lookupEnv "GIT_COMMIT_DATE"
+  pure Status{dbVersion = versionM <&> \(PGS.Only v) -> v, gitHash = hash, gitCommitDate = commitDate}
 
 
 pingH :: ATBaseCtx Text

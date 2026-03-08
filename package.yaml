@@ -256,7 +256,7 @@ library:
     - pretty-relative-time
     - tmp-postgres
     - directory
-    - githash
+
     - network-uri
     - scotty
     - filepath

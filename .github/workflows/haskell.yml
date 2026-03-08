@@ -7,8 +7,6 @@ on:
 
 env:
   LANG: C.UTF-8
-  LD_LIBRARY_PATH: '/usr/local/lib:$LD_LIBRARY_PATH'
-  GHC_VERSION: 9.12.2
 
 jobs:
   # Build frontend once and share via artifacts
@@ -47,10 +45,15 @@ jobs:
             static/public/assets/web-components/dist
           retention-days: 1
 
-  test:
-    name: Test ${{ matrix.test }}
+  build-and-test:
+    name: Build and Test
     needs: frontend
     runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/monoscope-tech/monoscope-deps:latest
+      credentials:
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GH_TOKEN }}
     services:
       postgres:
         image: timescale/timescaledb-ha:pg16-all
@@ -62,54 +65,17 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=5
-        ports:
-          - 5432:5432
-    strategy:
-      fail-fast: false
-      matrix:
-        test: [doctests, unit-tests, integration-tests]
     steps:
       - uses: actions/checkout@v6
 
-      - name: Free Disk Space
-        run: |
-          echo "Disk space before cleanup:"
-          df -h
-          sudo rm -rf /usr/share/dotnet
-          sudo rm -rf /usr/local/lib/android
-          sudo rm -rf /opt/ghc
-          sudo rm -rf /opt/hostedtoolcache/CodeQL
-          sudo docker image prune --all --force
-          echo "Disk space after cleanup:"
-          df -h
-
-      - name: Install system dependencies
-        uses: awalsh128/cache-apt-pkgs-action@latest
-        with:
-          packages: libssl-dev librdkafka-dev libgrpc-dev protobuf-compiler libsnappy-dev libpq-dev libldap2-dev libsasl2-dev liblz4-dev libzstd-dev pkg-config
-          version: 1.0
-
-      - name: Set OpenSSL environment variables
-        run: |
-          echo "OPENSSL_INCLUDE_DIR=$(pkg-config --variable=includedir openssl)" >> $GITHUB_ENV
-          echo "OPENSSL_LIB_DIR=$(pkg-config --variable=libdir openssl)" >> $GITHUB_ENV
-
-      - uses: haskell-actions/setup@v2
-        with:
-          ghc-version: ${{ env.GHC_VERSION }}
-          cabal-version: 'latest'
-
-      # Shared cache across all test matrix jobs
-      - name: Cache Haskell dependencies
+      - name: Cache dist-newstyle
         uses: actions/cache@v5
         with:
-          path: |
-            ~/.cabal/store
-            dist-newstyle
-          key: ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ hashFiles('src/**', 'app/**', 'test/**') }}
+          path: dist-newstyle
+          key: ${{ runner.os }}-container-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
           restore-keys: |
-            ${{ runner.os }}-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
-            ${{ runner.os }}-cabal-
+            ${{ runner.os }}-container-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
+            ${{ runner.os }}-container-cabal-
 
       - name: Download frontend artifacts
         uses: actions/download-artifact@v8
@@ -123,28 +89,26 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
 
-      - name: Update cabal index
-        run: cabal update
+      - name: Build
+        run: |
+          cabal update
+          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
+          cabal build all -j
 
-      - name: Configure project
-        run: cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
+      - name: Run doctests
+        run: cabal test doctests --ghc-options="-O0" --test-show-details=direct
 
-      - name: Build dependencies
-        run: cabal build --only-dependencies all -j
+      - name: Run unit-tests
+        run: cabal test unit-tests --ghc-options="-O0" --test-show-details=direct
 
-      - name: Build ${{ matrix.test }}
-        run: cabal build ${{ matrix.test }} -j
-
-      - name: Run ${{ matrix.test }}
+      - name: Run integration-tests
         env:
           USE_EXTERNAL_DB: true
-          LOG_LEVEL: ${{ matrix.test == 'integration-tests' && 'warn' || '' }}
+          DB_HOST: postgres
           TWILIO_ACCOUNT_SID: ${{ vars.TWILIO_ACCOUNT_SID }}
           DISCORD_CLIENT_ID: "1328384474395967631"
-        run: |
-          echo "::group::Running ${{ matrix.test }}"
-          cabal test ${{ matrix.test }} --ghc-options="-O0" --test-show-details=direct
-          echo "::endgroup::"
+          LOG_LEVEL: warn
+        run: cabal test integration-tests --ghc-options="-O0" --test-show-details=direct
 
   build-and-deploy:
     name: Build and Deploy Docker Image
@@ -192,6 +156,8 @@ jobs:
           provenance: false
           build-args: |
             BUILDKIT_INLINE_CACHE=1
+            GIT_HASH=${{ github.sha }}
+            GIT_COMMIT_DATE=${{ github.event.head_commit.timestamp || 'unknown' }}
 
       - name: Deploy Image to CapRrover
         uses: caprover/deploy-from-github@v1.2.0

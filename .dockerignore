@@ -1,5 +1,5 @@
 # Git files
-# .git is needed for GitHash
+.git
 .gitignore
 .gitmodules
 

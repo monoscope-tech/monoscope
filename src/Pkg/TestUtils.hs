@@ -65,7 +65,7 @@ import Data.Time (UTCTime, addUTCTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Connection, Only (..), close, connectPostgreSQL, execute, execute_)
+import Database.PostgreSQL.Simple (ConnectInfo (..), Connection, Only (..), close, connect, connectPostgreSQL, defaultConnectInfo, execute, execute_)
 import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.Migration (MigrationCommand (MigrationDirectory, MigrationInitialization))
 import Database.PostgreSQL.Simple.Migration qualified as Migration
@@ -182,31 +182,31 @@ withLocalSetup f = do
     withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 50)
 
 
+-- Test DB connection info, host configurable via DB_HOST env var
+testConnInfo :: String -> ConnectInfo
+testConnInfo dbName = defaultConnectInfo{connectUser = "postgres", connectPassword = "postgres", connectDatabase = dbName}
+
 -- External database setup using template database approach for better isolation and performance
 withExternalDBSetup :: (Pool Connection -> IO ()) -> IO ()
 withExternalDBSetup f = do
-  let masterConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=postgres"
+  dbHost <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
+  let connInfo dbName = (testConnInfo dbName){connectHost = dbHost}
       templateDbName = "monoscope_test_template"
 
   -- Create or update template database
-  ensureTemplateDatabase masterConnStr templateDbName
+  ensureTemplateDatabase connInfo templateDbName
 
   -- Generate unique test database name using UUID (replace hyphens with underscores)
   uuid <- nextRandom
   let testDbName = "monoscope_test_" <> T.replace "-" "_" (show uuid)
 
   -- Create test database from template
-  masterConn <- connectPostgreSQL masterConnStr
-  _ <-
-    execute
-      masterConn
-      (Query $ encodeUtf8 $ "CREATE DATABASE " <> testDbName <> " TEMPLATE " <> templateDbName)
-      ()
+  masterConn <- connect $ connInfo "postgres"
+  void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> testDbName <> " TEMPLATE " <> templateDbName) ()
   close masterConn
 
   -- Connect to the new test database
-  let testConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 testDbName
-  pool <- newPool (defaultPoolConfig (connectPostgreSQL testConnStr) close 60 10)
+  pool <- newPool (defaultPoolConfig (connect $ connInfo (toString testDbName)) close 60 10)
 
   -- Run tests and cleanup
   finally (f pool) $ do
@@ -217,7 +217,7 @@ withExternalDBSetup f = do
     threadDelay 100000 -- 100ms
 
     -- Forcefully terminate any remaining connections to test database
-    masterConn' <- connectPostgreSQL masterConnStr
+    masterConn' <- connect $ connInfo "postgres"
     (_ :: [Only Bool]) <-
       PGS.query_
         masterConn'
@@ -233,9 +233,9 @@ withExternalDBSetup f = do
 
 
 -- Helper function to ensure template database exists and is up to date
-ensureTemplateDatabase :: ByteString -> Text -> IO ()
-ensureTemplateDatabase masterConnStr templateDbName = do
-  masterConn <- connectPostgreSQL masterConnStr
+ensureTemplateDatabase :: (String -> ConnectInfo) -> Text -> IO ()
+ensureTemplateDatabase connInfo templateDbName = do
+  masterConn <- connect $ connInfo "postgres"
 
   -- Check if template database exists
   [Only exists] <-
@@ -255,8 +255,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
     if exists
       then do
         -- Try to connect to template and check a marker we'll set
-        let templateConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 templateDbName
-        templateConn <- connectPostgreSQL templateConnStr
+        templateConn <- connect $ connInfo (toString templateDbName)
 
         -- Check if our migration checksum marker exists and matches
         markerExists <-
@@ -319,8 +318,7 @@ ensureTemplateDatabase masterConnStr templateDbName = do
         ()
 
     -- Connect to template database and set up schema
-    let templateConnStr = "host=localhost port=5432 user=postgres password=postgres dbname=" <> encodeUtf8 templateDbName
-    templateConn <- connectPostgreSQL templateConnStr
+    templateConn <- connect $ connInfo (toString templateDbName)
 
     -- Run migrations
     _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
