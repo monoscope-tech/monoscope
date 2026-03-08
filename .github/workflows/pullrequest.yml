@@ -9,7 +9,7 @@ jobs:
   # Build frontend once and share via artifacts
   frontend:
     name: Build Frontend
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
 
@@ -45,7 +45,7 @@ jobs:
   build-and-test:
     name: Build and Test
     needs: frontend
-    runs-on: ubuntu-latest
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     container:
       image: ghcr.io/monoscope-tech/monoscope-deps:latest
       credentials:
@@ -109,7 +109,7 @@ jobs:
 
   lint:
     name: Lint (hlint)
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     permissions:
       contents: write
     steps:
@@ -138,7 +138,7 @@ jobs:
 
   ui-tests:
     name: UI Tests
-    runs-on: ubuntu-24.04
+    runs-on: blacksmith-4vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@v6
       - name: Setup Node.js
