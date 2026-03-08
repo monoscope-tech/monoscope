@@ -89,6 +89,12 @@
   --color-bgRaised: oklch(99.5% 0.001 106);
   --color-bgSunken: oklch(96.8% 0.003 106);
   --color-bgBrand: oklch(48% 0.205 265);
+  --color-bgSidebar: oklch(96% 0.008 265);
+  --color-fillSidebar-hover: rgba(10 10 40 / 0.05);
+  --color-fillSidebar-active: rgba(10 10 40 / 0.08);
+  --color-strokeSidebar: rgba(10 10 40 / 0.1);
+  --color-textSidebar: oklch(45% 0.01 265);
+  --color-textSidebar-strong: oklch(25% 0.015 265);
 
   /* Fill colors */
   --color-fillBrand-strong: oklch(48% 0.205 265);
@@ -1750,6 +1756,12 @@ code, pre, .code, .monospace {
     --color-bgRaised: oklch(18% 0.004 260);
     --color-bgSunken: oklch(8% 0.003 260);
     --color-bgBrand: oklch(60% 0.18 265);
+    --color-bgSidebar: oklch(10% 0.008 265);
+    --color-fillSidebar-hover: rgba(255 255 255 / 0.06);
+    --color-fillSidebar-active: rgba(255 255 255 / 0.1);
+    --color-strokeSidebar: rgba(255 255 255 / 0.08);
+    --color-textSidebar: rgba(255 255 255 / 0.55);
+    --color-textSidebar-strong: rgba(255 255 255 / 0.88);
 
     /* Fill colors — dark theme */
     --color-fillBrand-strong: oklch(60% 0.18 265);
