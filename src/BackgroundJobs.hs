@@ -624,7 +624,7 @@ generateOtelFacetsBatch projectIds timestamp = do
         ]
         $ \sp -> do
           addEvent sp "facet_generation.started" []
-          result <- try $ Fields.generateAndSaveFacets pid "otel_logs_and_spans" Fields.facetColumns 50 timestamp
+          result <- try $ Fields.generateAndSaveFacets pid "otel_logs_and_spans" 50 timestamp
           case result of
             Left (e :: SomeException) -> do
               addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]

@@ -21,7 +21,6 @@ module Models.Apis.Fields (
   -- Facets
   generateAndSaveFacets,
   getFacetSummary,
-  facetColumns,
 )
 where
 
@@ -40,11 +39,11 @@ import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
+import Database.PostgreSQL.Simple.ToField (Action, ToField, toField)
 import Database.PostgreSQL.Simple.Types (Only (..), Query)
 import Deriving.Aeson qualified as DAE
 import Effectful
-import Effectful.Labeled (Labeled, labeled)
+import Effectful.Labeled (Labeled)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
@@ -53,7 +52,7 @@ import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (DB)
+import System.Types (DB, withTimefusion)
 import Web.HttpApiData (FromHttpApiData)
 
 
@@ -349,7 +348,6 @@ facetColumns =
   , "attributes___db___operation___name"
   , "attributes___db___response___status_code"
   , "attributes___db___operation___batch___size"
-  , "attributes___error___type"
   , "attributes___exception___type"
   , "attributes___exception___message"
   , "severity___severity_text"
@@ -362,25 +360,18 @@ generateAndSaveFacets
   :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es)
   => Projects.ProjectId
   -> Text
-  -> [Text]
   -> Int
   -> UTCTime
   -> Eff es FacetSummary
-generateAndSaveFacets pid tableName columns maxValues timestamp = do
+generateAndSaveFacets pid tableName maxValues timestamp = do
   let dayEnd = timestamp
       dayStart = addUTCTime (-86400) dayEnd
 
   authCtx <- Effectful.Reader.Static.ask @AuthContext
+  let q = buildOptimizedFacetQuery tableName
+      params = concatMap (const [toField pid.toText, toField dayStart, toField dayEnd, toField maxValues]) facetColumns :: [Action]
   facetMap <- do
-    values <-
-      if authCtx.env.enableTimefusionReads
-        then
-          checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
-            $ labeled @"timefusion" @WithConnection
-            $ PG.query (buildOptimizedFacetQuery tableName (length columns)) (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
-        else
-          checkpoint (toAnnotation (buildOptimizedFacetQuery tableName (length columns)))
-            $ PG.query (buildOptimizedFacetQuery tableName (length columns)) (V.fromList columns, pid.toText, dayStart, dayEnd, maxValues)
+    values <- checkpoint (toAnnotation q) $ withTimefusion authCtx.env.enableTimefusionReads $ PG.query q params
     pure $ processQueryResults $ V.fromList values
 
   existingIdM <-
@@ -423,39 +414,16 @@ processQueryResults =
       | otherwise = x : insertSorted newVal xs
 
 
-buildFacetColumnQuery :: Text -> Text
-buildFacetColumnQuery colName =
-  "SELECT '" <> colName <> "' as column_name, " <> colName <> "::text as value, COUNT(*) as count FROM filtered_data WHERE " <> colName <> " IS NOT NULL GROUP BY value"
+buildFacetColumnQuery :: Text -> Text -> Text
+buildFacetColumnQuery tableName colName =
+  "(SELECT '" <> colName <> "' as column_name, " <> colName <> "::text as value, COUNT(*) as count FROM " <> tableName
+    <> " WHERE project_id = ?::text AND timestamp >= ? AND timestamp < ? AND " <> colName
+    <> " IS NOT NULL GROUP BY value ORDER BY count DESC LIMIT ?)"
 
 
-buildOptimizedFacetQuery :: Text -> Int -> Query
-buildOptimizedFacetQuery tableName _ =
-  let unionAllQueries = T.intercalate "\n      UNION ALL\n      " $ map buildFacetColumnQuery facetColumns
-   in [sql|
-      WITH columns_list AS (SELECT unnest(?::text[]) as column_name),
-      filtered_data AS (
-        SELECT * FROM |]
-        <> (" " <> fromString (toString tableName) <> " ")
-        <> [sql|
-        WHERE project_id = ?::text AND timestamp >= ? AND timestamp < ?
-      ),
-      combined_facets AS (
-        |]
-        <> fromString (toString unionAllQueries)
-        <> [sql|
-      ),
-      filtered_facets AS (
-        SELECT cf.* FROM combined_facets cf JOIN columns_list cl ON cf.column_name = cl.column_name
-      ),
-      ranked_facets AS (
-        SELECT column_name, value, count, ROW_NUMBER() OVER (PARTITION BY column_name ORDER BY count DESC) as rn
-        FROM filtered_facets
-      )
-      SELECT column_name, value, count
-      FROM ranked_facets
-      WHERE rn <= ?
-      ORDER BY column_name, count DESC
-    |]
+buildOptimizedFacetQuery :: Text -> Query
+buildOptimizedFacetQuery tableName =
+  fromString $ toString $ T.intercalate "\nUNION ALL\n" $ map (buildFacetColumnQuery tableName) facetColumns
 
 
 getFacetSummary :: DB es => Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
