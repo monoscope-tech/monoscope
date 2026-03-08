@@ -416,8 +416,14 @@ processQueryResults =
 
 buildFacetColumnQuery :: Text -> Text -> Text
 buildFacetColumnQuery tableName colName =
-  "(SELECT '" <> colName <> "' as column_name, " <> colName <> "::text as value, COUNT(*) as count FROM " <> tableName
-    <> " WHERE project_id = ?::text AND timestamp >= ? AND timestamp < ? AND " <> colName
+  "(SELECT '"
+    <> colName
+    <> "' as column_name, "
+    <> colName
+    <> "::text as value, COUNT(*) as count FROM "
+    <> tableName
+    <> " WHERE project_id = ?::text AND timestamp >= ? AND timestamp < ? AND "
+    <> colName
     <> " IS NOT NULL GROUP BY value ORDER BY count DESC LIMIT ?)"
 
 
