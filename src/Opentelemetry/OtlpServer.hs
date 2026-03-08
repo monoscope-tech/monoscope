@@ -34,6 +34,8 @@ import Data.List qualified as L
 import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage)
+import Data.ProtoLens.Encoding.Bytes (runBuilder, runParser)
+import Data.ProtoLens.Encoding.Wire (TaggedValue (..), WireValue (..), buildFieldSet, parseFieldSet)
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
@@ -121,6 +123,45 @@ instance ParseMetadata OtlpRequestMetadata where
 wireTypeErrorsRef :: IORef (HashMap Text (Int, AE.Value))
 {-# NOINLINE wireTypeErrorsRef #-}
 wireTypeErrorsRef = unsafePerformIO $ newIORef HashMap.empty
+
+
+-- | Try to decode a protobuf message with lenient UTF-8 handling.
+-- On UTF-8 decode errors, sanitizes the wire format by replacing invalid UTF-8 bytes
+-- with '?' in length-delimited fields, then retries decoding.
+decodeMessageLenient :: Message msg => ByteString -> Either String msg
+decodeMessageLenient bs =
+  case decodeMessage bs of
+    Right msg -> Right msg
+    Left err
+      | "Cannot decode byte" `L.isInfixOf` err -> decodeMessage (sanitizeProtobufUtf8 bs)
+      | otherwise -> Left err
+
+
+-- | Sanitize a protobuf ByteString by walking the wire format and replacing
+-- invalid UTF-8 bytes in length-delimited fields with '?'.
+sanitizeProtobufUtf8 :: ByteString -> ByteString
+sanitizeProtobufUtf8 bs =
+  case runParser parseFieldSet bs of
+    Left _ -> bs
+    Right fields -> runBuilder (buildFieldSet (map sanitizeTaggedValue fields))
+
+
+sanitizeTaggedValue :: TaggedValue -> TaggedValue
+sanitizeTaggedValue (TaggedValue tag (Lengthy content))
+  | BS.null content = TaggedValue tag (Lengthy content)
+  | otherwise =
+      case runParser parseFieldSet content of
+        Right subFields@(_ : _) ->
+          -- Content parses as a nested protobuf message; recursively sanitize its fields
+          TaggedValue tag (Lengthy (runBuilder (buildFieldSet (map sanitizeTaggedValue subFields))))
+        _ ->
+          -- Content is a string or bytes field; replace invalid UTF-8 bytes with '?'
+          TaggedValue tag (Lengthy (sanitizeUtf8Bytes content))
+sanitizeTaggedValue other = other
+
+
+sanitizeUtf8Bytes :: ByteString -> ByteString
+sanitizeUtf8Bytes content = encodeUtf8 (decodeUtf8With (\_ _ -> Just '?') content)
 
 
 -- | Initialize periodic error logging
@@ -298,7 +339,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
   checkpoint (cp "") $ do
     processingStartTime <- liftIO getCurrentTime
     let !msgsCount = length msgs
-        !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs] `using` parList rpar
+        !decodedMsgs = [(ackId, decodeMessageLenient msg :: Either String req) | (ackId, msg) <- msgs] `using` parList rpar
         !allProjectKeys = V.force $ V.concat [extractKeys req | (_, Right req) <- decodedMsgs]
         !uniqueProjectKeys = V.force $ V.fromList $ L.nub $ V.toList allProjectKeys
         !atIds = concatMap extractIds [req | (_, Right req) <- decodedMsgs]
