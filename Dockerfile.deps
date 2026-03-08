@@ -33,9 +33,10 @@ WORKDIR /build
 # Copy only files needed for dependency resolution
 COPY *.cabal cabal.project* Setup.hs LICENSE ./
 
-# Update cabal index and build all dependencies
+# Update cabal index and build all dependencies (including test deps)
 RUN cabal update && \
-  cabal build --only-dependencies exe:monoscope -j$(nproc)
+  cabal configure --enable-tests --enable-benchmarks && \
+  cabal build --only-dependencies all -j$(nproc)
 
 # Pre-install npm dependencies for faster deploys
 COPY package*.json ./
