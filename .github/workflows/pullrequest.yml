@@ -51,6 +51,8 @@ jobs:
       credentials:
         username: ${{ github.repository_owner }}
         password: ${{ secrets.GH_TOKEN }}
+      env:
+        CABAL_DIR: /root/.cabal
     services:
       postgres:
         image: timescale/timescaledb-ha:pg16-all
@@ -87,10 +89,7 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/css
 
       - name: Build
-        run: |
-          cabal update
-          cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
-          cabal build all -j
+        run: cabal build all -j --ghc-options="-O0 +RTS -A64m -n2m -RTS"
 
       - name: Run doctests
         run: cabal test doctests --ghc-options="-O0" --test-show-details=direct
