@@ -186,6 +186,7 @@ withLocalSetup f = do
 testConnInfo :: String -> ConnectInfo
 testConnInfo dbName = defaultConnectInfo{connectUser = "postgres", connectPassword = "postgres", connectDatabase = dbName}
 
+
 -- External database setup using template database approach for better isolation and performance
 withExternalDBSetup :: (Pool Connection -> IO ()) -> IO ()
 withExternalDBSetup f = do
