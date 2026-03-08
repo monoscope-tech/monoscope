@@ -435,7 +435,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     details_ [class_ "dropdown dropdown-end"] do
       summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"]
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
-      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
+      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-bgOverlay rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
         let dashId = fromMaybe "" widget._dashboardId
@@ -700,7 +700,7 @@ renderStatContent widget chartId valueM = do
 -- | Render placeholder with loading spinner for lazy-loaded stats
 renderStatPlaceholder :: Widget -> Text -> Html ()
 renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
-  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
     $ loadingIndicator_ LdSM LdSpinner
   div_ [class_ "inline-flex gap-1 items-center text-sm"] do
     whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
@@ -711,7 +711,7 @@ renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
 -- | Render actual stat value content
 renderStatValue :: Widget -> Text -> Maybe Text -> Html ()
 renderStatValue widget chartId valueM = div_ [class_ "flex flex-col gap-1"] do
-  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
     $ whenJust valueM toHtml
   div_ [class_ "inline-flex gap-1 items-center text-sm"] do
     whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"

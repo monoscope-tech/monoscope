@@ -1115,7 +1115,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
   appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (Just False, Just False, "Inbox")
-        Just "Acknowleged" -> (Just True, Nothing, "Acknowleged")
+        Just "Acknowledged" -> (Just True, Nothing, "Acknowledged")
         Just "Archived" -> (Nothing, Just True, "Archived")
         _ -> (Just False, Just False, "Inbox")
 
@@ -1201,7 +1201,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                   , clientSide = False
                   , options =
                       [ TabFilterOpt "Inbox" Nothing Nothing
-                      , TabFilterOpt "Acknowleged" Nothing Nothing
+                      , TabFilterOpt "Acknowledged" Nothing Nothing
                       , TabFilterOpt "Archived" Nothing Nothing
                       ]
                   }

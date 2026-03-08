@@ -276,9 +276,9 @@ monitorBase item = "/p/" <> item.projectId <> "/monitors"
 -- (dotColor, displayName, sortOrder) for each monitor status
 statusInfo :: Monitors.MonitorStatus -> (Text, Text, Int)
 statusInfo = \case
-  Monitors.MSAlerting -> ("bg-red-500", "Alerting", 0)
-  Monitors.MSWarning -> ("bg-yellow-500", "Warning", 1)
-  Monitors.MSNormal -> ("bg-green-500", "Normal", 2)
+  Monitors.MSAlerting -> ("bg-fillError-strong", "Alerting", 0)
+  Monitors.MSWarning -> ("bg-fillWarning-strong", "Warning", 1)
+  Monitors.MSNormal -> ("bg-fillSuccess-strong", "Normal", 2)
 
 
 bulkActionsFor :: Text -> Projects.ProjectId -> [BulkAction]
@@ -558,7 +558,7 @@ alertSidebar_ displayName alert currTime = do
     sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textWeak overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
     sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Alert: " <> direction <> " " <> formatWithCommas alert.alertThreshold
-      whenJust alert.warningThreshold \w -> span_ [class_ "text-yellow-600 tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
+      whenJust alert.warningThreshold \w -> span_ [class_ "text-textWarning tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
       whenJust alert.alertRecoveryThreshold \r -> span_ [class_ "text-textWeak tabular-nums"] $ toHtml $ "Recovery: " <> formatWithCommas r
     sidebarItem_ "Evaluation" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> toText (prettyTimeAuto currTime alert.lastEvaluated)
@@ -570,9 +570,9 @@ alertSidebar_ displayName alert currTime = do
   where
     direction = bool ">" "<" alert.triggerLessThan
     statusColor = case alert.currentStatus of
-      Monitors.MSAlerting -> "text-red-500"
-      Monitors.MSWarning -> "text-yellow-600"
-      Monitors.MSNormal -> "text-green-600"
+      Monitors.MSAlerting -> "text-textError"
+      Monitors.MSWarning -> "text-textWarning"
+      Monitors.MSNormal -> "text-textSuccess"
     sidebarItem_ label val = div_ [class_ "p-3 flex flex-col gap-1"] do
       _ <- span_ [class_ "text-xs font-medium text-textWeak uppercase tracking-wider"] label
       val

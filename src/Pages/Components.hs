@@ -51,11 +51,11 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
 -- Pass Nothing for icon to use default, or Just "icon-name" for custom icon
 emptyState_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> Html ()
 emptyState_ iconM title subTxt urlM btnText =
-  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4 empty-state"] do
-    div_ [] $ faSprite_ (fromMaybe "empty" iconM) "regular" "h-24 w-24 stroke-strokeBrand-strong fill-fillBrand-strong"
-    div_ [class_ "flex flex-col gap-2"] do
-      h2_ [class_ "text-xl text-textStrong font-bold"] $ toHtml title
-      p_ [class_ "text-sm font-medium text-textWeak"] $ toHtml subTxt
+  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-8 sm:px-12 flex flex-col gap-3 empty-state"] do
+    div_ [] $ faSprite_ (fromMaybe "empty" iconM) "regular" "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong"
+    div_ [class_ "flex flex-col gap-1.5"] do
+      h2_ [class_ "text-base text-textStrong font-semibold"] $ toHtml title
+      p_ [class_ "text-sm text-textWeak"] $ toHtml subTxt
       whenJust urlM \u ->
         unless (T.null btnText)
           $ let attrs =
@@ -68,10 +68,10 @@ emptyState_ iconM title subTxt urlM btnText =
 -- Shows a different visual treatment to indicate filters are active
 emptyStateFiltered_ :: Text -> Text -> Html () -> Html ()
 emptyStateFiltered_ title subTxt actionHtml =
-  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-10 sm:px-16 flex flex-col gap-4 rounded-xl empty-state-filtered"] do
-    div_ [] $ faSprite_ "filter-slash" "regular" "h-16 w-16 stroke-strokeBrand-strong fill-fillBrand-weak"
-    div_ [class_ "flex flex-col gap-2"] do
-      h2_ [class_ "text-lg text-textStrong font-semibold"] $ toHtml title
+  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-6 sm:px-12 flex flex-col gap-3 rounded-xl empty-state-filtered"] do
+    div_ [] $ faSprite_ "filter-slash" "regular" "h-10 w-10 stroke-strokeBrand-strong fill-fillBrand-weak"
+    div_ [class_ "flex flex-col gap-1.5"] do
+      h2_ [class_ "text-base text-textStrong font-semibold"] $ toHtml title
       p_ [class_ "text-sm text-textWeak max-w-sm"] $ toHtml subTxt
       actionHtml
 
@@ -456,7 +456,7 @@ featureRow feature =
 
 navBar :: Html ()
 navBar = do
-  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-4 py-4 bg-base-100 flex flex-row justify-between"] do
+  nav_ [id_ "main-navbar", class_ "fixed z-20 top-0 w-full w-full px-4 py-4 bg-bgOverlay flex flex-row justify-between"] do
     div_ [class_ "flex justify-between items-center gap-4 w-[1000px] mx-auto"] do
       a_ [href_ "https://monoscope.tech", class_ "flex items-center text-textWeak hover:text-textStrong"] do
         -- Only show full logos (no mini version needed for navbar)

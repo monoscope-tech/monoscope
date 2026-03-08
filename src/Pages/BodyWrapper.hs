@@ -407,9 +407,9 @@ bodyWrapper bcfg child = do
         ]
         do
           div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
+            $ div_ [class_ "bg-bgOverlay rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
-                h3_ [class_ "text-3xl font-bold "] "Only Desktop Browsers are Supported for now!"
+                h3_ [class_ "text-xl font-semibold text-textStrong"] "Only Desktop Browsers are Supported for now!"
               -- Modal body
               div_ [class_ "w-full"] $ div_ [class_ "p-6 space-y-6", style_ "height:50vh; width:100%"] do
                 p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
@@ -584,7 +584,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-strokeBrand-weak opacity-100 scale-100"
+    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-lg opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do

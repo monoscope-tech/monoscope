@@ -171,14 +171,14 @@ timepicker_ submitForm currentRange targetIdM = do
                 [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-title}) then $action then call $popoverId.hidePopover()|]
               timePickerLink val title =
                 li_ $ a_
-                  [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
+                  [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2"
                   , term "data-value" val
                   , term "data-title" title
                   , termRaw "_" onClickHandler
                   ]
                   do
                     span_ [class_ "text-sm"] $ toHtml title
-                    span_ [class_ "text-xs text-base-content/60"] $ toHtml val
+                    span_ [class_ "text-xs text-textWeak"] $ toHtml val
           mapM_ (uncurry timePickerLink) timePickerItems
           li_ $ a_
             [ term "_" [text| on click toggle .hidden on #$targetPr-timepickerSidebar |]
@@ -279,7 +279,7 @@ refreshButton_ = do
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral "
 
       -- Dropdown menu
-      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-base-100 rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
+      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-bgOverlay rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
         forM_ refreshOptions \(label, title, ms) ->
           li_
             $ a_
