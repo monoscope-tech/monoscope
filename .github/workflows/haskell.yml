@@ -91,6 +91,7 @@ jobs:
 
       - name: Build
         run: |
+          cabal update
           cabal configure --enable-tests --enable-benchmarks --ghc-options="-O0 +RTS -A64m -n2m -RTS"
           cabal build all -j
 
