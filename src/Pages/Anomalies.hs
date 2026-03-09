@@ -268,8 +268,8 @@ defaultSinceRange createdAt now
   | ageH < 72 = "3D"
   | ageH < 168 = "7D"
   | otherwise = "14D"
-  where ageH = diffUTCTime now (zonedTimeToUTC createdAt) / 3600
-
+  where
+    ageH = diffUTCTime now (zonedTimeToUTC createdAt) / 3600
 
 
 -- | Abbreviate time unit (e.g., "hours" → "hrs")
@@ -335,7 +335,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
       -- Header: title
       h3_ [class_ "text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
       unless (issue.recommendedAction == Issues.defaultRecommendedAction)
-        $ p_ [class_ "text-sm text-textWeak max-w-3xl"] $ toHtml issue.recommendedAction
+        $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
+        $ toHtml issue.recommendedAction
       -- Metadata chips + issue type content
       let infoChip_ = colorChip_ "text-fillInformation-strong bg-fillInformation-weak"
           createdChip = infoChip_ "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
@@ -409,7 +410,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 content
           withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
             div_ [class_ "flex gap-4 items-stretch"] do
-              div_ [class_ "min-w-0 flex-1"] $ cardSection "code" "Stack Trace"
+              div_ [class_ "min-w-0 flex-1"]
+                $ cardSection "code" "Stack Trace"
                 $ div_ [class_ "max-h-80 overflow-y-auto"]
                 $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap"]
                 $ code_ []
@@ -1095,15 +1097,15 @@ anomalyAIChat_ pid issueId = do
       , term "hx-on::after-request" "this.reset()"
       ]
       $ div_ [class_ "flex items-center gap-2 bg-fillWeaker rounded-lg px-3 py-2 has-[:focus]:ring-1 has-[:focus]:ring-strokeBrand-weak transition-shadow"] do
-          input_
-            [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
-            , placeholder_ "Ask about this issue..."
-            , name_ "query"
-            , id_ "ai-chat-input"
-            , autocomplete_ "off"
-            ]
-          span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
-          button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
+        input_
+          [ class_ "flex-1 bg-transparent border-none outline-none text-textStrong placeholder-textWeak text-sm"
+          , placeholder_ "Ask about this issue..."
+          , name_ "query"
+          , id_ "ai-chat-input"
+          , autocomplete_ "off"
+          ]
+        span_ [class_ "htmx-indicator", id_ "ai-chat-loader"] $ faSprite_ "spinner" "regular" "w-4 h-4 animate-spin text-iconBrand"
+        button_ [type_ "submit", class_ "p-1.5 rounded-lg bg-fillBrand-strong text-white hover:opacity-90 transition-opacity tap-target cursor-pointer", Aria.label_ "Send message"] $ faSprite_ "arrow-right" "regular" "w-3.5 h-3.5"
     div_ [class_ "flex gap-1.5 flex-wrap"] $ forM_ ["What could cause this?", "Show related logs", "Suggest a fix"] \txt ->
       button_
         [ type_ "button"
@@ -1415,7 +1417,8 @@ renderLogContent_ txt =
 -- "Normal title without tokens"
 stripSummaryTokens :: Text -> Text
 stripSummaryTokens = T.unwords . map extractValue . T.words
-  where extractValue token = case T.breakOn "⇒" token of (_, "") -> token; (_, rest) -> T.drop 1 rest
+  where
+    extractValue token = case T.breakOn "⇒" token of (_, "") -> token; (_, rest) -> T.drop 1 rest
 
 
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()

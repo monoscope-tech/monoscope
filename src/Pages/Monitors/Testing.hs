@@ -35,6 +35,7 @@ import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils (Channel (channelId, channelName))
+import Pages.Components (metadataChip_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Projects (TBulkActionForm (..))
 import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
@@ -45,7 +46,6 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast, redirectCS)
 import Text.Time.Pretty (prettyTimeAuto)
-import Pages.Components (metadataChip_)
 import Utils (checkFreeTierExceeded, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 
 
