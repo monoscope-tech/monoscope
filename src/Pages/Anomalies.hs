@@ -390,7 +390,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
               cardSection "code" "Stack Trace"
                 $ div_ [class_ "max-h-80 overflow-y-auto"]
                 $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap"]
-                $ code_ [] $ toHtml exceptionData.stackTrace
+                $ code_ []
+                $ toHtml exceptionData.stackTrace
               whenJust errM \errL -> do
                 let err = errL.base
                     detailItem :: (Text, Text, Text, Text) -> HtmlT Identity ()
