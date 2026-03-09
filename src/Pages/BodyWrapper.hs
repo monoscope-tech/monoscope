@@ -619,18 +619,19 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-bgSidebar border-strokeSidebar text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex"] do
+        -- Full logos (shown when sidebar is expanded)
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      label_ [class_ "cursor-pointer text-textSidebar tap-target", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
+      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
         input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-strokeSidebar bg-fillSidebar-hover text-textSidebar-strong hover:bg-fillSidebar-active gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-strokeWeak bg-fillWeaker text-textStrong hover:bg-fillWeaker gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
         , tabindex_ "0"
         , Aria.haspopup_ "listbox"
         , Aria.label_ $ "Switch project, current: " <> project.title
@@ -639,11 +640,11 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-bgSidebar 
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           faSprite_ "angles-up-down" "regular" "w-4"
       div_ [tabindex_ "0", class_ "dropdown-content z-40", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
-    nav_ [class_ "mt-5 flex flex-col gap-2.5 text-textSidebar"] do
+    nav_ [class_ "mt-5 flex flex-col gap-2.5 text-textWeak"] do
       -- FIXME: reeanable hx-boost hxBoost_ "true"
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then "bg-fillSidebar-active text-textSidebar-strong border border-strokeSidebar" else "border-transparent! hover:bg-fillSidebar-hover"
+        let activeCls = if isActive then "bg-fillWeak  text-textStrong border border-strokeStrong" else "border-transparent!"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
@@ -654,7 +655,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-bgSidebar 
             faSprite_ fIcon "regular" "w-4 h-4 shrink-0 "
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
 
-  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap text-textSidebar"] do
+  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
     let currUser = sess.persistentSession.user.getUser
         userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
@@ -663,34 +664,34 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-bgSidebar 
         avatarUrl = "/api/avatar/" <> currUser.id.toText
     div_ [tabindex_ "0", role_ "button", class_ ""] do
       img_
-        [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-fillSidebar-active"
+        [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-fillPress"
         , term "data-tippy-placement" "right"
         , term "data-tippy-content" userIdentifier
         , src_ avatarUrl
         ]
-      span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden text-textSidebar-strong"] $ toHtml userIdentifier
+      span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
 
     a_
-      [ class_ "hover:bg-fillSidebar-hover rounded-lg"
+      [ class_ "hover:bg-fillBrand-weak "
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Settings"
       , href_ $ "/p/" <> project.id.toText <> "/settings"
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillSidebar-active text-textSidebar leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-iconBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
     a_
-      [ class_ "hover:bg-fillSidebar-hover rounded-lg"
+      [ class_ "hover:bg-fillBrand-weak "
       , target_ "blank"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Documentation"
       , href_ "https://monoscope.tech/docs/"
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillSidebar-active text-textSidebar leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-iconBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
     div_
-      [ class_ "hover:bg-fillSidebar-hover pl-1.5 rounded-lg"
+      [ class_ "hover:bg-fillBrand-weak pl-1.5"
       , Aria.label_ "Toggle dark mode"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Toggle dark mode"
@@ -698,7 +699,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-bgSidebar 
       $ do
         -- Regular toggle with icons (visible when sidebar is expanded)
         label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center", Aria.label_ "Toggle dark mode"] $ do
-          faSprite_ "sun-bright" "regular" "h-5 w-5 text-textSidebar"
+          faSprite_ "sun-bright" "regular" "h-5 w-5 text-iconBrand"
           input_
             [ type_ "checkbox"
             , class_ "toggle theme-controller"
@@ -706,7 +707,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-bgSidebar 
             , Aria.label_ "Toggle dark mode"
             , onclick_ "toggleDarkMode()"
             ]
-          faSprite_ "moon-stars" "regular" "h-5 w-5 text-textSidebar"
+          faSprite_ "moon-stars" "regular" "h-5 w-5 text-iconBrand"
 
         -- Swap rotate icon (visible when sidebar is collapsed)
         label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden", Aria.label_ "Toggle dark mode"] $ do
@@ -722,14 +723,14 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-bgSidebar 
           -- Moon icon (shown in dark mode)
           span_ [class_ "swap-on", Aria.label_ "Dark mode"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
     a_
-      [ class_ "hover:bg-fillSidebar-hover rounded-lg"
+      [ class_ "hover:bg-fillBrand-weak"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" "Logout"
       , Aria.label_ "Logout"
       , href_ "/logout"
       , [__| on click js posthog.reset(); end |]
       ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillSidebar-active text-textSidebar leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
+      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillError-weak text-iconError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
       >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
 
 

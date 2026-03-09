@@ -74,27 +74,21 @@
   --shadow-lg: 0 8px 25px -5px rgba(0 0 0 / 0.1), 0 4px 10px -5px rgba(0 0 0 / 0.04);
   --shadow-toast: 0 4px 12px rgba(0 0 0 / 0.12);
 
-  /* Simple colors — subtle warm neutrals */
-  --color-gray-25: oklch(99% 0.002 106);
-  --color-gray-150: oklch(94.5% 0.003 106);
-  --color-slate-25: oklch(99% 0.002 106);
-  --color-slate-150: oklch(94.5% 0.004 106);
-  --color-slate-250: oklch(89.2% 0.006 106);
+  /* Simple colors — cool-tinted neutrals */
+  --color-gray-25: oklch(99% 0.002 260);
+  --color-gray-150: oklch(94.5% 0.003 260);
+  --color-slate-25: oklch(99% 0.002 260);
+  --color-slate-150: oklch(94.5% 0.004 260);
+  --color-slate-250: oklch(89.2% 0.006 260);
 
-  /* Background colors — barely-warm off-whites */
-  --color-bgAlternate: oklch(97.4% 0.003 106);
-  --color-bgBase: oklch(98.5% 0.002 106);
+  /* Background colors — cool off-whites */
+  --color-bgAlternate: oklch(97.4% 0.003 260);
+  --color-bgBase: oklch(98.5% 0.002 260);
   --color-bgInverse: oklch(16% 0.006 260);
-  --color-bgOverlay: oklch(99.5% 0.001 106);
-  --color-bgRaised: oklch(99.5% 0.001 106);
-  --color-bgSunken: oklch(96.8% 0.003 106);
+  --color-bgOverlay: oklch(99.5% 0.001 260);
+  --color-bgRaised: oklch(99.5% 0.001 260);
+  --color-bgSunken: oklch(96.8% 0.003 260);
   --color-bgBrand: oklch(48% 0.205 265);
-  --color-bgSidebar: oklch(96% 0.008 265);
-  --color-fillSidebar-hover: rgba(10 10 40 / 0.05);
-  --color-fillSidebar-active: rgba(10 10 40 / 0.08);
-  --color-strokeSidebar: rgba(10 10 40 / 0.1);
-  --color-textSidebar: oklch(45% 0.01 265);
-  --color-textSidebar-strong: oklch(25% 0.015 265);
 
   /* Fill colors */
   --color-fillBrand-strong: oklch(48% 0.205 265);
@@ -109,7 +103,7 @@
   --color-fillInverseDisabled: rgba(255 255 255 / 0.12);
   --color-fillInverse-hover: rgba(255 255 255 / 0.06);
   --color-fillInverse-press: rgba(255 255 255 / 0.12);
-  --color-fillInverse-strong: oklch(98.5% 0.002 106);
+  --color-fillInverse-strong: oklch(98.5% 0.002 260);
   --color-fillInverse-weak: rgba(255 255 255 / 0.06);
   --color-fillOverlay: rgba(10 10 15 / 0.45);
   --color-fillPress: rgba(15 15 20 / 0.1);
@@ -1015,7 +1009,7 @@
 
 :root,
 [data-theme] {
-  --backgroundPrimary: oklch(98.5% 0.002 106);
+  --backgroundPrimary: oklch(98.5% 0.002 260);
   --rounded-btn: 0.5rem;
 
   --tw-prose-body: var(--color-textStrong) !important;
@@ -1756,12 +1750,6 @@ code, pre, .code, .monospace {
     --color-bgRaised: oklch(18% 0.004 260);
     --color-bgSunken: oklch(8% 0.003 260);
     --color-bgBrand: oklch(60% 0.18 265);
-    --color-bgSidebar: oklch(10% 0.008 265);
-    --color-fillSidebar-hover: rgba(255 255 255 / 0.06);
-    --color-fillSidebar-active: rgba(255 255 255 / 0.1);
-    --color-strokeSidebar: rgba(255 255 255 / 0.08);
-    --color-textSidebar: rgba(255 255 255 / 0.55);
-    --color-textSidebar-strong: rgba(255 255 255 / 0.88);
 
     /* Fill colors — dark theme */
     --color-fillBrand-strong: oklch(60% 0.18 265);
