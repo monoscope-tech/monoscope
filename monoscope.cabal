@@ -74,6 +74,7 @@ extra-source-files:
     static/migrations/0046_endpoint_path_templates.sql
     static/migrations/0047_fix_anomaly_trigger_conflict.sql
     static/migrations/0048_error_pattern_llm_analysis.sql
+    static/migrations/0049_delay_anomaly_job_batching.sql
 
 source-repository head
   type: git
