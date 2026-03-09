@@ -1821,7 +1821,7 @@ code, pre, .code, .monospace {
     --color-textStrong: oklch(90% 0.005 260);
     --color-textSuccess: oklch(78% 0.088 162);
     --color-textWarning: oklch(79.5% 0.106 92);
-    --color-textWeak: oklch(72% 0.005 260);
+    --color-textWeak: oklch(62% 0.005 260);
 
     /* Dark mode shadow scale — deeper for contrast on dark surfaces */
     --shadow-xs: 0 1px 2px -1px rgba(0 0 0 / 0.2);
@@ -1832,7 +1832,7 @@ code, pre, .code, .monospace {
 
     /* Update fallback colors for dark mode */
     --fallback-b2: rgba(255 255 255 / 0.06);
-    --tab-color: oklch(72% 0.005 260);
+    --tab-color: oklch(62% 0.005 260);
     --fallback-pc: oklch(92% 0.005 260);
     --fallback-bc: rgba(255 255 255 / 0.55);
   }
@@ -1854,6 +1854,15 @@ code, pre, .code, .monospace {
     font-feature-settings: 'liga' 1, 'calt' 1;
     font-size: 16px;
   }
+}
+
+/* Table header — override DaisyUI's low-contrast th color */
+.table thead th {
+  color: var(--color-textWeak) !important;
+  font-weight: 600 !important;
+  font-size: 0.75rem !important;
+  letter-spacing: 0.025em !important;
+  text-transform: uppercase !important;
 }
 
 @layer custom {
@@ -1902,7 +1911,7 @@ code, pre, .code, .monospace {
   /* Alerting badge — gentle opacity pulse */
   @keyframes alertPulse {
     0%, 100% { opacity: 1; }
-    50% { opacity: 0.65; }
+    50% { opacity: 0.85; }
   }
   .alert-badge {
     animation: alertPulse 2.5s ease-in-out infinite;

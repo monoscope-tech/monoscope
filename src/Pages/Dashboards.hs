@@ -1464,7 +1464,7 @@ dashboardsGet_ dg = do
               else a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
             unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
 
-    let renderModifiedCol dash = span_ [class_ "monospace text-textWeak", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
+    let renderModifiedCol dash = span_ [class_ "monospace text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
     let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml team.handle
 
@@ -1476,9 +1476,9 @@ dashboardsGet_ dg = do
 
     let renderWidgetsCol dash = do
           let count = getWidgetCount dash
-          span_ [class_ "flex items-center gap-2", data_ "tippy-content" $ "There are " <> show count <> " charts/widgets in this dashboard"] do
+          span_ [class_ "flex items-center gap-2 text-textWeak", data_ "tippy-content" $ "There are " <> show count <> " charts/widgets in this dashboard"] do
             faSprite_ "chart-area" "regular" "w-4 h-4 text-iconNeutral"
-            span_ [class_ "leading-none monospace"] $ toHtml $ show count
+            span_ [class_ "leading-none monospace tabular-nums"] $ toHtml $ show count
 
     let tableCols = case dg.copyMode of
           Just _ ->

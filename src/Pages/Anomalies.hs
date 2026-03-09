@@ -231,7 +231,7 @@ anomalyDetailCore pid firstM fetchIssue = do
         Nothing -> pure (V.empty, False)
       let bwconf =
             baseBwconf
-              { headContent = Just highlightJsHead_
+              { headContent = Just do highlightJsHead_; style_ "#crisp-chatbox { display: none !important; }"
               , pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
@@ -246,8 +246,7 @@ anomalyDetailCore pid firstM fetchIssue = do
           let err = errL.base
               isFirst = isJust firstM
           tId <- hoistMaybe $ bool err.recentTraceId err.firstTraceId isFirst
-          let tme = bool (zonedTimeToUTC err.updatedAt) (zonedTimeToUTC err.createdAt) isFirst
-          traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId (Just tme) now
+          traceItem <- MaybeT $ Telemetry.getTraceDetails pid tId Nothing now
           spanRecs' <- lift $ Telemetry.getSpanRecordsByTraceId pid traceItem.traceId (Just traceItem.traceStartTime) now
           pure (Just traceItem, V.fromList spanRecs')
       hourlyStats <- case issue.issueType of
@@ -308,7 +307,7 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
       severityBadge _ = pass
   div_ [class_ "flex h-full overflow-hidden"] do
     -- LEFT: scrollable main content
-    div_ [class_ "flex-1 min-w-0 overflow-auto pt-8 px-4 pb-8 flex flex-col gap-4"] do
+    div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto pt-8 px-4 pb-8 space-y-4"] do
       -- Header: title + badges
       div_ [class_ "flex items-center gap-3"] do
         h3_ [class_ "text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
@@ -323,12 +322,12 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
           logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
             _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
               div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                span_ [class_ "text-sm font-medium text-textStrong"] "Log Pattern"
+                span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Log Pattern"
                 span_ [class_ "badge badge-sm badge-ghost"] $ toHtml $ sourceFieldLabel sourceField
               renderLogContent_ logPattern
             whenJust sampleMessage \msg ->
               div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-sm font-medium text-textStrong"] "Sample Message"
+                div_ [class_ "px-4 py-3 border-b border-strokeWeak"] $ span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Sample Message"
                 renderLogContent_ msg
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         createdChip
@@ -383,23 +382,22 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
         Issues.RuntimeException -> do
           let cardSection icon title content = div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
                 _ <- div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-                  faSprite_ icon "regular" "w-4 h-4 text-iconNeutral"
-                  span_ [class_ "text-sm font-medium text-textStrong"] title
+                  faSprite_ icon "regular" "w-3.5 h-3.5 text-textWeak"
+                  span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] title
                 content
           div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
             withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
               cardSection "code" "Stack Trace"
-                $ div_ [class_ "p-4 max-h-80 overflow-y-auto"]
-                $ pre_ [class_ "text-sm text-textWeak font-mono leading-relaxed overflow-x-auto whitespace-pre-wrap"]
-                $ toHtml exceptionData.stackTrace
+                $ div_ [class_ "max-h-80 overflow-y-auto"]
+                $ pre_ [class_ "text-sm leading-relaxed overflow-x-auto whitespace-pre-wrap"]
+                $ code_ [] $ toHtml exceptionData.stackTrace
               whenJust errM \errL -> do
                 let err = errL.base
-                    detailItem :: (Text, Text, Text) -> HtmlT Identity ()
-                    detailItem (icon, lbl, value) = div_ [class_ "flex items-center gap-2"] do
-                      faSprite_ icon "regular" "w-3 h-3"
-                      div_ [] do
-                        span_ [class_ "text-xs text-textWeak"] $ toHtml $ lbl <> ":"
-                        span_ [class_ "ml-2 text-xs"] $ toHtml value
+                    detailItem :: (Text, Text, Text, Text) -> HtmlT Identity ()
+                    detailItem (icon, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5"] do
+                      faSprite_ icon "regular" $ "w-3 h-3 " <> iconColor
+                      span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
+                      span_ [class_ "text-xs font-medium"] $ toHtml value
                 cardSection "circle-info" "Error Details" $ div_ [class_ "p-4 flex flex-col gap-4"] do
                   whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
                     div_ [class_ "mb-2"] do
@@ -407,20 +405,20 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
                       span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
                   div_ [class_ "flex items-center gap-4"]
                     $ forM_
-                      [ ("calendar" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
-                      , ("calendar" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
+                      [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
+                      , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
                       ]
                       detailItem
                   div_ [class_ "flex items-center gap-4"]
                     $ forM_
-                      [ ("code" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
-                      , ("server" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
+                      [ ("code" :: Text, "text-fillWarning-strong" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
+                      , ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
                       ]
                       detailItem
                 similarPatternsSection_ pid err.id
         Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
           div_ [class_ "mb-4"] do
-            span_ [class_ "text-sm text-textWeak mb-2 block font-medium"] "Query:"
+            span_ [class_ "text-xs text-textWeak mb-2 block font-semibold uppercase tracking-wide"] "Query"
             div_ [class_ "bg-fillInformation-weak border border-strokeInformation-weak rounded-lg p-3 text-sm font-mono text-fillInformation-strong max-w-2xl overflow-x-auto"] $ toHtml alertData.queryExpression
         Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d -> do
           div_ [class_ "flex items-center gap-3 mb-4 p-3 rounded-lg"] do
@@ -450,8 +448,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
         div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
           div_ [class_ "flex items-center gap-2"] do
-            faSprite_ "magnifying-glass-chart" "regular" "w-4 h-4 text-iconNeutral"
-            h4_ [class_ "text-textStrong text-lg font-medium"] "Investigation"
+            faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
+            h4_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
           div_ [class_ "flex items-center"] do
             let aUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId
                 navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
@@ -490,8 +488,8 @@ anomalyDetailPage pid issue tr otellogs errM now isFirst members hourlyStats = d
       let activityUrl = "/p/" <> pid.toText <> "/anomalies/" <> issueId <> "/activity"
       div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
         div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
-          faSprite_ "clock-rotate-left" "regular" "w-4 h-4 text-iconNeutral"
-          span_ [class_ "text-sm font-medium text-textStrong"] "Activity"
+          faSprite_ "clock-rotate-left" "regular" "w-3.5 h-3.5 text-textWeak"
+          span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Activity"
         div_ [id_ "issue-activity", hxGet_ activityUrl, hxTrigger_ "intersect once", hxSwap_ "innerHTML"]
           $ div_ [class_ "p-4 flex justify-center"]
           $ loadingIndicator_ LdSM LdDots
@@ -1527,7 +1525,7 @@ issueActivityGetH pid issueId = do
   activities <- Issues.selectIssueActivity pid issueId
   now <- Time.currentTime
   let userIds = ordNub $ mapMaybe (.createdBy) activities
-  users :: [Projects.User] <- if null userIds then pure [] else PG.query [sql| SELECT * FROM users.users WHERE id = ANY(?::uuid[]) |] (Only $ V.fromList userIds)
+  users :: [Projects.User] <- if null userIds then pure [] else PG.query [sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo FROM users.users WHERE id = ANY(?::uuid[]) |] (Only $ V.fromList userIds)
   let userMap = Map.fromList $ map (\u -> (u.id, u)) users
   addRespHeaders $ issueActivityTimeline_ userMap now activities
 

@@ -143,7 +143,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , columns =
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
               , col "Teams" (\i -> forM_ i.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48"]
-              , col "Schedule" (\i -> span_ [class_ "text-sm text-textWeak whitespace-nowrap"] $ toHtml i.schedule) & withAttrs [class_ "w-28"]
+              , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28"]
               , col "Last Run" renderLastRunCol & withAttrs [class_ "w-28"]
               , col "Threshold" renderThresholdCol & withAttrs [class_ "w-40"]
               ]
@@ -222,7 +222,7 @@ renderNameCol item = do
         when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/resolve") []
         inlineBtn "Delete" "trash" (hxDelete_ $ base <> "/alerts/" <> item.monitorId) [hxConfirm_ "Are you sure you want to delete this monitor?"]
     div_ [class_ "flex items-center gap-1.5"] do
-      span_ [class_ "text-xs text-textWeak font-mono line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query] $ toHtml item.details.query
+      span_ [class_ "text-xs text-textStrong/70 font-mono line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query] $ toHtml item.details.query
   where
     isActive = item.status == "Active"
     inlineBtn tip icon hxAction extraAttrs =
@@ -329,7 +329,7 @@ alertDeleteH = monitorActionH Monitors.monitorSoftDeleteByIds "Monitor deleted"
 
 
 renderLastRunCol :: UnifiedMonitorItem -> Html ()
-renderLastRunCol item = span_ [class_ "text-sm text-textWeak whitespace-nowrap"] $ maybe "Never" (toHtml . prettyTimeShort item.now) item.lastRun
+renderLastRunCol item = span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . prettyTimeShort item.now) item.lastRun
 
 
 renderThresholdCol :: UnifiedMonitorItem -> Html ()
@@ -555,7 +555,7 @@ alertSidebar_ displayName alert currTime = do
   div_ [class_ "w-78 shrink-0 border border-strokeWeak rounded-lg divide-y divide-strokeWeak"] do
     sidebarItem_ "Status" $ statusBadge_ True displayName
     sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.evalResult
-    sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textWeak overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
+    sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textStrong/70 overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
     sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Alert: " <> direction <> " " <> formatWithCommas alert.alertThreshold
       whenJust alert.warningThreshold \w -> span_ [class_ "text-textWarning tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
