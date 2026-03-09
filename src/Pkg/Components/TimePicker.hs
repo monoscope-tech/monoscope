@@ -13,6 +13,7 @@ import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Deriving.Aeson.Stock qualified as DAE
 import Language.Haskell.TH.Syntax qualified as THS
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Base (termRaw)
 import Lucid.Hyperscript (__)
 import NeatInterpolation (text)
@@ -130,27 +131,25 @@ timePickerItems =
 timepicker_ :: Maybe Text -> Maybe (Text, Text) -> Maybe Text -> Html ()
 timepicker_ submitForm currentRange targetIdM = do
   let targetPr = fromMaybe "n" targetIdM
-  fieldset_ [class_ "border border-strokeWeak p-0 inline-block rounded-lg overflow-hidden dash-variable text-sm shadow-xs -mt-1.5"] do
-    legend_ [id_ "offsetIndicator", class_ "px-1 ml-2 text-xs text-textWeak"] "UTC+00"
-    input_ [type_ "hidden", id_ $ targetPr <> "-since_input"]
-    input_ [type_ "hidden", id_ $ targetPr <> "-custom_range_input"]
+  input_ [type_ "hidden", id_ $ targetPr <> "-since_input"]
+  input_ [type_ "hidden", id_ $ targetPr <> "-custom_range_input"]
+  -- Trigger button using DaisyUI popover approach
+  button_
+    [ term "popovertarget" (targetPr <> "-timepicker-popover")
+    , term "style" $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
+    , term "popovertargetaction" "toggle"
+    , term "onclick" "event.stopPropagation()"
+    , class_ "flex items-center gap-2 py-2 px-3 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
+    ]
+    do
+      faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral"
+      let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
+      span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "Last Hour" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
+      span_ [id_ "offsetIndicator", class_ "text-[10px] opacity-50"] "UTC+00"
+      faSprite_ "chevron-down" "regular" "h-3 w-3"
 
-    -- Trigger button using DaisyUI popover approach
-    button_
-      [ term "popovertarget" (targetPr <> "-timepicker-popover")
-      , term "style" $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
-      , term "popovertargetaction" "toggle"
-      , term "onclick" "event.stopPropagation()"
-      , class_ "flex items-center gap-2 relative p-2 text-textWeak cursor-pointer"
-      ]
-      do
-        faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral "
-        let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
-        span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "Last Hour" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
-        faSprite_ "chevron-down" "regular" "h-3 w-3"
-
-  -- DaisyUI popover contentd
-  div_ [class_ "relative w-max bg-red-500"] do
+  -- DaisyUI popover content
+  div_ [class_ "relative w-max"] do
     div_
       [ class_ "border dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
       , term "popover" "manual"
@@ -171,14 +170,14 @@ timepicker_ submitForm currentRange targetIdM = do
                 [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-title}) then $action then call $popoverId.hidePopover()|]
               timePickerLink val title =
                 li_ $ a_
-                  [ class_ "flex items-center justify-between hover:bg-base-200 rounded-lg px-3 py-2"
+                  [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2"
                   , term "data-value" val
                   , term "data-title" title
                   , termRaw "_" onClickHandler
                   ]
                   do
                     span_ [class_ "text-sm"] $ toHtml title
-                    span_ [class_ "text-xs text-base-content/60"] $ toHtml val
+                    span_ [class_ "text-xs text-textWeak"] $ toHtml val
           mapM_ (uncurry timePickerLink) timePickerItems
           li_ $ a_
             [ term "_" [text| on click toggle .hidden on #$targetPr-timepickerSidebar |]
@@ -260,26 +259,23 @@ refreshOptions =
 -- No parameters needed as it's now fully standardized to work with the global event system
 refreshButton_ :: Html ()
 refreshButton_ = do
-  -- The join button group for refresh
   div_ [class_ "join"] do
-    -- Immediate refresh button
     label_
-      [ class_ "cursor-pointer px-3 flex items-center border border-strokeWeak shadow-xs leading-none join-item"
+      [ class_ "cursor-pointer px-3 flex items-center border border-strokeWeak rounded-l-lg shadow-xs leading-none join-item"
       , data_ "tippy-content" "Refresh"
+      , Aria.label_ "Refresh"
       , [__| on click trigger 'update-query' on window then
           add .animate-spin to the first <svg/> in me then wait 1 seconds then
           remove .animate-spin from the first <svg/> in me |]
       ]
-      $ faSprite_ "arrows-rotate" "regular" "w-3 h-3 text-iconNeutral"
+      $ faSprite_ "arrows-rotate" "regular" "w-3.5 h-3.5 text-iconNeutral"
+    div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeWeak rounded-r-lg shadow-xs group/rf"] do
+      div_ [class_ "cursor-pointer py-2 px-3 flex gap-1.5 items-center leading-none text-sm", tabindex_ "0", data_ "tippy-content" "Auto-refresh interval"] do
+        span_ [class_ "auto-refresh-span text-textWeak"] "Off"
+        faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
 
-    -- Auto-refresh dropdown
-    div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeWeak shadow-xs group/rf"] do
-      div_ [class_ "cursor-pointer py-2 px-3 flex gap-2 items-center leading-none", tabindex_ "0", data_ "tippy-content" "Refresh frequency"] do
-        span_ [class_ "auto-refresh-span"] "Off"
-        faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral "
-
-      -- Dropdown menu
-      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-base-100 rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
+      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-bgOverlay rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
+        li_ [class_ "menu-title"] "Auto-refresh"
         forM_ refreshOptions \(label, title, ms) ->
           li_
             $ a_

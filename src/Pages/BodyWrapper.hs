@@ -24,7 +24,7 @@ menu pid =
   [ ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/anomalies", "bug")
+  , ("Changes & Errors", "/p/" <> pid.toText <> "/issues", "bug")
   , ("Alerts", "/p/" <> pid.toText <> "/monitors", "list-check")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
@@ -407,9 +407,9 @@ bodyWrapper bcfg child = do
         ]
         do
           div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-base-100 rounded-lg drop-shadow-md border-1 w-full"] do
+            $ div_ [class_ "bg-bgOverlay rounded-lg drop-shadow-md border-1 w-full"] do
               div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
-                h3_ [class_ "text-3xl font-bold "] "Only Desktop Browsers are Supported for now!"
+                h3_ [class_ "text-xl font-semibold text-textStrong"] "Only Desktop Browsers are Supported for now!"
               -- Modal body
               div_ [class_ "w-full"] $ div_ [class_ "p-6 space-y-6", style_ "height:50vh; width:100%"] do
                 p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
@@ -584,7 +584,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-2xl shadow-strokeBrand-weak opacity-100 scale-100"
+    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-lg opacity-100 scale-100"
     ]
     do
       div_ [class_ "p-2 pb-4 "] do
@@ -740,12 +740,16 @@ navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Sessions.User -> May
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full px-4 py-2 flex flex-row border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
-      whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, _, icon) -> do
-        whenJust projectM \p -> a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ $ "/p/" <> p.id.toText <> "/dashboards"] do
+      whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, url, icon) -> do
+        a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
-      label_ [class_ "font-normal text-xl p-1 rounded-md cursor-pointer hover:bg-fillWeak leading-none", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
+      let targetPage = Components.getTargetPage pageTitle
+          titleBase = "font-normal text-xl p-1 rounded-md leading-none"
+      if targetPage /= "" && isJust pageTitleSuffix
+        then whenJust projectM \p -> a_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] $ toHtml pageTitle
+        else label_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
       -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
       span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1"] $ whenJust pageTitleSuffix \suffix -> do
         faSprite_ "chevron-right" "regular" "w-3 h-3"

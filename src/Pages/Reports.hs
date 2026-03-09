@@ -122,18 +122,6 @@ anomalyTypeCounts :: Foldable f => (a -> Issues.IssueType) -> f a -> (Int, Int, 
 anomalyTypeCounts getType = foldl' (\(e, a, m) x -> (e + fromEnum (getType x == Issues.RuntimeException), a + fromEnum (getType x == Issues.ApiChange), m + fromEnum (getType x == Issues.QueryAlert))) (0, 0, 0)
 
 
-getDataset :: Charts.MetricsData -> Widget.WidgetDataset
-getDataset chartEv =
-  Widget.WidgetDataset
-    { source = AE.toJSON $ V.cons (AE.toJSON <$> chartEv.headers) (AE.toJSON <<$>> chartEv.dataset)
-    , rowsPerMin = chartEv.rowsPerMin
-    , value = Just chartEv.rowsCount
-    , from = chartEv.from
-    , to = chartEv.to
-    , stats = chartEv.stats
-    }
-
-
 buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
@@ -145,8 +133,8 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
         , "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange]
         , "spanTypeStats" AE..= spanStatsDiff
         , "slowDbQueries" AE..= slowDbQueries'
-        , "errorDataset" AE..= getDataset chartErr
-        , "eventsDataset" AE..= getDataset chartEv
+        , "errorDataset" AE..= Widget.toWidgetDataset chartErr
+        , "eventsDataset" AE..= Widget.toWidgetDataset chartEv
         , "issues" AE..= ((\(i, t, c, s, tp) -> IssueStat i t c s tp) <$> issues)
         ]
 

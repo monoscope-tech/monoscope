@@ -319,7 +319,7 @@ jsonValueToHtmlTree val pathM = do
               span_ [class_ "text-textBrand"] ":"
               span_ [class_ "text-textBrand ml-2.5 log-item-field-value", term "data-field-path" fullFieldPath'] $ toHtml $ unwrapJsonPrimValue False value
 
-          ul_ [tabindex_ "-1", id_ "log-item-context-menu", class_ "log-item-context-menu dropdown-content z-50 menu p-2 shadow bg-base-100 rounded-box w-52", tabindex_ "0"] do
+          ul_ [tabindex_ "-1", id_ "log-item-context-menu", class_ "log-item-context-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgOverlay rounded-box w-52", tabindex_ "0"] do
             li_
               $ a_
                 [ class_ "flex gap-2 items-center"

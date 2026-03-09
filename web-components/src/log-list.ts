@@ -1077,8 +1077,8 @@ export class LogList extends LitElement {
             {
               markArea: {
                 itemStyle: {
-                  color: 'rgba(0, 104, 255, .2)',
-                  borderColor: 'rgb(0 104 255)',
+                  color: 'oklch(48% 0.205 265 / 0.2)',
+                  borderColor: 'oklch(48% 0.205 265)',
                   borderWidth: 1,
                   borderType: 'dashed',
                 },
@@ -1128,7 +1128,7 @@ export class LogList extends LitElement {
         @keyframes pulseIndicator {
           0%,
           90% {
-            background-color: rgb(0, 104, 255);
+            background-color: oklch(48% 0.205 265);
           }
           100% {
             background-color: transparent;

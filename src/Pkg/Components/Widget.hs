@@ -318,7 +318,7 @@ widget_ = widgetHelper_
 widgetHelper_ :: Widget -> Html ()
 widgetHelper_ w' = case w.wType of
   WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
+    unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/issues")) (w.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
     -- Header: auto height (no flex), group-header class for CSS targeting when collapsed
@@ -435,7 +435,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     details_ [class_ "dropdown dropdown-end"] do
       summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"]
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
-      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
+      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-bgOverlay rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
         let dashId = fromMaybe "" widget._dashboardId
@@ -700,7 +700,7 @@ renderStatContent widget chartId valueM = do
 -- | Render placeholder with loading spinner for lazy-loaded stats
 renderStatPlaceholder :: Widget -> Text -> Html ()
 renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
-  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
     $ loadingIndicator_ LdSM LdSpinner
   div_ [class_ "inline-flex gap-1 items-center text-sm"] do
     whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"
@@ -711,7 +711,7 @@ renderStatPlaceholder widget chartId = div_ [class_ "flex flex-col gap-1"] do
 -- | Render actual stat value content
 renderStatValue :: Widget -> Text -> Maybe Text -> Html ()
 renderStatValue widget chartId valueM = div_ [class_ "flex flex-col gap-1"] do
-  strong_ [class_ "text-textSuccess-strong text-4xl font-normal", id_ $ chartId <> "Value"]
+  strong_ [class_ "text-textStrong text-4xl font-bold tabular-nums", id_ $ chartId <> "Value"]
     $ whenJust valueM toHtml
   div_ [class_ "inline-flex gap-1 items-center text-sm"] do
     whenJust widget.icon \icon -> Utils.faSprite_ icon "regular" "w-4 h-4 text-iconBrand"

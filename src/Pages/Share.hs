@@ -134,5 +134,5 @@ sharePage req = do
     case req of
       Just r -> r
       Nothing -> div_ [class_ "flex flex-col gap-4 mt-[80px] text-center"] do
-        h1_ [class_ "font-bold text-3xl"] "Event Not Found"
+        h1_ [class_ "font-semibold text-3xl text-textStrong"] "Event Not Found"
         p_ [class_ "text-textWeak text-xl"] "This shared request log URL does not exist or has expired"

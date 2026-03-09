@@ -35,6 +35,7 @@ import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils (Channel (channelId, channelName))
+import Pages.Components (metadataChip_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Projects (TBulkActionForm (..))
 import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableRows (..), ZeroState (..), col, withAttrs)
@@ -143,7 +144,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , columns =
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
               , col "Teams" (\i -> forM_ i.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48"]
-              , col "Schedule" (\i -> span_ [class_ "text-sm text-textWeak whitespace-nowrap"] $ toHtml i.schedule) & withAttrs [class_ "w-28"]
+              , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28"]
               , col "Last Run" renderLastRunCol & withAttrs [class_ "w-28"]
               , col "Threshold" renderThresholdCol & withAttrs [class_ "w-40"]
               ]
@@ -222,7 +223,7 @@ renderNameCol item = do
         when (item.currentStatus /= Monitors.MSNormal) $ inlineBtn "Resolve" "check" (hxPost_ $ base <> "/alerts/" <> item.monitorId <> "/resolve") []
         inlineBtn "Delete" "trash" (hxDelete_ $ base <> "/alerts/" <> item.monitorId) [hxConfirm_ "Are you sure you want to delete this monitor?"]
     div_ [class_ "flex items-center gap-1.5"] do
-      span_ [class_ "text-xs text-textWeak font-mono line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query] $ toHtml item.details.query
+      span_ [class_ "text-xs text-textStrong/70 font-mono line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query] $ toHtml item.details.query
   where
     isActive = item.status == "Active"
     inlineBtn tip icon hxAction extraAttrs =
@@ -276,9 +277,9 @@ monitorBase item = "/p/" <> item.projectId <> "/monitors"
 -- (dotColor, displayName, sortOrder) for each monitor status
 statusInfo :: Monitors.MonitorStatus -> (Text, Text, Int)
 statusInfo = \case
-  Monitors.MSAlerting -> ("bg-red-500", "Alerting", 0)
-  Monitors.MSWarning -> ("bg-yellow-500", "Warning", 1)
-  Monitors.MSNormal -> ("bg-green-500", "Normal", 2)
+  Monitors.MSAlerting -> ("bg-fillError-strong", "Alerting", 0)
+  Monitors.MSWarning -> ("bg-fillWarning-strong", "Warning", 1)
+  Monitors.MSNormal -> ("bg-fillSuccess-strong", "Normal", 2)
 
 
 bulkActionsFor :: Text -> Projects.ProjectId -> [BulkAction]
@@ -329,7 +330,7 @@ alertDeleteH = monitorActionH Monitors.monitorSoftDeleteByIds "Monitor deleted"
 
 
 renderLastRunCol :: UnifiedMonitorItem -> Html ()
-renderLastRunCol item = span_ [class_ "text-sm text-textWeak whitespace-nowrap"] $ maybe "Never" (toHtml . prettyTimeShort item.now) item.lastRun
+renderLastRunCol item = span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ maybe "Never" (toHtml . prettyTimeShort item.now) item.lastRun
 
 
 renderThresholdCol :: UnifiedMonitorItem -> Html ()
@@ -479,7 +480,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
     div_ [class_ "flex gap-6 border-t border-strokeWeak pt-4"] do
       -- Left: timepicker + chart
       div_ [class_ "flex-1 min-w-0 flex flex-col gap-3"] do
-        div_ [class_ "flex justify-end items-center gap-2"] do
+        div_ [class_ "flex items-center gap-2"] do
           TimePicker.timepicker_ Nothing Nothing Nothing
           TimePicker.refreshButton_
         div_ [class_ "border border-strokeWeak rounded-lg p-3", style_ "aspect-ratio: 5 / 2; max-height: 420px;"] do
@@ -503,9 +504,6 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
   where
     displayName = bool (view _2 $ statusInfo alert.currentStatus) "Inactive" (isJust alert.deactivatedAt)
     muteBase = "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText
-    metadataChip_ icon label = span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak bg-fillWeaker rounded-full px-2.5 py-1"] do
-      faSprite_ icon "regular" "h-3 w-3"
-      toHtml @Text label
 
 
 -- | Reusable tabbed section component
@@ -555,10 +553,10 @@ alertSidebar_ displayName alert currTime = do
   div_ [class_ "w-78 shrink-0 border border-strokeWeak rounded-lg divide-y divide-strokeWeak"] do
     sidebarItem_ "Status" $ statusBadge_ True displayName
     sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.evalResult
-    sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textWeak overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
+    sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textStrong/70 overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
     sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Alert: " <> direction <> " " <> formatWithCommas alert.alertThreshold
-      whenJust alert.warningThreshold \w -> span_ [class_ "text-yellow-600 tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
+      whenJust alert.warningThreshold \w -> span_ [class_ "text-textWarning tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
       whenJust alert.alertRecoveryThreshold \r -> span_ [class_ "text-textWeak tabular-nums"] $ toHtml $ "Recovery: " <> formatWithCommas r
     sidebarItem_ "Evaluation" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
       span_ [class_ "text-textStrong"] $ toHtml $ "Last: " <> toText (prettyTimeAuto currTime alert.lastEvaluated)
@@ -570,9 +568,9 @@ alertSidebar_ displayName alert currTime = do
   where
     direction = bool ">" "<" alert.triggerLessThan
     statusColor = case alert.currentStatus of
-      Monitors.MSAlerting -> "text-red-500"
-      Monitors.MSWarning -> "text-yellow-600"
-      Monitors.MSNormal -> "text-green-600"
+      Monitors.MSAlerting -> "text-textError"
+      Monitors.MSWarning -> "text-textWarning"
+      Monitors.MSNormal -> "text-textSuccess"
     sidebarItem_ label val = div_ [class_ "p-3 flex flex-col gap-1"] do
       _ <- span_ [class_ "text-xs font-medium text-textWeak uppercase tracking-wider"] label
       val

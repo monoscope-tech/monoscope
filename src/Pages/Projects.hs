@@ -430,7 +430,7 @@ integrationsBody IntegrationsConfig{..} = do
           , id_ "notifsForm"
           ]
           do
-            h2_ [class_ "text-textStrong text-3xl font-medium mb-2"] "Integrations"
+            h2_ [class_ "text-textStrong text-3xl font-semibold mb-2"] "Integrations"
             p_ [class_ "text-textWeak mb-8"] "Through what channels can we reach you?"
 
             -- Group integrations by connection status

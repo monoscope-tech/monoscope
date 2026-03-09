@@ -247,7 +247,7 @@ processBackgroundJob authCtx bgJob =
           let (issueTitle, issuePath) = case issueM of
                 Just issue -> (issue.title, issue.id.toText)
                 Nothing -> (err.errorType <> ": " <> err.message, "by_hash/" <> err.hash)
-              issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/anomalies/" <> issuePath
+              issueUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issuePath
               projectTitle = project.title
               errorType = err.errorType
               errorMessage = err.message
@@ -1164,7 +1164,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
         else do
           issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdDir
           Issues.insertIssue issue
-          let issueUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/anomalies/" <> issue.id.toText
+          let issueUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/issues/" <> issue.id.toText
           pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl}, issueUrl)
     targetTeams <-
       if null teams

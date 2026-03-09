@@ -264,7 +264,7 @@ apiKeysPage pid apiKeys = do
   section_ [class_ "w-full mx-auto px-16 py-16 overflow-hidden overflow-y-scroll"] do
     div_ [class_ "flex justify-between items-center mb-6"] do
       div_ [class_ "flex flex-col gap-2"] do
-        h2_ [class_ "text-xl font-semibold text-textWeak leading-7"] "Manage API keys"
+        h2_ [class_ "text-xl font-semibold text-textStrong leading-7"] "Manage API keys"
         p_ [class_ "text-sm text-textWeak leading-tight"] "Create and revoke your API keys"
       pass
     apiMainContent pid apiKeys Nothing
@@ -395,7 +395,7 @@ copyNewApiKey newKeyM hasNext =
                 div_ [class_ "-mx-2 -my-1.5 flex"] do
                   button_
                     [ type_ "button"
-                    , class_ "bg-fillSuccess-strong px-2 py-1.5 text-white rounded-md  font-medium text-textSuccess hover:bg-fillSuccess-weak focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-fillSuccess-weak focus:ring-strokeSuccess-strong"
+                    , class_ "btn btn-sm btn-success"
                     , [__|
                       on click
                         if 'clipboard' in window.navigator then
@@ -409,14 +409,14 @@ copyNewApiKey newKeyM hasNext =
                     then do
                       button_
                         [ type_ "button"
-                        , class_ "ml-3 bg-green-50 px-2 py-1.5 rounded-md  font-medium text-textSuccess hover:bg-fillSuccess-weak focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-offset-fillSuccess-weak focus:ring-strokeSuccess-strong"
+                        , class_ "btn btn-sm btn-ghost text-textSuccess ml-2"
                         , [__|on click remove #apiFeedbackSection|]
                         ]
                         "Dismiss"
                     else do
                       button_
                         [ type_ "button"
-                        , class_ "ml-6 font-medium px-2 py-1.5 rounded-md font-medium text-textBrand"
+                        , class_ "btn btn-sm btn-ghost text-textBrand ml-4"
                         , [__|on click call window.location.reload()|]
                         ]
                         "Next"

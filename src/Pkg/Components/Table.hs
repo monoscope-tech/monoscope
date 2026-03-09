@@ -529,7 +529,7 @@ renderSortDropdown actions = do
               div_ [class_ "grow space-y-1"] do
                 span_ [class_ "block text-lg"] $ toHtml title
                 span_ [class_ "block"] $ toHtml desc
-  div_ [class_ "p-12 fixed rounded-lg shadow-sm bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
+  div_ [class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
 
 
 renderFilterDropdown :: TableHeaderActions -> Html ()
@@ -654,7 +654,7 @@ renderToolbar tbl =
 
 renderSearch :: Text -> SearchMode -> Html ()
 renderSearch elemID searchMode =
-  label_ [class_ "input input-sm flex w-full h-10 bg-fillWeak border border-strokeStrong shadow-none overflow-hidden items-center gap-2"] do
+  label_ [class_ "input input-sm flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
     faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
     case searchMode of
       ServerSide url ->
@@ -693,7 +693,7 @@ renderSortMenu sortCfg = do
     div_
       [ id_ "sortMenuDiv"
       , hxBoost_ "true"
-      , class_ "dropdown-content bg-base-100 p-1 text-sm border border-black-30 z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg"
+      , class_ "dropdown-content bg-bgOverlay p-1 text-sm border border-strokeWeak z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg"
       , tabindex_ "0"
       ]
       do
@@ -711,7 +711,7 @@ renderSortMenu sortCfg = do
                 span_ [class_ "block text-lg"] $ toHtml title
                 span_ [class_ "block"] $ toHtml desc
   div_
-    [ class_ "p-12 fixed rounded-lg shadow-sm bg-base-100 top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
+    [ class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
     , id_ "sortLoader"
     ]
     ""

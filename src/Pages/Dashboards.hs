@@ -599,7 +599,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
       oobAttr = if useOob then [id_ $ modalId <> "-container", hxSwapOob_ "beforeend:body"] else []
   div_ oobAttr do
     Components.modalWith_ modalId def{autoOpen = True, boxClass = "min-w-80 max-w-md gap-4"} Nothing do
-      h3_ [class_ "font-bold text-lg"] $ toHtml $ "Select " <> varTitle
+      h3_ [class_ "font-semibold text-lg"] $ toHtml $ "Select " <> varTitle
       p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
       whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
       input_
@@ -1464,7 +1464,7 @@ dashboardsGet_ dg = do
               else a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
             unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
 
-    let renderModifiedCol dash = span_ [class_ "monospace text-textWeak", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
+    let renderModifiedCol dash = span_ [class_ "monospace text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
     let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml team.handle
 
@@ -1476,9 +1476,9 @@ dashboardsGet_ dg = do
 
     let renderWidgetsCol dash = do
           let count = getWidgetCount dash
-          span_ [class_ "flex items-center gap-2", data_ "tippy-content" $ "There are " <> show count <> " charts/widgets in this dashboard"] do
+          span_ [class_ "flex items-center gap-2 text-textWeak", data_ "tippy-content" $ "There are " <> show count <> " charts/widgets in this dashboard"] do
             faSprite_ "chart-area" "regular" "w-4 h-4 text-iconNeutral"
-            span_ [class_ "leading-none monospace"] $ toHtml $ show count
+            span_ [class_ "leading-none monospace tabular-nums"] $ toHtml $ show count
 
     let tableCols = case dg.copyMode of
           Just _ ->
@@ -2304,7 +2304,7 @@ dashboardActions_ pid dashId tabSlugM currentRange = div_ [class_ "flex items-ce
   yamlEditorDrawer_ pid dashId
   div_ [class_ "dropdown dropdown-end"] do
     div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
-    ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-base-100 rounded-box p-2 w-52 shadow-sm leading-none"] do
+    ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-bgOverlay rounded-box p-2 w-52 shadow-sm leading-none"] do
       li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
       whenJust tabSlugM $ \_ -> li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
       li_ $ button_ [class_ "p-2 w-full text-left", hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate"), hxSwap_ "none", data_ "tippy-content" "Creates a copy of this dashboard"] "Duplicate dashboard"

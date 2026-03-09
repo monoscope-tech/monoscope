@@ -57,7 +57,7 @@ generateEnhancedDescription authCtx issue = runExceptT do
   r <- ExceptT $ AI.callOpenAIAPIEff authCtx.config.openaiSmallModel (buildDescriptionPrompt issue) authCtx.config.openaiApiKey
   (response, _) <- hoistEither $ AI.getNormalTupleReponse r
   let lines' = lines response
-  pure (fromMaybe "" $ viaNonEmpty head lines', fromMaybe "Review the changes and update your integration accordingly." $ lines' !!? 1, fromMaybe "medium" $ lines' !!? 2)
+  pure (fromMaybe "" $ viaNonEmpty head lines', fromMaybe Issues.defaultRecommendedAction $ lines' !!? 1, fromMaybe "medium" $ lines' !!? 2)
 
 
 withIssueData :: AE.FromJSON a => Issues.Issue -> (a -> Text) -> Text -> Text

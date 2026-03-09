@@ -63,7 +63,7 @@ logQueryBox_ config = do
       strong_ "Please input a title for your query"
       input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
       input_ [class_ "input input-md", placeholder_ "query title", name_ "queryTitle"]
-      button_ [type_ "submit", class_ "btn cursor-pointer bg-linear-to-b from-[#067cff] to-[#0850c5] text-white"] "Save"
+      button_ [type_ "submit", class_ "btn btn-primary cursor-pointer"] "Save"
   form_
     [ id_ "log_explorer_form"
     , class_ "flex flex-col gap-1 w-full max-w-full"
@@ -183,7 +183,7 @@ logQueryBox_ config = do
 
               div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
                 div_ [class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button", Aria.label_ "Save query"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
-                ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-base-100 rounded-box z-1 w-60 p-2 shadow-lg"] do
+                ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-bgOverlay rounded-box z-1 w-60 p-2 shadow-lg"] do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
             button_
               [ type_ "submit"
