@@ -45,6 +45,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast, redirectCS)
 import Text.Time.Pretty (prettyTimeAuto)
+import Pages.Components (metadataChip_)
 import Utils (checkFreeTierExceeded, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 
 
@@ -479,7 +480,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
     div_ [class_ "flex gap-6 border-t border-strokeWeak pt-4"] do
       -- Left: timepicker + chart
       div_ [class_ "flex-1 min-w-0 flex flex-col gap-3"] do
-        div_ [class_ "flex justify-end items-center gap-2"] do
+        div_ [class_ "flex items-center gap-2"] do
           TimePicker.timepicker_ Nothing Nothing Nothing
           TimePicker.refreshButton_
         div_ [class_ "border border-strokeWeak rounded-lg p-3", style_ "aspect-ratio: 5 / 2; max-height: 420px;"] do
@@ -503,9 +504,6 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
   where
     displayName = bool (view _2 $ statusInfo alert.currentStatus) "Inactive" (isJust alert.deactivatedAt)
     muteBase = "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText
-    metadataChip_ icon label = span_ [class_ "inline-flex items-center gap-1.5 text-xs text-textWeak bg-fillWeaker rounded-full px-2.5 py-1"] do
-      faSprite_ icon "regular" "h-3 w-3"
-      toHtml @Text label
 
 
 -- | Reusable tabbed section component

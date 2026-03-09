@@ -166,13 +166,13 @@ sendWhatsAppAlert alert pid pTitle tos = do
   case alert of
     RuntimeErrorAlert{..} -> do
       let template = appCtx.config.whatsappErrorTemplate
-          url = pid.toText <> "/anomalies/by_hash/" <> errorData.hash
+          url = pid.toText <> "/issues/by_hash/" <> errorData.hash
           contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= ("*" <> issueTitle <> "*"), "3" AE..= ("`" <> errorData.message <> "`"), "4" AE..= url]
       sendAlert template contentVars
       pass
     EndpointAlert{..} -> do
       let template = appCtx.config.whatsappEndpointTemplate
-          url = pid.toText <> "/anomalies/by_hash/" <> endpointHash
+          url = pid.toText <> "/issues/by_hash/" <> endpointHash
           contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x <> "`") <$> V.toList endpoints), "3" AE..= url]
       sendAlert template contentVars
       pass
@@ -278,7 +278,7 @@ slackErrorAlert alertType err issTitle project channelId projectUrl =
     , "channel" AE..= channelId
     ]
   where
-    targetUrl = projectUrl <> "/anomalies/by_hash/" <> err.hash
+    targetUrl = projectUrl <> "/issues/by_hash/" <> err.hash
     title = "<" <> targetUrl <> "|" <> (runtimeAlertMessages alertType).slackEmoji <> " " <> err.errorType <> ": " <> issTitle <> ">"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath
@@ -304,7 +304,7 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     , "channel" AE..= channelId
     ]
   where
-    targetUrl = projectUrl <> "/anomalies/by_hash/" <> hash
+    targetUrl = projectUrl <> "/issues/by_hash/" <> hash
     enp = (\x -> "\"" <> x <> "\"") . T.dropWhile (/= ' ') <$> V.toList endpoints
     query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
     explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
@@ -428,7 +428,7 @@ discordErrorAlert alertType err issTitle project projectUrl =
   where
     discordMsg = (runtimeAlertMessages alertType).discordContent
     titleText = err.errorType <> ": " <> issTitle
-    url = projectUrl <> "/anomalies/by_hash/" <> err.hash
+    url = projectUrl <> "/issues/by_hash/" <> err.hash
     msg = "```" <> err.message <> "```"
     method = fromMaybe "" err.requestMethod
     path = fromMaybe "" err.requestPath
@@ -462,7 +462,7 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
   where
     endpointsCount = length endpoints
     description = "We've detected **" <> show endpointsCount <> " new endpoints** in the **" <> projectName <> "** project."
-    url = projectUrl <> "/anomalies/by_hash/" <> hash
+    url = projectUrl <> "/issues/by_hash/" <> hash
     enp = (\x -> "\"" <> x <> "\"") . T.dropWhile (/= ' ') <$> V.toList endpoints
     query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
     explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
@@ -533,11 +533,11 @@ sendPagerdutyAlertToService integrationKey (MonitorsAlert monitorTitle monitorUr
 sendPagerdutyAlertToService integrationKey (MonitorsRecoveryAlert monitorTitle monitorUrl) projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDResolve ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": Resolved - " <> monitorTitle) Notify.PDInfo (AE.object ["url" AE..= monitorUrl]) monitorUrl
 sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
-  let endpointUrl = projectUrl <> "/anomalies/by_hash/" <> hash
+  let endpointUrl = projectUrl <> "/issues/by_hash/" <> hash
       endpointNames = T.intercalate ", " $ V.toList endpoints
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData} projectTitle projectUrl =
-  let errorUrl = projectUrl <> "/anomalies/by_hash/" <> errorData.hash
+  let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> issueTitle) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
 sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName} projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 patternText) (projectTitle <> ": New Log Pattern - " <> T.take 80 patternText) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= patternText, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl

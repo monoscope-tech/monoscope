@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
@@ -78,7 +78,7 @@ emptyStateFiltered_ title subTxt actionHtml =
 
 getTargetPage :: Text -> Text
 getTargetPage "Requests" = "/log_explorer"
-getTargetPage "Anomalies" = "/anomalies"
+getTargetPage "Issues" = "/issues"
 getTargetPage "Endpoints" = "/endpoints"
 getTargetPage _ = ""
 
@@ -804,3 +804,13 @@ confirmModal_ modalId title description confirmAttrs confirmText =
     div_ [class_ "flex justify-end gap-2 mt-6"] do
       label_ [class_ "btn btn-sm btn-ghost", Lucid.for_ modalId] "Cancel"
       button_ ([class_ "btn btn-sm bg-fillError-strong text-white hover:opacity-90"] <> confirmAttrs) $ toHtml confirmText
+
+
+colorChip_ :: Monad m => Text -> Text -> Text -> HtmlT m ()
+colorChip_ color icon label = span_ [class_ $ "inline-flex items-center gap-1.5 text-xs rounded-full px-2.5 py-1 " <> bool "text-textWeak bg-fillWeaker" color (color /= "")] do
+  faSprite_ icon "regular" "h-3 w-3"
+  toHtml @Text label
+
+
+metadataChip_ :: Monad m => Text -> Text -> HtmlT m ()
+metadataChip_ = colorChip_ ""

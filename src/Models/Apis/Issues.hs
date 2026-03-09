@@ -55,6 +55,8 @@ module Models.Apis.Issues (
   issueIdText,
   parseIssueType,
   issueTypeToText,
+  hashPrefix,
+  defaultRecommendedAction,
   serviceLabel,
   showRate,
   showPct,
@@ -149,6 +151,18 @@ data IssueType
 
 issueTypeToText :: IssueType -> Text
 issueTypeToText = display
+
+
+-- | Hash prefix used in otel_logs_and_spans hashes column
+hashPrefix :: IssueType -> Maybe Text
+hashPrefix LogPattern = Just "pat:"
+hashPrefix LogPatternRateChange = Just "pat:"
+hashPrefix RuntimeException = Just "err:"
+hashPrefix _ = Nothing
+
+
+defaultRecommendedAction :: Text
+defaultRecommendedAction = "Review the changes and update your integration accordingly."
 
 
 parseIssueType :: Text -> Maybe IssueType

@@ -318,7 +318,7 @@ widget_ = widgetHelper_
 widgetHelper_ :: Widget -> Html ()
 widgetHelper_ w' = case w.wType of
   WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
-    unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/anomalies")) (w.hideSubtitle == Just True)
+    unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/issues")) (w.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
     -- Header: auto height (no flex), group-header class for CSS targeting when collapsed

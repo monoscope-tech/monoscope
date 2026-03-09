@@ -634,7 +634,7 @@ sampleAnomalyEndpoint = anomalyEndpointEmail "Jane Doe" "My API Project" "https:
 
 
 sampleIssueAssigned :: (Text, Html ())
-sampleIssueAssigned = issueAssignedEmail "Jane Doe" "My API Project" "TypeError: Cannot read property 'map' of undefined" "https://app.monoscope.tech/p/sample-id/anomalies/by_hash/abc123" "TypeError" "Cannot read property 'map' of undefined"
+sampleIssueAssigned = issueAssignedEmail "Jane Doe" "My API Project" "TypeError: Cannot read property 'map' of undefined" "https://app.monoscope.tech/p/sample-id/issues/by_hash/abc123" "TypeError" "Cannot read property 'map' of undefined"
 
 
 sampleWeeklyReport :: Text -> Text -> (Text, Html ())
@@ -665,7 +665,7 @@ sampleLogPattern :: (Text, Html ())
 sampleLogPattern =
   logPatternEmail
     "My API Project"
-    "https://app.monoscope.tech/p/sample-id/anomalies/sample-issue"
+    "https://app.monoscope.tech/p/sample-id/issues/sample-issue"
     "Failed to connect to database: connection refused at <*>"
     (Just "Failed to connect to database: connection refused at 10.0.0.1:5432")
     (Just "error")
@@ -678,7 +678,7 @@ sampleLogPatternRateChange :: (Text, Html ())
 sampleLogPatternRateChange =
   logPatternRateChangeEmail
     "My API Project"
-    "https://app.monoscope.tech/p/sample-id/anomalies/sample-issue"
+    "https://app.monoscope.tech/p/sample-id/issues/sample-issue"
     "Request timeout after <*> ms for endpoint <*>"
     (Just "Request timeout after 30000 ms for endpoint /api/users")
     (Just "warning")

@@ -266,7 +266,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
-  , anomalies :: mode :- "p" :> ProjectId :> "anomalies" :> AnomaliesRoutes
+  , anomalies :: mode :- "p" :> ProjectId :> "issues" :> AnomaliesRoutes
   , logExplorer :: mode :- "p" :> ProjectId :> LogExplorerRoutes
   , monitors :: mode :- "p" :> ProjectId :> "monitors" :> MonitorsRoutes
   , traces :: mode :- "p" :> ProjectId :> TelemetryRoutes
@@ -302,8 +302,8 @@ data AnomaliesRoutes' mode = AnomaliesRoutes'
   , unarchiveGet :: mode :- Capture "anomalyID" Anomalies.AnomalyId :> "unarchive" :> Get '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , bulkActionsPost :: mode :- "bulk_actions" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] AnomalyList.AnomalyBulkForm :> Post '[HTML] (RespHeaders AnomalyList.AnomalyAction)
   , listGet :: mode :- QPT "layout" :> QPT "filter" :> QPT "sort" :> QPT "since" :> QPT "page" :> QPT "per_page" :> QPT "load_more" :> QEID "endpoint" :> QPT "period" :> HXRequest :> HXBoosted :> Get '[HTML] (RespHeaders AnomalyList.AnomalyListGet)
-  , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , anomalyGet :: mode :- Capture "anomalyID" Anomalies.IssueId :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
+  , anomalyHashGet :: mode :- "by_hash" :> Capture "anomalyHash" Text :> QPT "first_occurrence" :> QPT "since" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , assignErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "assign" :> ReqBody '[FormUrlEncoded] AnomalyList.AssignErrorForm :> Post '[HTML] (RespHeaders (Html ()))
   , resolveErrorPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
   , errorSubscriptionPost :: mode :- "errors" :> Capture "errorID" UUID.UUID :> "subscribe" :> ReqBody '[FormUrlEncoded] AnomalyList.ErrorSubscriptionForm :> Post '[HTML] (RespHeaders (Html ()))
