@@ -338,8 +338,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
         $ toHtml issue.recommendedAction
       -- Metadata chips + issue type content
-      let infoChip_ = colorChip_ "text-fillInformation-strong bg-fillInformation-weak"
-          createdChip = infoChip_ "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
+      let createdChip = colorChip_ "text-fillInformation-strong bg-fillInformation-weak" "calendar" $ "Created " <> toText (prettyTimeAuto now (zonedTimeToUTC issue.createdAt))
           logPatternCards sourceField logPattern sampleMessage = div_ [class_ "flex flex-col gap-4"] do
             _ <- div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
               div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
@@ -364,12 +363,6 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             metadataChip_ "percent" $ Issues.showPct d.changePercent <> " change"
             metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
             metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
-          Issues.RuntimeException -> whenJust errM \errL -> do
-            let err = errL.base
-            infoChip_ "clock" $ "First seen " <> compactTimeAgo (toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
-            infoChip_ "clock" $ "Last seen " <> compactTimeAgo (toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
-            whenJust err.errorData.runtime \r -> colorChip_ "text-fillBrand-strong bg-fillBrand-weak" "code" r
-            whenJust err.errorData.serviceName \s -> colorChip_ "text-fillSuccess-strong bg-fillSuccess-weak" "server" s
           _ -> createdChip
       -- Volume chart: preloaded from hourly stats, refreshable via hashes query
       whenJust (Issues.hashPrefix issue.issueType) \prefix -> do
