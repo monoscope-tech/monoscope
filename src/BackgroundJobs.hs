@@ -2223,23 +2223,15 @@ processNewLogPatterns pid authCtx = do
           void $ createJob conn "background_jobs" $ EnhanceIssuesWithLLM pid issueIds
 
 
--- | Should a new log pattern create an issue? Filters out infrastructure noise
--- (DB spans, internal spans, successful HTTP requests) unless they have error status.
+-- | Should a new log pattern create an issue? Whitelist-based: only error/warn logs
+-- and patterns with error status codes. Everything else is acknowledged but no issue created.
 isIssueWorthy :: LogPatterns.LogPattern -> Bool
 isIssueWorthy lp
-  | lp.sourceField == "url_path" = False
-  | lp.logLevel `elem` [Just "INFO", Just "TRACE" :: Maybe Text] = False
-  | hasErrorStatus pat = True
-  | isDbSpan pat = False
-  | isInternalSpan pat = False
-  | isSuccessfulRequest pat = False
-  | otherwise = True
+  | lp.logLevel `elem` [Just "error", Just "warning" :: Maybe Text] = True
+  | hasErrorStatus lp.logPattern = True
+  | otherwise = False
   where
-    pat = lp.logPattern
     hasErrorStatus p = "status;badge-error⇒ERROR" `T.isInfixOf` p || "status_code;badge-4xx" `T.isInfixOf` p || "status_code;badge-5xx" `T.isInfixOf` p
-    isDbSpan p = "kind;neutral⇒database" `T.isPrefixOf` p
-    isInternalSpan p = "kind;neutral⇒internal" `T.isPrefixOf` p
-    isSuccessfulRequest p = "request_type;neutral⇒" `T.isInfixOf` p && not (hasErrorStatus p)
 
 
 -- | Prune acknowledged patterns not seen in 30 days, auto-acknowledge stale 'new' patterns,
