@@ -256,6 +256,7 @@ data Issue = Issue
   , responsePayloads :: Aeson [PayloadChange]
   , llmEnhancedAt :: Maybe UTCTime
   , llmEnhancementVersion :: Maybe Int
+  , seqNum :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -291,6 +292,7 @@ data IssueL = IssueL
   , responsePayloads :: Aeson [PayloadChange]
   , llmEnhancedAt :: Maybe UTCTime -- Not in DB, will be NULL
   , llmEnhancementVersion :: Maybe Int -- Not in DB, will be NULL
+  , seqNum :: Int
   -- Aggregated data
   , eventCount :: Int
   , lastSeen :: UTCTime
@@ -315,8 +317,8 @@ INSERT INTO apis.issues (
   title, service, environment, critical, severity,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
-  llm_enhanced_at, llm_enhancement_version
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  llm_enhanced_at, llm_enhancement_version, seq_num
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
@@ -411,7 +413,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       [text|
       SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
         CASE WHEN i.critical THEN 'critical' ELSE 'info' END, i.affected_requests, i.affected_clients, NULL::double precision,
-        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int,
+        i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int, i.seq_num,
         CASE
           WHEN i.issue_type = 'runtime_exception' THEN COALESCE(err_ev.cnt, 0)
           WHEN i.issue_type IN ('log_pattern', 'log_pattern_rate_change') THEN COALESCE(lp_ev.cnt, 0)
@@ -892,6 +894,7 @@ mkIssue opts = do
       , responsePayloads = Aeson []
       , llmEnhancedAt = Nothing
       , llmEnhancementVersion = Nothing
+      , seqNum = 0 -- Auto-assigned by DB trigger
       }
 
 

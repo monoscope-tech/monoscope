@@ -232,11 +232,10 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
                   || maybe False (\errL -> errL.base.assigneeId == Just sess.user.id) errorM
           pure (ms, cr)
         Nothing -> pure (V.empty, False)
-      let plainTitle = stripSummaryTokens issue.title
-          bwconf =
+      let bwconf =
             baseBwconf
               { prePageTitle = Just "Issues"
-              , pageTitle = T.take 50 plainTitle <> bool "..." "" (T.length plainTitle <= 50)
+              , pageTitle = "#" <> show issue.seqNum
               , headContent = Just do highlightJsHead_; style_ "#crisp-chatbox { display: none !important; }"
               , pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
