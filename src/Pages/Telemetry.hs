@@ -377,8 +377,8 @@ dataPointsPage pid metrics refCounts = do
                           else div_ [class_ "absolute top-0 h-1/2 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
                         div_ [class_ "absolute h-[1px] bg-strokeWeak", style_ $ "left:" <> px <> "; top:50%; width:16px"] pass
                   div_ [class_ "flex items-center gap-2", style_ $ "padding-left:" <> show (r.level * indent) <> "px"] do
-                    when r.isGroup $
-                      div_ [class_ "border border-strokeWeak min-w-7 flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
+                    when r.isGroup
+                      $ div_ [class_ "border border-strokeWeak min-w-7 flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
                         faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
                         span_ [class_ "text-xs"] $ toHtml $ show r.childCount
                     unless (r.parentPath == "___root___") $ span_ [class_ "text-textDisabled"] $ toHtml $ r.parentPath <> "."
@@ -825,8 +825,8 @@ buildSpanTree_ pid sp trId level scol = do
       ]
       do
         div_ [class_ "w-[35%] shrink-0 flex items-center gap-1 px-2 overflow-hidden", style_ $ "padding-left:" <> indent] do
-          when hasChildren $
-            button_
+          when hasChildren
+            $ button_
               [ class_ "waterfall-toggle w-4 h-4 flex items-center justify-center shrink-0"
               , [__|on click halt the event's bubbling then toggle .hidden on the next .waterfall-children from the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me|]
               ]
