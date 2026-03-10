@@ -1300,7 +1300,6 @@ issueColumnsWithToggle pid period toggleM =
   ]
 
 
-
 renderIssueEventsCol :: IssueVM -> Html ()
 renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
   unless isWidget
@@ -1461,8 +1460,10 @@ renderIssueTitle_ issue
   | otherwise = renderWithPlaceholders_ title
   where
     title = stripIssuePrefix issue.title
-    stripIssuePrefix = foldl' (\t pfx -> fromMaybe t $ T.stripPrefix pfx t) <*> const
-      ["New Log Pattern: ", "Log Pattern Spike: ", "Log Pattern Drop: ", "New Log Pattern Detected: "]
+    stripIssuePrefix =
+      foldl' (\t pfx -> fromMaybe t $ T.stripPrefix pfx t)
+        <*> const
+          ["New Log Pattern: ", "Log Pattern Spike: ", "Log Pattern Drop: ", "New Log Pattern Detected: "]
 
 
 -- | Render text with <> placeholders styled as distinct tokens
@@ -1575,7 +1576,9 @@ anomalyArchiveButton pid aid archived = do
 issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
 issueTypeLabel issueType critical = span_ [class_ $ "flex items-center gap-1.5 text-xs font-medium " <> color] do
   faSprite_ icon "regular" "w-3 h-3"; toHtml txt
-  where (color, icon, txt) = issueTypeMeta issueType critical
+  where
+    (color, icon, txt) = issueTypeMeta issueType critical
+
 
 issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
 issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 text-[11px] whitespace-nowrap " <> color, term "data-tippy-content" fullTxt] do
@@ -1586,6 +1589,7 @@ issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 tex
       Issues.LogPattern -> "Log"
       Issues.LogPatternRateChange -> "Rate"
       _ -> fullTxt
+
 
 issueTypeMeta :: Issues.IssueType -> Bool -> (Text, Text, Text)
 issueTypeMeta issueType critical = case issueType of
