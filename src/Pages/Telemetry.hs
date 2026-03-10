@@ -377,7 +377,7 @@ dataPointsPage pid metrics refCounts = do
                           else div_ [class_ "absolute top-0 h-1/2 border-l border-l-strokeWeak", style_ $ "left:" <> px] pass
                         div_ [class_ "absolute h-[1px] bg-strokeWeak", style_ $ "left:" <> px <> "; top:50%; width:16px"] pass
                   div_ [class_ "flex items-center gap-2", style_ $ "padding-left:" <> show (r.level * indent) <> "px"] do
-                    when r.isGroup do
+                    when r.isGroup $
                       div_ [class_ "border border-strokeWeak min-w-7 flex justify-between gap-1 items-center rounded-sm px-1 py-0.5"] do
                         faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong tree-chevron rotate-90 transition-transform"
                         span_ [class_ "text-xs"] $ toHtml $ show r.childCount
@@ -493,7 +493,7 @@ metricsDetailsPage pid sources metric source currentRange = do
 metricBreakdown :: Projects.ProjectId -> Maybe Text -> V.Vector Text -> Html ()
 metricBreakdown pid label values = do
   div_ [class_ "grid grid-cols-2 gap-2"] do
-    forM_ values $ \v -> do
+    forM_ values \v ->
       div_ [class_ "w-full flex flex-col gap-2 metric_filterble rounded-lg p-2 border border-strokeWeak"] do
         div_ [class_ "w-full justify-between flex gap-2 items-center"] do
           div_ [class_ "flex gap-1 items-center"] do
@@ -767,29 +767,36 @@ buildSpanMap :: V.Vector Telemetry.SpanRecord -> MapS.Map (Maybe Text) [Telemetr
 buildSpanMap = V.foldr (\sp m -> MapS.insertWith (++) sp.parentSpanId [sp] m) MapS.empty
 
 
+-- | Build span tree with clock skew adjustment: if a child starts before its parent
+-- (due to clock skew between services), shift it forward to the parent's start time.
 buildSpanTree :: V.Vector Telemetry.SpanRecord -> [SpanTree]
 buildSpanTree spans =
   let spanMap = buildSpanMap spans
-   in buildTree spanMap Nothing
+   in buildTree spanMap Nothing (0, toInteger (maxBound :: Int64))
   where
-    buildTree spanMap parentId =
+    buildTree spanMap parentId (pStart, pEnd) =
       case MapS.lookup parentId spanMap of
         Nothing -> []
         Just spans' ->
-          [ SpanTree
-              SpanMin
-                { parentSpanId = sp.parentSpanId
-                , spanId = sp.spanId
-                , uSpanId = fromMaybe UUID.nil (UUID.fromText sp.uSpanId)
-                , spanName = sp.spanName
-                , spanDurationNs = sp.spanDurationNs
-                , serviceName = getServiceName sp.resource
-                , startTime = utcTimeToNanoseconds sp.startTime
-                , endTime = utcTimeToNanoseconds <$> sp.endTime
-                , hasErrors = spanHasErrors sp
-                , timestamp = sp.timestamp
-                }
-              (buildTree spanMap (Just sp.spanId))
+          [ let cStart = utcTimeToNanoseconds sp.startTime
+                delta = pStart - cStart
+                (adjStart, adjEnd, adjDur)
+                  | delta > 0 = (cStart + delta, (+ delta) <$> (utcTimeToNanoseconds <$> sp.endTime), min sp.spanDurationNs (pEnd - cStart - delta))
+                  | otherwise = (cStart, utcTimeToNanoseconds <$> sp.endTime, sp.spanDurationNs)
+                rec =
+                  SpanMin
+                    { parentSpanId = sp.parentSpanId
+                    , spanId = sp.spanId
+                    , uSpanId = fromMaybe UUID.nil (UUID.fromText sp.uSpanId)
+                    , spanName = sp.spanName
+                    , spanDurationNs = adjDur
+                    , serviceName = getServiceName sp.resource
+                    , startTime = adjStart
+                    , endTime = adjEnd
+                    , hasErrors = spanHasErrors sp
+                    , timestamp = sp.timestamp
+                    }
+             in SpanTree rec (buildTree spanMap (Just sp.spanId) (adjStart, adjStart + adjDur))
           | sp <- spans'
           ]
 
@@ -818,7 +825,7 @@ buildSpanTree_ pid sp trId level scol = do
       ]
       do
         div_ [class_ "w-[35%] shrink-0 flex items-center gap-1 px-2 overflow-hidden", style_ $ "padding-left:" <> indent] do
-          when hasChildren do
+          when hasChildren $
             button_
               [ class_ "waterfall-toggle w-4 h-4 flex items-center justify-center shrink-0"
               , [__|on click halt the event's bubbling then toggle .hidden on the next .waterfall-children from the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me|]
