@@ -415,7 +415,9 @@ renderRows tbl =
                   when (isJust c.sortField && isJust tbl.features.sortableColumns && not isSorted) $ faSprite_ "arrows-up-down" "regular" "w-3 h-3 opacity-30"
                   when (tbl.config.bulkActionsInHeader == Just idx) do
                     renderHeaderBulkActions tbl.features.bulkActions
-                    whenJust tbl.features.tableHeaderActions renderHeaderTableActions
+                    whenJust tbl.features.tableHeaderActions \ha -> do
+                      when (not $ null tbl.features.bulkActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
+                      renderHeaderTableActions ha
       tbody_ [id_ $ tbl.config.elemID <> "_tbody", class_ "stagger-fade"] do
         V.mapM_ (renderTableRow tbl) tbl.rows
     else div_ [class_ "stagger-fade"] $ V.mapM_ (renderListRow tbl) tbl.rows
@@ -498,18 +500,18 @@ renderSortDropdown actions = do
 
   div_ [class_ "inline-block", data_ "tippy-content" "Sort by"] do
     button_
-      [ class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-textWeak border-strokeWeak"
+      [ class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent"
       , type_ "button"
       , term "popovertarget" popId
       , style_ $ "anchor-name: --anchor-" <> popId
       ]
       do
+        faSprite_ "sort" "regular" "h-3 w-3"
         span_ $ toHtml currentLabel
-        faSprite_ "sort" "regular" "h-4 w-4 stroke-iconNeutral"
     div_
       [ id_ popId
       , term "popover" "auto"
-      , class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1"
+      , class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-72 rounded-md shadow-lg mt-1"
       , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
       ]
       do
@@ -525,10 +527,10 @@ renderSortDropdown actions = do
             , hxIndicator_ "#sortLoader"
             ]
             do
-              div_ [class_ "flex flex-col items-center justify-center px-3"] $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
-              div_ [class_ "grow space-y-1"] do
-                span_ [class_ "block text-lg"] $ toHtml title
-                span_ [class_ "block"] $ toHtml desc
+              div_ [class_ "flex flex-col items-center justify-center px-1"] $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
+              div_ [class_ "grow"] do
+                span_ [class_ "block text-sm font-medium"] $ toHtml title
+                span_ [class_ "block text-xs text-textWeak"] $ toHtml desc
   div_ [class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md", id_ "sortLoader"] ""
 
 
@@ -539,18 +541,18 @@ renderFilterDropdown actions = do
       popId = "filterDropdown"
   div_ [class_ "inline-block", data_ "tippy-content" "Filter by"] do
     button_
-      [ class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-textWeak border-strokeWeak"
+      [ class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent"
       , type_ "button"
       , term "popovertarget" popId
       , style_ $ "anchor-name: --anchor-" <> popId
       ]
       do
+        faSprite_ "filter" "regular" "h-3 w-3"
         span_ $ toHtml $ "Filter" <> if hasActiveFilters then " (" <> show activeCount <> ")" else ""
-        faSprite_ "filter" "regular" "h-4 w-4 stroke-iconNeutral"
     div_
       [ id_ popId
       , term "popover" "auto"
-      , class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1"
+      , class_ "dropdown dropdown-start bg-bgRaised p-1 text-sm normal-case border border-strokeWeak z-50 w-60 rounded-md shadow-lg mt-1"
       , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
       ]
       do
@@ -581,7 +583,7 @@ renderFilterMenuItem actions menu = div_ [class_ "relative"] do
       span_ $ toHtml $ "By " <> menu.label
       faSprite_ "chevron-right" "regular" "w-3 h-3"
   div_
-    [ class_ "dropdown dropdown-right menu bg-bgRaised rounded-lg shadow-lg w-48 border border-strokeWeak max-h-60 overflow-y-auto"
+    [ class_ "dropdown dropdown-right bg-bgRaised rounded-lg shadow-lg w-48 normal-case border border-strokeWeak max-h-60 overflow-y-auto"
     , term "popover" "auto"
     , id_ subPopId
     , style_ $ "position-try: flip-inline; position-anchor: --anchor-" <> subPopId
@@ -619,10 +621,12 @@ renderFilterOption actions menu opt = label_ [class_ "flex items-center gap-3 px
 
 -- | Remove a specific param=value pair from a URL (for multi-select filter toggle)
 deleteParamValue :: Text -> Text -> Text -> Text
-deleteParamValue key val = T.replace needle ""
+deleteParamValue key val url = fixQueryStart $ T.replace ("&" <> pair) "" $ T.replace ("?" <> pair) "?" url
   where
-    encodedVal = toUriStr val
-    needle = "&" <> key <> "=" <> encodedVal
+    pair = key <> "=" <> toUriStr val
+    fixQueryStart t = case T.breakOn "&" t of
+      (before, after) | not (T.null after) && not ("?" `T.isInfixOf` before) -> before <> "?" <> T.drop 1 after
+      _ -> t
 
 
 renderToolbar :: Table a -> Html ()
@@ -686,9 +690,9 @@ renderSortMenu sortCfg = do
   let currentSortTitle = maybe sortCfg.current (\(t, _, _) -> t) $ find (\(_, _, identifier) -> identifier == sortCfg.current) sortCfg.options
 
   div_ [class_ "dropdown dropdown-end inline-block"] do
-    a_ [class_ "btn btn-sm shadow-none text-sm font-medium bg-fillWeaker border text-textWeak border-strokeWeak", tabindex_ "0"] do
+    a_ [class_ "btn btn-xs shadow-none text-xs font-normal border border-strokeWeak text-textWeak bg-transparent", tabindex_ "0"] do
+      faSprite_ "sort" "regular" "h-3 w-3"
       span_ $ toHtml currentSortTitle
-      faSprite_ "sort" "regular" "h-4 w-4 stroke-iconNeutral"
 
     div_
       [ id_ "sortMenuDiv"
@@ -705,11 +709,11 @@ renderSortMenu sortCfg = do
             , hxIndicator_ "#sortLoader"
             ]
             do
-              div_ [class_ "flex flex-col items-center justify-center px-3"]
-                $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-5" else div_ [class_ "w-4 h-5"] ""
-              div_ [class_ "grow space-y-1"] do
-                span_ [class_ "block text-lg"] $ toHtml title
-                span_ [class_ "block"] $ toHtml desc
+              div_ [class_ "flex flex-col items-center justify-center px-1"]
+                $ if isActive then faSprite_ "icon-checkmark4" "solid" "w-4 h-4" else div_ [class_ "w-4 h-4"] ""
+              div_ [class_ "grow"] do
+                span_ [class_ "block text-sm font-medium"] $ toHtml title
+                span_ [class_ "block text-xs text-textWeak"] $ toHtml desc
   div_
     [ class_ "p-12 fixed rounded-lg shadow-sm bg-bgOverlay top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 htmx-indicator loading loading-dots loading-md"
     , id_ "sortLoader"

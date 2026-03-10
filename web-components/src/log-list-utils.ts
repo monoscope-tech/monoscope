@@ -112,7 +112,7 @@ export const unescapeJsonString = (str: string): string => {
 
   // Only process ANSI if likely present
   if (result.includes('\x1b')) {
-    result = ansi_up.ansi_to_text(result);
+    result = ansi_up.ansi_to_html(result);
   }
 
   // Only colorize if there are colons (JSON-like content)
@@ -312,7 +312,7 @@ export const renderSparkline = (buckets: number[]): TemplateResult => {
   const bars = buckets.map((v, i) => {
     if (v >= buckets[peakIdx]) peakIdx = i;
     const barH = Math.max(2, (v / peak) * barZone);
-    return svg`<rect x="${i * (barW + gap)}" y="${h - barH}" width="${barW}" height="${barH}" rx="1.5" fill="var(--color-fillBrand-strong)" opacity="0.45"/>`;
+    return svg`<rect x="${i * (barW + gap)}" y="${h - barH}" width="${barW}" height="${barH}" rx="1.5" fill="var(--color-chart-default, #1A74A8)" opacity="0.7"/>`;
   });
   const lineX1 = peakIdx * (barW + gap) + barW;
   return html`<svg viewBox="0 0 ${w} ${h}" style="width:100%;height:${h}px" preserveAspectRatio="xMinYMid meet">

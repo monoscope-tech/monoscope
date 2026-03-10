@@ -140,7 +140,7 @@ spec = aroundAll withTestResources do
 
       -- After acknowledging, the issue should appear in the Acknowledged filter
       (_, pg) <- testServant tr $
-        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowleged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
           let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.ApiChange) tbl.rows

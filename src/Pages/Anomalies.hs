@@ -84,7 +84,7 @@ import Pages.Components (colorChip_, emptyState_, metadataChip_, resizer_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), FilterMenu (..), FilterOption (..), Pagination (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (UUIDId (..), hashAssetFile)
@@ -209,7 +209,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
   appCtx <- ask @AuthContext
   issueM <- fetchIssue pid
   now <- Time.currentTime
-  let baseBwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Issues", config = appCtx.config}
+  let baseBwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Issues", menuItem = Just "Issues", config = appCtx.config}
   case issueM of
     Nothing -> do
       addErrorToast "Issue not found" Nothing
@@ -235,7 +235,8 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
       let plainTitle = stripSummaryTokens issue.title
           bwconf =
             baseBwconf
-              { pageTitleSuffix = Just $ T.take 50 plainTitle <> bool "..." "" (T.length plainTitle <= 50)
+              { prePageTitle = Just "Issues"
+              , pageTitle = T.take 50 plainTitle <> bool "..." "" (T.length plainTitle <= 50)
               , headContent = Just do highlightJsHead_; style_ "#crisp-chatbox { display: none !important; }"
               , pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
@@ -1119,10 +1120,12 @@ anomalyListGetH
   -> Maybe Text
   -> Maybe Endpoints.EndpointId
   -> Maybe Text
+  -> [Text]
+  -> [Text]
   -> Maybe Text
   -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
-anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM periodM hxRequestM hxBoostedM = do
+anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM periodM serviceFilters typeFilters hxRequestM hxBoostedM = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
@@ -1140,9 +1143,14 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
   currTime <- liftIO getCurrentTime
 
   let period = fromMaybe "24h" periodM
-  (issues, totalCount) <- Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period
+  (issues, totalCount) <- Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters
 
-  let baseUrl = "/p/" <> pid.toText <> "/issues?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period
+  -- Lightweight query for filter dropdown options
+  availableServices <- map (\(Only s) -> s) <$> PG.query [sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = ? AND service IS NOT NULL |] (Only pid)
+  availableTypes <- map (\(Only t) -> t) <$> PG.query [sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = ? |] (Only pid)
+
+  let filterParams = foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) typeFilters
+      baseUrl = "/p/" <> pid.toText <> "/issues?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period <> filterParams
       paginationConfig =
         Pagination
           { currentPage = pageInt
@@ -1151,7 +1159,9 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , baseUrl = baseUrl
           , targetId = "anomalyListContainer"
           }
-  let issuesVM = V.fromList $ map (IssueVM False False currTime filterV) issues
+  let serviceMenu = FilterMenu{label = "Service", paramName = "service", multiSelect = True, options = map (\s -> FilterOption{label = s, value = s, isActive = s `elem` serviceFilters}) availableServices}
+      typeMenu = FilterMenu{label = "Type", paramName = "type", multiSelect = True, options = map (\t -> FilterOption{label = t, value = t, isActive = t `elem` typeFilters}) availableTypes}
+      issuesVM = V.fromList $ map (IssueVM False False currTime filterV) issues
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -1164,8 +1174,8 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
               , ("Name (Z-A)", "Sort reverse alphabetically", "-title")
               ]
           , currentSort
-          , filterMenus = []
-          , activeFilters = []
+          , filterMenus = [serviceMenu | not (null availableServices)] <> [typeMenu | not (null availableTypes)]
+          , activeFilters = [("Service", serviceFilters) | not (null serviceFilters)] <> [("Type", typeFilters) | not (null typeFilters)]
           , headerExtra = Nothing
           }
   let issuesTable =
@@ -1176,10 +1186,10 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , features =
               def
                 { rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id
-                , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                , rowAttrs = Just issueRowAttrs
                 , bulkActions =
                     [ BulkAction{icon = Just "check", title = "Acknowledge", uri = "/p/" <> pid.toText <> "/issues/bulk_actions/acknowledge"}
-                    , BulkAction{icon = Just "inbox-full", title = "Archive", uri = "/p/" <> pid.toText <> "/issues/bulk_actions/archive"}
+                    , BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/issues/bulk_actions/archive"}
                     ]
                 , search = Just ClientSide
                 , tableHeaderActions = Just tableActions
@@ -1199,8 +1209,8 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Issues: Changes, Alerts & Errors"
-          , menuItem = Just "Changes & Errors"
+          , pageTitle = "Issues"
+          , menuItem = Just "Issues"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.config
           , headContent = Just highlightJsHead_
@@ -1219,7 +1229,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                   }
           }
   addRespHeaders $ case (layoutM, hxRequestM, hxBoostedM, loadM) of
-    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = if totalCount > 0 then Just paginationConfig else Nothing}
+    (_, _, _, Just "true") -> ALRows $ TableRows{columns = issueColumns pid period, rows = issuesVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(IssueVM _ _ _ _ issue) -> Issues.issueIdText issue.id, rowAttrs = Just issueRowAttrs, pagination = if totalCount > 0 then Just paginationConfig else Nothing}
     _ -> ALPage $ PageCtx bwconf issuesTable
 
 
@@ -1234,10 +1244,26 @@ instance ToHtml AnomalyListGet where
   toHtmlRaw = toHtml
 
 
-anomalyAccentColor :: Bool -> Bool -> Text
-anomalyAccentColor _ True = "bg-fillStrong"
-anomalyAccentColor True False = "bg-fillSuccess-weak"
-anomalyAccentColor False False = "bg-fillError-strong"
+issueRowAttrs :: IssueVM -> [Attribute]
+issueRowAttrs (IssueVM _ _ _ _ issue) =
+  [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> case issue.severity of
+    "critical" -> [style_ "box-shadow: inset 2px 0 0 var(--color-fillError-strong)"]
+    "warning" -> [style_ "box-shadow: inset 2px 0 0 var(--color-fillWarning-strong)"]
+    _ -> []
+  where
+    bg = case issue.severity of
+      "critical" -> "bg-fillError-weak"
+      "warning" -> "bg-fillWarning-weak"
+      _ -> ""
+
+
+-- | (icon, iconStyle, colorClass, tooltip) — uses shape+color so status isn't color-only
+anomalyStatusIndicator :: Bool -> Bool -> Text -> (Text, Text, Text, Text)
+anomalyStatusIndicator _ True _ = ("archive", "regular", "text-fillStrong", "Archived")
+anomalyStatusIndicator True False _ = ("circle-check", "regular", "text-fillSuccess-strong", "Acknowledged")
+anomalyStatusIndicator False False "critical" = ("octagon-exclamation", "regular", "text-fillError-strong", "Critical")
+anomalyStatusIndicator False False "warning" = ("triangle-alert", "regular", "text-fillWarning-strong", "Warning")
+anomalyStatusIndicator False False _ = ("circle-alert", "regular", "text-textWeak", "Active")
 
 
 data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
@@ -1267,33 +1293,25 @@ issueColumns pid period = issueColumnsWithToggle pid period Nothing
 
 issueColumnsWithToggle :: Projects.ProjectId -> Text -> Maybe (Html ()) -> [Column IssueVM]
 issueColumnsWithToggle pid period toggleM =
-  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0"]
-  , col "Type" renderIssueTypeCol & withAttrs [class_ "w-28"]
-  , col "Service" renderIssueServiceCol & withAttrs [class_ "w-28"]
-  , col "Events" renderIssueEventsCol
-      & withAttrs [class_ "w-24"]
-      & withColHeaderExtra (span_ [class_ "text-[10px] font-normal text-textWeak"] $ toHtml $ "(" <> period <> ")")
+  [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
+  , col ("Events (" <> period <> ")") renderIssueEventsCol & withAttrs [class_ "w-24"]
   , col "Last Seen" renderIssueDateCol & withAttrs [class_ "w-24"]
   , col "Activity" renderIssueChartCol & withAttrs [class_ "w-40"] & maybe identity withColHeaderExtra toggleM
   ]
 
 
-renderIssueTypeCol :: IssueVM -> Html ()
-renderIssueTypeCol (IssueVM _ _ _ _ issue) = issueTypeLabel issue.issueType issue.critical
-
-
-renderIssueServiceCol :: IssueVM -> Html ()
-renderIssueServiceCol (IssueVM _ _ _ _ issue) =
-  span_ [class_ "text-sm text-textWeak truncate"] $ toHtml $ Issues.serviceLabel issue.service
-
 
 renderIssueEventsCol :: IssueVM -> Html ()
 renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
   unless isWidget
-    $ span_ [class_ "tabular-nums text-sm text-textStrong"]
+    $ span_ [class_ $ "tabular-nums font-medium " <> countStyle issue.eventCount]
     $ toHtml
     $ formatWithCommas issue.eventCount
   where
+    countStyle n
+      | n >= 100 = "text-sm text-fillError-strong"
+      | n >= 10 = "text-sm text-fillWarning-strong"
+      | otherwise = "text-sm text-textStrong"
     formatWithCommas n = reverse $ go $ reverse (show n)
     go [] = []
     go xs = case splitAt 3 xs of (chunk, []) -> chunk; (chunk, rest) -> chunk ++ "," ++ go rest
@@ -1345,8 +1363,8 @@ sparkline_ buckets
               , makeAttribute "width" $ show barW
               , makeAttribute "height" $ show barH
               , makeAttribute "rx" "1.5"
-              , makeAttribute "fill" "var(--color-fillBrand-strong)"
-              , makeAttribute "opacity" "0.45"
+              , makeAttribute "fill" "var(--color-chart-default)"
+              , makeAttribute "opacity" "0.7"
               ]
               ""
           with
@@ -1438,20 +1456,34 @@ renderSummaryText_ txt = forM_ (T.words txt) \token ->
 
 renderIssueTitle_ :: Issues.IssueL -> Html ()
 renderIssueTitle_ issue
-  | T.null issue.title = "(Untitled)"
-  | "⇒" `T.isInfixOf` issue.title = renderSummaryText_ issue.title
-  | otherwise = toHtml issue.title
+  | T.null title = "(Untitled)"
+  | "⇒" `T.isInfixOf` title = renderSummaryText_ title
+  | otherwise = renderWithPlaceholders_ title
+  where
+    title = stripIssuePrefix issue.title
+    stripIssuePrefix = foldl' (\t pfx -> fromMaybe t $ T.stripPrefix pfx t) <*> const
+      ["New Log Pattern: ", "Log Pattern Spike: ", "Log Pattern Drop: ", "New Log Pattern Detected: "]
+
+
+-- | Render text with <> placeholders styled as distinct tokens
+renderWithPlaceholders_ :: Monad m => Text -> HtmlT m ()
+renderWithPlaceholders_ txt = go txt
+  where
+    placeholder = span_ [class_ "text-textWeak opacity-60"] "<>"
+    go t = case T.breakOn "<>" t of
+      (before, "") -> toHtml before
+      (before, rest) -> do toHtml before; placeholder; go (T.drop 2 rest)
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
 renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
-  let statusColor = anomalyAccentColor (isJust issue.acknowledgedAt) (isJust issue.archivedAt)
-      isAcknowledged = isJust issue.acknowledgedAt
+  let isAcknowledged = isJust issue.acknowledgedAt
       isArchived = isJust issue.archivedAt
+      (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived issue.severity
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText issue.id
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
-    div_ [class_ "flex items-start gap-2 min-w-0"] do
-      span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> statusColor] ""
+    div_ [class_ "flex items-center gap-2 min-w-0"] do
+      span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
       a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors line-clamp-2 break-all"] $ renderIssueTitle_ issue
       severityBadge_ issue.severity
       issueStateBadge_ issue.latestStateEvent
@@ -1486,20 +1518,29 @@ issueStateBadge_ = \case
 
 
 issuePreview_ :: Issues.IssueL -> Html ()
-issuePreview_ issue = case issue.issueType of
-  Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \d ->
-    previewSnippet $ d.errorType <> ": " <> d.errorMessage
-  Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \d ->
-    previewSnippet d.queryExpression
-  Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
-    bool previewSnippet summaryPreview ("⇒" `T.isInfixOf` d.logPattern) d.logPattern
-  Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
-    bool previewSnippet summaryPreview ("⇒" `T.isInfixOf` d.logPattern) d.logPattern
-  Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d ->
-    previewSnippet $ d.endpointMethod <> " " <> d.endpointPath
+issuePreview_ issue = div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
+  issueTypeBadge issue.issueType issue.critical
+  whenJust issue.service \svc -> span_ [class_ "shrink-0", term "data-tippy-content" "Service"] $ toHtml svc
+  span_ [class_ "shrink-0 opacity-40"] "·"
+  snippet
   where
-    previewSnippet txt = div_ [class_ "text-xs text-textWeak font-mono leading-relaxed line-clamp-3 break-all min-w-0 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5 [&_code.hljs]:!bg-transparent [&_code.hljs]:!p-0 [&_code.hljs]:!inline [&_code.hljs]:!overflow-visible", term "data-tippy-content" txt] $ code_ [] $ toHtml $ unescapeJson txt
-    summaryPreview txt = div_ [class_ "text-xs text-textWeak leading-relaxed line-clamp-3 break-all min-w-0 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5 flex flex-wrap items-center gap-0.5"] $ renderSummaryText_ txt
+    snippet = case issue.issueType of
+      Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \d ->
+        previewSnippet $ d.errorType <> ": " <> d.errorMessage
+      Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \d ->
+        previewSnippet d.queryExpression
+      Issues.LogPattern -> withIssueDataH @Issues.LogPatternData issue.issueData \d ->
+        logPatternPreview d.logPattern d.sampleMessage
+      Issues.LogPatternRateChange -> withIssueDataH @Issues.LogPatternRateChangeData issue.issueData \d ->
+        logPatternPreview d.logPattern d.sampleMessage
+      Issues.ApiChange -> withIssueDataH @Issues.APIChangeData issue.issueData \d ->
+        previewSnippet $ d.endpointMethod <> " " <> d.endpointPath
+    previewSnippet txt = span_ [class_ "font-mono truncate min-w-0", term "data-tippy-content" txt] $ renderWithPlaceholders_ $ unescapeJson txt
+    summaryPreview txt = span_ [class_ "truncate min-w-0"] $ renderSummaryText_ txt
+    logPatternPreview pat sampleMsg
+      | "⇒" `T.isInfixOf` pat = summaryPreview pat
+      | Just msg <- sampleMsg, not (T.null msg) = previewSnippet msg
+      | otherwise = previewSnippet pat
     unescapeJson = T.replace "\\\"" "\"" . T.replace "\\n" " " . T.replace "\\t" " "
 
 
@@ -1534,14 +1575,26 @@ anomalyArchiveButton pid aid archived = do
 issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
 issueTypeLabel issueType critical = span_ [class_ $ "flex items-center gap-1.5 text-xs font-medium " <> color] do
   faSprite_ icon "regular" "w-3 h-3"; toHtml txt
+  where (color, icon, txt) = issueTypeMeta issueType critical
+
+issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
+issueTypeBadge issueType critical = span_ [class_ $ "flex items-center gap-1 text-[11px] whitespace-nowrap " <> color, term "data-tippy-content" fullTxt] do
+  faSprite_ icon "regular" "w-3 h-3 shrink-0"; toHtml shortTxt
   where
-    (color, icon, txt) = case issueType of
-      Issues.RuntimeException -> ("text-fillError-strong", "triangle-alert", "Error")
-      Issues.QueryAlert -> ("text-fillWarning-strong", "zap", "Alert")
-      Issues.LogPattern -> ("text-fillInformation-strong", "file-text", "Log Pattern")
-      Issues.LogPatternRateChange -> ("text-fillWarning-strong", "activity", "Rate Change")
-      Issues.ApiChange | critical -> ("text-fillError-strong", "exclamation-triangle", "Breaking")
-      Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
+    (color, icon, fullTxt) = issueTypeMeta issueType critical
+    shortTxt = case issueType of
+      Issues.LogPattern -> "Log"
+      Issues.LogPatternRateChange -> "Rate"
+      _ -> fullTxt
+
+issueTypeMeta :: Issues.IssueType -> Bool -> (Text, Text, Text)
+issueTypeMeta issueType critical = case issueType of
+  Issues.RuntimeException -> ("text-fillError-strong", "triangle-alert", "Error")
+  Issues.QueryAlert -> ("text-fillWarning-strong", "zap", "Alert")
+  Issues.LogPattern -> ("text-fillInformation-strong", "file-text", "Log Pattern")
+  Issues.LogPatternRateChange -> ("text-fillWarning-strong", "activity", "Rate Change")
+  Issues.ApiChange | critical -> ("text-fillError-strong", "exclamation-triangle", "Breaking")
+  Issues.ApiChange -> ("text-fillInformation-strong", "info", "Incremental")
 
 
 issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))

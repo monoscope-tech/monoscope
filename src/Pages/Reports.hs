@@ -244,7 +244,7 @@ buildLiveReportEmailHtml pid project userName = do
   endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
   endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate $ 12 * 86400) currentTime) startTime
   let performance = computeDurationChanges endpointStats endpointStatsPrev
-  (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d"
+  (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] []
   let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
   anomaliesCount <- Anomalies.countAnomalies pid "weekly"
   totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid

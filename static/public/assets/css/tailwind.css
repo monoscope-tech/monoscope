@@ -90,6 +90,9 @@
   --color-bgSunken: oklch(97.7% 0.006 247);
   --color-bgBrand: oklch(56.7% 0.239 261);
 
+  /* Chart default blue (echarts THEME_COLORS[0]) */
+  --color-chart-default: #1A74A8;
+
   /* Fill colors */
   --color-fillBrand-strong: oklch(56.7% 0.239 261);
   --color-fillBrand-weak: oklch(56.7% 0.239 261 / 0.05);

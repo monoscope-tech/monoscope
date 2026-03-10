@@ -683,7 +683,7 @@ fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.
 processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> ATAuthCtx Widget.Widget
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
-    (issues, _) <- Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing "24h"
+    (issues, _) <- Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing "24h" [] []
     let issuesVM = V.fromList $ map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget

@@ -24,7 +24,7 @@ menu pid =
   [ ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")
   , ("Explorer", "/p/" <> pid.toText <> "/log_explorer", "explore")
   , ("API Catalog", "/p/" <> pid.toText <> "/api_catalog", "swap")
-  , ("Changes & Errors", "/p/" <> pid.toText <> "/issues", "bug")
+  , ("Issues", "/p/" <> pid.toText <> "/issues", "bug")
   , ("Alerts", "/p/" <> pid.toText <> "/monitors", "list-check")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]

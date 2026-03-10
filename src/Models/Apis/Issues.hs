@@ -378,8 +378,8 @@ bumpIssueUpdatedAt issueId = do
 
 -- | Select issues with filters, returns issues and total count for pagination
 -- period: "24h" = 24 hourly buckets, "7d" = 7 daily buckets (default)
-selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> Eff es ([IssueL], Int)
-selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM period = do
+selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
+selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM period serviceFilters typeFilters = do
   issues <- PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
   countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
   pure (issues, fromMaybe 0 countResult)
@@ -387,6 +387,8 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     timefilter = maybe "" (\(st, end) -> " AND i.created_at >= '" <> formatUTC st <> "' AND i.created_at <= '" <> formatUTC end <> "'") timeRangeM
     ackF = maybe "" (\ack -> bool " AND i.acknowledged_at IS NULL" " AND i.acknowledged_at IS NOT NULL" ack) isAcknowledged
     archF = maybe "" (\arch -> bool " AND i.archived_at IS NULL" " AND i.archived_at IS NOT NULL" arch) isArchived
+    svcF = if null serviceFilters then "" else " AND i.service = ANY(ARRAY[" <> T.intercalate "," (map (\s -> "'" <> T.replace "'" "''" s <> "'") serviceFilters) <> "]::text[])"
+    typF = if null typeFilters then "" else " AND i.issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" (t) <> "'") typeFilters) <> "]::text[])"
     orderBy = case sortM of
       Just "-created_at" -> "ORDER BY i.created_at DESC"
       Just "+created_at" -> "ORDER BY i.created_at ASC"
@@ -399,6 +401,8 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     cTimefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
     cAckF = maybe "" (\ack -> bool " AND acknowledged_at IS NULL" " AND acknowledged_at IS NOT NULL" ack) isAcknowledged
     cArchF = maybe "" (\arch -> bool " AND archived_at IS NULL" " AND archived_at IS NOT NULL" arch) isArchived
+    cSvcF = if null serviceFilters then "" else " AND service = ANY(ARRAY[" <> T.intercalate "," (map (\s -> "'" <> T.replace "'" "''" s <> "'") serviceFilters) <> "]::text[])"
+    cTypF = if null typeFilters then "" else " AND issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" (t) <> "'") typeFilters) <> "]::text[])"
     -- period controls bucket granularity: "24h" = hourly, "7d" = daily
     (seriesStart, seriesStep, bucketSize) = case period of
       "24h" -> ("NOW() - INTERVAL '23 hours'" :: Text, "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)
@@ -446,9 +450,9 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
         WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
         ORDER BY a.created_at DESC LIMIT 1
       ) lat ON TRUE
-      WHERE i.project_id = ? $timefilter $ackF $archF $orderBy LIMIT ? OFFSET ?
+      WHERE i.project_id = ? $timefilter $ackF $archF $svcF $typF $orderBy LIMIT ? OFFSET ?
     |]
-    countQ = [text|SELECT COUNT(*) FROM apis.issues WHERE project_id = ? $cTimefilter $cAckF $cArchF|]
+    countQ = [text|SELECT COUNT(*) FROM apis.issues WHERE project_id = ? $cTimefilter $cAckF $cArchF $cSvcF $cTypF|]
 
 
 -- | Find open issue for endpoint
@@ -718,8 +722,9 @@ createLogPatternRateChangeIssue projectId lp sr = do
   let changePercentVal = if sr.mean > 1 then min 9999 $ abs ((sr.currentRate / sr.mean) - 1) * 100 else 0
       dir = display sr.direction
       zonedNow = utcToZonedTime utc now
-      severity = case (sr.direction, lp.logLevel) of
-        (Spike, Just "error") -> "critical"
+      lvl = T.toLower $ fromMaybe "" lp.logLevel
+      severity = case (sr.direction, lvl) of
+        (Spike, "error") -> "critical"
         (Spike, _) -> "warning"
         (Drop, _) -> "info"
   mkIssue
@@ -728,7 +733,7 @@ createLogPatternRateChangeIssue projectId lp sr = do
       , issueType = LogPatternRateChange
       , targetHash = lp.patternHash
       , service = lp.serviceName
-      , critical = sr.direction == Spike && lp.logLevel == Just "error"
+      , critical = sr.direction == Spike && lvl == "error"
       , severity
       , title = "Log Pattern " <> T.toTitle dir <> ": " <> T.take 60 lp.logPattern <> " (" <> showPct changePercentVal <> ")"
       , recommendedAction = "Log pattern volume " <> dir <> " detected. Current: " <> showRate sr.currentRate <> ", Baseline: " <> showRate sr.mean <> " (" <> show (round (abs sr.zScore) :: Int) <> " std devs)."
@@ -767,9 +772,11 @@ createLogPatternIssue projectId lp = do
           , firstSeenAt = zonedTimeToUTC lp.firstSeenAt
           , occurrenceCount = lp.occurrenceCount
           }
-      severity = case lp.logLevel of
-        Just "error" -> "critical"
-        Just "warning" -> "warning"
+      lvl = T.toLower $ fromMaybe "" lp.logLevel
+      severity = case lvl of
+        "error" -> "critical"
+        "warning" -> "warning"
+        "warn" -> "warning"
         _ -> "info"
   mkIssue
     MkIssueOpts
@@ -777,7 +784,7 @@ createLogPatternIssue projectId lp = do
       , issueType = LogPattern
       , targetHash = lp.patternHash
       , service = lp.serviceName
-      , critical = lp.logLevel == Just "error"
+      , critical = lvl == "error"
       , severity
       , title = "New Log Pattern: " <> T.take 100 lp.logPattern
       , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
