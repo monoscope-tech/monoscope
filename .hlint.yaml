@@ -17,40 +17,43 @@
   # - {name: System.Directory, as: Dir, importStyle: qualified, qualifiedStyle: post, asRequired: true}
 
 - arguments:
+  # From package.yaml default-extensions
+  - "-XAllowAmbiguousTypes"
+  - "-XBlockArguments"
+  - "-XDataKinds"
+  - "-XDeriveAnyClass"
+  - "-XDerivingStrategies"
+  - "-XDerivingVia"
+  - "-XDuplicateRecordFields"
+  - "-XExplicitNamespaces"
+  - "-XExtendedDefaultRules"
+  - "-XLambdaCase"
+  - "-XMultiWayIf"
   - "-XMultilineStrings"
+  - "-XNoImplicitPrelude"
+  - "-XOverloadedLabels"
+  - "-XOverloadedLists"
+  - "-XOverloadedRecordDot"
+  - "-XOverloadedStrings"
+  - "-XPatternSynonyms"
+  - "-XQuasiQuotes"
+  - "-XRecordWildCards"
+  - "-XRoleAnnotations"
+  - "-XTemplateHaskell"
+  - "-XTupleSections"
+  - "-XTypeFamilies"
+  - "-XUndecidableInstances"
+  # Additional extensions for HLint parsing
   - "-XConstraintKinds"
   - "-XDeriveGeneric"
+  - "-XFlexibleInstances"
   - "-XGeneralizedNewtypeDeriving"
-  - "-XLambdaCase"
-  - "-XOverloadedStrings"
-  - "-XRecordWildCards"
+  - "-XMultiParamTypeClasses"
   - "-XScopedTypeVariables"
   - "-XStandaloneDeriving"
-  - "-XTupleSections"
   - "-XTypeApplications"
-  - "-XViewPatterns"
-  - "-XNoImplicitPrelude"
-  - "-XDerivingStrategies"
-  - "-XDataKinds"
-  - "-XTypeFamilies"
   - "-XTypeOperators"
-  - "-XTypeApplications"
-  - "-XDataKinds"
-  - "-XDerivingVia"
-  - "-XDerivingStrategies"
-  - "-XDeriveAnyClass"
-  - "-XDeriveGeneric"
-  - "-XRecordWildCards"
-  - "-XQuasiQuotes"
-  - "-XOverloadedStrings"
-  - "-XOverloadedLists"
-  - "-XExtendedDefaultRules"
-  - "-XOverloadedLabels"
-  - "-XFlexibleInstances"
-  - "-XMultiParamTypeClasses"
-  - "-XUndecidableInstances"
-  - "-XTemplateHaskell"
-  - "-XOverloadedRecordDot"
+  - "-XViewPatterns"
 - ignore:
     name: Use head
 - ignore:
@@ -3337,3 +3340,14 @@
     lhs: "(,) a <$> f a"
     note: "Use `traverseToSnd` from `Relude.Extra.Tuple`"
     rhs: traverseToSnd f a
+
+# Redundant single-statement do blocks (with BlockArguments)
+- warn: {lhs: "when a (do b)", rhs: "when a $ b", name: "Redundant do in when"}
+- warn: {lhs: "unless a (do b)", rhs: "unless a $ b", name: "Redundant do in unless"}
+- warn: {lhs: "void (do b)", rhs: "void $ b", name: "Redundant do in void"}
+- warn: {lhs: "forM_ a (\\x -> do b)", rhs: "forM_ a \\x -> b", name: "Redundant do in forM_"}
+- warn: {lhs: "for_ a (\\x -> do b)", rhs: "for_ a \\x -> b", name: "Redundant do in for_"}
+- warn: {lhs: "traverse_ (\\x -> do b) a", rhs: "traverse_ (\\x -> b) a", name: "Redundant do in traverse_"}
+- warn: {lhs: "whenJust a (\\x -> do b)", rhs: "whenJust a \\x -> b", name: "Redundant do in whenJust"}
+- warn: {lhs: "whenNothing a (do b)", rhs: "whenNothing a $ b", name: "Redundant do in whenNothing"}
+- warn: {lhs: "whenNothing_ a (do b)", rhs: "whenNothing_ a $ b", name: "Redundant do in whenNothing_"}
