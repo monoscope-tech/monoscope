@@ -2227,7 +2227,7 @@ processNewLogPatterns pid authCtx = do
 -- and patterns with error status codes. Everything else is acknowledged but no issue created.
 isIssueWorthy :: LogPatterns.LogPattern -> Bool
 isIssueWorthy lp
-  | lp.logLevel `elem` [Just "error", Just "warning" :: Maybe Text] = True
+  | lp.logLevel `elem` [Just "ERROR", Just "WARN" :: Maybe Text] = True
   | hasErrorStatus lp.logPattern = True
   | otherwise = False
   where
