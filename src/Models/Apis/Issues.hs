@@ -293,8 +293,8 @@ data IssueL = IssueL
   , llmEnhancedAt :: Maybe UTCTime -- Not in DB, will be NULL
   , llmEnhancementVersion :: Maybe Int -- Not in DB, will be NULL
   , seqNum :: Int
-  -- Aggregated data
-  , eventCount :: Int
+  , -- Aggregated data
+    eventCount :: Int
   , lastSeen :: UTCTime
   , latestStateEvent :: Maybe IssueEvent
   , activityBuckets :: PGArray Int
