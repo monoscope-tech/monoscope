@@ -1424,7 +1424,6 @@ renderLogContent_ txt =
     else div_ [class_ "p-4 max-h-80 overflow-y-auto"] $ pre_ [class_ "text-sm text-textWeak font-mono whitespace-pre-wrap [&_code.hljs]:!bg-transparent [&_code.hljs]:!p-0"] $ code_ [] $ toHtml txt
 
 
-
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()
 renderSummaryText_ txt = forM_ (T.words txt) \token ->
   case T.breakOn "⇒" token of
