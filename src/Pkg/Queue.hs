@@ -199,8 +199,8 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
         pollResult@(leftRecords, rightRecords) <- partitionEithers <$> K.pollMessageBatch consumer (K.Timeout 100) (K.BatchSize appCtx.config.messagesPerPubsubPullBatch) -- timeout in milliseconds
 
         -- Log polling errors if any
-        unless (null leftRecords) $ do
-          runLogT "kafka-service" appLogger LogAttention
+        unless (null leftRecords)
+          $ runLogT "kafka-service" appLogger LogAttention
             $ LogBase.logAttention "Kafka poll returned errors"
             $ AE.object
               [ "error_count" AE..= length leftRecords

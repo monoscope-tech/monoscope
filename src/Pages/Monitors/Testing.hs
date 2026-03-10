@@ -317,7 +317,7 @@ monitorActionH action msg pid monitorId = do
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
 alertMuteH pid monitorId durationMinsM = do
   void $ Monitors.monitorMuteByIds durationMinsM [monitorId]
-  let msg = maybe "Monitor muted indefinitely" (\_ -> "Monitor muted") durationMinsM
+  let msg = maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM
   addSuccessToast msg Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
   addRespHeaders ""
@@ -449,7 +449,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
             faSprite_ "bell" "regular" "h-4 w-4"
             "Unmute"
           Nothing -> muteDropdown_ alert.id.toText (muteBase <> "/mute")
-        when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]) do
+        when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]) $
           button_ [class_ $ actionBtn <> " text-textSuccess", hxPost_ $ muteBase <> "/resolve"] do
             faSprite_ "check" "regular" "h-4 w-4"
             "Resolve"
@@ -588,9 +588,9 @@ alertNotificationsTab_ alert teams = do
         div_ [class_ "pt-2 flex items-center gap-1"] do
           span_ [class_ "text-sm text-textWeak"] "Project level notification integrations will be used."
           a_ [href_ $ "/p/" <> alert.projectId.toText <> "/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
-      unless (V.null teams) $ do
-        div_ [class_ "flex flex-wrap gap-4 mb-4"] do
-          forM_ teams $ \team -> do
+      unless (V.null teams) $
+        div_ [class_ "flex flex-wrap gap-4 mb-4"] $
+          forM_ teams \team ->
             div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
               button_
                 [ type_ "button"

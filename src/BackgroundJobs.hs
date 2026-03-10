@@ -329,8 +329,8 @@ processBackgroundJob authCtx bgJob =
                   [Only (count :: Int)] -> count >= 288
                   _ -> False
 
-            unless projectJobsExist $ do
-              liftIO $ withResource authCtx.jobsPool \conn -> do
+            unless projectJobsExist
+              $ liftIO $ withResource authCtx.jobsPool \conn -> do
                 void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
                 let sched count secs mkJob = forM_ [0 .. count - 1] \i -> do
                       let t = addUTCTime (fromIntegral @Int $ i * secs) currentTime
@@ -397,12 +397,12 @@ processBackgroundJob authCtx bgJob =
     MonoscopeAdminDaily -> do
       now <- Time.currentTime
       let since = addUTCTime (-86400) now
-          dateStr = T.pack $ formatTime defaultTimeLocale "%Y-%m-%d" now
+          dateStr = toText $ formatTime defaultTimeLocale "%Y-%m-%d" now
           send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
           buildMessages [] msgs = msgs
           buildMessages items msgs =
             let (chunk, rest) = splitAccum 1800 items
-             in buildMessages rest (msgs <> [T.unlines chunk])
+             in buildMessages rest (msgs <> [unlines chunk])
           splitAccum _ [] = ([], [])
           splitAccum remaining (x : xs)
             | T.length x > remaining = ([], x : xs)
@@ -432,7 +432,7 @@ processBackgroundJob authCtx bgJob =
           tableHeader = T.justifyLeft 25 ' ' "Project" <> T.justifyLeft 12 ' ' "Plan" <> T.justifyRight 10 ' ' "Events" <> T.justifyRight 10 ' ' "Metrics" <> T.justifyRight 10 ' ' "Total"
           tableBody = tableHeader : map fmtRow sorted
       send summaryHeader
-      send $ "```\n" <> T.unlines tableBody <> "```"
+      send $ "```\n" <> unlines tableBody <> "```"
 
       -- Section 2: New projects (created in last 24h)
       tryLog "newProjects" do
@@ -442,7 +442,7 @@ processBackgroundJob authCtx bgJob =
                in "- " <> p.title <> " (" <> p.paymentPlan <> ") -- created " <> hoursAgo <> "h ago"
         send
           $ bool
-            ("**New Projects** (" <> show (length newProjects) <> ")\n" <> T.unlines (map fmtNew newProjects))
+            ("**New Projects** (" <> show (length newProjects) <> ")\n" <> unlines (map fmtNew newProjects))
             "**New Projects**: None"
             (null newProjects)
 
@@ -454,7 +454,7 @@ processBackgroundJob authCtx bgJob =
           $ "**Inactive Projects** ("
           <> show (length churn)
           <> " with 0 events in 24h)\n"
-          <> T.unlines (map (\(p, _, _, _) -> "- " <> p.title <> " (" <> p.paymentPlan <> ")") churn)
+          <> unlines (map (\(p, _, _, _) -> "- " <> p.title <> " (" <> p.paymentPlan <> ")") churn)
 
       -- Section 4: New issues
       tryLog "newIssues" do
@@ -476,7 +476,7 @@ processBackgroundJob authCtx bgJob =
             <> " across "
             <> show projectCount
             <> " projects)\n"
-            <> T.unlines (map fmtProject $ take 10 byProject)
+            <> unlines (map fmtProject $ take 10 byProject)
 
       -- Section 5: Monitor alerts
       tryLog "monitorAlerts" do
@@ -500,7 +500,7 @@ processBackgroundJob authCtx bgJob =
             <> " warning across "
             <> show (length byProject)
             <> " projects\n"
-            <> T.unlines (map fmtProject $ take 10 byProject)
+            <> unlines (map fmtProject $ take 10 byProject)
 
       -- Section 6: Background job health
       tryLog "jobHealth" do
@@ -530,7 +530,7 @@ processBackgroundJob authCtx bgJob =
         unless (null withGrowth)
           $ send
           $ "**Top Growing** (vs previous day)\n"
-          <> T.unlines (map fmtGrowth $ take 5 withGrowth)
+          <> unlines (map fmtGrowth $ take 5 withGrowth)
 
       -- Section 8: Active users (last 24h)
       tryLog "activeUsers" do
@@ -550,7 +550,7 @@ processBackgroundJob authCtx bgJob =
           $ "**Active Users** ("
           <> show (length activeUsers)
           <> " in last 24h)\n"
-          <> T.unlines (map fmtUser activeUsers)
+          <> unlines (map fmtUser activeUsers)
 
       -- Section 9: Project links
       let linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> authCtx.env.hostUrl <> "p/" <> p.id.toText <> ")"
@@ -997,7 +997,7 @@ processProjectErrors pid errors now = do
         $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
       forM_ newOrRegressed \(errorHash, errState) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
-        whenJust errM \err -> do
+        whenJust errM \err ->
           if errState == "regressed"
             then do
               existingM <- Issues.selectLatestIssueByHash pid errorHash
@@ -1397,7 +1397,7 @@ processAPIChangeAnomalies pid targetHashes = do
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
 
   -- Process each endpoint group, collecting info for newly created issues only
-  newEndpointInfos <- fmap catMaybes $ forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
+  newEndpointInfos <- catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
     existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
     case existingIssueM of
       Just existingIssue -> do
@@ -1556,7 +1556,7 @@ enhanceIssuesWithLLM pid issueIds = do
                 -- Analyze error patterns for root cause and category
                 analysisResult <- Enhancement.analyzeErrorPattern ctx issue
                 case analysisResult of
-                  Left _ -> pure () -- not a runtime exception or LLM failure
+                  Left _ -> pass -- not a runtime exception or LLM failure
                   Right (rootCause, category) -> do
                     epM <- ErrorPatterns.getErrorPatternByHash pid issue.targetHash
                     for_ epM \ep -> void $ ErrorPatterns.updateErrorPatternAnalysis ep.id rootCause category
@@ -1592,7 +1592,7 @@ embedAndMergeErrors pid ctx = do
       , fetchTexts = PatternMergeDB.fetchErrorTexts
       , canMerge = PatternMerge.errorCanMerge
       , judgeFn = mkJudge PatternMerge.buildErrorJudgePrompt
-      , onCanonicalPath = \_ _ -> pure ()
+      , onCanonicalPath = \_ _ -> pass
       , verifyMerge = Nothing
       }
 
@@ -1615,7 +1615,7 @@ embedAndMergeLogPatterns pid ctx = do
       , fetchTexts = PatternMergeDB.fetchLogTexts
       , canMerge = PatternMerge.logCanMerge
       , judgeFn = mkJudge PatternMerge.buildLogClusterJudgePrompt
-      , onCanonicalPath = \_ _ -> pure ()
+      , onCanonicalPath = \_ _ -> pass
       , verifyMerge = Just PatternMergeDB.fetchLogSamples
       }
 
@@ -1690,14 +1690,14 @@ embedAndMerge pid ctx cfg = unless (null cfg.items) do
                   pure $ filter (\(newId, canId) -> fromMaybe True $ PatternMerge.verifyMergeDecision <$> Map.lookup canId allTexts <*> Map.lookup newId samples) merges
               void $ cfg.assignCanonical verifiedMerges
               forM_ decisions \(idx, shouldMerge, mPath) ->
-                when shouldMerge $ for_ ((,) <$> (snd <$> ambiguousV V.!? idx) <*> mPath) (uncurry cfg.onCanonicalPath)
+                when shouldMerge $ for_ ((,) . snd <$> (ambiguousV V.!? idx) <*> mPath) (uncurry cfg.onCanonicalPath)
 
 
 embeddingConfig :: Config.AuthContext -> Langchain.Embeddings.OpenAI.OpenAIEmbeddings
 embeddingConfig ctx =
   Langchain.Embeddings.OpenAI.defaultOpenAIEmbeddings
     { Langchain.Embeddings.OpenAI.apiKey = ctx.config.openaiApiKey
-    , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (T.unpack ctx.config.openaiBaseUrl)
+    , Langchain.Embeddings.OpenAI.baseUrl = if T.null ctx.config.openaiBaseUrl then Just "https://api.openai.com/v1" else Just (toString ctx.config.openaiBaseUrl)
     }
 
 
@@ -1733,7 +1733,7 @@ endpointTemplateDiscovery pid = do
           foldMap
             ( \((method, host, tp), hs) ->
                 let ch = toXXHash $ pid.toText <> host <> method <> tp
-                 in (map (\h -> (h, ch, tp)) hs, [(pid, tp, method, host, ch)])
+                 in (map (, ch, tp) hs, [(pid, tp, method, host, ch)])
             )
             $ filter (\((_, _, tp), hs) -> length hs >= 2 && T.isInfixOf "{param}" tp) grouped
     void $ Endpoints.setEndpointCanonical allUpdates
@@ -1765,8 +1765,8 @@ endpointTemplateDiscovery pid = do
   mergedPairs <- Endpoints.getMergedEndpointPairs pid
   Log.logInfo "Endpoint merge cleanup starting" ("project_id", pid.toText, "merged_count", length mergedPairs)
   Endpoints.migrateAndDeleteMergedEndpoints mergedPairs
-  unless (null mergedPairs) do
-    Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
+  unless (null mergedPairs)
+    $ Log.logInfo "Cleaned up merged endpoints" ("project_id", pid.toText, "merged_count", length mergedPairs)
 
 
 -- | Get access token for GitHub sync (either PAT or GitHub App installation token)

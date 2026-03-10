@@ -366,7 +366,7 @@ generateSummaryDrainTokens content =
       (prefix, rest)
         | Just val <- T.stripPrefix "\8658" rest -> prefix <> "\8658" <> normalizePlaceholders (replaceAllFormats val)
         | otherwise -> normalizePlaceholders (replaceAllFormats tok)
-    normalizePlaceholders = T.unwords . map normalizePlaceholder . T.words
+    normalizePlaceholders = unwords . map normalizePlaceholder . words
 
 
 -- | Fold items into a DrainTree using a custom tokenizer.

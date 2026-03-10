@@ -114,7 +114,7 @@ ambiguousThreshold = 0.75
 -- >>> assignToCentroids [("c1", [1,0,0])] [("n1", [0,1,0])]
 -- ([],[])
 assignToCentroids :: [(a, [Float])] -> [(a, [Float])] -> ([(a, a)], [(a, a)])
-assignToCentroids centroids newPatterns = foldl' classify ([], []) newPatterns
+assignToCentroids centroids = foldl' classify ([], [])
   where
     centroidsU = map (\(cid, emb) -> let v = VU.fromList emb in (cid, v, vecNorm v)) centroids
     classify (merges, ambiguous) (newId, newEmb) =
@@ -136,7 +136,7 @@ buildJudgePrompt :: [(Text, Text)] -> Text
 buildJudgePrompt pairs = systemPart <> "\n\n" <> pairsPart
   where
     systemPart =
-      T.unlines
+      unlines
         [ "You are a pattern deduplication judge. For each pair of error/log patterns below,"
         , "decide if they represent the same underlying issue (MERGE) or distinct issues (KEEP_SEPARATE)."
         , ""
@@ -146,7 +146,7 @@ buildJudgePrompt pairs = systemPart <> "\n\n" <> pairsPart
         , ""
         , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
         ]
-    pairsPart = T.unlines $ zipWith formatPair [0 :: Int ..] pairs
+    pairsPart = unlines $ zipWith formatPair [0 :: Int ..] pairs
     formatPair i (a, b) = "Pair " <> show i <> ":\n  A: " <> a <> "\n  B: " <> b
 
 
@@ -174,7 +174,7 @@ buildEndpointJudgePrompt pairs = systemPart <> "\n\n" <> pathsPart <> "\n" <> pa
     allPaths = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
     pathIndex = Map.fromList $ zip allPaths [0 :: Int ..]
     systemPart =
-      T.unlines
+      unlines
         [ "You are an API route deduplication judge for an API monitoring tool."
         , "Below is a numbered list of HTTP endpoint URL paths, followed by candidate pairs."
         , "Your job is to identify URL paths that are the same route but differ only in dynamic"
@@ -197,8 +197,8 @@ buildEndpointJudgePrompt pairs = systemPart <> "\n\n" <> pathsPart <> "\n" <> pa
         , ""
         , "Example: [{\"index\": 0, \"decision\": \"MERGE\", \"canonical\": \"/api/v1/users/{param}\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
         ]
-    pathsPart = T.unlines $ "Endpoints:" : zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPaths
-    pairsPart = T.unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
+    pathsPart = unlines $ "Endpoints:" : zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPaths
+    pairsPart = unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
     formatPair i (a, b) =
       let aIdx = fromMaybe 0 $ Map.lookup a pathIndex
           bIdx = fromMaybe 0 $ Map.lookup b pathIndex
@@ -243,7 +243,7 @@ isPlaceholderToken t = t == "<*>" || (T.isPrefixOf "{" t && T.isSuffixOf "}" t)
 -- >>> normalizeForEmbedding "error {/payments} not found"
 -- "error {/payments} not found"
 normalizeForEmbedding :: Text -> Text
-normalizeForEmbedding = T.unwords . map Drain.normalizePlaceholder . T.words
+normalizeForEmbedding = unwords . map Drain.normalizePlaceholder . words
 
 
 -- | Extract non-placeholder content tokens as a Set (for reuse in hot loops).
@@ -308,7 +308,7 @@ buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n"
     allTemplates = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
     templateIndex = Map.fromList $ zip allTemplates [0 :: Int ..]
     systemPart =
-      T.unlines
+      unlines
         [ "You are a log pattern deduplication judge. Below is a numbered list of log pattern"
         , "templates, followed by candidate pairs to evaluate."
         , ""
@@ -333,8 +333,8 @@ buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n"
         , ""
         , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
         ]
-    templatesPart = T.unlines $ "Templates:" : zipWith (\i t -> "  [" <> show i <> "] " <> t) [0 :: Int ..] allTemplates
-    pairsPart = T.unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
+    templatesPart = unlines $ "Templates:" : zipWith (\i t -> "  [" <> show i <> "] " <> t) [0 :: Int ..] allTemplates
+    pairsPart = unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
     formatPair i (a, b) =
       let aIdx = fromMaybe 0 $ Map.lookup a templateIndex
           bIdx = fromMaybe 0 $ Map.lookup b templateIndex
@@ -485,7 +485,7 @@ buildErrorJudgePrompt pairs = systemPart <> "\n\n" <> patternsPart <> "\n" <> pa
     allPatterns = ordNub $ concatMap (\(a, b) -> [a, b]) pairs
     patternIndex = Map.fromList $ zip allPatterns [0 :: Int ..]
     systemPart =
-      T.unlines
+      unlines
         [ "You are an error pattern deduplication judge. Below is a numbered list of error"
         , "patterns, followed by candidate pairs to evaluate."
         , ""
@@ -520,8 +520,8 @@ buildErrorJudgePrompt pairs = systemPart <> "\n\n" <> patternsPart <> "\n" <> pa
         , ""
         , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
         ]
-    patternsPart = T.unlines $ "Error patterns:" : zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPatterns
-    pairsPart = T.unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
+    patternsPart = unlines $ "Error patterns:" : zipWith (\i p -> "  [" <> show i <> "] " <> p) [0 :: Int ..] allPatterns
+    pairsPart = unlines $ "Pairs to evaluate:" : zipWith formatPair [0 :: Int ..] pairs
     formatPair i (a, b) =
       let aIdx = fromMaybe 0 $ Map.lookup a patternIndex
           bIdx = fromMaybe 0 $ Map.lookup b patternIndex

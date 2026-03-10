@@ -69,7 +69,7 @@ updateErrorEmbeddings pairs =
         WHERE apis.error_patterns.id = u.id |]
     (V.fromList ids, V.fromList embs)
   where
-    (ids, embs) = unzip $ map (\(eid, e) -> (eid, showPGFloatArray e)) pairs
+    (ids, embs) = unzip $ map (second showPGFloatArray) pairs
 
 
 updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
@@ -83,7 +83,7 @@ updateLogEmbeddings pairs =
         WHERE apis.log_patterns.id = u.id |]
     (V.fromList ids, V.fromList embs)
   where
-    (ids, embs) = unzip $ map (\(lid, e) -> (lid, showPGFloatArray e)) pairs
+    (ids, embs) = unzip $ map (second showPGFloatArray) pairs
 
 
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
@@ -164,8 +164,7 @@ getLogPatternGroupMembers lid =
 
 getErrorPatternMemberCount :: DB es => ErrorPatternId -> Eff es Int
 getErrorPatternMemberCount eid =
-  fromMaybe 0
-    . fmap fromOnly
+  maybe 0 fromOnly
     . listToMaybe
     <$> PG.query
       [sql| SELECT COUNT(*)::int FROM apis.error_patterns WHERE canonical_id = ? |]
@@ -174,8 +173,7 @@ getErrorPatternMemberCount eid =
 
 getLogPatternMemberCount :: DB es => LogPatternId -> Eff es Int
 getLogPatternMemberCount lid =
-  fromMaybe 0
-    . fmap fromOnly
+  maybe 0 fromOnly
     . listToMaybe
     <$> PG.query
       [sql| SELECT COUNT(*)::int FROM apis.log_patterns WHERE canonical_id = ? |]

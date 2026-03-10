@@ -416,7 +416,7 @@ renderRows tbl =
                   when (tbl.config.bulkActionsInHeader == Just idx) do
                     renderHeaderBulkActions tbl.features.bulkActions
                     whenJust tbl.features.tableHeaderActions \ha -> do
-                      when (not $ null tbl.features.bulkActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
+                      unless (null tbl.features.bulkActions) $ span_ [class_ "w-px h-5 bg-strokeWeak mx-1"] ""
                       renderHeaderTableActions ha
       tbody_ [id_ $ tbl.config.elemID <> "_tbody", class_ "stagger-fade"] do
         V.mapM_ (renderTableRow tbl) tbl.rows
@@ -632,8 +632,8 @@ deleteParamValue key val url = fixQueryStart $ T.replace ("&" <> pair) "" $ T.re
 renderToolbar :: Table a -> Html ()
 renderToolbar tbl =
   div_ [class_ $ "flex py-3 gap-8 items-center " <> if tbl.config.renderAsTable then "" else "bg-fillWeaker"] do
-    when (isJust tbl.features.rowId && not tbl.config.renderAsTable) do
-      div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
+    when (isJust tbl.features.rowId && not tbl.config.renderAsTable)
+      $ div_ [class_ "h-4 flex space-x-3 w-8 items-center"] do
         span_ [class_ "w-2 h-full"] ""
         input_
           [ term "aria-label" "Select All"

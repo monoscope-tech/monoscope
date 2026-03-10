@@ -240,7 +240,7 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
               , pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
-                  when (issue.issueType == Issues.RuntimeException) do
+                  when (issue.issueType == Issues.RuntimeException) $
                     whenJust errorM \errL -> do
                       errorResolveAction pid errL.base.id errL.base.state canResolve
                       errorSubscriptionAction pid errL.base
@@ -312,7 +312,7 @@ timeStatBox_ title timeStr
 activityPanel_ :: Projects.ProjectId -> Text -> Text -> Html ()
 activityPanel_ pid issueId extraClass = do
   let activityUrl = "/p/" <> pid.toText <> "/issues/" <> issueId <> "/activity"
-  details_ [class_ $ T.unwords $ filter (not . T.null) ["surface-raised rounded-2xl group/activity", extraClass], term "open" ""] do
+  details_ [class_ $ unwords $ filter (not . T.null) ["surface-raised rounded-2xl group/activity", extraClass], term "open" ""] do
     summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
       faSprite_ "clock-rotate-left" "regular" "w-3.5 h-3.5 text-textWeak"
       span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Activity"
@@ -400,7 +400,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
           volumeChart_ "Pattern Volume"
           logPatternCards d.sourceField d.logPattern d.sampleMessage
         Issues.RuntimeException -> withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
-          let errorFirstLine = fromMaybe exceptionData.stackTrace $ viaNonEmpty head $ T.lines exceptionData.stackTrace
+          let errorFirstLine = fromMaybe exceptionData.stackTrace $ viaNonEmpty head $ lines exceptionData.stackTrace
               detailItem (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
                 faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
                 span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
@@ -1277,7 +1277,7 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
 periodToggle_ :: Text -> Text -> Text -> Html ()
 periodToggle_ baseUrl targetId currentPeriod =
   span_ [class_ "inline-flex rounded-md border border-strokeWeak overflow-hidden"] do
-    forM_ [("24h" :: Text), ("7d" :: Text)] \val ->
+    forM_ ["24h" :: Text, "7d" :: Text] \val ->
       let url = deleteParam "period" baseUrl <> "&period=" <> val
        in button_
             [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillStrong text-textInverse-strong" (val == currentPeriod)
@@ -1346,7 +1346,7 @@ sparkline_ buckets
           barW = max 2 (120 `div` n - gap)
           barsEnd = n * (barW + gap)
           topPad = h - barZone
-          peakIdx = fromMaybe 0 $ fmap fst $ viaNonEmpty head $ filter ((== peakVal) . snd) $ zip [0 ..] buckets
+          peakIdx = maybe 0 fst $ viaNonEmpty head $ filter ((== peakVal) . snd) $ zip [0 ..] buckets
           lineX1 = peakIdx * (barW + gap) + barW
           lineX2 = barsEnd + 2
           w = lineX2 + labelW
@@ -1425,7 +1425,7 @@ renderLogContent_ txt =
 
 
 renderSummaryText_ :: Monad m => Text -> HtmlT m ()
-renderSummaryText_ txt = forM_ (T.words txt) \token ->
+renderSummaryText_ txt = forM_ (words txt) \token ->
   case T.breakOn "⇒" token of
     (_, "") -> span_ [class_ "mr-1"] $ toHtml $ unesc token
     (left, rest) -> do
@@ -1461,7 +1461,7 @@ renderIssueTitle_ issue
 
 -- | Render text with <> placeholders styled as distinct tokens
 renderWithPlaceholders_ :: Monad m => Text -> HtmlT m ()
-renderWithPlaceholders_ txt = go txt
+renderWithPlaceholders_ = go
   where
     placeholder = span_ [class_ "text-textWeak opacity-60"] "<>"
     go t = case T.breakOn "<>" t of
@@ -1509,13 +1509,13 @@ issueStateBadge_ = \case
   Just Issues.IEReopened -> badge "bg-fillWarning-weak text-fillWarning-strong border-strokeWarning-weak" "REOPENED"
   _ -> pass
   where
-    badge cls lbl = span_ [class_ $ "badge badge-sm border " <> cls] lbl
+    badge cls = span_ [class_ $ "badge badge-sm border " <> cls]
 
 
 issuePreview_ :: Issues.IssueL -> Html ()
 issuePreview_ issue = div_ [class_ "flex items-center gap-2 min-w-0 overflow-hidden text-xs text-textWeak"] do
   issueTypeBadge issue.issueType issue.critical
-  whenJust issue.service \svc -> span_ [class_ "shrink-0", term "data-tippy-content" "Service"] $ toHtml svc
+  whenJust issue.service $ span_ [class_ "shrink-0", term "data-tippy-content" "Service"] . toHtml
   span_ [class_ "shrink-0 opacity-40"] "·"
   snippet
   where
@@ -1639,7 +1639,7 @@ eventDisplay = \case
 errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 errorGroupMembersGetH pid errorId = do
   members <- PatternMerge.getErrorPatternGroupMembers (ErrorPatternId errorId)
-  addRespHeaders $ unless (null members) do
+  addRespHeaders $ unless (null members) $
     div_ [class_ "surface-raised rounded-2xl overflow-hidden mt-4"] do
       div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
         faSprite_ "layer-group" "regular" "w-4 h-4 text-iconNeutral"

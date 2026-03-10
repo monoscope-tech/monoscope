@@ -254,7 +254,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               span_ [class_ "htmx-indicator", id_ $ "tab-indicator-" <> dashId.toText <> "-" <> show idx] $ faSprite_ "spinner" "regular" "w-3 h-3 animate-spin"
 
     -- Variables section (pushed to the right)
-    whenJust dash.variables \variables -> do
+    whenJust dash.variables \variables ->
       div_ [class_ $ "flex gap-2 flex-wrap " <> if isJust dash.tabs then "ml-auto" else ""] do
         forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
           legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"

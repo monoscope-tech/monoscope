@@ -326,7 +326,7 @@ monitorsPageContent_ pid monitors = do
   let activeMonitors = V.filter (isNothing . (.deactivatedAt)) monitors
       inactiveMonitors = V.filter (isJust . (.deactivatedAt)) monitors
   section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4"] do
-    when (V.null monitors) do
+    when (V.null monitors) $
       div_ [class_ "flex flex-col items-center justify-center py-16 text-center"] do
         faSprite_ "bell-slash" "regular" "h-12 w-12 text-iconNeutral mb-4"
         h3_ [class_ "text-lg font-medium text-textStrong mb-2"] "No alerts configured yet"
@@ -403,9 +403,9 @@ notificationSettingsSection_ severityM subjectM messageM emailAll allTeams selec
       teamName tId = maybe "Unknown Team" (.handle) $ V.find (\t -> t.id == tId) allTeams
       existingTeams = decodeUtf8 $ AE.encode $ (\tId -> AE.object ["name" AE..= teamName tId, "value" AE..= tId]) <$> selectedTeamIds
       renotifyEnabled = maybe True (isJust . (.renotifyIntervalMins)) monitorM
-      renotifyVal = fromMaybe "30m" $ monitorM >>= (.renotifyIntervalMins) <&> minsToInterval
+      renotifyVal = maybe "30m" minsToInterval $ monitorM >>= (.renotifyIntervalMins)
       stopEnabled = maybe False (isJust . (.stopAfterCount)) monitorM
-      stopVal = fromMaybe "5" $ monitorM >>= (.stopAfterCount) <&> show
+      stopVal = maybe "5" show $ monitorM >>= (.stopAfterCount)
   panel_ def{icon = Just "envelope", collapsible = Just False} "Notification Settings" do
     div_ [class_ "flex items-center w-full gap-2 mb-3"] do
       formSelectField_ FieldSm "Severity" "severity" False $ forM_ ["Info", "Error", "Warning", "Critical"] \s -> option_ [selected_ "" | defaultSeverity == s] $ toHtml s

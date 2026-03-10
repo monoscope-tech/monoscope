@@ -1187,13 +1187,12 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
                 toHtml $ formatColumnValue col value
         tr_ [class_ "hidden"] do
           td_ [colspan_ "100%"] do
-            whenJust widget._projectId \p -> do
+            whenJust widget._projectId \p ->
               div_
                 [ class_ "w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
                 , id_ $ "flame-graph-container-" <> val
                 ]
-                do
-                  renderFlameGraph val
+                $ renderFlameGraph val
 
 
 getSpanJson :: Maybe (Text, Int, Int) -> Telemetry.SpanRecord -> AE.Value

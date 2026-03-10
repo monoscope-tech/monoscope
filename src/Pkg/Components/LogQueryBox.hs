@@ -355,8 +355,8 @@ queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id
                  if the event's key is 'Escape' set my value to '' then trigger keyup
                  else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
           ]
-      when (label == "Saved") do
-        label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-10", role_ "tablist"] do
+      when (label == "Saved")
+        $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-10", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
           div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-3", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "regular" "w-3.5 h-3.5"
           div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-3", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "regular" "w-3.5 h-3.5"

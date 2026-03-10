@@ -200,12 +200,12 @@ projectCard_ project = do
             faSprite_ "calendar" "regular" "h-3.5 w-3.5"
             time_ [datetime_ $ fmt $ dateDashF project.createdAt] $ toHtml @Text $ fmt $ dateDashF project.createdAt
 
-          unless (V.null project.usersDisplayImages) do
+          unless (V.null project.usersDisplayImages) $
             div_ [class_ "flex -space-x-2"] do
               project.usersDisplayImages & V.toList & take 3 & mapM_ \imgSrc ->
                 img_ [class_ "inline-block h-6 w-6 rounded-full ring-2 ring-base-100", src_ imgSrc, alt_ "User avatar", term "loading" "lazy", term "decoding" "async"]
-              when (V.length project.usersDisplayImages > 3) do
-                span_ [class_ "flex items-center justify-center h-6 w-6 rounded-full bg-fillWeak text-textWeak text-xs ring-2 ring-base-100"] do
+              when (V.length project.usersDisplayImages > 3) $
+                span_ [class_ "flex items-center justify-center h-6 w-6 rounded-full bg-fillWeak text-textWeak text-xs ring-2 ring-base-100"] $
                   toHtml ("+" <> show (V.length project.usersDisplayImages - 3))
 
       div_ [class_ "border-t border-strokeWeak bg-fillWeaker/30 px-4 pt-8 h-36"] do
@@ -519,7 +519,7 @@ renderNotificationOption pid teamIdM title description value channel notifChanne
           input_ [type_ "checkbox", value_ value, name_ "notifChannel", if isChecked then checked_ else title_ $ "Enable notification via " <> title, class_ "toggle toggle-primary"]
 
     -- Configuration content
-    when (isChecked || not (T.null $ toStrict $ renderText extraContent)) do
+    when (isChecked || not (T.null $ toStrict $ renderText extraContent)) $
       div_ [class_ "px-4 pb-4 border-t border-strokeWeak pt-4"] extraContent
 
 
@@ -545,7 +545,7 @@ renderSlackIntegration envCfg pid slackData channels existingChannels = do
           faSprite_ "circle-check" "solid" "w-5 h-5 text-iconSuccess"
           span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected to Slack (Team ID: " <> sd.teamId <> ")") ("Connected to Slack workspace: " <>) sd.teamName
 
-        when (isNothing sd.teamName) do
+        when (isNothing sd.teamName) $
           p_ [class_ "text-xs text-textWeak ml-7"] "Reconnect to see workspace name"
 
       let slackWhitelist = decodeUtf8 $ AE.encode $ map (\c -> AE.object ["value" AE..= BotUtils.channelId c, "name" AE..= ("#" <> BotUtils.channelName c)]) channels
@@ -745,7 +745,7 @@ manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
       if canDelete
         then do
           _ <- ProjectMembers.deleteTeams pid $ V.fromList itemId
-          when (isNothing listViewM) do
+          when (isNothing listViewM) $
             redirectCS ("/p/" <> pid.toText <> "/manage_teams")
           addRespHeaders ManageTeamsDelete
         else do
@@ -848,7 +848,7 @@ nameCell pid name description handle = do
 memberCell :: V.Vector ProjectMembers.TeamMemberVM -> Html ()
 memberCell members = do
   div_ [class_ "inline-block flex -space-x-2"] do
-    forM_ members $ \m -> do
+    forM_ members \m ->
       div_ [class_ "inline-block mx-0.5", term "data-tippy-content" m.memberName]
         $ img_ [class_ "inline-block h-6 w-6 rounded-full border border-strokeWeak ", src_ m.memberAvatar, alt_ "User avatar", term "loading" "lazy", term "decoding" "async"]
 
@@ -925,7 +925,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
       h2_ [class_ "text-textStrong text-3xl font-semibold flex items-center gap-2"] do
         toHtml team.name
         when isEveryone $ span_ [class_ "badge badge-primary"] "Default"
-    when isEveryone do
+    when isEveryone $
       div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong mb-6"] do
         faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
         "@everyone automatically includes all project members. "
@@ -1016,7 +1016,7 @@ manageMembersBody pid projMembers paymentPlan =
         h2_ [class_ "text-textStrong text-xl font-semibold"] "Manage Members"
         p_ [class_ "text-textWeak text-sm mt-1"] "Invite team members and manage their access permissions"
 
-      when (paymentPlan == "Free" && V.length projMembers > 1) do
+      when (paymentPlan == "Free" && V.length projMembers > 1) $
         div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
           faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
           div_ do
@@ -1598,7 +1598,7 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
             "Start typing to search members..."
             [data_ "tagify-whitelist" whiteList, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" membersTags, data_ "tagify-resolve" ""]
 
-        when isEveryoneTeam do
+        when isEveryoneTeam $
           div_ [class_ "rounded-lg bg-fillBrand-weak p-4 text-sm text-textStrong"] do
             faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
             "The @everyone team automatically includes all project members. Configure additional notification channels below, or use the "

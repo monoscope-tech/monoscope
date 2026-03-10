@@ -273,7 +273,7 @@ setEndpointCanonical triples =
 
 
 insertCanonicalEndpoints :: DB es => [(Projects.ProjectId, Text, Text, Text, Text)] -> Eff es ()
-insertCanonicalEndpoints [] = pure ()
+insertCanonicalEndpoints [] = pass
 insertCanonicalEndpoints rows =
   void
     $ PG.executeMany
@@ -313,7 +313,7 @@ updateEndpointEmbeddings pairs =
         WHERE apis.endpoints.id = u.id |]
     (V.fromList ids, V.fromList embs)
   where
-    (ids, embs) = unzip $ map (\(eid, e) -> (eid, showPGFloatArray e)) pairs
+    (ids, embs) = unzip $ map (second showPGFloatArray) pairs
 
 
 getCanonicalEndpoints :: DB es => Projects.ProjectId -> Eff es [(EndpointId, [Float])]
@@ -364,7 +364,7 @@ getMergedEndpointPairs pid =
 
 -- | Migrate shapes/fields/formats from old endpoints to canonical ones, remap anomalies/issues, then delete old data.
 migrateAndDeleteMergedEndpoints :: DB es => [(Text, Text)] -> Eff es ()
-migrateAndDeleteMergedEndpoints [] = pure ()
+migrateAndDeleteMergedEndpoints [] = pass
 migrateAndDeleteMergedEndpoints pairs = do
   let (oldHashes, canonHashes) = unzip pairs
       oldArr = V.fromList oldHashes

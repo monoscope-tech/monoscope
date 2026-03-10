@@ -387,10 +387,10 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
   pure (issues, fromMaybe 0 countResult)
   where
     timefilter = maybe "" (\(st, end) -> " AND i.created_at >= '" <> formatUTC st <> "' AND i.created_at <= '" <> formatUTC end <> "'") timeRangeM
-    ackF = maybe "" (\ack -> bool " AND i.acknowledged_at IS NULL" " AND i.acknowledged_at IS NOT NULL" ack) isAcknowledged
-    archF = maybe "" (\arch -> bool " AND i.archived_at IS NULL" " AND i.archived_at IS NOT NULL" arch) isArchived
+    ackF = maybe "" (bool " AND i.acknowledged_at IS NULL" " AND i.acknowledged_at IS NOT NULL") isAcknowledged
+    archF = maybe "" (bool " AND i.archived_at IS NULL" " AND i.archived_at IS NOT NULL") isArchived
     svcF = if null serviceFilters then "" else " AND i.service = ANY(ARRAY[" <> T.intercalate "," (map (\s -> "'" <> T.replace "'" "''" s <> "'") serviceFilters) <> "]::text[])"
-    typF = if null typeFilters then "" else " AND i.issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" (t) <> "'") typeFilters) <> "]::text[])"
+    typF = if null typeFilters then "" else " AND i.issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" t <> "'") typeFilters) <> "]::text[])"
     orderBy = case sortM of
       Just "-created_at" -> "ORDER BY i.created_at DESC"
       Just "+created_at" -> "ORDER BY i.created_at ASC"
@@ -401,10 +401,10 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       _ -> "ORDER BY i.critical DESC, i.created_at DESC"
     -- Count query uses bare table without alias
     cTimefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
-    cAckF = maybe "" (\ack -> bool " AND acknowledged_at IS NULL" " AND acknowledged_at IS NOT NULL" ack) isAcknowledged
-    cArchF = maybe "" (\arch -> bool " AND archived_at IS NULL" " AND archived_at IS NOT NULL" arch) isArchived
+    cAckF = maybe "" (bool " AND acknowledged_at IS NULL" " AND acknowledged_at IS NOT NULL") isAcknowledged
+    cArchF = maybe "" (bool " AND archived_at IS NULL" " AND archived_at IS NOT NULL") isArchived
     cSvcF = if null serviceFilters then "" else " AND service = ANY(ARRAY[" <> T.intercalate "," (map (\s -> "'" <> T.replace "'" "''" s <> "'") serviceFilters) <> "]::text[])"
-    cTypF = if null typeFilters then "" else " AND issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" (t) <> "'") typeFilters) <> "]::text[])"
+    cTypF = if null typeFilters then "" else " AND issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" t <> "'") typeFilters) <> "]::text[])"
     -- period controls bucket granularity: "24h" = hourly, "7d" = daily
     (seriesStart, seriesStep, bucketSize) = case period of
       "24h" -> ("NOW() - INTERVAL '23 hours'" :: Text, "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)
