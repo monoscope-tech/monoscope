@@ -412,7 +412,8 @@ getErrorPatternsWithCurrentRates pid now =
 -- Used for fast pre-merge before issue creation to prevent notification spam from identical errors across different spans.
 findCanonicalMatch :: DB es => Projects.ProjectId -> Maybe Text -> Text -> Text -> Eff es (Maybe ErrorPatternId)
 findCanonicalMatch pid service errorType msg =
-  fmap fromOnly . listToMaybe
+  fmap fromOnly
+    . listToMaybe
     <$> PG.query
       [sql| SELECT id FROM apis.error_patterns
         WHERE project_id = ? AND service IS NOT DISTINCT FROM ?

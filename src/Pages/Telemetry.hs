@@ -845,8 +845,8 @@ buildSpanTree_ pid sp trId level scol = do
       ]
       do
         div_ [class_ "shrink-0 flex items-center gap-1 px-2 overflow-hidden", style_ $ "width:var(--wf-left);padding-left:" <> indent] do
-          when hasChildren $
-            button_
+          when hasChildren
+            $ button_
               [ class_ "waterfall-toggle w-4 h-4 flex items-center justify-center shrink-0"
               , [__|on click halt the event's bubbling then toggle .hidden on the next .waterfall-children from the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me|]
               ]
@@ -864,7 +864,7 @@ buildSpanTree_ pid sp trId level scol = do
           , term "data-service" sp.spanRecord.serviceName
           ]
           pass
-    when hasChildren $
-      div_ [class_ "waterfall-children"] do
+    when hasChildren
+      $ div_ [class_ "waterfall-children"] do
         forM_ sp.children \c ->
           buildSpanTree_ pid c trId (level + 1) scol

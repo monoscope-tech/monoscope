@@ -950,8 +950,8 @@ stepIndicator step title prevUrl = do
       div_ [class_ " text-textStrong text-base "] $ "Step " <> show step <> " of 5"
       div_ [class_ "grid grid-cols-5 w-full gap-1"] $ do
         forM_ [1 .. 5] $ \i -> div_ [class_ $ "h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
-      when (step > 1) $
-        a_ [class_ "flex items-center gap-3 flex text-textBrand w-full mt-2", href_ prevUrl] do
+      when (step > 1)
+        $ a_ [class_ "flex items-center gap-3 flex text-textBrand w-full mt-2", href_ prevUrl] do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
           span_ [] "Back"
     span_ [class_ " text-textStrong text-4xl mt-4"] $ toHtml title

@@ -449,8 +449,8 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
             faSprite_ "bell" "regular" "h-4 w-4"
             "Unmute"
           Nothing -> muteDropdown_ alert.id.toText (muteBase <> "/mute")
-        when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]) $
-          button_ [class_ $ actionBtn <> " text-textSuccess", hxPost_ $ muteBase <> "/resolve"] do
+        when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning])
+          $ button_ [class_ $ actionBtn <> " text-textSuccess", hxPost_ $ muteBase <> "/resolve"] do
             faSprite_ "check" "regular" "h-4 w-4"
             "Resolve"
         let isInactive = isJust alert.deactivatedAt
@@ -588,30 +588,30 @@ alertNotificationsTab_ alert teams = do
         div_ [class_ "pt-2 flex items-center gap-1"] do
           span_ [class_ "text-sm text-textWeak"] "Project level notification integrations will be used."
           a_ [href_ $ "/p/" <> alert.projectId.toText <> "/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
-      unless (V.null teams) $
-        div_ [class_ "flex flex-wrap gap-4 mb-4"] $
-          forM_ teams \team ->
-            div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
-              button_
-                [ type_ "button"
-                , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
-                , term "data-tippy-content" "Remove team"
-                , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> UUID.toText team.id
-                , hxTarget_ $ "#" <> team.handle
-                , hxSwap_ "outerHTML"
-                ]
-                do
-                  faSprite_ "trash" "regular" "h-3 w-3"
-              span_ [class_ "text-sm font-medium"] $ toHtml team.name
-              forM_ team.notify_emails $ \email ->
-                div_ [class_ "flex items-center gap-2"] do
-                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "envelope" "regular" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml email
-              forM_ team.slack_channels $ \channel ->
-                div_ [class_ "flex items-center gap-2"] do
-                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "slack" "solid" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml ("#" <> channel)
-              forM_ team.discord_channels $ \channel ->
-                div_ [class_ "flex items-center gap-2"] do
-                  span_ [class_ "text-sm text-textWeak"] $ faSprite_ "discord" "brand" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml ("#" <> channel)
+      unless (V.null teams)
+        $ div_ [class_ "flex flex-wrap gap-4 mb-4"]
+        $ forM_ teams \team ->
+          div_ [class_ "flex flex-col border rounded-lg gap-4 border-strokeWeak p-6 relative w-96", id_ team.handle] do
+            button_
+              [ type_ "button"
+              , class_ "absolute top-3 cursor-pointer right-3 text-iconNeutral hover:text-iconBrand transition-colors"
+              , term "data-tippy-content" "Remove team"
+              , hxDelete_ $ "/p/" <> alert.projectId.toText <> "/monitors/alerts/" <> alert.id.toText <> "/teams/" <> UUID.toText team.id
+              , hxTarget_ $ "#" <> team.handle
+              , hxSwap_ "outerHTML"
+              ]
+              do
+                faSprite_ "trash" "regular" "h-3 w-3"
+            span_ [class_ "text-sm font-medium"] $ toHtml team.name
+            forM_ team.notify_emails $ \email ->
+              div_ [class_ "flex items-center gap-2"] do
+                span_ [class_ "text-sm text-textWeak"] $ faSprite_ "envelope" "regular" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml email
+            forM_ team.slack_channels $ \channel ->
+              div_ [class_ "flex items-center gap-2"] do
+                span_ [class_ "text-sm text-textWeak"] $ faSprite_ "slack" "solid" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml ("#" <> channel)
+            forM_ team.discord_channels $ \channel ->
+              div_ [class_ "flex items-center gap-2"] do
+                span_ [class_ "text-sm text-textWeak"] $ faSprite_ "discord" "brand" "h-3 w-3 mr-2 text-iconNeutral" >> toHtml ("#" <> channel)
 
     -- Message template
     div_ [class_ "pt-6 pb-3"] do

@@ -359,12 +359,13 @@ singleReportPage (reportType, dateLabel, emailHtml) =
 reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl _daily _weekly =
   div_ [class_ "flex flex-row h-full w-full border-t"] do
-    when (V.null reports) $
-      div_ [class_ "flex h-full w-full justify-center items-center"] $
-        div_ [class_ "flex flex-col items-center justify-center py-16 px-4"] $ do
-          div_ [class_ "rounded-full flex items-center justify-center mb-3"] $
-            faSprite_ "empty" "regular" "h-12 w-12"
-          h3_ [class_ "text-xl text-textStrong mb-2"] "No reports generated for this project yet."
+    when (V.null reports)
+      $ div_ [class_ "flex h-full w-full justify-center items-center"]
+      $ div_ [class_ "flex flex-col items-center justify-center py-16 px-4"]
+      $ do
+        div_ [class_ "rounded-full flex items-center justify-center mb-3"]
+          $ faSprite_ "empty" "regular" "h-12 w-12"
+        h3_ [class_ "text-xl text-textStrong mb-2"] "No reports generated for this project yet."
     unless (V.null reports) do
       div_ [class_ "w-1/3 border-r border-strokeWeak p-4 overflow-y-auto"] do
         div_ [class_ "mt-4 space-y-4 w-full"] do

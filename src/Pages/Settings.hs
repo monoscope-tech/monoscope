@@ -686,8 +686,8 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
         div_ [class_ "flex items-center gap-2 text-textWeak text-sm"] do
           faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
           span_ $ toHtml $ "Latest data: " <> T.take 19 last_reported
-        unless (paymentPlan == "Free") $
-          a_ [class_ "flex items-center gap-2 text-textBrand hover:underline cursor-pointer text-sm font-medium", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
+        unless (paymentPlan == "Free")
+          $ a_ [class_ "flex items-center gap-2 text-textBrand hover:underline cursor-pointer text-sm font-medium", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
             faSprite_ "link-simple" "regular" "h-4 w-4"
             span_ "View on LemonSqueezy"
 

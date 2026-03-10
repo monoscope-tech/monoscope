@@ -201,11 +201,11 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
         -- Log polling errors if any
         unless (null leftRecords)
           $ runLogT "kafka-service" appLogger LogAttention
-            $ LogBase.logAttention "Kafka poll returned errors"
-            $ AE.object
-              [ "error_count" AE..= length leftRecords
-              , "errors" AE..= map show leftRecords
-              ]
+          $ LogBase.logAttention "Kafka poll returned errors"
+          $ AE.object
+            [ "error_count" AE..= length leftRecords
+            , "errors" AE..= map show leftRecords
+            ]
 
         case rightRecords of
           [] -> pass

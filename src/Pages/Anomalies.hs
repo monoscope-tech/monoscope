@@ -240,8 +240,8 @@ anomalyDetailCore pid firstM sinceM fetchIssue = do
               , pageActions = Just $ div_ [class_ "flex gap-2"] do
                   anomalyAcknowledgeButton pid (UUIDId issue.id.unUUIDId) (isJust issue.acknowledgedAt) ""
                   anomalyArchiveButton pid (UUIDId issue.id.unUUIDId) (isJust issue.archivedAt)
-                  when (issue.issueType == Issues.RuntimeException) $
-                    whenJust errorM \errL -> do
+                  when (issue.issueType == Issues.RuntimeException)
+                    $ whenJust errorM \errL -> do
                       errorResolveAction pid errL.base.id errL.base.state canResolve
                       errorSubscriptionAction pid errL.base
               }
@@ -1639,8 +1639,9 @@ eventDisplay = \case
 errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 errorGroupMembersGetH pid errorId = do
   members <- PatternMerge.getErrorPatternGroupMembers (ErrorPatternId errorId)
-  addRespHeaders $ unless (null members) $
-    div_ [class_ "surface-raised rounded-2xl overflow-hidden mt-4"] do
+  addRespHeaders
+    $ unless (null members)
+    $ div_ [class_ "surface-raised rounded-2xl overflow-hidden mt-4"] do
       div_ [class_ "px-4 py-3 border-b border-strokeWeak flex items-center gap-2"] do
         faSprite_ "layer-group" "regular" "w-4 h-4 text-iconNeutral"
         span_ [class_ "text-sm font-medium text-textStrong"] "Similar Patterns"

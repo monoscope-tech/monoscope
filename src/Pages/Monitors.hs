@@ -326,8 +326,8 @@ monitorsPageContent_ pid monitors = do
   let activeMonitors = V.filter (isNothing . (.deactivatedAt)) monitors
       inactiveMonitors = V.filter (isJust . (.deactivatedAt)) monitors
   section_ [class_ "pt-2 mx-auto px-14 w-full flex flex-col gap-4"] do
-    when (V.null monitors) $
-      div_ [class_ "flex flex-col items-center justify-center py-16 text-center"] do
+    when (V.null monitors)
+      $ div_ [class_ "flex flex-col items-center justify-center py-16 text-center"] do
         faSprite_ "bell-slash" "regular" "h-12 w-12 text-iconNeutral mb-4"
         h3_ [class_ "text-lg font-medium text-textStrong mb-2"] "No alerts configured yet"
         p_ [class_ "text-textWeak mb-4"] "Create an alert to get notified when your queries match certain conditions."

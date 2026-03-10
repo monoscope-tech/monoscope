@@ -330,7 +330,8 @@ processBackgroundJob authCtx bgJob =
                   _ -> False
 
             unless projectJobsExist
-              $ liftIO $ withResource authCtx.jobsPool \conn -> do
+              $ liftIO
+              $ withResource authCtx.jobsPool \conn -> do
                 void $ createJob conn "background_jobs" $ BackgroundJobs.ReportUsage p
                 let sched count secs mkJob = forM_ [0 .. count - 1] \i -> do
                       let t = addUTCTime (fromIntegral @Int $ i * secs) currentTime
@@ -1397,45 +1398,46 @@ processAPIChangeAnomalies pid targetHashes = do
   let anomaliesByEndpoint = groupAnomaliesByEndpointHash anomaliesVM
 
   -- Process each endpoint group, collecting info for newly created issues only
-  newEndpointInfos <- catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
-    existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
-    case existingIssueM of
-      Just existingIssue -> do
-        let allNewFields = V.concatMap (.shapeNewUniqueFields) anomalies
-            allDeletedFields = V.concatMap (.shapeDeletedFields) anomalies
-            allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
-            hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
-            hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
-        Relude.when hasChanges do
-          let apiChangeData =
-                Issues.APIChangeData
-                  { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
-                  , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
-                  , endpointHost = "Unknown"
-                  , anomalyHashes = V.map (.targetHash) anomalies
-                  , shapeChanges = V.empty
-                  , formatChanges = V.empty
-                  , newFields = allNewFields
-                  , deletedFields = allDeletedFields
-                  , modifiedFields = allModifiedFields
-                  }
-          Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
-        pure Nothing
-      Nothing -> do
-        let allNewFields = V.concatMap (.shapeNewUniqueFields) anomalies
-            allDeletedFields = V.concatMap (.shapeDeletedFields) anomalies
-            allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
-            hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
-            hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
-        if not hasChanges
-          then pure Nothing
-          else do
-            issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
-            Issues.insertIssue issue
-            _ <- liftIO $ withResource authCtx.jobsPool \conn ->
-              createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
-            let firstAnom = V.head anomalies
-            pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
+  newEndpointInfos <-
+    catMaybes <$> forM anomaliesByEndpoint \(endpointHash, anomalies) -> do
+      existingIssueM <- Issues.findOpenIssueForEndpoint pid endpointHash
+      case existingIssueM of
+        Just existingIssue -> do
+          let allNewFields = V.concatMap (.shapeNewUniqueFields) anomalies
+              allDeletedFields = V.concatMap (.shapeDeletedFields) anomalies
+              allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
+              hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+              hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
+          Relude.when hasChanges do
+            let apiChangeData =
+                  Issues.APIChangeData
+                    { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
+                    , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
+                    , endpointHost = "Unknown"
+                    , anomalyHashes = V.map (.targetHash) anomalies
+                    , shapeChanges = V.empty
+                    , formatChanges = V.empty
+                    , newFields = allNewFields
+                    , deletedFields = allDeletedFields
+                    , modifiedFields = allModifiedFields
+                    }
+            Issues.updateIssueWithNewAnomaly existingIssue.id apiChangeData
+          pure Nothing
+        Nothing -> do
+          let allNewFields = V.concatMap (.shapeNewUniqueFields) anomalies
+              allDeletedFields = V.concatMap (.shapeDeletedFields) anomalies
+              allModifiedFields = V.concatMap (.shapeUpdatedFieldFormats) anomalies
+              hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
+              hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
+          if not hasChanges
+            then pure Nothing
+            else do
+              issue <- Issues.createAPIChangeIssue pid endpointHash anomalies
+              Issues.insertIssue issue
+              _ <- liftIO $ withResource authCtx.jobsPool \conn ->
+                createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
+              let firstAnom = V.head anomalies
+              pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
 
   -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do
@@ -1733,7 +1735,7 @@ endpointTemplateDiscovery pid = do
           foldMap
             ( \((method, host, tp), hs) ->
                 let ch = toXXHash $ pid.toText <> host <> method <> tp
-                 in (map (, ch, tp) hs, [(pid, tp, method, host, ch)])
+                 in (map (,ch,tp) hs, [(pid, tp, method, host, ch)])
             )
             $ filter (\((_, _, tp), hs) -> length hs >= 2 && T.isInfixOf "{param}" tp) grouped
     void $ Endpoints.setEndpointCanonical allUpdates

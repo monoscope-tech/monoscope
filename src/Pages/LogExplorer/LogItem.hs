@@ -345,8 +345,8 @@ expandedItemView pid item aptSp leftM rightM = do
         when isHttp $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Request"
         unless isAlert $ button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
         button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#meta-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Process"
-        unless (isLog || null spanErrors) $
-          button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
+        unless (isLog || null spanErrors)
+          $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
             "Errors"
             div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
         unless isLog $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] $ do
@@ -357,8 +357,8 @@ expandedItemView pid item aptSp leftM rightM = do
 
       div_ [class_ "my-4 py-2 text-textWeak"] $ do
         when (isLog || isAlert) $ whenJust item.body \b ->
-          div_ [class_ "http-tab-content", id_ "body-content"] $
-            jsonValueToHtmlTree (AE.toJSON b) Nothing
+          div_ [class_ "http-tab-content", id_ "body-content"]
+            $ jsonValueToHtmlTree (AE.toJSON b) Nothing
         div_ [class_ "hidden http-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
         unless isAlert $ div_ [class_ $ "http-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
