@@ -1064,7 +1064,6 @@ parseStoredContent content storedWidgets =
     Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
-
 -- | AI Chat body (response container + input bar, no header)
 anomalyAIChatBody_ :: Projects.ProjectId -> Issues.IssueId -> Html ()
 anomalyAIChatBody_ pid issueId = do
