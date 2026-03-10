@@ -970,11 +970,11 @@ aiChatResponse_ pid userQuery explanation widgetsM toolCallsM systemPromptM =
       $ details_ [class_ "mt-2 ml-[2.125rem] border border-strokeWeak rounded-lg text-xs group/debug"] do
         summary_ [class_ "cursor-pointer px-2.5 py-1.5 text-textWeak hover:bg-fillWeaker list-none flex items-center gap-1.5"] do
           faSprite_ "chevron-right" "regular" "w-2.5 h-2.5 transition-transform group-open/debug:rotate-90"
-          span_ [] $ toHtml @Text $ bool "System context" (show (length toolCalls) <> " tool calls") (not $ null toolCalls)
+          span_ [] $ toHtml @Text $ bool "System context" (show (length toolCalls) <> " tool calls") (not (null toolCalls))
         div_ [class_ "px-2.5 py-2 border-t border-strokeWeak bg-fillWeaker/50"] do
           forM_ toolCalls toolCallView_
           whenJust systemPromptM \sp ->
-            details_ [class_ $ bool "" "mt-2 border-t border-strokeWeak pt-2 " (not $ null toolCalls) <> "group/sp"] do
+            details_ [class_ $ bool "" "mt-2 border-t border-strokeWeak pt-2 " (not (null toolCalls)) <> "group/sp"] do
               summary_ [class_ "cursor-pointer text-textWeak hover:text-textStrong list-none flex items-center gap-1.5"] do
                 faSprite_ "chevron-right" "regular" "w-2.5 h-2.5 transition-transform group-open/sp:rotate-90"
                 span_ [] "System Prompt"

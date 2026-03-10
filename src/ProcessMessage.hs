@@ -859,7 +859,7 @@ ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
     (segs, vals) = parseUrlSegments (T.splitOn "/" url) ([], [])
     parsedUrl = T.intercalate "/" segs
     dynSegs = filter (T.isPrefixOf "{") segs
-    hasDyn = not $ null dynSegs
+    hasDyn = not (null dynSegs)
     pathParams = buildPathParams dynSegs vals (AE.object [])
 
 

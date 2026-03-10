@@ -120,8 +120,8 @@ getSessionEvents conn pid bucket sessionId = do
     items <- runConduit $ Minio.listObjects bucket (Just prefix) True .| CC.sinkList
     let objectNames = [Minio.oiObject info | Minio.ListItemObject info <- items]
         (mergedFiles, individualFiles) = partition (== mergedKey) objectNames
-        hasMerged = not $ null mergedFiles
-        hasIndividual = not $ null individualFiles
+        hasMerged = not (null mergedFiles)
+        hasIndividual = not (null individualFiles)
     mergedEvents <-
       if hasMerged
         then do

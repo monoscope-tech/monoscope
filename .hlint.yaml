@@ -3351,3 +3351,88 @@
 - warn: {lhs: "whenJust a (\\x -> do b)", rhs: "whenJust a \\x -> b", name: "Redundant do in whenJust"}
 - warn: {lhs: "whenNothing a (do b)", rhs: "whenNothing a $ b", name: "Redundant do in whenNothing"}
 - warn: {lhs: "whenNothing_ a (do b)", rhs: "whenNothing_ a $ b", name: "Redundant do in whenNothing_"}
+
+# ============================================================
+# Additional strict rules for enforcing CLAUDE.md code style
+# ============================================================
+
+# --- 1. Partial Function Warnings ---
+- error: {lhs: "fromJust x", rhs: "fromMaybe defaultValue x", name: "Avoid fromJust", note: "Use fromMaybe or maybe instead of fromJust"}
+- error: {lhs: "x !! n", rhs: "listToMaybe (drop n x)", name: "Avoid !!", note: "Use safe indexing instead of !!"}
+
+# --- 2. Monadic Idioms ---
+- error: {lhs: "a >> pure x", rhs: "a $> x", name: "Use $> instead of >> pure"}
+- error: {lhs: "a >> return x", rhs: "a $> x", name: "Use $> instead of >> return"}
+- error: {lhs: "a *> pure x", rhs: "a $> x", name: "Use $> instead of *> pure"}
+- error: {lhs: "pure x <* a", rhs: "x <$ a", name: "Use <$ instead of pure <*"}
+- error: {lhs: "return x <* a", rhs: "x <$ a", name: "Use <$ instead of return <*"}
+- error: {lhs: "pure f <*> x", rhs: "f <$> x", name: "Use <$> instead of pure <*>"}
+- error: {lhs: "return f <*> x", rhs: "f <$> x", name: "Use <$> instead of return <*>"}
+- error: {lhs: "x >>= pure", rhs: "x", name: "Redundant >>= pure (monad identity)"}
+- error: {lhs: "x >>= return", rhs: "x", name: "Redundant >>= return (monad identity)"}
+- error: {lhs: "pure x >>= f", rhs: "f x", name: "Redundant pure >>= f"}
+- error: {lhs: "return x >>= f", rhs: "f x", name: "Redundant return >>= f"}
+- error: {lhs: "join (pure x)", rhs: "x", name: "Redundant join pure"}
+- error: {lhs: "join (return x)", rhs: "x", name: "Redundant join return"}
+- error: {lhs: "liftM f x", rhs: "fmap f x", name: "Use fmap instead of liftM"}
+- error: {lhs: "liftA f x", rhs: "fmap f x", name: "Use fmap instead of liftA"}
+
+# --- 3. More Redundant Do Blocks ---
+- warn: {lhs: "whenM a (do b)", rhs: "whenM a $ b", name: "Redundant do in whenM"}
+- warn: {lhs: "unlessM a (do b)", rhs: "unlessM a $ b", name: "Redundant do in unlessM"}
+- warn: {lhs: "whenJustM a (\\x -> do b)", rhs: "whenJustM a \\x -> b", name: "Redundant do in whenJustM"}
+- warn: {lhs: "whenLeft_ a (\\x -> do b)", rhs: "whenLeft_ a \\x -> b", name: "Redundant do in whenLeft_"}
+- warn: {lhs: "whenRight_ a (\\x -> do b)", rhs: "whenRight_ a \\x -> b", name: "Redundant do in whenRight_"}
+- warn: {lhs: "mapM_ (\\x -> do b) a", rhs: "mapM_ (\\x -> b) a", name: "Redundant do in mapM_"}
+- warn: {lhs: "traverse a (\\x -> do b)", rhs: "traverse a \\x -> b", name: "Redundant do in traverse"}
+- warn: {lhs: "concatMapM (\\x -> do b) a", rhs: "concatMapM (\\x -> b) a", name: "Redundant do in concatMapM"}
+- warn: {lhs: "foldlM (\\x y -> do b) a c", rhs: "foldlM (\\x y -> b) a c", name: "Redundant do in foldlM"}
+- warn: {lhs: "withRunInIO (\\x -> do b)", rhs: "withRunInIO \\x -> b", name: "Redundant do in withRunInIO"}
+- warn: {lhs: "handle (\\x -> do b) a", rhs: "handle (\\x -> b) a", name: "Redundant do in handle"}
+- warn: {lhs: "catch a (\\x -> do b)", rhs: "catch a \\x -> b", name: "Redundant do in catch"}
+
+# --- 4. Relude Preferences ---
+- error: {lhs: "Data.Text.pack (show x)", rhs: "show x", name: "Relude show returns Text", note: "Relude's show already returns Text"}
+- error: {lhs: "T.pack (show x)", rhs: "show x", name: "Relude show returns Text", note: "Relude's show already returns Text"}
+- error: {lhs: "Data.Text.pack x", rhs: "toText x", name: "Use toText from Relude"}
+- error: {lhs: "T.pack x", rhs: "toText x", name: "Use toText from Relude"}
+- error: {lhs: "Data.Text.unpack x", rhs: "toString x", name: "Use toString from Relude"}
+- error: {lhs: "T.unpack x", rhs: "toString x", name: "Use toString from Relude"}
+- error: {lhs: "Data.Text.Encoding.encodeUtf8 x", rhs: "encodeUtf8 x", name: "Use Relude encodeUtf8"}
+- error: {lhs: "Data.Text.Encoding.decodeUtf8 x", rhs: "decodeUtf8 x", name: "Use Relude decodeUtf8"}
+- ignore: {name: "Use notNull"}
+- error: {lhs: "mconcat (map f x)", rhs: "foldMap f x", name: "Use foldMap instead of mconcat map"}
+- error: {lhs: "mconcat (fmap f x)", rhs: "foldMap f x", name: "Use foldMap instead of mconcat fmap"}
+
+# --- 5. Maybe/Either Combinators ---
+- error: {lhs: "not (isNothing x)", rhs: "isJust x", name: "Use isJust"}
+- error: {lhs: "not (isJust x)", rhs: "isNothing x", name: "Use isNothing"}
+- error: {lhs: "not (isLeft x)", rhs: "isRight x", name: "Use isRight"}
+- error: {lhs: "not (isRight x)", rhs: "isLeft x", name: "Use isLeft"}
+
+# --- 6. Performance ---
+- error: {lhs: "foldl f z x", rhs: "foldl' f z x", name: "Use foldl' instead of foldl", note: "foldl is lazy and can cause space leaks"}
+- error: {lhs: "length x == 0", rhs: "null x", name: "Use null instead of length == 0"}
+- error: {lhs: "length x /= 0", rhs: "not (null x)", name: "Use not null instead of length /= 0"}
+- error: {lhs: "length x > 0", rhs: "not (null x)", name: "Use not null instead of length > 0"}
+- error: {lhs: "sortBy (comparing f) x", rhs: "sortOn f x", name: "Use sortOn instead of sortBy comparing"}
+- error: {lhs: "catMaybes (map f x)", rhs: "mapMaybe f x", name: "Use mapMaybe instead of catMaybes map"}
+- error: {lhs: "catMaybes (fmap f x)", rhs: "mapMaybe f x", name: "Use mapMaybe instead of catMaybes fmap"}
+
+# --- 7. Functor Laws ---
+- error: {lhs: "fmap id x", rhs: "x", name: "Redundant fmap id (functor identity)"}
+- error: {lhs: "id <$> x", rhs: "x", name: "Redundant id <$> (functor identity)"}
+- error: {lhs: "fmap f (fmap g x)", rhs: "fmap (f . g) x", name: "Fuse fmap (functor composition)"}
+
+# --- 8. Suggestions (non-blocking) ---
+- suggest: {lhs: "length (filter f x)", rhs: "length (filter f x)", name: "Consider count function", note: "Consider using a count helper instead of length . filter"}
+
+# --- 9. Import Consistency ---
+- modules:
+  - {name: Data.HashMap.Strict, as: HM, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Set, as: Set, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.IntMap, as: IntMap, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.IntMap.Strict, as: IntMap, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Sequence, as: Seq, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Control.Monad.Trans.Maybe, as: MaybeT, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Control.Monad.Trans.Except, as: ExceptT, importStyle: qualified, qualifiedStyle: post, asRequired: true}

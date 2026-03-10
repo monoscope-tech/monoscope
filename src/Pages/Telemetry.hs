@@ -141,7 +141,7 @@ flattenMetricTree dataMap trees lvl conts = V.concat $ zipWith flatten trees isL
     isLastFlags = replicate (length trees - 1) False ++ [True]
     flatten (MetricTree nd children) isLast =
       let fp = if nd.parent == "___root___" then nd.current else nd.parent <> "." <> nd.current
-          hasChildren = not $ null children
+          hasChildren = not (null children)
           row = MetricRow{level = lvl, segment = nd.current, parentPath = nd.parent, fullPath = fp, isGroup = hasChildren, childCount = length children, continuations = conts, metric = Map.lookup fp dataMap}
           childIsLast = replicate (length children - 1) False ++ [True]
           childRows = V.concat $ zipWith (\c cLast -> flattenMetricTree dataMap [c] (lvl + 1) (conts ++ [not cLast])) children childIsLast
@@ -615,10 +615,33 @@ tracePage pid traceItem spanRecords = do
                           $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
-            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden", style_ "--wf-left:35%", id_ $ "waterfall-container-" <> traceItem.traceId] do
+            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%"] do
+              div_
+                [ class_ "absolute top-0 bottom-0 w-2 cursor-col-resize z-20 flex justify-center waterfall-divider group"
+                , style_ "left:calc(var(--wf-left) - 4px)"
+                , [__|on pointerdown(clientX)
+                     set container to the closest parent <div[style*='--wf-left']/>
+                     if no container exit end
+                     trigger setPointerCapture(pointerId: event.pointerId) on me
+                     set document.body.style.userSelect to 'none'
+                     set document.body.style.cursor to 'col-resize'
+                     repeat until event pointerup from document
+                       wait for pointermove(clientX) or pointerup from document
+                       if the event's type is 'pointerup' exit end
+                       set rect to container.getBoundingClientRect()
+                       set pct to ((clientX - rect.left) / rect.width) * 100
+                       if pct < 15 set pct to 15 end
+                       if pct > 70 set pct to 70 end
+                       call container.style.setProperty('--wf-left', pct + '%')
+                       send waterfallResize to window
+                     end
+                     set document.body.style.userSelect to ''
+                     set document.body.style.cursor to ''
+                   |]
+                ]
+                $ div_ [class_ "w-px h-full bg-strokeWeak group-hover:bg-fillBrand-strong group-active:bg-fillBrand-strong transition-colors pointer-events-none"] pass
               div_ [class_ "flex sticky top-0 z-10 bg-bgBase border-b border-b-strokeWeak h-8 text-xs"] do
                 div_ [class_ "shrink-0", style_ "width:var(--wf-left)"] pass
-                div_ [class_ "w-1 shrink-0 cursor-col-resize bg-strokeWeak hover:bg-fillBrand-strong active:bg-fillBrand-strong transition-colors waterfall-divider", term "data-container" $ "waterfall-container-" <> traceItem.traceId] pass
                 div_ [class_ "relative grow min-w-0", id_ $ "waterfall-time-container-" <> traceItem.traceId] pass
               div_ [class_ "py-1", id_ $ "waterfall-rows-" <> traceItem.traceId] do
                 waterFallTree pid rootSpans traceItem.traceId serviceColors
@@ -655,25 +678,6 @@ tracePage pid traceItem spanRecords = do
       el.dataset.init = '1';
       flameGraphChart($spanJson, "$trId", $colorsJson);
       waterFallGraphChart("$trId", $colorsJson);
-      document.querySelectorAll('.waterfall-divider').forEach(function(div) {
-        div.addEventListener('mousedown', function(e) {
-          e.preventDefault();
-          var container = document.getElementById(div.dataset.container);
-          if (!container) return;
-          var onMove = function(ev) {
-            var rect = container.getBoundingClientRect();
-            var pct = Math.min(70, Math.max(15, ((ev.clientX - rect.left) / rect.width) * 100));
-            container.style.setProperty('--wf-left', pct + '%');
-            window.dispatchEvent(new Event('waterfall-resize'));
-          };
-          var onUp = function() {
-            document.removeEventListener('mousemove', onMove);
-            document.removeEventListener('mouseup', onUp);
-          };
-          document.addEventListener('mousemove', onMove);
-          document.addEventListener('mouseup', onUp);
-        });
-      });
     }
     document.addEventListener("DOMContentLoaded", initTraceCharts);
     initTraceCharts();
@@ -855,13 +859,13 @@ buildSpanTree_ pid sp trId level scol = do
           div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol] pass
           span_ [class_ "text-xs font-medium text-textStrong truncate"] $ toHtml sp.spanRecord.serviceName
           span_ [class_ "text-xs text-textWeak truncate"] $ toHtml sp.spanRecord.spanName
-        div_ [class_ "w-1 shrink-0"] pass
         div_
           [ class_ "h-full relative grow min-w-0"
           , id_ $ "waterfall-bar-" <> sp.spanRecord.spanId
           , term "data-start" $ show sp.spanRecord.startTime
           , term "data-duration" $ show sp.spanRecord.spanDurationNs
           , term "data-service" sp.spanRecord.serviceName
+          , term "data-has-errors" $ bool "false" "true" sp.spanRecord.hasErrors
           ]
           pass
     when hasChildren

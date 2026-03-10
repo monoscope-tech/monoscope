@@ -1941,7 +1941,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
 
       -- Add widget to target dashboard (might be same as source)
       (_, targetDash) <- getDashAndVM targetDashId Nothing
-      let targetHasTabs = not $ null $ fromMaybe [] targetDash.tabs
+      let targetHasTabs = not (null (fromMaybe [] targetDash.tabs))
           addedToTab = targetHasTabs && isJust (viaNonEmpty head (fromMaybe [] targetDash.tabs))
 
       Log.logTrace "Widget duplication"
