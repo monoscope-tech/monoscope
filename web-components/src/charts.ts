@@ -1,20 +1,23 @@
 import { getSeriesColor, tailwindToHex, getContrastTextColor } from './colorMapping';
 
-// Calculate actual trace time range (maxEndTime - minStartTime)
-const getTimeRange = (spans: FlameGraphItem[]): number => {
+// Calculate actual trace time bounds (minStart, maxEnd) across root spans
+const getTimeBounds = (spans: FlameGraphItem[]): { minStart: number; range: number } => {
   let minStart = Infinity, maxEnd = -Infinity;
-  const traverse = (items: FlameGraphItem[]) => {
-    for (const item of items) {
-      minStart = Math.min(minStart, item.start);
-      maxEnd = Math.max(maxEnd, item.start + item.value);
-      if (item.children) traverse(item.children);
-    }
-  };
-  traverse(spans);
-  return maxEnd - minStart || 1;
+  for (const item of spans) {
+    minStart = Math.min(minStart, item.start);
+    maxEnd = Math.max(maxEnd, item.start + item.value);
+  }
+  return { minStart, range: maxEnd - minStart || 1 };
 };
 
 const SCROLL_BAR_WIDTH = 7;
+const FLAME_PAD_LEFT = 4;
+const RESIZE_EVENTS = ['resize', 'toggle-sidebar', 'loglist-resize'];
+
+const resolveColor = (service: string, colorsMap: Record<string, string>): string => {
+  const tw = colorsMap[service] || getSeriesColor(service, 'service');
+  return tw.startsWith('#') ? tw : tailwindToHex(tw);
+};
 
 // Simple debounce utility
 function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
@@ -40,6 +43,23 @@ const getErrorIndicator = () =>
     )
   );
 
+// Tooltip for hovering over small spans
+let tooltipEl: HTMLElement | null = null;
+function showTooltip(e: MouseEvent, text: string) {
+  if (!tooltipEl) {
+    tooltipEl = document.createElement('div');
+    tooltipEl.className = 'fixed z-[9999] px-2 py-1 text-xs rounded bg-bgOverlay text-textStrong border border-strokeWeak shadow-md pointer-events-none whitespace-nowrap';
+    document.body.appendChild(tooltipEl);
+  }
+  tooltipEl.textContent = text;
+  tooltipEl.style.display = 'block';
+  tooltipEl.style.left = `${e.clientX + 12}px`;
+  tooltipEl.style.top = `${e.clientY - 8}px`;
+}
+function hideTooltip() {
+  if (tooltipEl) tooltipEl.style.display = 'none';
+}
+
 type FlameGraphItem = {
   spanId: string;
   value: number;
@@ -56,7 +76,17 @@ type ItemsWithStyle = Pick<FlameGraphItem, 'name' | 'hasErrors' | 'spanId'> & {
   value: [number, number, number, string, number];
 };
 
+// Abort controllers keyed by renderAt to clean up listeners on re-init
+const abortControllers = new Map<string, AbortController>();
+function acquireSignal(key: string): AbortSignal {
+  abortControllers.get(key)?.abort();
+  const ac = new AbortController();
+  abortControllers.set(key, ac);
+  return ac.signal;
+}
+
 function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Record<string, string>) {
+  const signal = acquireSignal('flame-' + renderAt);
   const filterJson = (json: FlameGraphItem | FlameGraphItem[], id: string | null = null): FlameGraphItem[] => {
     if (id == null) {
       if (Array.isArray(json)) return json;
@@ -92,64 +122,59 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
   };
   const recursionJson = (jsonObj: FlameGraphItem[], id: string | null = null) => {
     const data: ItemsWithStyle[] = [];
-    const filteredJson = filterJson(structuredClone(jsonObj), id);
-    const rootVal = getTimeRange(filteredJson);
-    const recur = (item: FlameGraphItem, start = 0, level = 0) => {
-      const tailwindColor = colorsMap[item.serviceName] || getSeriesColor(item.serviceName, 'service');
-      const color = tailwindColor.startsWith('#') ? tailwindColor : tailwindToHex(tailwindColor);
-      const temp: ItemsWithStyle = {
+    const filteredJson = id != null ? filterJson(structuredClone(jsonObj), id) : jsonObj;
+    const { minStart: globalMinStart, range: rootVal } = getTimeBounds(filteredJson);
+    const recur = (item: FlameGraphItem, level = 0) => {
+      const color = resolveColor(item.serviceName, colorsMap);
+      data.push({
         name: item.name,
         hasErrors: item.hasErrors,
         spanId: item.spanId,
-        value: [level, item.start - start, item.value, item.name, (item.value / rootVal) * 100],
-        itemStyle: {
-          color,
-        },
-      };
-      data.push(temp);
+        value: [level, item.start - globalMinStart, item.value, item.name, (item.value / rootVal) * 100],
+        itemStyle: { color },
+      });
       for (const child of item.children || []) {
-        recur(child, start, level + 1);
+        recur(child, level + 1);
       }
     };
-    filteredJson.forEach((item) => {
-      recur(item, item.start);
-    });
+    filteredJson.forEach((item) => recur(item));
     return data;
   };
 
   const fData = buildHierarchy(data);
+  const flameContainer = document.querySelector('#a' + renderAt) as HTMLElement;
+  const resetBtn = document.getElementById('reset-zoom-btn');
 
-  const renderItem = (item: ItemsWithStyle, renderAt: string, rootVal: number, containerWidth?: number) => {
+  const renderItem = (item: ItemsWithStyle, container: HTMLElement, rootVal: number, containerWidth: number) => {
     const [level, xStart, xEnd] = item.value;
-
-    // Get container - we need it for appending the element
-    const container = document.querySelector('#a' + renderAt) as HTMLElement;
-    if (!container) return;
-
-    // Use cached containerWidth if provided, otherwise calculate it
-    const actualWidth = containerWidth || container.offsetWidth - SCROLL_BAR_WIDTH;
-
-    const startPix = (actualWidth * xStart) / rootVal;
-    const width = (actualWidth * xEnd) / rootVal;
+    const drawWidth = containerWidth - FLAME_PAD_LEFT;
+    const startPix = Math.max(FLAME_PAD_LEFT, FLAME_PAD_LEFT + (drawWidth * xStart) / rootVal);
+    const width = Math.max((drawWidth * xEnd) / rootVal, 3);
     const height = 20;
     const yStart = height * level + (level + 1) * 3;
 
+    const [t, u] = formatDuration(item.value[2]);
+    const pct = item.value[4];
     const div = elt('div', {
-      class:
-        item.itemStyle.color +
-        ' absolute hover:z-999 flex rounded-sm items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black',
+      class: 'absolute hover:z-999 flex rounded-sm items-center span-filterble cursor-pointer gap-1 flex-nowrap overflow-hidden hover:border hover:border-black',
       id: item.spanId,
       style: `background-color: ${item.itemStyle.color};`,
       onclick: (e: any) => {
         e.stopPropagation();
+        // Highlight selected span
+        document.querySelectorAll('.timeline-selected').forEach((el) => {
+          el.classList.remove('ring-2', 'ring-strokeBrand-strong', 'timeline-selected');
+        });
+        (e.currentTarget as HTMLElement).classList.add('ring-2', 'ring-strokeBrand-strong', 'timeline-selected');
         const data = filterJson(structuredClone(fData), item.name);
         flameGraph(data, renderAt);
-        // const target = document.getElementById(item.span_id)
-        // if (target) {
-        //   target.scrollIntoView()
-        // }
+        resetBtn?.classList.remove('hidden');
         (window as any).htmx.trigger('#trigger-span-' + item.spanId, 'click');
       },
+      onmouseenter: (e: MouseEvent) => {
+        showTooltip(e, `${item.name} — ${Math.floor(Number(t))} ${u} (${pct.toFixed(1)}%)`);
+      },
+      onmouseleave: () => hideTooltip(),
     });
     div.style.left = `${startPix}px`;
     div.style.top = `${yStart}px`;
@@ -160,7 +185,6 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     }
     const textColor = getContrastTextColor(item.itemStyle.color);
     const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs', style: `color: ${textColor}` }, item.name);
-    const [t, u] = formatDuration(item.value[2]);
     const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
     div.appendChild(text);
     div.appendChild(tim);
@@ -169,26 +193,29 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
 
   let maxDuration = 0;
   function flameGraph(stackTrace: FlameGraphItem[], target: string) {
-    const container = document.querySelector('#a' + target);
-    if (container) {
-      container.innerHTML = '';
-      const rootVal = stackTrace.sort((a, b) => b.value - a.value)[0].value || 1;
-      maxDuration = rootVal;
-      generateTimeIntervals(rootVal, 'time-container-' + target);
+    if (!flameContainer) return;
+    flameContainer.innerHTML = '';
+    const rootVal = getTimeBounds(stackTrace).range;
+    maxDuration = rootVal;
+    generateTimeIntervals(rootVal, 'time-container-' + target, FLAME_PAD_LEFT);
 
-      // Cache container width to avoid multiple reflows
-      const containerWidth = container.offsetWidth - SCROLL_BAR_WIDTH;
-      const data = recursionJson(stackTrace);
-      const sortedData = data.sort((a, b) => b.value[2] - a.value[2]);
-      sortedData.forEach((item) => {
-        renderItem(item, target, rootVal, containerWidth);
-      });
-    }
+    const containerWidth = flameContainer.offsetWidth - SCROLL_BAR_WIDTH;
+    const data = recursionJson(stackTrace);
+    data.sort((a, b) => b.value[2] - a.value[2]);
+    data.forEach((item) => renderItem(item, flameContainer, rootVal, containerWidth));
   }
 
   flameGraph(fData, renderAt);
 
-  const flameGraphContainer = document.querySelector('#flame-graph-container-' + renderAt)!;
+  // Reset zoom button
+  if (resetBtn) {
+    resetBtn.addEventListener('click', () => {
+      flameGraph(fData, renderAt);
+      resetBtn.classList.add('hidden');
+    }, { signal });
+  }
+
+  const flameGraphContainer = document.querySelector('#flame-graph-container-' + renderAt) as HTMLElement;
 
   // Cache DOM elements and values outside the mousemove handler
   const lineContainer = document.querySelector('#time-bar-indicator-' + renderAt) as HTMLElement;
@@ -199,25 +226,23 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
 
   // Update cache when needed
   const updateCache = () => {
-    if (flameGraphContainer) {
-      cachedBoundingX = flameGraphContainer.getBoundingClientRect().x;
-    }
-    if (timeContainer) {
-      cachedContainerWidth = timeContainer.offsetWidth - SCROLL_BAR_WIDTH;
-    }
+    if (!flameGraphContainer || !timeContainer) return;
+    cachedBoundingX = flameGraphContainer.getBoundingClientRect().x;
+    cachedContainerWidth = timeContainer.offsetWidth - SCROLL_BAR_WIDTH;
   };
 
   // Initial cache update
   updateCache();
 
-  ['resize', 'toggle-sidebar', 'loglist-resize'].forEach((eventName) => {
-    const updateCacheDebounced = debounce(updateCache, 250);
-    const flameGraphDebounced = debounce(() => flameGraph(fData, renderAt), 100);
-    window.addEventListener(eventName, () => {
-      updateCacheDebounced();
-      flameGraphDebounced();
-    });
-  });
+  const redraw = () => { updateCache(); flameGraph(fData, renderAt); };
+  const debouncedRedraw = debounce(redraw, 100);
+  RESIZE_EVENTS.forEach((e) => window.addEventListener(e, debouncedRedraw, { signal }));
+
+  // Re-render when tab becomes visible via navigatable()
+  const flameTab = flameGraphContainer.closest('.a-tab-content');
+  if (flameTab) {
+    flameTab.addEventListener('tab-visible', () => requestAnimationFrame(redraw), { signal });
+  }
 
   flameGraphContainer.addEventListener('mousemove', (e) => {
     if (e.currentTarget && cachedBoundingX !== null && cachedContainerWidth !== null) {
@@ -237,11 +262,8 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
       });
     }
   });
-  flameGraphContainer.addEventListener('mouseleave', (e) => {
-    const lineContainer = document.querySelector('#time-bar-indicator-' + renderAt) as HTMLElement;
-    if (lineContainer) {
-      lineContainer.style.display = 'none';
-    }
+  flameGraphContainer.addEventListener('mouseleave', () => {
+    if (lineContainer) lineContainer.style.display = 'none';
   });
 }
 
@@ -261,24 +283,22 @@ function buildHierarchy(spans: FlameGraphItem[]): FlameGraphItem[] {
   return roots;
 }
 
-function generateTimeIntervals(duration: number, target: string) {
+function generateTimeIntervals(duration: number, target: string, padLeft = 0) {
   const container = document.querySelector('#' + target) as HTMLElement;
   if (!container) return;
-  // Cache width calculation
-  const containerWidth = target.startsWith('waterfall-time-container') ? 550 : container.offsetWidth - SCROLL_BAR_WIDTH;
-  const intervalWidth = containerWidth / 9;
+  const drawWidth = container.offsetWidth - SCROLL_BAR_WIDTH - padLeft;
+  const intervalWidth = drawWidth / 9;
 
   // Clear container after reading width
   container.innerHTML = '';
   const intervals = [];
   for (let i = 0; i < 10; i++) {
     const t = Math.floor((i * duration) / 9);
-    let [durationF, unit] = formatDuration(t);
-    const time = durationF;
+    let [time, unit] = formatDuration(t);
     unit = t === 0 ? '' : unit;
     intervals.push(`
               <div class="absolute bottom-0 text-textStrong border-left overflow-x-visible" style="width: ${intervalWidth}px; left: ${
-      i * intervalWidth
+      padLeft + i * intervalWidth
     }px;">
                <div class="relative" style="height:10px">
                 <div class="bg-fillPress"  style="width:1px; height:10px;"></div>
@@ -292,11 +312,14 @@ function generateTimeIntervals(duration: number, target: string) {
 
 function formatDuration(duration: number): string[] {
   if (duration >= 1000000000) {
-    return [(duration / 1000000000).toFixed(1), 's'];
+    const v = duration / 1000000000;
+    return [v >= 10 ? Math.round(v).toString() : v.toFixed(1), 's'];
   } else if (duration >= 1000000) {
-    return [(duration / 1000000).toFixed(1), 'ms'];
+    const v = duration / 1000000;
+    return [v >= 10 ? Math.round(v).toString() : v.toFixed(1), 'ms'];
   } else if (duration >= 1000) {
-    return [(duration / 1000).toFixed(1), 'µs'];
+    const v = duration / 1000;
+    return [v >= 10 ? Math.round(v).toString() : v.toFixed(1), 'µs'];
   } else {
     return [duration.toFixed(1), 'ns'];
   }
@@ -323,92 +346,61 @@ function elt(type: string, props: Record<string, any>, ...children: (HTMLElement
   return dom;
 }
 
-type WaterfallItem = {
-  spanRecord: {
-    parentSpanId?: string;
-    spanName: string;
-    spanId: string;
-    spanDurationNs: number;
-    uSpandId: boolean;
-    hasErrors: boolean;
-    serviceName: string;
-    startTime: number;
-    endTime: number;
-    timestamp: string;
-  };
-  children: WaterfallItem[];
-};
+function waterFallGraphChart(renderAt: string, serviceColors: Record<string, string>) {
+  const container = document.querySelector('#waterfall-rows-' + renderAt);
+  if (!container) return;
 
-function waterFallGraphChart(fData: WaterfallItem[], renderAt: string, serviceColors: Record<string, string>) {
-  const { min, max } = getMinMax(fData);
-  const maxDuration = max - min;
-  generateTimeIntervals(maxDuration, 'waterfall-time-container-' + renderAt);
-  buildWaterfall(fData, renderAt, serviceColors, min, maxDuration);
+  const signal = acquireSignal('waterfall-' + renderAt);
+
+  // Parse bar data once from DOM attributes, pre-compute colors
+  const barEls = container.querySelectorAll<HTMLElement>('[id^="waterfall-bar-"]');
+  const barData: { el: HTMLElement; start: number; duration: number; color: string; textColor: string; label: string }[] = [];
+  let min = Infinity, max = -Infinity;
+  barEls.forEach((el) => {
+    const start = Number(el.dataset.start);
+    const duration = Number(el.dataset.duration);
+    const color = resolveColor(el.dataset.service || '', serviceColors);
+    const [t, u] = formatDuration(duration);
+    min = Math.min(min, start);
+    max = Math.max(max, start + duration);
+    barData.push({ el, start, duration, color, textColor: getContrastTextColor(color), label: `${Math.floor(Number(t))} ${u}` });
+  });
+  const maxDuration = max - min || 1;
+
+  const renderBars = () => {
+    const firstWidth = barData[0]?.el.clientWidth;
+    if (!firstWidth) return;
+    for (const { el, start, duration, color, textColor, label } of barData) {
+      const offset = start - min;
+      const leftPx = Math.max(0, (firstWidth * offset) / maxDuration);
+      const widthPx = Math.max((firstWidth * duration) / maxDuration, 2);
+
+      el.innerHTML = '';
+      const bar = elt('div', {
+        class: 'absolute top-1 bottom-1 rounded-sm flex items-center justify-end overflow-hidden',
+        style: `left:${leftPx}px;width:${widthPx}px;background-color:${color};`,
+      });
+      const tim = elt('span', { class: 'text-xs shrink-0 mr-1 tabular-nums', style: `color:${textColor}` }, label);
+      bar.appendChild(tim);
+      el.appendChild(bar);
+    }
+  };
+
+  const fullRender = () => {
+    generateTimeIntervals(maxDuration, 'waterfall-time-container-' + renderAt);
+    renderBars();
+  };
+
+  fullRender();
+
+  // Re-render when tab becomes visible via navigatable()
+  const waterfallTab = (container as HTMLElement).closest('.a-tab-content');
+  if (waterfallTab) {
+    waterfallTab.addEventListener('tab-visible', () => requestAnimationFrame(fullRender), { signal });
+  }
+
+  const debouncedRender = debounce(fullRender, 150);
+  RESIZE_EVENTS.forEach((e) => window.addEventListener(e, debouncedRender, { signal }));
 }
 
 window.waterFallGraphChart = waterFallGraphChart;
-
-function buildWaterfall(spans: WaterfallItem[], target: string, serviceColors: Record<string, string>, start: number, maxDuration: number) {
-  const container = document.querySelector('#waterfall-' + target);
-  if (container) {
-    const containerWidth = 550;
-    container.innerHTML = '';
-    spans.forEach((span) => {
-      container.appendChild(buildTree(span, serviceColors, start, maxDuration, containerWidth));
-    });
-  }
-}
-
-function buildTree(span: WaterfallItem, serviceColors: Record<string, string>, start: number, rootVal: number, containerWidth: number) {
-  const startCurr = span.spanRecord.startTime;
-  const st = startCurr - start;
-  const startPix = (containerWidth * st) / rootVal;
-  const width = (containerWidth * span.spanRecord.spanDurationNs) / rootVal;
-  const spanId = span.spanRecord.spanId;
-  const tailwindColor = serviceColors[span.spanRecord.serviceName] || getSeriesColor(String(span.spanRecord.serviceName), 'service');
-  const color = tailwindColor.startsWith('#') ? tailwindColor : tailwindToHex(tailwindColor);
-  const textColor = getContrastTextColor(color);
-  const parentDiv = elt('div', { class: 'flex flex-col span-filterble' });
-  const div = elt('div', {
-    class: 'flex rounded-sm items-center cursor-pointer h-5 grow-0 justify-between flex-nowrap overflow-x-visible hover:border hover:border-black',
-    id: 'waterfall-chart-' + spanId,
-    style: `background-color: ${color};`,
-    onclick: (event: any) => {
-      event.stopPropagation();
-      event.currentTarget.nextSibling.classList.toggle('hidden');
-      const treeTarget = document.querySelector('#waterfall-tree-' + spanId);
-      if (treeTarget) treeTarget.classList.toggle('hidden');
-    },
-  });
-  parentDiv.style.marginLeft = `${startPix}px`;
-  div.style.width = `${width}px`;
-  const childDiv = elt('div', { class: 'flex flex-col gap-2 mt-2', id: 'waterfall-child-' + spanId });
-  span.children.forEach((child) => {
-    childDiv.appendChild(buildTree(child, serviceColors, startCurr, rootVal, containerWidth));
-  });
-  const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs hidden', style: `color: ${textColor}` }, span.spanRecord.serviceName + span.spanRecord.spanName);
-  const [t, u] = formatDuration(span.spanRecord.spanDurationNs);
-  const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
-  if (span.spanRecord.hasErrors) div.appendChild(getErrorIndicator());
-  div.appendChild(text);
-  div.appendChild(tim);
-  parentDiv.appendChild(div);
-  if (span.children.length > 0) parentDiv.appendChild(childDiv);
-  return parentDiv;
-}
-
-function getMinMax(arr: WaterfallItem[]) {
-  let min = Infinity;
-  let max = -Infinity;
-  function traverse(array: WaterfallItem[]) {
-    for (let i = 0; i < array.length; i++) {
-      const nano = array[i].spanRecord.startTime;
-      const nano2 = array[i].spanRecord.endTime;
-      if (nano < min) min = nano;
-      if (nano2 > max) max = nano2;
-      if (array[i].children) traverse(array[i].children);
-    }
-  }
-  traverse(arr);
-  return { min, max };
-}

@@ -548,7 +548,7 @@ tracePage pid traceItem spanRecords = do
           div_ [class_ "flex flex-col gap-2"] do
             div_ [class_ "flex justify-between mb-2"] do
               div_ [class_ "flex items-center gap-2 text-textWeak font-medium"] do
-                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Flame Graph"
+                button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
               div_ [class_ "flex items-center gap-2"] do
@@ -579,7 +579,7 @@ tracePage pid traceItem spanRecords = do
                     ]
                     do
                       faSprite_ "chevron-down" "regular" "h-3 w-3"
-              button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9"] "Reset Zoom"
+              button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden", id_ "reset-zoom-btn"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
             div_ [class_ "flex gap-2 w-full pt-2"] do
               div_
@@ -589,7 +589,7 @@ tracePage pid traceItem spanRecords = do
                 do
                   div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ $ "time-container-" <> traceItem.traceId] pass
                   div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> traceItem.traceId] pass
-                  div_ [class_ "h-full top-0  absolute z-50 hidden", id_ $ "time-bar-indicator-" <> traceItem.traceId] do
+                  div_ [class_ "h-full top-0 absolute z-50 hidden", id_ $ "time-bar-indicator-" <> traceItem.traceId] do
                     div_ [class_ "relative h-full"] do
                       div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ $ "line-time-" <> traceItem.traceId] "2 ms"
                       div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
@@ -615,25 +615,18 @@ tracePage pid traceItem spanRecords = do
                           $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
-            div_ [class_ "border border-strokeWeak flex w-full rounded-2xl min-h-[230px]  overflow-y-auto overflow-x-hidden "] do
-              div_ [class_ "w-full border-r overflow-x-hidden"] do
-                div_ [class_ "border-b h-10 border-b-strokeWeak"] pass
+            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden"] do
+              div_ [class_ "flex sticky top-0 z-10 bg-bgBase border-b border-b-strokeWeak h-8 text-xs"] do
+                div_ [class_ "w-[35%] shrink-0"] pass
+                div_ [class_ "w-[65%] relative", id_ $ "waterfall-time-container-" <> traceItem.traceId] pass
+              div_ [class_ "py-1", id_ $ "waterfall-rows-" <> traceItem.traceId] do
                 waterFallTree pid rootSpans traceItem.traceId serviceColors
-              div_ [class_ "shrink-0 px-2"] do
-                div_
-                  [ class_ "w-xl sticky top-0 border-b border-b-strokeWeak h-10 text-xs relative"
-                  , id_ $ "waterfall-time-container-" <> traceItem.traceId
-                  ]
-                  pass
-                div_ [class_ "w-xl overflow-x-hidden py-2 relative flex flex-col gap-2", id_ $ "waterfall-" <> traceItem.traceId] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "span_list"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors spanRecords
 
   let spanJson = decodeUtf8 $ AE.encode $ spanRecords <&> getSpanJson
-  let waterFallJson = decodeUtf8 $ AE.encode rootSpans
-
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
   script_
@@ -655,12 +648,15 @@ tracePage pid traceItem spanRecords = do
   |]
   script_
     [text|
-    document.addEventListener("DOMContentLoaded", function() {
+    function initTraceCharts() {
+      var el = document.getElementById('trace-tabs');
+      if (typeof flameGraphChart === 'undefined' || !el || el.dataset.init) return;
+      el.dataset.init = '1';
       flameGraphChart($spanJson, "$trId", $colorsJson);
-      waterFallGraphChart($waterFallJson, "$trId", $colorsJson);
-   });
-    flameGraphChart($spanJson, "$trId", $colorsJson);
-    waterFallGraphChart($waterFallJson, "$trId", $colorsJson);
+      waterFallGraphChart("$trId", $colorsJson);
+    }
+    document.addEventListener("DOMContentLoaded", initTraceCharts);
+    initTraceCharts();
   |]
 
 
@@ -799,43 +795,48 @@ buildSpanTree spans =
 
 
 waterFallTree :: Projects.ProjectId -> [SpanTree] -> Text -> HashMap Text Text -> Html ()
-waterFallTree pid records trId scols = do
-  div_ [class_ "pl-2 py-2 flex flex-col gap-2"] do
-    forM_ (zip [0 ..] records) \(i, c) -> do
-      buildSpanTree_ pid c trId 0 scols True
+waterFallTree pid records trId scols =
+  forM_ records \c -> buildSpanTree_ pid c trId 0 scols
 
 
-buildSpanTree_ :: Projects.ProjectId -> SpanTree -> Text -> Int -> HashMap Text Text -> Bool -> Html ()
-buildSpanTree_ pid sp trId level scol isLasChild = do
+buildSpanTree_ :: Projects.ProjectId -> SpanTree -> Text -> Int -> HashMap Text Text -> Html ()
+buildSpanTree_ pid sp trId level scol = do
   let hasChildren = not $ null sp.children
       serviceCol = getServiceColor sp.spanRecord.serviceName scol
-  div_ [class_ "flex items-start w-full relative span-filterble"] do
-    when (level /= 0) $ div_ [class_ "w-4 shrink-0 ml-2 h-[1px] mt-2 bg-strokeWeak"] pass
-    unless (level == 0) $ div_ [class_ "absolute -top-3 left-2 border-l h-5 border-l-strokeWeak"] pass
-    unless isLasChild $ div_ [class_ "absolute top-1 left-2 border-l h-full border-l-strokeWeak"] pass
-    div_ [class_ "flex flex-col w-full grow-1 shrink-1 border-strokeWeak relative"] do
-      when hasChildren $ div_ [class_ "absolute top-1 left-2 border-l h-2 border-l-strokeWeak"] pass
-      let tme = fromString (formatShow iso8601Format sp.spanRecord.timestamp)
-          spanId = UUID.toText sp.spanRecord.uSpanId
-      div_
-        [ class_ "w-full cursor-pointer flex justify-between max-w-full items-center h-5 collapsed"
-        , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
-        , hxTarget_ "#log_details_container"
-        , hxSwap_ "innerHTML"
-        , hxIndicator_ "#loading-span-list"
-        , id_ $ "trigger-span-" <> sp.spanRecord.spanId
-        ]
-        do
-          div_ [class_ "flex items-center w-[95%] gap-1 border-strokeBrand-strong rounded-lg overflow-x-hidden waterfall-item", [__|on click remove .border from .waterfall-item then add .border to me|]] do
-            when hasChildren $ do
-              div_ [class_ "border border-strokeWeak w-7 flex justify-between gap-1 items-center rounded-sm p-0.5"] do
-                faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 font-bold text-textStrong waterfall-item-tree-chevron"
-                span_ [class_ "text-xs"] $ toHtml $ show (length sp.children)
-            span_ [class_ "font-medium text-textStrong "] $ toHtml sp.spanRecord.serviceName
-            faSprite_ "chevron-right" "regular" "h-3 w-3 shrink-0 text-textStrong"
-            span_ [class_ "text-textWeak text-sm whitespace-nowrap"] $ toHtml sp.spanRecord.spanName
-          span_ [class_ $ "w-1 rounded-sm h-5 shrink-0 " <> serviceCol] ""
-      when hasChildren $ do
-        div_ [class_ "flex flex-col children_container gap-2 mt-2", id_ $ "waterfall-tree-" <> sp.spanRecord.spanId] do
-          forM_ (zip [0 ..] sp.children) \(i, c) -> do
-            buildSpanTree_ pid c trId (level + 1) scol (i == length sp.children - 1)
+      tme = fromString (formatShow iso8601Format sp.spanRecord.timestamp)
+      spanId = UUID.toText sp.spanRecord.uSpanId
+      indent = show (level * 12) <> "px"
+  div_ [class_ "span-filterble"] do
+    div_
+      [ class_ "flex items-center w-full h-7 cursor-pointer hover:bg-fillWeaker waterfall-row"
+      , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
+      , hxTarget_ "#log_details_container"
+      , hxSwap_ "innerHTML"
+      , hxIndicator_ "#loading-span-list"
+      , id_ $ "trigger-span-" <> sp.spanRecord.spanId
+      , [__|on click remove .bg-fillBrand-weak from .waterfall-active then add .bg-fillBrand-weak .waterfall-active to me|]
+      ]
+      do
+        div_ [class_ "w-[35%] shrink-0 flex items-center gap-1 px-2 overflow-hidden", style_ $ "padding-left:" <> indent] do
+          when hasChildren do
+            button_
+              [ class_ "waterfall-toggle w-4 h-4 flex items-center justify-center shrink-0"
+              , [__|on click halt the event's bubbling then toggle .hidden on the next .waterfall-children from the closest .span-filterble then toggle .rotate-90 on the first <svg/> in me|]
+              ]
+              do faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak rotate-90"
+          unless hasChildren $ div_ [class_ "w-4 shrink-0"] pass
+          div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol] pass
+          span_ [class_ "text-xs font-medium text-textStrong truncate"] $ toHtml sp.spanRecord.serviceName
+          span_ [class_ "text-xs text-textWeak truncate"] $ toHtml sp.spanRecord.spanName
+        div_
+          [ class_ "w-[65%] h-full relative"
+          , id_ $ "waterfall-bar-" <> sp.spanRecord.spanId
+          , term "data-start" $ show sp.spanRecord.startTime
+          , term "data-duration" $ show sp.spanRecord.spanDurationNs
+          , term "data-service" $ sp.spanRecord.serviceName
+          ]
+          pass
+    when hasChildren do
+      div_ [class_ "waterfall-children"] do
+        forM_ sp.children \c ->
+          buildSpanTree_ pid c trId (level + 1) scol

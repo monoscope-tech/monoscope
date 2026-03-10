@@ -147,7 +147,6 @@ bodyWrapper bcfg child = do
 
         -- Flag for widget initialization - set to true after web-components loads
         script_ "window.widgetDepsReady = false;"
-
         script_ [type_ "module", src_ $(hashAssetFile "/public/assets/web-components/dist/js/index.js")] ("" :: Text)
 
         script_
@@ -188,6 +187,7 @@ bodyWrapper bcfg child = do
               me.classList.add(activeClass);
               contents.forEach(content => content.classList.add("hidden"));
               targetElement.classList.remove("hidden");
+              targetElement.dispatchEvent(new CustomEvent("tab-visible", { bubbles: true }));
             });
         }
 
