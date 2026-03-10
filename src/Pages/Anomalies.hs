@@ -1478,6 +1478,7 @@ renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
+      span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show issue.seqNum
       a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors line-clamp-2 break-all"] $ renderIssueTitle_ issue
       severityBadge_ issue.severity
       issueStateBadge_ issue.latestStateEvent
