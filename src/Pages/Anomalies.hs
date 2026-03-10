@@ -330,7 +330,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
       severityBadge "critical" = span_ [class_ $ sevBase <> "bg-fillError-weak text-fillError-strong border-2 border-strokeError-strong shadow-sm"] "CRITICAL"
       severityBadge "warning" = span_ [class_ $ sevBase <> "bg-fillWarning-weak text-fillWarning-strong border border-strokeWarning-weak shadow-sm"] "WARNING"
       severityBadge _ = pass
-  div_ [class_ "flex h-full overflow-hidden"] do
+  div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
     -- LEFT: scrollable main content
     div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto pt-8 px-4 pb-8 space-y-4"] do
       -- Header: title
@@ -365,6 +365,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             metadataChip_ "gauge-high" $ Issues.showRate d.currentRatePerHour <> " current"
             metadataChip_ "chart-line" $ Issues.showRate d.baselineMean <> " baseline"
           _ -> createdChip
+      -- Seed URL params with default time range so standalone chart widgets can read it
+      script_ [fmt|document.addEventListener('DOMContentLoaded',function(){{if(!new URLSearchParams(location.search).get('since'))window.setParams({{since:'{fromMaybe "1H" tp.since}'}})}});|]
       -- Volume chart: preloaded from hourly stats, refreshable via hashes query
       whenJust (Issues.hashPrefix issue.issueType) \prefix -> do
         let hashQuery = "hashes[*]==\"" <> prefix <> issue.targetHash <> "\" | summarize count(*) by bin_auto(timestamp)"
@@ -377,7 +379,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             div_ [class_ "flex items-center gap-2"] do
               TimePicker.timepicker_ (Just refreshId) currentRange Nothing
               TimePicker.refreshButton_
-          div_ [class_ "h-36"]
+          div_ [class_ "h-24"]
             $ Widget.widget_
               (def :: Widget.Widget)
                 { Widget.standalone = Just True
@@ -403,7 +405,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                   span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] title
                 content
           withIssueDataH @Issues.RuntimeExceptionData issue.issueData \exceptionData -> do
-            div_ [class_ "flex gap-4 items-stretch"] do
+            div_ [class_ "flex flex-col lg:flex-row gap-4 items-stretch"] do
               div_ [class_ "min-w-0 flex-1"]
                 $ cardSection "code" "Stack Trace"
                 $ div_ [class_ "max-h-80 overflow-y-auto"]
@@ -413,29 +415,30 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
               whenJust errM \errL -> do
                 let err = errL.base
                     detailItem :: (Text, Text, Text, Text) -> HtmlT Identity ()
-                    detailItem (icon, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5"] do
-                      faSprite_ icon "regular" $ "w-3 h-3 " <> iconColor
+                    detailItem (icn, iconColor, lbl, value) = div_ [class_ "flex items-center gap-1.5 whitespace-nowrap"] do
+                      faSprite_ icn "regular" $ "w-3 h-3 " <> iconColor
                       span_ [class_ "text-xs text-textWeak"] $ toHtml lbl <> ":"
                       span_ [class_ "text-xs font-medium"] $ toHtml value
-                cardSection "circle-info" "Error Details" $ div_ [class_ "p-4 flex flex-col gap-4"] do
-                  whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
-                    div_ [class_ "mb-2"] do
-                      span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
-                      span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
-                  div_ [class_ "flex items-center gap-4"]
-                    $ forM_
-                      [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
-                      , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
-                      ]
-                      detailItem
-                  div_ [class_ "flex items-center gap-4"]
-                    $ forM_
-                      [ ("code" :: Text, "text-fillWarning-strong" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
-                      , ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
-                      ]
-                      detailItem
-                similarPatternsSection_ pid err.id
-              activityPanel_ pid issueId "overflow-y-auto w-72 shrink-0"
+                div_ [class_ "lg:w-80 shrink-0 flex flex-col gap-4"] do
+                  cardSection "circle-info" "Error Details" $ div_ [class_ "p-4 flex flex-col gap-3"] do
+                    whenJust ((,) <$> exceptionData.requestMethod <*> exceptionData.requestPath) \(method, path) ->
+                      div_ [class_ "mb-1"] do
+                        span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap"] $ toHtml method
+                        span_ [class_ "ml-2 text-sm text-textWeak"] $ toHtml path
+                    div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
+                      $ forM_
+                        [ ("calendar" :: Text, "text-fillBrand-strong" :: Text, "First seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.createdAt))
+                        , ("calendar" :: Text, "text-fillBrand-strong" :: Text, "Last seen" :: Text, compactTimeAgo $ toText $ prettyTimeAuto now (zonedTimeToUTC err.updatedAt))
+                        ]
+                        detailItem
+                    div_ [class_ "flex flex-wrap items-center gap-x-5 gap-y-2"]
+                      $ forM_
+                        [ ("code" :: Text, "text-fillWarning-strong" :: Text, "Stack" :: Text, fromMaybe "Unknown stack" err.errorData.runtime)
+                        , ("server" :: Text, "text-fillSuccess-strong" :: Text, "Service" :: Text, fromMaybe "Unknown service" err.errorData.serviceName)
+                        ]
+                        detailItem
+                  activityPanel_ pid issueId ""
+                  similarPatternsSection_ pid err.id
         Issues.QueryAlert -> withIssueDataH @Issues.QueryAlertData issue.issueData \alertData ->
           div_ [class_ "mb-4"] do
             span_ [class_ "text-xs text-textWeak mb-2 block font-semibold uppercase tracking-wide"] "Query"
@@ -466,10 +469,10 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 , Widget.hideLegend = Just True
                 }
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
-        div_ [class_ "px-4 border-b border-b-strokeWeak flex items-center justify-between"] do
+        div_ [class_ "px-4 border-b border-strokeWeak flex items-center justify-between"] do
           div_ [class_ "flex items-center gap-2"] do
             faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
-            h4_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
+            h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
           div_ [class_ "flex items-center"] do
             let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
                 navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
@@ -478,8 +481,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             span_ [class_ "mx-4 w-px h-4 bg-strokeWeak"] pass
             forM_ [("#span-content" :: Text, "Trace" :: Text, True), ("#log-content" :: Text, "Logs" :: Text, False), ("#replay-content" :: Text, "Replay" :: Text, False)] tabBtn
         div_ [class_ "p-2 w-full overflow-x-hidden"] do
-          div_ [class_ "flex w-full err-tab-content", id_ "span-content"] do
-            div_ [id_ "trace_container", class_ "grow-1 max-w-[80%] w-1/2 min-w-[20%] shrink-1"]
+          div_ [class_ "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
+            div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
               $ maybe
                 ( div_ [class_ "flex flex-col items-center justify-center h-48"] do
                     faSprite_ "inbox-full" "regular" "w-6 h-6 text-iconNeutral"
@@ -487,8 +490,8 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 )
                 (\t -> tracePage pid t spanRecs)
                 tr
-            div_ [class_ "transition-opacity duration-200 mx-1", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] w-1/2 w-c-scroll overflow-x-hidden overflow-y-auto", id_ "log_details_container"] do
+            div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto", id_ "log_details_container"] do
               htmxOverlayIndicator_ "details_indicator"
               whenJust (spanRecs V.!? 0) \sr ->
                 div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
@@ -506,22 +509,20 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
 
       when (issue.issueType /= Issues.RuntimeException) $ activityPanel_ pid issueId ""
 
-    -- RESIZER + RIGHT: AI chat panel
-    resizer_ "ai_chat_container" "ai_chat_width" False
-    div_ [id_ "ai_chat_container", class_ "shrink-0 overflow-hidden flex flex-col h-full border-l border-t border-strokeWeak", style_ "width: 420px;"] do
-      anomalyAIChat_ pid issue.id
-      script_
-        """
-        (function() {
-          const c = document.getElementById('ai_chat_container');
-          if (!c) return;
-          const q = new URLSearchParams(window.location.search).get('ai_chat_width');
-          const s = localStorage.getItem('resizer-ai_chat_width');
-          if (q) c.style.width = q + 'px';
-          else if (s && !s.endsWith('px')) c.style.width = s + 'px';
-          else if (s) c.style.width = s;
-        })();
-        """
+    -- RIGHT: Inline collapsible AI chat panel (checkbox + group-has CSS, persists to localStorage)
+    input_ [type_ "checkbox", id_ "ai-panel-toggle", class_ "hidden", onchange_ "localStorage.setItem('ai-panel-open', this.checked); if(this.checked) htmx.trigger('#ai-response-container','load-chat')"]
+    script_ """(function(){var e=document.getElementById('ai-panel-toggle');e.checked=localStorage.getItem('ai-panel-open')==='true';if(e.checked)htmx.trigger('#ai-response-container','load-chat')})()"""
+    label_ [Lucid.for_ "ai-panel-toggle", class_ "absolute right-0 top-3 z-10 flex items-center gap-1.5 bg-fillBrand-strong text-white px-2 py-2.5 rounded-l-lg cursor-pointer shadow-md hover:opacity-90 transition-opacity group-has-[#ai-panel-toggle:checked]/ai:hidden", Aria.label_ "Open AI Assistant"] do
+      faSprite_ "sparkles" "regular" "w-3.5 h-3.5"
+    div_ [class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:block"] $ resizer_ "ai_chat_container" "ai_width" False
+    div_ [id_ "ai_chat_container", class_ "hidden group-has-[#ai-panel-toggle:checked]/ai:flex w-[420px] shrink-0 h-full overflow-hidden flex-col bg-bgBase border-l border-t border-strokeWeak"] do
+      div_ [class_ "shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center justify-between"] do
+        div_ [class_ "flex items-center gap-2"] do
+          faSprite_ "sparkles" "regular" "w-3.5 h-3.5 text-fillBrand-strong"
+          span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "AI Assistant"
+        label_ [Lucid.for_ "ai-panel-toggle", class_ "p-1.5 rounded-lg hover:bg-fillWeaker cursor-pointer transition-colors tap-target", Aria.label_ "Close AI Assistant"]
+          $ faSprite_ "xmark" "regular" "w-3 h-3 text-textWeak"
+      anomalyAIChatBody_ pid issue.id
 
 
 errorAssigneeSection :: Projects.ProjectId -> Maybe ErrorPatterns.ErrorPatternId -> Maybe Projects.UserId -> V.Vector ProjectMembers.ProjectMemberVM -> Html ()
@@ -1063,25 +1064,20 @@ parseStoredContent content storedWidgets =
     Left _ -> (content, parseStoredJSON @[Widget.Widget] storedWidgets)
 
 
--- | AI Chat Component as a right-side panel
-anomalyAIChat_ :: Projects.ProjectId -> Issues.IssueId -> Html ()
-anomalyAIChat_ pid issueId = do
+
+-- | AI Chat body (response container + input bar, no header)
+anomalyAIChatBody_ :: Projects.ProjectId -> Issues.IssueId -> Html ()
+anomalyAIChatBody_ pid issueId = do
   let issueIdT = UUID.toText issueId.unUUIDId
       baseUrl = "/p/" <> pid.toText <> "/issues/" <> issueIdT
-  -- Panel header
-  div_ [class_ "shrink-0 px-4 py-2.5 border-b border-strokeWeak flex items-center gap-2"] do
-    faSprite_ "sparkles" "regular" "w-3.5 h-3.5 text-fillBrand-strong"
-    span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "AI Assistant"
-  -- Scrollable response container
   div_
     [ id_ "ai-response-container"
     , class_ "flex-1 overflow-y-auto flex flex-col px-3"
     , hxGet_ $ baseUrl <> "/ai_chat/history"
-    , hxTrigger_ "load"
+    , hxTrigger_ "load-chat once"
     , term "hx-on::after-swap" "window.evalScriptsFromContent && window.evalScriptsFromContent(event.detail.elt === this ? this : this.lastElementChild); this.lastElementChild?.scrollIntoView({behavior: 'smooth', block: 'start'})"
     ]
     ""
-  -- Input bar pinned to bottom
   div_ [class_ "shrink-0 border-t border-strokeWeak p-3 flex flex-col gap-2"] do
     form_
       [ hxPost_ $ baseUrl <> "/ai_chat"
