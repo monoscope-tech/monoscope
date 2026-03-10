@@ -336,13 +336,13 @@ processBackgroundJob authCtx bgJob =
                 let sched count secs mkJob = forM_ [0 .. count - 1] \i -> do
                       let t = addUTCTime (fromIntegral @Int $ i * secs) currentTime
                       void $ scheduleJob conn "background_jobs" (mkJob t) t
-                sched 288 300 \t -> BackgroundJobs.FiveMinuteLogPatternExtraction t p
-                sched 96 900 \t -> BackgroundJobs.PatternEmbeddingAndMerge t p
-                sched 96 900 \t -> BackgroundJobs.LogPatternPeriodicProcessing t p
-                sched 4 21600 \t -> BackgroundJobs.EndpointTemplateDiscovery t p
-                sched 24 3600 \t -> BackgroundJobs.LogPatternHourlyProcessing t p
-                sched 288 300 \t -> BackgroundJobs.FiveMinuteSpanProcessing t p
-                sched 1440 60 \t -> BackgroundJobs.OneMinuteErrorProcessing t p
+                sched 288 300 (`FiveMinuteLogPatternExtraction` p)
+                sched 96 900 (`PatternEmbeddingAndMerge` p)
+                sched 96 900 (`LogPatternPeriodicProcessing` p)
+                sched 4 21600 (`EndpointTemplateDiscovery` p)
+                sched 24 3600 (`LogPatternHourlyProcessing` p)
+                sched 288 300 (`FiveMinuteSpanProcessing` p)
+                sched 1440 60 (`OneMinuteErrorProcessing` p)
                 Relude.when (dayOfWeek currentDay == Monday)
                   $ void
                   $ createJob conn "background_jobs"
