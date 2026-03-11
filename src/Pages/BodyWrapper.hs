@@ -1,12 +1,13 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..)) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), onboardingChecklist_) where
 
 import Data.CaseInsensitive qualified as CI
+import Data.Text qualified as T
 import Data.Default (Default)
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -28,6 +29,65 @@ menu pid =
   , ("Monitors", "/p/" <> pid.toText <> "/monitors", "list-check")
   , ("Reports", "/p/" <> pid.toText <> "/reports", "chart-simple")
   ]
+
+
+-- | Onboarding checklist widget for the sidenav
+onboardingChecklist_ :: Projects.Project -> Html ()
+onboardingChecklist_ project = do
+  let steps = project.onboardingStepsCompleted
+      pid = project.id.toText
+      hasEvents = V.elem "Integration" steps || V.elem "has_events" steps
+      exploredLogs = V.elem "explored_logs" steps
+      createdMonitor = V.elem "created_monitor" steps
+      setupNotifs = V.elem "NotifChannel" steps
+      items =
+        [ (hasEvents, "Send first event", "/p/" <> pid <> "/onboarding?step=Integration", "satellite-dish")
+        , (exploredLogs, "Explore logs", "/p/" <> pid <> "/log_explorer", "magnifying-glass")
+        , (createdMonitor, "Create a monitor", "/p/" <> pid <> "/monitors/new", "bell")
+        , (setupNotifs, "Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope")
+        ] ::
+          [(Bool, Text, Text, Text)]
+      doneCount = length $ filter (\(d, _, _, _) -> d) items
+      totalCount = length items
+      allDone = doneCount == totalCount
+      dismissed = V.elem "checklist_dismissed" steps
+  unless (allDone || dismissed) do
+    div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
+      -- Collapsed state: rocket icon
+      div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
+        a_ [href_ $ "/p/" <> pid <> "/onboarding", class_ "relative tap-target", term "data-tippy-placement" "right", term "data-tippy-content" $ "Getting Started (" <> show doneCount <> "/" <> show totalCount <> ")"] do
+          faSprite_ "rocket" "regular" "w-4 h-4 text-textWeak"
+      -- Expanded state: full checklist
+      div_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block bg-fillWeaker rounded-lg p-2.5"] do
+        div_ [class_ "flex items-center justify-between mb-1.5 pl-1.5"] do
+          div_ [class_ "flex items-center gap-2"] do
+            faSprite_ "rocket" "regular" "w-2.5 h-2.5 text-textWeak"
+            span_ [class_ "text-xs font-medium text-textStrong"] "Getting Started"
+          div_ [class_ "flex items-center gap-3"] do
+            span_ [class_ "text-xs text-textWeak tabular-nums"] $ toHtml @Text $ show doneCount <> "/" <> show totalCount
+            button_
+              [ class_ "text-textWeak opacity-50 hover:opacity-100 hover:text-textStrong tap-target cursor-pointer"
+              , Aria.label_ "Dismiss getting started checklist"
+              , hxPost_ $ "/p/" <> pid <> "/onboarding/dismiss-checklist"
+              , hxTarget_ "#onboarding-checklist"
+              , hxSwap_ "delete"
+              ]
+              $ faSprite_ "xmark" "regular" "w-2.5 h-2.5"
+        div_ [class_ "h-0.5 w-full bg-strokeWeak rounded-full overflow-hidden mb-2"] do
+          let pct = show (doneCount * 100 `div` totalCount :: Int)
+          div_ [class_ "h-full bg-strokeBrand-strong rounded-full transition-all", style_ $ "width:" <> toText pct <> "%"] ""
+        let sorted = sortBy (comparing (Down . (\(d, _, _, _) -> d))) items
+        div_ [class_ "flex flex-col gap-0.5"] do
+          forM_ sorted \(done, label, link, icon) ->
+            a_
+              [ href_ link
+              , class_ $ "flex items-center gap-2 px-2 py-1 rounded-md text-xs transition-colors " <> if done then "text-textWeak opacity-60" else "text-textStrong font-medium hover:bg-fillWeak"
+              ]
+              do
+                if done
+                  then faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-textSuccess shrink-0"
+                  else faSprite_ icon "regular" "w-3.5 h-3.5 shrink-0"
+                span_ [class_ "truncate"] $ toHtml label
 
 
 type role PageCtx representational
@@ -631,107 +691,84 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
         faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
     div_ [class_ "mt-4 sd-px-0 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-strokeWeak bg-fillWeaker text-textStrong hover:bg-fillWeaker gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3"
+        [ class_ "flex flex-row border border-strokeWeak bg-fillWeaker text-textStrong hover:bg-fillWeak gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3 transition-colors duration-100"
         , tabindex_ "0"
         , Aria.haspopup_ "listbox"
         , Aria.label_ $ "Switch project, current: " <> project.title
         ]
         do
+          -- Collapsed: show first letter abbreviation
+          span_ [class_ "w-6 h-6 rounded-md bg-fillBrand-weak text-textBrand text-xs font-semibold flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:hidden shrink-0"] $ toHtml $ T.take 1 project.title
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
-          faSprite_ "angles-up-down" "regular" "w-4"
+          faSprite_ "angles-up-down" "regular" "w-4 hidden group-has-[#sidenav-toggle:checked]/pg:block"
       div_ [tabindex_ "0", class_ "dropdown-content z-40", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
-    nav_ [class_ "mt-5 flex flex-col gap-2.5 text-textWeak"] do
-      -- FIXME: reeanable hx-boost hxBoost_ "true"
+    nav_ [class_ "mt-5 flex flex-col gap-1 text-textWeak"] do
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then "bg-fillWeak  text-textStrong border border-strokeStrong" else "border-transparent!"
+        let activeCls = if isActive then "bg-fillWeak text-textStrong font-medium border-l-2 border-l-strokeBrand-strong border-y border-y-transparent border-r border-r-transparent" else "border-l-2 border-transparent hover:bg-fillWeak hover:text-textStrong transition-colors duration-100"
+        let iconCls = if isActive then "w-4 h-4 shrink-0 text-textBrand" else "w-4 h-4 shrink-0"
         a_
           [ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
-          , class_ $ "group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0  justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg  border hover:border overflow-x-hidden overflow-y-hidden " <> activeCls
+          , class_ $ "relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden " <> activeCls
           ]
           do
-            faSprite_ fIcon "regular" "w-4 h-4 shrink-0 "
+            faSprite_ fIcon "regular" iconCls
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
+      onboardingChecklist_ project
 
-  div_ [class_ "py-8 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 *:gap-2 *:whitespace-nowrap *:truncate flex flex-col gap-2.5 *:items-center *:overflow-x-hidden *:flex &:no-wrap"] do
+  div_ [class_ "py-4 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
     let currUser = sess.persistentSession.user.getUser
         userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
             then currUser.firstName <> " " <> currUser.lastName
             else CI.original currUser.email
         avatarUrl = "/api/avatar/" <> currUser.id.toText
-    div_ [tabindex_ "0", role_ "button", class_ ""] do
-      img_
-        [ class_ "inline-block w-9 h-9 p-2 rounded-full bg-fillPress"
-        , term "data-tippy-placement" "right"
-        , term "data-tippy-content" userIdentifier
-        , src_ avatarUrl
-        ]
-      span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:inline-block overflow-hidden"] $ toHtml userIdentifier
-
-    a_
-      [ class_ "hover:bg-fillBrand-weak "
-      , term "data-tippy-placement" "right"
-      , term "data-tippy-content" "Settings"
-      , href_ $ "/p/" <> project.id.toText <> "/settings"
-      ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-iconBrand leading-none "] (faSprite_ "gear" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Settings"
-    a_
-      [ class_ "hover:bg-fillBrand-weak "
-      , target_ "blank"
-      , term "data-tippy-placement" "right"
-      , term "data-tippy-content" "Documentation"
-      , href_ "https://monoscope.tech/docs/"
-      ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillBrand-weak text-iconBrand leading-none"] (faSprite_ "circle-question" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Documentation"
 
     -- Dark mode toggle
-    div_
-      [ class_ "hover:bg-fillBrand-weak pl-1.5"
-      , Aria.label_ "Toggle dark mode"
-      , term "data-tippy-placement" "right"
-      , term "data-tippy-content" "Toggle dark mode"
-      ]
-      $ do
-        -- Regular toggle with icons (visible when sidebar is expanded)
-        label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center", Aria.label_ "Toggle dark mode"] $ do
-          faSprite_ "sun-bright" "regular" "h-5 w-5 text-iconBrand"
-          input_
-            [ type_ "checkbox"
-            , class_ "toggle theme-controller"
-            , id_ "dark-mode-toggle"
-            , Aria.label_ "Toggle dark mode"
-            , onclick_ "toggleDarkMode()"
-            ]
-          faSprite_ "moon-stars" "regular" "h-5 w-5 text-iconBrand"
+    div_ [Aria.label_ "Toggle dark mode"] do
+      -- Expanded: sun + toggle + moon
+      label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
+        faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
+        input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
+        faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
+      -- Collapsed: show sun (light) / moon (dark) with swap
+      label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", term "data-tippy-placement" "right", term "data-tippy-content" "Toggle dark mode"] do
+        input_ [type_ "checkbox", class_ "theme-controller", id_ "dark-mode-toggle-swap", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
+        span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
+        span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
 
-        -- Swap rotate icon (visible when sidebar is collapsed)
-        label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden", Aria.label_ "Toggle dark mode"] $ do
-          input_
-            [ type_ "checkbox"
-            , class_ "theme-controller"
-            , id_ "dark-mode-toggle-swap"
-            , Aria.label_ "Toggle dark mode"
-            , onclick_ "toggleDarkMode()"
-            ]
-          -- Sun icon (shown in light mode)
-          span_ [class_ "swap-off", Aria.label_ "Light mode"] $ faSprite_ "sun-bright" "regular" "h-6 w-6"
-          -- Moon icon (shown in dark mode)
-          span_ [class_ "swap-on", Aria.label_ "Dark mode"] $ faSprite_ "moon-stars" "regular" "h-6 w-6"
-    a_
-      [ class_ "hover:bg-fillBrand-weak"
-      , term "data-tippy-placement" "right"
-      , term "data-tippy-content" "Logout"
-      , Aria.label_ "Logout"
-      , href_ "/logout"
-      , [__| on click js posthog.reset(); end |]
-      ]
-      $ span_ [class_ "w-9 h-9 p-2 flex justify-center items-center rounded-full bg-fillError-weak text-iconError leading-none"] (faSprite_ "arrow-right-from-bracket" "regular" "h-3 w-3")
-      >> span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block"] "Logout"
+    -- User avatar popover
+    div_ [class_ "dropdown dropdown-top group-has-[#sidenav-toggle:checked]/pg:dropdown-top block group/user"] do
+      div_
+        [ tabindex_ "0"
+        , role_ "button"
+        , class_ "flex items-center gap-2 py-2 px-1 rounded-lg hover:bg-fillWeak cursor-pointer w-full justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"
+        , Aria.haspopup_ "true"
+        , Aria.label_ $ "User menu for " <> userIdentifier
+        ]
+        do
+          img_ [class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ avatarUrl, term "data-tippy-placement" "right", term "data-tippy-content" userIdentifier]
+          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
+            span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
+            faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"
+      ul_ [tabindex_ "0", class_ "dropdown-content z-40 menu menu-md bg-bgOverlay rounded-box shadow-sm border border-strokeWeak w-56 mb-2", role_ "menu"] do
+        div_ [class_ "px-3 py-2 text-sm"] do
+          div_ [class_ "font-medium text-textStrong truncate"] $ toHtml userIdentifier
+          div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
+        div_ [class_ "divider my-0"] ""
+        li_ [] $ a_ [href_ $ "/p/" <> project.id.toText <> "/settings", class_ "flex items-center gap-2"] do
+          faSprite_ "gear" "regular" "w-4 h-4"
+          "Settings"
+        li_ [] $ a_ [href_ "https://monoscope.tech/docs/", target_ "blank", class_ "flex items-center gap-2"] do
+          faSprite_ "circle-question" "regular" "w-4 h-4"
+          "Documentation"
+          faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 text-textWeak ml-auto"
+        div_ [class_ "divider my-0"] ""
+        li_ [] $ a_ [href_ "/logout", class_ "flex items-center gap-2 text-textError", [__| on click js posthog.reset(); end |]] do
+          faSprite_ "arrow-right-from-bracket" "regular" "w-4 h-4"
+          "Logout"
 
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText
