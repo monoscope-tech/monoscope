@@ -52,7 +52,7 @@ testPid = UUIDId UUID.nil
 getAnomalies :: TestResources -> IO (V.Vector AnomalyList.IssueVM)
 getAnomalies tr = do
   (_, pg) <- testServant tr $
-    AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+    AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
   case pg of
     AnomalyList.ALPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from anomaly list"
@@ -63,7 +63,7 @@ spec = aroundAll withTestResources do
   describe "Check Anomaly List" do
     it "should return an empty list" \tr -> do
       (_, pg) <-
-        testServant tr $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        testServant tr $ AnomalyList.anomalyListGetH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
 
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
@@ -140,7 +140,7 @@ spec = aroundAll withTestResources do
 
       -- After acknowledging, the issue should appear in the Acknowledged filter
       (_, pg) <- testServant tr $
-        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
           let acknowledgedApiChangeIssues = V.filter (\(AnomalyList.IssueVM _ _ _ _ c) -> c.issueType == Issues.ApiChange) tbl.rows
@@ -229,7 +229,7 @@ spec = aroundAll withTestResources do
 
     it "should get acknowledged anomalies" \tr -> do
       (_, pg) <- testServant tr $
-        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        AnomalyList.anomalyListGetH testPid Nothing (Just "Acknowledged") Nothing Nothing Nothing Nothing Nothing Nothing Nothing [] [] Nothing Nothing
       case pg of
         AnomalyList.ALPage (PageCtx _ tbl) -> do
           -- Acknowledged anomalies should include API changes
