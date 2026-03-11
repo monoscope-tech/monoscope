@@ -217,10 +217,10 @@ expandedItemView pid item aptSp leftM rightM = do
           dateTime (if isLog then item.timestamp else item.start_time) Nothing
           div_ [class_ "flex gap-2 items-center"] do
             button_
-              [ class_ "cursor-pointer"
-              , [__|on click add .hidden to #trace_expanded_view 
-            then put '0px' into  #log_details_container.style.width 
-            then put '100%' into #logs_list_container.style.width 
+              [ class_ "cursor-pointer detail-close-btn"
+              , [__|on click add .hidden to #trace_expanded_view
+            then put '0px' into  #log_details_container.style.width
+            then put '100%' into #logs_list_container.style.width
             then add .hidden to #resizer-details_width-wrapper
             then add .opacity-0 to #resizer-details_width-wrapper
             then add .pointer-events-none to #resizer-details_width-wrapper
@@ -259,8 +259,9 @@ expandedItemView pid item aptSp leftM rightM = do
                       ("HTTP", method, path, status) -> do
                         span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap", term "data-tip" ""] $ toHtml method
                         span_ [class_ $ "relative cbadge-sm badge-" <> T.take 1 (show status) <> "xx whitespace-nowrap", term "data-tip" ""] $ toHtml $ T.take 3 $ show status
+                        let displayPath = if T.length path <= 1 then fromMaybe path item.name else path
                         div_ [class_ "flex items-center"] do
-                          span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml path
+                          span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml displayPath
                           div_ [[__| install Copy(content:.urlPath )|]] do
                             faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-iconNeutral"
                       (scheme, method, path, status) -> do

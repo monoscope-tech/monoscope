@@ -605,7 +605,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       -- Build preload URL using the same function that builds the JSON URLs
       let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
           -- Also preload the chart data request
-          chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+status_code"
+          chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+coalesce%28status_code%2C+level%29"
           headContent = Just $ do
             script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
             link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
@@ -712,7 +712,7 @@ logChartWidget :: Projects.ProjectId -> Widget.Widget
 logChartWidget pid =
   (def :: Widget.Widget)
     { Widget.wType = WTTimeseries
-    , Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"
+    , Widget.query = Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)"
     , Widget.unit = Just "rows"
     , Widget.title = Just "All traces"
     , Widget.legendPosition = Just "top-right"

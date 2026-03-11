@@ -505,23 +505,24 @@ checkFreeTierExceeded pid paymentPlan =
 serviceColors :: V.Vector Text
 serviceColors =
   V.fromList
-    [ "bg-red-400"
-    , "bg-amber-400"
-    , "bg-orange-400"
-    , "bg-yellow-400"
-    , "bg-lime-400"
-    , "bg-green-400"
-    , "bg-teal-400"
-    , "bg-cyan-400"
-    , "bg-blue-400"
-    , "bg-purple-400"
-    , "bg-violet-400"
-    , "bg-pink-400"
-    , "bg-rose-400"
-    , "bg-emerald-400"
-    , "bg-fuchsia-400"
-    , "bg-indigo-400"
-    , "bg-sky-400"
+    -- Ordered for maximum hue separation: any 3 consecutive colors are visually distinct
+    [ "bg-blue-400" -- blue
+    , "bg-red-400" -- red
+    , "bg-green-400" -- green
+    , "bg-amber-400" -- amber
+    , "bg-purple-400" -- purple
+    , "bg-teal-400" -- teal
+    , "bg-orange-400" -- orange
+    , "bg-sky-400" -- sky
+    , "bg-rose-400" -- rose
+    , "bg-lime-400" -- lime
+    , "bg-indigo-400" -- indigo
+    , "bg-yellow-400" -- yellow
+    , "bg-pink-400" -- pink
+    , "bg-emerald-400" -- emerald
+    , "bg-violet-400" -- violet
+    , "bg-cyan-400" -- cyan
+    , "bg-fuchsia-400" -- fuchsia
     ]
 
 

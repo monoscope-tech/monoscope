@@ -5,28 +5,28 @@
 // When updating this logic, also update chartshot/colorMapping.ts to keep server-side
 // chart rendering consistent with browser rendering.
 
-// Theme colors with better contrast - removed light/pale colors
+// Theme colors ordered for maximum hue separation: any 3 consecutive are visually distinct
 const THEME_COLORS = [
+  '#60a5fa', // Blue-400
+  '#f87171', // Red-400
+  '#4ade80', // Green-400
+  '#fbbf24', // Amber-400
+  '#c084fc', // Purple-400
+  '#2dd4bf', // Teal-400
+  '#fb923c', // Orange-400
+  '#38bdf8', // Sky-400
+  '#fb7185', // Rose-400
+  '#a3e635', // Lime-400
+  '#818cf8', // Indigo-400
+  '#facc15', // Yellow-400
+  '#f472b6', // Pink-400
+  '#34d399', // Emerald-400
+  '#a78bfa', // Violet-400
+  '#22d3ee', // Cyan-400
+  '#e879f9', // Fuchsia-400
+  '#fc8452', // Dark orange
   '#1A74A8', // Deep blue
-  '#91cc75', // Green
-  '#fac858', // Yellow/Gold
-  '#ee6666', // Red
-  '#73c0de', // Cyan
-  '#3ba272', // Dark green
-  '#fc8452', // Orange
-  '#9a60b4', // Purple
-  '#c71585', // Medium violet red (replaced light pink)
-  '#37a2da', // Bright blue
-  '#32c5e9', // Light blue
-  '#20b2aa', // Light sea green (replaced pale cyan)
-  '#228b22', // Forest green (replaced pale green)
-  '#ff8c00', // Dark orange (replaced pale yellow)
-  '#ff6347', // Tomato (replaced pale orange)
-  '#dc143c', // Crimson (replaced pale pink)
-  '#8b008b', // Dark magenta (replaced light pink)
-  '#4b0082', // Indigo (replaced pale purple)
-  '#6a5acd', // Slate blue (replaced very pale purple)
-  '#4169e1'  // Royal blue (replaced pale purple)
+  '#ee6666'  // Classic red
 ];
 
 // HTTP Status Code Colors
@@ -160,8 +160,11 @@ export function getLogLevelColor(text: string): string {
 // Main function to get deterministic color for any series
 export function getSeriesColor(value: string, context?: 'status' | 'percentile' | 'service' | 'log'): string {
   // Handle null and undefined values with neutral gray
-  if (value && (value.toLowerCase() === 'null' || value.toLowerCase() === 'undefined' || value.toLowerCase() === 'unknown')) {
-    return '#9ca3af'; // Gray-500 - neutral color for missing data
+  if (value && value.toLowerCase() === 'unset') {
+    return '#94a3b8'; // Slate-400 - desaturated blue-gray for unset status
+  }
+  if (value && ['null', 'undefined', 'unknown'].includes(value.toLowerCase())) {
+    return '#9ca3af'; // Gray-400 - neutral color for missing data
   }
   
   // Handle empty values - use default color
@@ -207,23 +210,23 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
 
 // Tailwind to hex color mapping (ECharts theme colors for consistency across app)
 export const TAILWIND_TO_HEX: Record<string, string> = {
-  'bg-red-400': '#ee6666',
-  'bg-amber-400': '#fac858',
-  'bg-orange-400': '#fc8452',
-  'bg-yellow-400': '#fac858',
-  'bg-lime-400': '#91cc75',
-  'bg-green-400': '#3ba272',
-  'bg-teal-400': '#20b2aa',
-  'bg-cyan-400': '#73c0de',
-  'bg-blue-400': '#1A74A8',
-  'bg-purple-400': '#9a60b4',
-  'bg-violet-400': '#6a5acd',
-  'bg-pink-400': '#c71585',
-  'bg-rose-400': '#dc143c',
-  'bg-emerald-400': '#228b22',
-  'bg-fuchsia-400': '#8b008b',
-  'bg-indigo-400': '#4b0082',
-  'bg-sky-400': '#32c5e9',
+  'bg-red-400': '#f87171',
+  'bg-amber-400': '#fbbf24',
+  'bg-orange-400': '#fb923c',
+  'bg-yellow-400': '#facc15',
+  'bg-lime-400': '#a3e635',
+  'bg-green-400': '#4ade80',
+  'bg-teal-400': '#2dd4bf',
+  'bg-cyan-400': '#22d3ee',
+  'bg-blue-400': '#60a5fa',
+  'bg-purple-400': '#c084fc',
+  'bg-violet-400': '#a78bfa',
+  'bg-pink-400': '#f472b6',
+  'bg-rose-400': '#fb7185',
+  'bg-emerald-400': '#34d399',
+  'bg-fuchsia-400': '#e879f9',
+  'bg-indigo-400': '#818cf8',
+  'bg-sky-400': '#38bdf8',
   'bg-gray-400': '#9ca3af',
   'bg-gray-500': '#6b7280',
 };

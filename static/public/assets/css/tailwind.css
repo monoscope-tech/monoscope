@@ -1582,6 +1582,34 @@ code, pre, .code, .monospace {
     @apply bg-fillWeaker border border-strokeWeak rounded-xl;
   }
 
+  .investigation-fullscreen {
+    position: fixed !important;
+    inset: 0 !important;
+    z-index: 9999 !important;
+    border-radius: 0 !important;
+    max-height: 100vh !important;
+    overflow-y: auto !important;
+    background: var(--color-bgBase) !important;
+  }
+  .investigation-fullscreen .investigation-content {
+    min-height: calc(100vh - 44px) !important;
+    max-height: none !important;
+    flex: 1;
+  }
+  .investigation-fullscreen .investigation-content > div {
+    height: 100%;
+    flex: 1;
+  }
+  .investigation-fullscreen #log_details_container {
+    max-height: calc(100vh - 120px) !important;
+  }
+
+  /* Hide close/collapse buttons in investigation panel context */
+  .investigation-details .detail-close-btn,
+  .investigation-content .trace-collapse-btn {
+    display: none !important;
+  }
+
   /* Like surface-raised but transparent — border, radius, and shadow only */
   .surface-table {
     @apply border border-strokeWeak rounded-xl;

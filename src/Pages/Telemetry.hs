@@ -540,7 +540,7 @@ tracePage pid traceItem spanRecords = do
           h3_ [class_ "whitespace-nowrap  font-semibold text-textStrong"] "Trace Breakdown"
         div_ [class_ "flex items-center gap-2"] $ do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
-          button_ [class_ "p-0 m-0 cursor-pointer", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
+          button_ [class_ "p-0 m-0 cursor-pointer trace-collapse-btn", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
             faSprite_ "side-chevron-left" "regular" "w-5 h-5 text-iconBrand rotate-180"
 
       div_ [class_ "flex gap-1 w-full mt-5"] $ do
@@ -550,7 +550,7 @@ tracePage pid traceItem spanRecords = do
               div_ [class_ "flex items-center gap-2 text-textWeak font-medium"] do
                 button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
-                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
+                button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Services"
               div_ [class_ "flex items-center gap-2"] do
                 stBox "Spans" (show $ length spanRecords) Nothing
                 stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
@@ -595,10 +595,10 @@ tracePage pid traceItem spanRecords = do
                       div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
 
               div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
-                h3_ [class_ "w-full flex p-3 font-medium justify-between items-center text-sm border-b"] do
+                h3_ [class_ "w-full flex px-3 py-2 font-medium justify-between items-center text-xs text-textWeak border-b"] do
                   span_ [] "Services"
                   span_ [] "Exec Time %"
-                div_ [class_ "w-full overflow-x-hidden  text-textWeak", id_ $ "services-" <> traceItem.traceId] do
+                div_ [class_ "w-full overflow-x-hidden text-textWeak text-xs", id_ $ "services-" <> traceItem.traceId] do
                   forM_ serviceNames $ \s -> do
                     let spans = filter (\x -> x.name == s) serviceData
                         duration = sum $ (.duration) <$> spans
@@ -607,12 +607,12 @@ tracePage pid traceItem spanRecords = do
                         color = getServiceColor s serviceColors
                     div_ [class_ "flex items-center justify-between px-2 py-1"] $ do
                       div_ [class_ "flex gap-1 items-center"] $ do
-                        div_ [class_ $ "w-3 h-3 rounded-sm " <> color] pass
-                        span_ [class_ ""] $ toHtml s
-                      div_ [class_ "flex gap-1 items-center"] $ do
-                        span_ [class_ "text-xs max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
-                        div_ [class_ "w-[100px] h-3 bg-fillWeak rounded-sm overflow-hidden"]
-                          $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
+                        div_ [class_ $ "w-2.5 h-2.5 rounded-sm " <> color] pass
+                        span_ [] $ toHtml s
+                      div_ [class_ "flex gap-1 items-center tabular-nums"] $ do
+                        span_ [class_ "max-w-52 truncate"] $ toHtml $ T.take 4 percent <> "%"
+                        div_ [class_ "w-[80px] h-2 bg-fillWeak rounded-sm overflow-hidden"]
+                          $ div_ [class_ $ "h-full " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%", id_ $ "waterfall-container-" <> traceItem.traceId] do

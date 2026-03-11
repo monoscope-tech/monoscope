@@ -477,11 +477,13 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 , Widget._projectId = Just issue.projectId
                 , Widget.hideLegend = Just True
                 }
-      div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container"] do
+      div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container", makeAttribute "tabindex" "-1", onkeydown_ "if(event.key==='Escape'&&this.classList.contains('investigation-fullscreen'))document.getElementById('investigation-fullscreen-btn').click()"] do
         div_ [class_ "px-4 border-b border-strokeWeak flex items-center justify-between"] do
           div_ [class_ "flex items-center gap-2"] do
             faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
             h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
+            button_ [class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer transition-colors tap-target", Aria.label_ "Toggle fullscreen", id_ "investigation-fullscreen-btn", onclick_ "var c=document.getElementById('error-details-container'),u=this.querySelector('use'),h=u.getAttribute('href');c.classList.toggle('investigation-fullscreen');u.setAttribute('href',c.classList.contains('investigation-fullscreen')?h.replace('#expand','#compress'):h.replace('#compress','#expand'));window.scrollTo({top:0})"] do
+              faSprite_ "expand" "regular" "w-3 h-3 text-textWeak"
           div_ [class_ "flex items-center"] do
             let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
                 navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
@@ -489,7 +491,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
             span_ [class_ "mx-4 w-px h-4 bg-strokeWeak"] pass
             forM_ [("#span-content" :: Text, "Trace" :: Text, True), ("#log-content" :: Text, "Logs" :: Text, False), ("#replay-content" :: Text, "Replay" :: Text, False)] tabBtn
-        div_ [class_ "p-2 w-full overflow-x-hidden"] do
+        div_ [class_ "p-2 w-full overflow-x-hidden investigation-content"] do
           div_ [class_ "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
             div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
               $ maybe
@@ -500,7 +502,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 (\t -> tracePage pid t spanRecs)
                 tr
             div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto", id_ "log_details_container"] do
+            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto investigation-details", id_ "log_details_container"] do
               htmxOverlayIndicator_ "details_indicator"
               whenJust (spanRecs V.!? 0) \sr ->
                 div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
