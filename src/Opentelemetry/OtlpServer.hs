@@ -29,7 +29,7 @@ import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Effectful.UUID (UUIDEff)
-import Data.HashMap.Strict qualified as HashMap
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
@@ -118,18 +118,18 @@ instance ParseMetadata OtlpRequestMetadata where
 
 
 -- | Global error counters for common parsing errors (wire type, UTF-8, etc)
-wireTypeErrorsRef :: IORef (HashMap Text (Int, AE.Value))
+wireTypeErrorsRef :: IORef (HM.HashMap Text (Int, AE.Value))
 {-# NOINLINE wireTypeErrorsRef #-}
-wireTypeErrorsRef = unsafePerformIO $ newIORef HashMap.empty
+wireTypeErrorsRef = unsafePerformIO $ newIORef HM.empty
 
 
 -- | Initialize periodic error logging
 initPeriodicErrorLogging :: Logger -> IO ()
 initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
   threadDelay (60 * 1000000) -- 60 seconds
-  errors <- atomicModifyIORef' wireTypeErrorsRef (HashMap.empty,)
-  unless (HashMap.null errors) $ do
-    let totalErrors = sum $ map fst $ HashMap.elems errors
+  errors <- atomicModifyIORef' wireTypeErrorsRef (HM.empty,)
+  unless (HM.null errors) $ do
+    let totalErrors = sum $ map fst $ HM.elems errors
         errorDetails =
           AE.object
             [ "period_seconds" AE..= (60 :: Int)
@@ -141,7 +141,7 @@ initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
                         [ "count" AE..= count
                         , "example" AE..= example
                         ]
-                  | (k, (count, example)) <- HashMap.toList errors
+                  | (k, (count, example)) <- HM.toList errors
                   ]
             ]
     runLogT "monoscope" logger LogAttention
@@ -201,7 +201,7 @@ getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe ge
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -214,7 +214,7 @@ processList msgs !attrs = checkpoint "processList" $ do
   Log.logTrace
     "processList: batch processing completed"
     ( AE.object
-        [ "ce-type" AE..= HashMap.lookup "ce-type" attrs
+        [ "ce-type" AE..= HM.lookup "ce-type" attrs
         , "event_count" AE..= eventCount
         , "duration_seconds" AE..= realToFrac @_ @Double duration
         , "duration_ms" AE..= (round (duration * 1000) :: Int)
@@ -225,13 +225,13 @@ processList msgs !attrs = checkpoint "processList" $ do
   pure result
   where
     handleException = checkpoint "processList:exception" $ do
-      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
+      Log.logAttention "processList: caught exception" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs, "msg_count" AE..= length msgs, "attrs" AE..= attrs])
       pure (map fst msgs, 0, 0)
 
     process fallbackTime = do
       appCtx <- ask @AuthContext
 
-      case HashMap.lookup "ce-type" attrs of
+      case HM.lookup "ce-type" attrs of
         Just "org.opentelemetry.otlp.logs.v1" ->
           processBatchPipeline @LS.ExportLogsServiceRequest
             "logs"
@@ -243,7 +243,7 @@ processList msgs !attrs = checkpoint "processList" $ do
             ( \ft caches keyToId req ->
                 let !rls = V.fromList $ req ^. PLF.resourceLogs
                     !pkeys = getLogAttributeValue "at-project-key" rls
-                    !pids = V.fromList [(k, pid) | (k, pid) <- HashMap.toList keyToId, k `V.elem` pkeys]
+                    !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.force $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
             (checkpoint "processList:logs:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
@@ -258,7 +258,7 @@ processList msgs !attrs = checkpoint "processList" $ do
             ( \ft caches keyToId req ->
                 let !rss = V.force $ V.fromList $ req ^. PTF.resourceSpans
                     !pkeys = getSpanAttributeValue "at-project-key" rss
-                    !pids = V.fromList [(k, pid) | (k, pid) <- HashMap.toList keyToId, k `V.elem` pkeys]
+                    !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.force $ V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
             (checkpoint "processList:traces:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
@@ -272,13 +272,13 @@ processList msgs !attrs = checkpoint "processList" $ do
             (\req -> maybeToList $ Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" (V.fromList $ req ^. PMF.resourceMetrics))
             ( \ft caches keyToId req ->
                 let !rms = V.fromList $ req ^. PMF.resourceMetrics
-                    !pidM = getMetricAttributeValue "at-project-key" rms >>= (`HashMap.lookup` keyToId)
+                    !pidM = getMetricAttributeValue "at-project-key" rms >>= (`HM.lookup` keyToId)
                     !pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" rms
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
             (checkpoint "processList:metrics:bulkInsert" . Telemetry.bulkInsertMetrics)
         _ -> do
-          Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HashMap.lookup "ce-type" attrs])
+          Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
           pure ([], 0, 0)
 
 
@@ -291,7 +291,7 @@ processBatchPipeline
   -> UTCTime
   -> (req -> V.Vector Text) -- extract project keys
   -> (req -> [Projects.ProjectId]) -- extract project IDs
-  -> (UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> HashMap Text Projects.ProjectId -> req -> V.Vector res) -- per-message converter
+  -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> HM.HashMap Text Projects.ProjectId -> req -> V.Vector res) -- per-message converter
   -> (V.Vector res -> Eff es ()) -- DB insert
   -> Eff es ([Text], Int, Int)
 processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds convert dbInsert =
@@ -305,11 +305,11 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
 
     (!keyToIdMap, !projectCachesMap) <-
       if V.null uniqueProjectKeys
-        then pure (HashMap.empty, HashMap.empty)
+        then pure (HM.empty, HM.empty)
         else do
           projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
-          let !keyToId = HashMap.fromList $ V.toList projectIdsAndKeys
-              !projectIds = L.nub $ atIds <> HashMap.elems keyToId
+          let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
+              !projectIds = L.nub $ atIds <> HM.elems keyToId
           projectCaches <- checkpoint (cp ":getProjectCaches") $ do
             caches <- liftIO $ do
               cachePairs <- forM projectIds \pid ->
@@ -317,7 +317,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
                   mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
                   pure $! fromMaybe Projects.defaultProjectCache mpjCache
               pure (zip projectIds cachePairs `using` parList rpar)
-            pure $ HashMap.fromList caches
+            pure $ HM.fromList caches
           pure (keyToId, projectCaches)
 
     let !chunkSize = max 10 (msgsCount `div` 4)
@@ -478,10 +478,10 @@ migrateElasticsearchPathParts keyVals =
 migrateHttpSemanticConventions :: [(Text, AE.Value)] -> [(Text, AE.Value)]
 migrateHttpSemanticConventions !keyVals =
   let
-    -- Build a HashMap for O(1) lookups
-    fieldMappingsMap :: HashMap Text Text
+    -- Build a HM.HashMap for O(1) lookups
+    fieldMappingsMap :: HM.HashMap Text Text
     fieldMappingsMap =
-      HashMap.fromList
+      HM.fromList
         [ ("http.method", "http.request.method")
         , ("http.status_code", "http.response.status_code")
         , ("http.request_content_length", "http.request.body.size")
@@ -525,11 +525,11 @@ migrateHttpSemanticConventions !keyVals =
         ]
 
     -- Pre-build lookups for efficiency
-    kvMap = HashMap.fromList keyVals
-    hasUrlPath = HashMap.member "url.path" kvMap
-    httpMethodM = HashMap.lookup "http.method" kvMap
-    httpTargetM = HashMap.lookup "http.target" kvMap
-    methodOriginalM = HashMap.lookup "http.request.method_original" kvMap
+    kvMap = HM.fromList keyVals
+    hasUrlPath = HM.member "url.path" kvMap
+    httpMethodM = HM.lookup "http.method" kvMap
+    httpTargetM = HM.lookup "http.target" kvMap
+    methodOriginalM = HM.lookup "http.request.method_original" kvMap
 
     -- Fields to remove (deprecated with no replacement)
     fieldsToRemove = ["db.user", "db.instance.id", "db.jdbc.driver_classname", "db.mssql.instance_name", "db.cosmosdb.operation_type"]
@@ -542,20 +542,20 @@ migrateHttpSemanticConventions !keyVals =
     -- - db.elasticsearch.path_parts.*: Transformed to db.operation.parameter.* preserving key suffix
     -- - http.method + http.request.method_original (when "_OTHER"): Special handling to use original method value
     specialFields =
-      ["db.connection_string" | HashMap.member "db.connection_string" kvMap]
+      ["db.connection_string" | HM.member "db.connection_string" kvMap]
         ++ ["http.target" | isJust httpTargetM] -- Always exclude http.target when it exists
-        ++ ["db.redis.database_index" | HashMap.member "db.redis.database_index" kvMap]
+        ++ ["db.redis.database_index" | HM.member "db.redis.database_index" kvMap]
         ++ filter ("db.elasticsearch.path_parts." `T.isPrefixOf`) (map fst keyVals)
         ++ (if httpMethodM == Just (AE.String "_OTHER") && isJust methodOriginalM then ["http.method", "http.request.method_original"] else [])
 
     -- Filter out deprecated fields and special fields, then apply migrations
     filteredVals = filter (\(k, _) -> k `notElem` fieldsToRemove && k `notElem` specialFields) keyVals
-    mgVals = map (\(k, v) -> (HashMap.lookupDefault k k fieldMappingsMap, v)) filteredVals
+    mgVals = map (\(k, v) -> (HM.lookupDefault k k fieldMappingsMap, v)) filteredVals
 
     -- Handle special migrations
 
     -- Handle db.connection_string -> server.address, server.port
-    migrateConnectionString = case HashMap.lookup "db.connection_string" kvMap of
+    migrateConnectionString = case HM.lookup "db.connection_string" kvMap of
       Just (AE.String connStr) -> parseConnectionString connStr
       _ -> []
 
@@ -563,7 +563,7 @@ migrateHttpSemanticConventions !keyVals =
     migrateElasticsearchPaths = migrateElasticsearchPathParts keyVals
 
     -- Handle db.redis.database_index special case (convert to string for db.namespace)
-    migrateRedisIndex = case HashMap.lookup "db.redis.database_index" kvMap of
+    migrateRedisIndex = case HM.lookup "db.redis.database_index" kvMap of
       Just (AE.Number n) -> [("db.namespace", AE.String (show (round n :: Int)))]
       _ -> []
 
@@ -583,7 +583,7 @@ migrateHttpSemanticConventions !keyVals =
     -- Migrate method "_OTHER" case
     migrateMethodOther = case (httpMethodM, methodOriginalM) of
       (Just (AE.String "_OTHER"), Just originalMethod)
-        | not (HashMap.member "http.request.method" kvMap) ->
+        | not (HM.member "http.request.method" kvMap) ->
             [("http.request.method", originalMethod)]
       _ -> []
    in
@@ -614,7 +614,7 @@ recordProtoError prefix err msg logFn = do
     Just errorKey -> liftIO $ atomicModifyIORef' wireTypeErrorsRef $ \m ->
       let updateFn Nothing = Just (1, errorInfo)
           updateFn (Just (count, example)) = Just (count + 1, example)
-       in (HashMap.alter updateFn errorKey m, ())
+       in (HM.alter updateFn errorKey m, ())
     Nothing -> logFn ("processList:" <> prefix <> ": unable to parse service request") errorInfo
 
 
@@ -740,7 +740,7 @@ normalizeSeverityLevel txt = fst <$> Map.lookup (T.toUpper txt) severityMap
 
 
 -- | Convert ResourceLogs to OtelLogsAndSpans
-convertResourceLogsToOtelLogs :: UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
+convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
   let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" (V.singleton resourceLogs)
       projectId = case find (\(k, _) -> k == projectKey) pids of
@@ -751,7 +751,7 @@ convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
            in ((Just . UUIDId) =<< uId)
    in case projectId of
         Just pid ->
-          case HashMap.lookup pid projectCaches of
+          case HM.lookup pid projectCaches of
             Just cache ->
               -- Check if project has exceeded daily limit for free tier
               let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
@@ -850,7 +850,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
 
 
 -- | Convert ResourceSpans to OtelLogsAndSpans
-convertResourceSpansToOtelLogs :: UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
+convertResourceSpansToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
 convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans =
   join
     $ V.toList
@@ -868,7 +868,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
                       _ -> Nothing
            in case projectId of
                 Just pid ->
-                  case HashMap.lookup pid projectCaches of
+                  case HM.lookup pid projectCaches of
                     Just cache ->
                       let !totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
                           !isFreeTier = cache.paymentPlan == "Free"
@@ -1057,9 +1057,9 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
 
 
 -- | Convert ResourceMetrics to MetricRecords
-convertResourceMetricsToMetricRecords :: UTCTime -> HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
+convertResourceMetricsToMetricRecords :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> Projects.ProjectId -> V.Vector PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
-  case HashMap.lookup pid projectCaches of
+  case HM.lookup pid projectCaches of
     Just cache ->
       -- Check if project has exceeded daily limit for free tier
       let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
@@ -1209,7 +1209,7 @@ processTraceRequest metadataApiKey req = do
         mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
         pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
-    pure $ HashMap.fromList caches
+    pure $ HM.fromList caches
   let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
       !spans' = V.fromList spans
 
@@ -1278,7 +1278,7 @@ processLogsRequest metadataApiKey req = do
         mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
         pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
-    pure $ HashMap.fromList caches
+    pure $ HM.fromList caches
 
   let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
 

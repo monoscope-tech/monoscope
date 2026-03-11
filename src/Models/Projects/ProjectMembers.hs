@@ -37,7 +37,7 @@ module Models.Projects.ProjectMembers (
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -469,7 +469,7 @@ addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
   maybe (pure False) addIfNotExists everyoneTeamM
   where
     addIfNotExists team = do
-      let channelExists = Set.member channelId $ Set.fromList $ V.toList $ getChannels team
+      let channelExists = S.member channelId $ S.fromList $ V.toList $ getChannels team
       if channelExists
         then pure False
         else void (updateTeam pid team.id $ updateChannels (teamToDetails team) (V.snoc (getChannels team) channelId)) $> True

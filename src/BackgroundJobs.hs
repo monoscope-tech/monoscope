@@ -19,7 +19,7 @@ import Data.List as L (foldl, partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
@@ -1655,8 +1655,8 @@ embedAndMerge pid ctx cfg = unless (null cfg.items) do
     Right embeddingsList -> do
       void $ cfg.updateEmbs $ zipWith (\item emb -> (cfg.toId item, emb)) cfg.items embeddingsList
       allCentroids <- cfg.getCentroids
-      let newIds = Set.fromList $ map cfg.toId cfg.items
-          centroids = filter (\(cid, _) -> not $ Set.member cid newIds) allCentroids
+      let newIds = S.fromList $ map cfg.toId cfg.items
+          centroids = filter (\(cid, _) -> not $ S.member cid newIds) allCentroids
           newWithEmbs = zip (map cfg.toId cfg.items) embeddingsList
           !(autoMerges, ambiguous) = PatternMerge.assignToCentroids centroids newWithEmbs
       let newTextMap = Map.fromList $ map (\item -> (cfg.toId item, cfg.itemText item)) cfg.items

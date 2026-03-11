@@ -18,7 +18,7 @@ module Pkg.Drain (
 ) where
 
 import Data.Char (isSpace)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time.Clock (UTCTime)
 import Data.Vector qualified as V
@@ -273,9 +273,9 @@ tokenizeJsonLike txt
 -- | Known typed placeholders produced by 'replaceAllFormats'. Normalized to @\<*\>@
 -- before Drain tokenization so patterns differing only in placeholder type
 -- (e.g. @{uuid}@ vs @{integer}@) route to the same Drain tree branch.
-drainPlaceholders :: Set.Set Text
+drainPlaceholders :: S.Set Text
 drainPlaceholders =
-  Set.fromList
+  S.fromList
     [ "{integer}"
     , "{float}"
     , "{hex}"
@@ -315,7 +315,7 @@ drainPlaceholders =
 -- >>> normalizePlaceholder "{\"context\":\"Nest\"}"
 -- "{\"context\":\"Nest\"}"
 normalizePlaceholder :: Text -> Text
-normalizePlaceholder t = if Set.member t drainPlaceholders then "<*>" else t
+normalizePlaceholder t = if S.member t drainPlaceholders then "<*>" else t
 
 
 generateDrainTokens :: T.Text -> V.Vector T.Text

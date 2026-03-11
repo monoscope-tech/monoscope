@@ -8,8 +8,7 @@ import Data.Aeson qualified as AE
 import Data.Char (isDigit)
 import Data.Map.Strict qualified as M
 import Data.Scientific (FPFormat (Fixed), Scientific, formatScientific)
-import Data.Set (member)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Builder.Linear (Builder)
 import Data.Text.Display (Display, display, displayBuilder, displayParen, displayPrec)
@@ -638,7 +637,7 @@ flattenedOtelAttributes =
 -- Transform dot notation to triple-underscore notation for flattened attributes
 transformFlattenedAttribute :: T.Text -> T.Text
 transformFlattenedAttribute entire
-  | entire `member` flattenedOtelAttributes = T.replace "." "___" entire
+  | entire `S.member` flattenedOtelAttributes = T.replace "." "___" entire
   | entire == "url_path" = "attributes___url___path"
   | otherwise = entire
 
@@ -656,7 +655,7 @@ transformFlattenedAttribute entire
 -- "errors->0->>'message' as message"
 instance Display Subject where
   displayPrec prec (Subject entire x keys) =
-    if entire `member` flattenedOtelAttributes
+    if entire `S.member` flattenedOtelAttributes
       then displayPrec prec (transformFlattenedAttribute entire)
       else case keys of
         [] -> displayPrec prec x
@@ -740,10 +739,10 @@ kqlTimespanToTimeBucket :: Text -> Text
 kqlTimespanToTimeBucket timespan = fromMaybe "5 minutes" $ parsePostgresInterval ts <|> parseKqlFormat ts
   where
     ts = T.strip timespan
-    validUnits = Set.fromList ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
+    validUnits = S.fromList ["second", "seconds", "minute", "minutes", "hour", "hours", "day", "days", "week", "weeks", "millisecond", "milliseconds", "microsecond", "microseconds", "nanosecond", "nanoseconds"]
     -- Parse and reconstruct PostgreSQL interval format (returns validated string, not original input)
     parsePostgresInterval t = case words t of
-      [num, unit] | Just n <- readMaybe @Int (toString num), unit `member` validUnits -> Just $ show n <> " " <> unit
+      [num, unit] | Just n <- readMaybe @Int (toString num), unit `S.member` validUnits -> Just $ show n <> " " <> unit
       _ -> Nothing
     -- Parse KQL short format (e.g., "30s", "5m", "1h")
     parseKqlFormat t

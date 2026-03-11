@@ -190,7 +190,7 @@ widgetPngUrl secret hostUrl pid widget since from to =
       timeParams = mconcat $ catMaybes [("&since=" <>) . encodeParam <$> since, ("&from=" <>) . encodeParam <$> from, ("&to=" <>) . encodeParam <$> to]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000
-        then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure ""
+        then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> ""
         else pure url
 
 

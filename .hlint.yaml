@@ -3400,7 +3400,6 @@
 - error: {lhs: "T.unpack x", rhs: "toString x", name: "Use toString from Relude"}
 - error: {lhs: "Data.Text.Encoding.encodeUtf8 x", rhs: "encodeUtf8 x", name: "Use Relude encodeUtf8"}
 - error: {lhs: "Data.Text.Encoding.decodeUtf8 x", rhs: "decodeUtf8 x", name: "Use Relude decodeUtf8"}
-- ignore: {name: "Use notNull"}
 - error: {lhs: "mconcat (map f x)", rhs: "foldMap f x", name: "Use foldMap instead of mconcat map"}
 - error: {lhs: "mconcat (fmap f x)", rhs: "foldMap f x", name: "Use foldMap instead of mconcat fmap"}
 
@@ -3430,7 +3429,7 @@
 # --- 9. Import Consistency ---
 - modules:
   - {name: Data.HashMap.Strict, as: HM, importStyle: qualified, qualifiedStyle: post, asRequired: true}
-  - {name: Data.Set, as: Set, importStyle: qualified, qualifiedStyle: post, asRequired: true}
+  - {name: Data.Set, as: S, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.IntMap, as: IntMap, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.IntMap.Strict, as: IntMap, importStyle: qualified, qualifiedStyle: post, asRequired: true}
   - {name: Data.Sequence, as: Seq, importStyle: qualified, qualifiedStyle: post, asRequired: true}

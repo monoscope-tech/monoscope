@@ -38,7 +38,6 @@ import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
-import Data.HashMap.Strict qualified as HashMap
 import Data.HashTable.Class qualified as HTC
 import Data.HashTable.ST.Cuckoo qualified as HT
 import Data.Scientific qualified as Scientific
@@ -139,7 +138,7 @@ import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFrom
 processMessages
   :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
-  -> HashMap Text Text
+  -> HM.HashMap Text Text
   -> Eff es [Text]
 processMessages [] _ = pure []
 processMessages msgs attrs = do
@@ -167,11 +166,11 @@ processMessages msgs attrs = do
             pure $! fromMaybe Projects.defaultProjectCache mpjCache
         -- Force evaluation of cache pairs
         pure (zip projectIds cachePairs `using` parList rpar)
-      let projectCaches = HashMap.fromList caches
+      let projectCaches = HM.fromList caches
 
       spans <- forM rMsgs \(rmAckId, msg) -> do
         let pid = UUIDId msg.projectId
-        case HashMap.lookup pid projectCaches of
+        case HM.lookup pid projectCaches of
           Just cache ->
             -- Check if project has exceeded daily limit for free tier
             let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount

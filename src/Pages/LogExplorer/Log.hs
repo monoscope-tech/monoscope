@@ -486,9 +486,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let queryInput = maybeToMonoid queryM'
   (queryAST, hadParseError) <- case parseQueryToAST queryInput of
-    Left err -> addErrorToast "Error Parsing Query" (Just err) >> pure ([], True)
+    Left err -> addErrorToast "Error Parsing Query" (Just err) $> ([], True)
     Right ast
-      | not (T.null (T.strip queryInput)) && null ast -> addErrorToast "Error Parsing Query" (Just "Invalid query syntax") >> pure ([], True)
+      | not (T.null (T.strip queryInput)) && null ast -> addErrorToast "Error Parsing Query" (Just "Invalid query syntax") $> ([], True)
       | otherwise -> pure (ast, False)
   let queryText = toQText queryAST
 

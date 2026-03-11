@@ -24,8 +24,8 @@ import Control.Lens (view, _5)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
-import Data.HashMap.Strict qualified as HashMap
-import Data.Set (member)
+import Data.HashMap.Strict qualified as HM
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
@@ -472,11 +472,11 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
           hourlyFrom = fromMaybe (addUTCTime (-(24 * 3600)) now) dateFrom
           hourlyTo = fromMaybe now dateTo
       -- Fetch member hashes for merged patterns so their hourly stats are included
-      memberHashMap :: HashMap.HashMap Text [Text] <- HashMap.fromListWith (++) . map (\(canonical, mHash) -> (canonical, [mHash])) <$> PG.query [sql|SELECT c.pattern_hash, m.pattern_hash FROM apis.log_patterns m JOIN apis.log_patterns c ON m.canonical_id = c.id WHERE c.project_id = ? AND c.source_field = ? AND c.pattern_hash = ANY(?)|] (pid, target, hashes)
-      let allHashes = V.fromList $ concatMap (\h -> h : fromMaybe [] (HashMap.lookup h memberHashMap)) $ V.toList hashes
+      memberHashMap :: HM.HashMap Text [Text] <- HM.fromListWith (++) . map (\(canonical, mHash) -> (canonical, [mHash])) <$> PG.query [sql|SELECT c.pattern_hash, m.pattern_hash FROM apis.log_patterns m JOIN apis.log_patterns c ON m.canonical_id = c.id WHERE c.project_id = ? AND c.source_field = ? AND c.pattern_hash = ANY(?)|] (pid, target, hashes)
+      let allHashes = V.fromList $ concatMap (\h -> h : fromMaybe [] (HM.lookup h memberHashMap)) $ V.toList hashes
       hourlyRows :: [(Text, UTCTime, Int)] <- PG.query [sql|SELECT pattern_hash, hour_bucket, event_count::INT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND source_field = ? AND pattern_hash = ANY(?) AND hour_bucket >= ? AND hour_bucket <= ? ORDER BY pattern_hash, hour_bucket|] (pid, target, allHashes, hourlyFrom, hourlyTo)
-      let volumeMap = HashMap.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
-          lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> fromMaybe [] $ HashMap.lookup mh volumeMap) (h : fromMaybe [] (HashMap.lookup h memberHashMap))
+      let volumeMap = HM.fromListWith (++) [(h, [(t, c)]) | (h, t, c) <- hourlyRows]
+          lookupVolume h = buildHourlyBuckets now $ concatMap (\mh -> fromMaybe [] $ HM.lookup mh volumeMap) (h : fromMaybe [] (HM.lookup h memberHashMap))
       pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = lookupVolume h, mergedCount = mc} | (pat, cnt, lvl, svc, h, mc, _) <- precomputed])
     else do
       Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
@@ -493,24 +493,24 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
       let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, l1 <|> l2, s1 <|> s2, b1 ++ b2)
           grouped =
-            HashMap.fromListWith
+            HM.fromListWith
               agg
               [(replaceAllFormats val, (cnt, lvl, svc, [(bi, cnt)])) | (val, bi, cnt, lvl, svc) <- rawResults, not (T.null val)]
           drainTree =
-            let keys = V.fromList $ HashMap.keys grouped
+            let keys = V.fromList $ HM.keys grouped
              in Drain.buildDrainTree Drain.tokenizeForDrain Relude.id (const Nothing) Drain.emptyDrainTree keys now
           merged =
-            HashMap.fromListWith
+            HM.fromListWith
               agg
-              [ (dr.templateStr, foldl' agg (0, Nothing, Nothing, []) $ mapMaybe (`HashMap.lookup` grouped) $ V.toList dr.logIds)
+              [ (dr.templateStr, foldl' agg (0, Nothing, Nothing, []) $ mapMaybe (`HM.lookup` grouped) $ V.toList dr.logIds)
               | dr <- V.toList $ Drain.getAllLogGroups drainTree
               ]
-          sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HashMap.toList merged
+          sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HM.toList merged
           allBIs = [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
           (minB, maxB) = case allBIs of [] -> (0, 0); xs -> (foldl' min maxBound xs, foldl' max minBound xs)
-          buildVolume bs = let bMap = HashMap.fromListWith (+) bs in [fromMaybe 0 $ HashMap.lookup i bMap | i <- [minB .. maxB]]
-      Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HashMap.size merged]
-      pure (HashMap.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = buildVolume bs, mergedCount = 0} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+          buildVolume bs = let bMap = HM.fromListWith (+) bs in [fromMaybe 0 $ HM.lookup i bMap | i <- [minB .. maxB]]
+      Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HM.size merged]
+      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = buildVolume bs, mergedCount = 0} | (pat, (cnt, lvl, svc, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.
@@ -519,7 +519,7 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       | f == "url_path" = Just $ Left "attributes___url___path"
       | f == "exception" = Just $ Left "attributes___exception___message"
       | f == "summary" = Just $ Left "array_to_string(summary, chr(30))"
-      | f `member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
+      | f `S.member` flattenedOtelAttributes = Just $ Left $ transformFlattenedAttribute f
       | f `elem` rootColumns = Just $ Left f
       | "attributes." `T.isPrefixOf` f = let parts = drop 1 $ T.splitOn "." f in if null parts || parts == [""] then Nothing else Just $ Right $ V.fromList parts
       | otherwise = Nothing
@@ -533,10 +533,10 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
 
 -- | Build a fixed 24-slot hourly bucket array from sparse (UTCTime, Int) pairs.
 buildHourlyBuckets :: UTCTime -> [(UTCTime, Int)] -> [Int]
-buildHourlyBuckets now pairs = [fromMaybe 0 $ HashMap.lookup i bucketMap | i <- [0 .. 23]]
+buildHourlyBuckets now pairs = [fromMaybe 0 $ HM.lookup i bucketMap | i <- [0 .. 23]]
   where
     startHour = addUTCTime (-(23 * 3600)) $ truncateToHour now
-    bucketMap = HashMap.fromListWith (+) [(hourIndex t, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0 && idx < 24]
+    bucketMap = HM.fromListWith (+) [(hourIndex t, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0 && idx < 24]
     hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
     truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
 

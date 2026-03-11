@@ -307,7 +307,7 @@ authCallbackH codeM _ redirectToM = do
     let picture = fromMaybe "" $ resp L.^? responseBody . key "picture" . _String
     lift $ authorizeUserAndPersist (Just envCfg.config.convertkitApiKey) firstName lastName picture email
   case resp of
-    Left err -> putStrLn ("unable to process auth callback page " <> err) >> (throwError $ err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}) >> pure (noHeader $ noHeader "")
+    Left err -> putStrLn ("unable to process auth callback page " <> err) >> throwError err302{errHeaders = [("Location", "/login?auth0_callback_failure")]}
     Right persistentSessId -> pure
       $ addHeader (fromMaybe "/" redirectToM)
       $ addHeader
@@ -381,6 +381,6 @@ clientMetadataH (Just authTextB64) = do
             $ ClientMetadata
               { projectId = pApiKey.projectId
               , pubsubProjectId = "past-3"
-              , topicId = appCtx.config.requestPubsubTopics !! 0
+              , topicId = fromMaybe "" $ listToMaybe appCtx.config.requestPubsubTopics
               , pubsubPushServiceAccount = serviceAccountJson
               }

@@ -301,7 +301,7 @@ widgetPngUrl secret hostUrl pid widget since fromM toM =
       sig = signWidgetUrl secret pid widgetJson
       timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", fromM), ("to", toM)] :: [(Text, Maybe Text)])
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
-   in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) >> pure "" else pure url
+   in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> "" else pure url
 
 
 signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text

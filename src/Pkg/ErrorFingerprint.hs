@@ -109,7 +109,7 @@ splitDotted q = case T.breakOnEnd "." q of
   (modDot, fn) -> (T.dropEnd 1 modDot, fn)
 
 
--- | O(log n) prefix check via Set.lookupLE: the largest entry <= the input
+-- | O(log n) prefix check via S.lookupLE: the largest entry <= the input
 -- is the only possible prefix match in a sorted set of prefixes.
 isGoStdlib :: Text -> Bool
 isGoStdlib txt = case S.lookupLE txt goStdlibPrefixes of

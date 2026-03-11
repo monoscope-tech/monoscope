@@ -27,7 +27,7 @@ import Data.Aeson.Lens (key, _Array, _String)
 import Data.List (maximumBy)
 import Data.Map.Strict qualified as Map
 import Data.Sequence qualified as Seq
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
@@ -247,15 +247,15 @@ normalizeForEmbedding = unwords . map Drain.normalizePlaceholder . words
 
 
 -- | Extract non-placeholder content tokens as a Set (for reuse in hot loops).
-contentTokens :: Text -> Set.Set Text
-contentTokens = Set.fromList . filter (not . isPlaceholderToken) . words
+contentTokens :: Text -> S.Set Text
+contentTokens = S.fromList . filter (not . isPlaceholderToken) . words
 
 
 -- | Jaccard similarity on pre-computed token sets.
-jaccardOnSets :: Set.Set Text -> Set.Set Text -> Double
+jaccardOnSets :: S.Set Text -> S.Set Text -> Double
 jaccardOnSets tokA tokB =
-  let inter = Set.size $ Set.intersection tokA tokB
-      union_ = Set.size $ Set.union tokA tokB
+  let inter = S.size $ S.intersection tokA tokB
+      union_ = S.size $ S.union tokA tokB
    in if union_ == 0 then 1.0 else fromIntegral inter / fromIntegral union_
 
 
@@ -342,9 +342,9 @@ buildLogClusterJudgePrompt pairs = systemPart <> "\n\n" <> templatesPart <> "\n"
 
 
 -- | Shared trivial tokens excluded from meaningful comparison across all pattern types.
-trivialTokens :: Set.Set Text
+trivialTokens :: S.Set Text
 trivialTokens =
-  Set.fromList
+  S.fromList
     [ "info"
     , "warn"
     , "error"
@@ -382,8 +382,8 @@ trivialTokens =
 
 
 -- | Extract meaningful (non-placeholder, non-trivial) tokens from a pattern.
-meaningfulTokens :: Text -> Set.Set Text
-meaningfulTokens = Set.filter (\t -> not (Set.member (T.toLower t) trivialTokens) && T.length t > 1) . contentTokens
+meaningfulTokens :: Text -> S.Set Text
+meaningfulTokens = S.filter (\t -> not (S.member (T.toLower t) trivialTokens) && T.length t > 1) . contentTokens
 
 
 -- | Check if two patterns share meaningful tokens (or both have none).
@@ -391,7 +391,7 @@ shareMeaningfulTokens :: Text -> Text -> Bool
 shareMeaningfulTokens a b =
   let toksA = meaningfulTokens a
       toksB = meaningfulTokens b
-   in (Set.null toksA && Set.null toksB) || not (Set.null $ Set.intersection toksA toksB)
+   in (S.null toksA && S.null toksB) || not (S.null $ S.intersection toksA toksB)
 
 
 -- | Split "ErrorType: message" into (errorType, message). Returns ("", full) if no ": " separator.

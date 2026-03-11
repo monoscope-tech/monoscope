@@ -57,7 +57,7 @@ import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
-import Data.HashMap.Strict qualified as HashMap
+import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Text qualified as T
@@ -816,7 +816,7 @@ processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
   let testProjectId = UUIDId UUID.nil
 
   _ <- runTestBg frozenTime tr do
-    _ <- ProcessMessage.processMessages msgs HashMap.empty
+    _ <- ProcessMessage.processMessages msgs HM.empty
     _ <- BackgroundJobs.processOneMinuteErrors futureTime testProjectId
     BackgroundJobs.processFiveMinuteSpans futureTime testProjectId
 

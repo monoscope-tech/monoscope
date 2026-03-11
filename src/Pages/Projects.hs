@@ -58,7 +58,7 @@ import Data.Effectful.Wreq qualified as W
 import Data.List (partition)
 import Data.List.Unique (uniq)
 import Data.Pool (withResource)
-import Data.Set qualified as Set
+import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Time
 import Data.UUID qualified as RealUUID
@@ -309,9 +309,9 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
       projectM <- Projects.projectById pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       whenJust everyoneTeamM \team -> do
-        let oldChannels = Set.fromList $ V.toList team.slack_channels
-            newChannelsSet = Set.fromList slackChannels
-            addedChannels = Set.difference newChannelsSet oldChannels
+        let oldChannels = S.fromList $ V.toList team.slack_channels
+            newChannelsSet = S.fromList slackChannels
+            addedChannels = S.difference newChannelsSet oldChannels
             teamDetails = (ProjectMembers.teamToDetails team){ProjectMembers.slackChannels = V.fromList slackChannels} :: ProjectMembers.TeamDetails
         void $ ProjectMembers.updateTeam pid team.id teamDetails
         whenJust projectM \project ->
