@@ -652,7 +652,8 @@ projectsDropDown currProject projects = do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
             input_
-              [ type_ "search", Aria.label_ "Search projects"
+              [ type_ "search"
+              , Aria.label_ "Search projects"
               , class_ "pl-10 w-full bg-fillWeak rounded-lg border-0 py-2 px-3 text-sm"
               , placeholder_ "Search..."
               , [__|on input
