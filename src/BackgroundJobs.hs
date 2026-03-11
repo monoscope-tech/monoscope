@@ -2001,8 +2001,11 @@ evaluateQueryMonitor monitor startWall = do
           , ("monitor.query", AE.toJSON monitor.logQueryAsSql)
           , ("monitor.condition", AE.toJSON $ if monitor.triggerLessThan then "less_than" :: Text else "greater_than")
           ]
-      otelLog = (mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall)
-        { Telemetry.kind = Just "alert", Telemetry.parent_id = Just monitor.id.toText }
+      otelLog =
+        (mkSystemLog monitor.projectId "monitor.alert.triggered" severity (title <> ": " <> display status) attrs (Just $ fromIntegral durationNs) startWall)
+          { Telemetry.kind = Just "alert"
+          , Telemetry.parent_id = Just monitor.id.toText
+          }
   insertSystemLog otelLog{Telemetry.summary = generateSummary otelLog}
 
   -- Determine notification intent before UPDATE so we can set timestamps correctly

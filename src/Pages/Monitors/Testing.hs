@@ -237,16 +237,22 @@ muteButtonDropdown_ btnClass monitorId muteUrl = do
   let popId = "mute-btn-pop-" <> monitorId
   div_ [class_ "inline-block"] do
     button_
-      [ type_ "button", class_ btnClass, term "data-tippy-content" "Silence notifications for a period"
-      , term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId
-      ] do
+      [ type_ "button"
+      , class_ btnClass
+      , term "data-tippy-content" "Silence notifications for a period"
+      , term "popovertarget" popId
+      , style_ $ "anchor-name: --anchor-" <> popId
+      ]
+      do
         faSprite_ "bell-slash" "regular" "h-4 w-4"
         "Mute"
     div_
-      [ id_ popId, term "popover" "auto"
+      [ id_ popId
+      , term "popover" "auto"
       , class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1"
       , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
-      ] do
+      ]
+      do
         span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak"] "Mute for..."
         forM_ muteDurations \(mins, label) ->
           button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full", hxPost_ $ muteUrl <> "?duration=" <> show mins, hxSwap_ "none"] $ toHtml label
@@ -456,25 +462,26 @@ unifiedMonitorOverviewH pid monitorId = do
       let muteBase = "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText
           isInactive = isJust alert.deactivatedAt
           actionBtn = "btn btn-sm btn-ghost border border-strokeWeak"
-          bwconf = baseBwconf
-            { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
-                case alert.mutedUntil of
-                  Just _ -> button_ [class_ actionBtn, term "data-tippy-content" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
-                    faSprite_ "bell" "regular" "h-4 w-4"
-                    "Unmute"
-                  Nothing -> muteButtonDropdown_ actionBtn alert.id.toText (muteBase <> "/mute")
-                when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning])
-                  $ button_ [class_ actionBtn, term "data-tippy-content" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
-                    faSprite_ "check" "regular" "h-4 w-4"
-                    "Resolve"
-                button_ [class_ actionBtn, term "data-tippy-content" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
-                  faSprite_ (bool "pause" "circle-play" isInactive) "regular" "h-4 w-4"
-                  bool "Deactivate" "Activate" isInactive
-                div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty
-                a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm btn-primary", term "data-tippy-content" "Edit query, thresholds, and notification settings"] do
-                  faSprite_ "pen-to-square" "regular" "h-4 w-4"
-                  "Edit monitor"
-            }
+          bwconf =
+            baseBwconf
+              { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
+                  case alert.mutedUntil of
+                    Just _ -> button_ [class_ actionBtn, term "data-tippy-content" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
+                      faSprite_ "bell" "regular" "h-4 w-4"
+                      "Unmute"
+                    Nothing -> muteButtonDropdown_ actionBtn alert.id.toText (muteBase <> "/mute")
+                  when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning])
+                    $ button_ [class_ actionBtn, term "data-tippy-content" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
+                      faSprite_ "check" "regular" "h-4 w-4"
+                      "Resolve"
+                  button_ [class_ actionBtn, term "data-tippy-content" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
+                    faSprite_ (bool "pause" "circle-play" isInactive) "regular" "h-4 w-4"
+                    bool "Deactivate" "Activate" isInactive
+                  div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty
+                  a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm btn-primary", term "data-tippy-content" "Edit query, thresholds, and notification settings"] do
+                    faSprite_ "pen-to-square" "regular" "h-4 w-4"
+                    "Edit monitor"
+              }
       let findChannel xx x = fromMaybe x (find (\c -> c.channelId == x) xx >>= (\a -> Just a.channelName))
       let teams' = (\x -> x{slack_channels = findChannel channels <$> x.slack_channels, discord_channels = (\xx -> fromMaybe xx (find (\c -> c.channelId == xx) discordChannels >>= (\a -> Just a.channelName))) <$> x.discord_channels}) <$> teams
       addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
