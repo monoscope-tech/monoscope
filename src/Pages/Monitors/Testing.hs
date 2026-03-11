@@ -158,10 +158,10 @@ unifiedMonitorsGetH pid filterTM sinceM = do
                 , zeroState =
                     Just
                       $ ZeroState
-                        { icon = "empty-set"
+                        { icon = "bell"
                         , title = "No monitors configured yet"
-                        , description = "Create alerts"
-                        , actionText = "Create alert"
+                        , description = "Get notified when your logs, spans, errors, or metrics match specific conditions"
+                        , actionText = "Create monitor"
                         , destination =
                             Left $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"
                         }
@@ -172,15 +172,15 @@ unifiedMonitorsGetH pid filterTM sinceM = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Alerts"
-          , menuItem = Just "Alerts"
+          , pageTitle = "Monitors"
+          , menuItem = Just "Monitors"
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.env
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4"
-                "Create Alert"
+                "Create monitor"
           , navTabs =
               Just
                 $ toHtml
@@ -231,6 +231,29 @@ renderNameCol item = do
         $ faSprite_ icon "regular" "h-3.5 w-3.5"
 
 
+-- | Mute dropdown styled as a full button (for page headers)
+muteButtonDropdown_ :: Text -> Text -> Text -> Html ()
+muteButtonDropdown_ btnClass monitorId muteUrl = do
+  let popId = "mute-btn-pop-" <> monitorId
+  div_ [class_ "inline-block"] do
+    button_
+      [ type_ "button", class_ btnClass, term "data-tippy-content" "Silence notifications for a period"
+      , term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId
+      ] do
+        faSprite_ "bell-slash" "regular" "h-4 w-4"
+        "Mute"
+    div_
+      [ id_ popId, term "popover" "auto"
+      , class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1"
+      , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
+      ] do
+        span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak"] "Mute for..."
+        forM_ muteDurations \(mins, label) ->
+          button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full", hxPost_ $ muteUrl <> "?duration=" <> show mins, hxSwap_ "none"] $ toHtml label
+        button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak", hxPost_ muteUrl, hxSwap_ "none"] "Indefinitely"
+
+
+-- | Mute dropdown styled as inline icon (for table rows)
 muteDropdown_ :: Text -> Text -> Html ()
 muteDropdown_ monitorId muteUrl = do
   let popId = "mute-pop-" <> monitorId
@@ -383,7 +406,7 @@ statusBadge_ isLarge status = do
         _ -> ("badge-ghost", "circle")
       sizeClass = if isLarge then "" else "badge-sm"
       iconSize = if isLarge then "h-4 w-4" else "h-3 w-3"
-  span_ [class_ $ sizeClass <> " " <> badgeClass <> " gap-1 badge" <> bool "" " alert-badge" (status `elem` ["Alerting", "alert"])] do
+  span_ [class_ $ "badge gap-1 " <> sizeClass <> " " <> badgeClass <> bool "" " alert-badge" (status `elem` ["Alerting", "alert"])] do
     faSprite_ icon "regular" iconSize
     toHtml status
 
@@ -403,13 +426,13 @@ unifiedMonitorOverviewH pid monitorId = do
       pure $ listToMaybe alerts
     Nothing -> pure Nothing
 
-  let bwconf =
+  let baseBwconf =
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Alerts Overview"
-          , prePageTitle = Just "Alerts"
-          , menuItem = Just "Alerts"
+          , pageTitle = "Monitor Overview"
+          , prePageTitle = Just "Monitors"
+          , menuItem = Just "Monitors"
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.config
@@ -430,38 +453,39 @@ unifiedMonitorOverviewH pid monitorId = do
       discordChannels <- case discordDataM of
         Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
         Nothing -> return []
+      let muteBase = "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText
+          isInactive = isJust alert.deactivatedAt
+          actionBtn = "btn btn-sm btn-ghost border border-strokeWeak"
+          bwconf = baseBwconf
+            { pageActions = Just $ div_ [class_ "flex items-center gap-2"] do
+                case alert.mutedUntil of
+                  Just _ -> button_ [class_ actionBtn, term "data-tippy-content" "Resume notifications for this monitor", hxPost_ $ muteBase <> "/unmute"] do
+                    faSprite_ "bell" "regular" "h-4 w-4"
+                    "Unmute"
+                  Nothing -> muteButtonDropdown_ actionBtn alert.id.toText (muteBase <> "/mute")
+                when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning])
+                  $ button_ [class_ actionBtn, term "data-tippy-content" "Mark as resolved and reset status to normal", hxPost_ $ muteBase <> "/resolve"] do
+                    faSprite_ "check" "regular" "h-4 w-4"
+                    "Resolve"
+                button_ [class_ actionBtn, term "data-tippy-content" $ bool "Pause this monitor — it won't evaluate or alert" "Re-enable this monitor to resume evaluations" isInactive, hxPost_ $ muteBase <> "/toggle_active"] do
+                  faSprite_ (bool "pause" "circle-play" isInactive) "regular" "h-4 w-4"
+                  bool "Deactivate" "Activate" isInactive
+                div_ [class_ "w-px bg-strokeWeak h-5 mx-0.5"] mempty
+                a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm btn-primary", term "data-tippy-content" "Edit query, thresholds, and notification settings"] do
+                  faSprite_ "pen-to-square" "regular" "h-4 w-4"
+                  "Edit monitor"
+            }
       let findChannel xx x = fromMaybe x (find (\c -> c.channelId == x) xx >>= (\a -> Just a.channelName))
       let teams' = (\x -> x{slack_channels = findChannel channels <$> x.slack_channels, discord_channels = (\xx -> fromMaybe xx (find (\c -> c.channelId == xx) discordChannels >>= (\a -> Just a.channelName))) <$> x.discord_channels}) <$> teams
       addRespHeaders $ PageCtx bwconf $ unifiedOverviewPage pid alert currTime (V.fromList teams') slackDataM discordDataM
-    _ -> addRespHeaders $ PageCtx bwconf $ div_ [class_ "p-6 text-center"] "Alert not found"
+    _ -> addRespHeaders $ PageCtx baseBwconf $ div_ [class_ "p-6 text-center"] "Monitor not found"
 
 
 -- | Unified overview page that handles both monitor types
 unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
 unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
   section_ [class_ "pt-2 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-y-auto"] do
-    -- Row 1: actions left, Edit right
-    div_ [class_ "flex items-center justify-between gap-4"] do
-      div_ [class_ "flex items-center gap-2"] do
-        let actionBtn = "btn btn-sm btn-ghost border border-strokeWeak"
-        case alert.mutedUntil of
-          Just _ -> button_ [class_ actionBtn, hxPost_ $ muteBase <> "/unmute"] do
-            faSprite_ "bell" "regular" "h-4 w-4"
-            "Unmute"
-          Nothing -> muteDropdown_ alert.id.toText (muteBase <> "/mute")
-        when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning])
-          $ button_ [class_ $ actionBtn <> " text-textSuccess", hxPost_ $ muteBase <> "/resolve"] do
-            faSprite_ "check" "regular" "h-4 w-4"
-            "Resolve"
-        let isInactive = isJust alert.deactivatedAt
-        button_ [class_ actionBtn, hxPost_ $ muteBase <> "/toggle_active"] do
-          faSprite_ (bool "pause" "circle-play" isInactive) "regular" "h-4 w-4"
-          bool "Deactivate" "Activate" isInactive
-      a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?alert=" <> alert.id.toText <> "&query=" <> alert.logQuery, class_ "btn btn-sm btn-primary"] do
-        faSprite_ "pen-to-square" "regular" "h-4 w-4"
-        "Edit Alert"
-
-    -- Row 2: Title + status badge
+    -- Title + status badge
     div_ [class_ "flex items-center gap-3"] do
       h1_ [class_ "text-2xl font-semibold text-textStrong"] $ toHtml $ bool alert.alertConfig.title "(Untitled)" (T.null alert.alertConfig.title)
       statusBadge_ False displayName
@@ -488,7 +512,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
             $ (def :: Widget)
               { Widget.wType = Widget.mapChatTypeToWidgetType alert.visualizationType
               , Widget.query = Just alert.logQuery
-              , Widget.title = Just "Alert Query Visualization"
+              , Widget.title = Just "Monitor Query Visualization"
               , Widget.standalone = Just True
               , Widget._projectId = Just pid
               , Widget.layout = Just (def{Widget.w = Just 12, Widget.h = Just 6})
@@ -503,18 +527,17 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
     tabbedSection_ "monitor-tabs" [("Execution History", monitorHistoryTab_ pid alert.id), ("Notification Channels", alertNotificationsTab_ alert teams)]
   where
     displayName = bool (view _2 $ statusInfo alert.currentStatus) "Inactive" (isJust alert.deactivatedAt)
-    muteBase = "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText
 
 
 -- | Reusable tabbed section component
 tabbedSection_ :: Text -> [(Text, Html ())] -> Html ()
 tabbedSection_ containerId tabs = do
   div_ [role_ "tablist", class_ "w-full", id_ containerId] do
-    div_ [class_ "w-full flex"] do
+    div_ [class_ "w-full flex border-b border-strokeWeak"] do
       forM_ (zip [0 ..] tabs) $ \(idx, (label, _)) -> do
         let tabId = containerId <> "-tab-" <> show idx
         button_
-          [ class_ $ "cursor-pointer shrink-0 tab-btn  tab-box  text-sm font-medium p-2 text-textWeak border-b-2 border-b-transparent" <> if idx == 0 then " t-tab-active" else ""
+          [ class_ $ "cursor-pointer shrink-0 tab-btn tab-box text-sm font-medium p-2 text-textWeak border-b-2 border-b-transparent" <> if idx == 0 then " t-tab-active" else ""
           , role_ "tab"
           , term "aria-label" label
           , onclick_ $ "navigateTab(this, '#" <> tabId <> "', '#" <> containerId <> "')"
@@ -555,7 +578,7 @@ alertSidebar_ displayName alert currTime = do
     sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.evalResult
     sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textStrong/70 overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
     sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
-      span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Alert: " <> direction <> " " <> formatWithCommas alert.alertThreshold
+      span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Trigger: " <> direction <> " " <> formatWithCommas alert.alertThreshold
       whenJust alert.warningThreshold \w -> span_ [class_ "text-textWarning tabular-nums"] $ toHtml $ "Warning: " <> direction <> " " <> formatWithCommas w
       whenJust alert.alertRecoveryThreshold \r -> span_ [class_ "text-textWeak tabular-nums"] $ toHtml $ "Recovery: " <> formatWithCommas r
     sidebarItem_ "Evaluation" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
@@ -584,7 +607,7 @@ alertNotificationsTab_ alert teams = do
     div_ [class_ "mb-6"] do
       h4_ [class_ "text-base font-medium text-textStrong mb-2 flex items-center"] $ faSprite_ "users" "regular" "h-4 w-4 mr-2" >> "Teams"
       when (null teams) $ do
-        div_ [class_ "text-sm text-textWeak"] "No teams configured for this alert."
+        div_ [class_ "text-sm text-textWeak"] "No teams configured for this monitor."
         div_ [class_ "pt-2 flex items-center gap-1"] do
           span_ [class_ "text-sm text-textWeak"] "Project level notification integrations will be used."
           a_ [href_ $ "/p/" <> alert.projectId.toText <> "/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
