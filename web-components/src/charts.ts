@@ -28,6 +28,58 @@ function debounce<T extends (...args: any[]) => any>(func: T, wait: number): T {
   }) as T;
 }
 
+function setupTimeCursor(opts: {
+  container: HTMLElement; indicator: HTMLElement; timeLabel: HTMLElement; ruler: HTMLElement;
+  maxDuration: number; signal?: AbortSignal; padLeft?: number; resizeEvents?: string[];
+  indicatorLeft?: (x: number) => number; boundingEl?: HTMLElement;
+}): () => void {
+  const { container, indicator, timeLabel, ruler, padLeft = 0 } = opts;
+  const boundingEl = opts.boundingEl ?? container;
+  const events = opts.resizeEvents ?? RESIZE_EVENTS;
+  const getLeft = opts.indicatorLeft ?? ((x: number) => x);
+  let cachedLeft: number | null = null;
+  let cachedWidth: number | null = null;
+  const updateCache = () => {
+    if (!container || !ruler) return;
+    cachedLeft = boundingEl.getBoundingClientRect().x;
+    cachedWidth = ruler.offsetWidth - SCROLL_BAR_WIDTH;
+  };
+  updateCache();
+
+  let pending = false;
+  const onMove = (e: MouseEvent) => {
+    if (!cachedWidth || cachedWidth < 0) updateCache();
+    if (cachedLeft === null || !cachedWidth || cachedWidth < 0) return;
+    const x = e.clientX - cachedLeft;
+    const w = cachedWidth;
+    if (pending) return;
+    pending = true;
+    requestAnimationFrame(() => {
+      pending = false;
+      if (x < padLeft + 1 || x > w + padLeft) {
+        indicator.style.display = 'none';
+      } else {
+        indicator.style.display = 'block';
+        indicator.style.left = `${getLeft(x)}px`;
+        const [f, u] = formatDuration((opts.maxDuration * (x - padLeft)) / w);
+        timeLabel.textContent = `${f}${u}`;
+      }
+    });
+  };
+  const onLeave = () => { indicator.style.display = 'none'; };
+
+  const listenerOpts = opts.signal ? { signal: opts.signal } : undefined;
+  events.forEach((e) => window.addEventListener(e, updateCache, listenerOpts));
+  container.addEventListener('mousemove', onMove, listenerOpts);
+  container.addEventListener('mouseleave', onLeave, listenerOpts);
+
+  return () => {
+    events.forEach((e) => window.removeEventListener(e, updateCache));
+    container.removeEventListener('mousemove', onMove);
+    container.removeEventListener('mouseleave', onLeave);
+  };
+}
+
 const getErrorIndicator = () =>
   elt(
     'span',
@@ -218,25 +270,11 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
   }
 
   const flameGraphContainer = document.querySelector('#flame-graph-container-' + renderAt) as HTMLElement;
-
-  // Cache DOM elements and values outside the mousemove handler
   const lineContainer = document.querySelector('#time-bar-indicator-' + renderAt) as HTMLElement;
   const timeElement = document.querySelector('#line-time-' + renderAt) as HTMLElement;
   const timeContainer = document.querySelector('#time-container-' + renderAt) as HTMLElement;
-  let cachedBoundingX: number | null = null;
-  let cachedContainerWidth: number | null = null;
 
-  // Update cache when needed
-  const updateCache = () => {
-    if (!flameGraphContainer || !timeContainer) return;
-    cachedBoundingX = flameGraphContainer.getBoundingClientRect().x;
-    cachedContainerWidth = timeContainer.offsetWidth - SCROLL_BAR_WIDTH;
-  };
-
-  // Initial cache update
-  updateCache();
-
-  const redraw = () => { updateCache(); flameGraph(fData, renderAt); };
+  const redraw = () => flameGraph(fData, renderAt);
   const debouncedRedraw = debounce(redraw, 100);
   RESIZE_EVENTS.forEach((e) => window.addEventListener(e, debouncedRedraw, { signal }));
 
@@ -246,27 +284,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     flameTab.addEventListener('tab-visible', () => requestAnimationFrame(redraw), { signal });
   }
 
-  flameGraphContainer.addEventListener('mousemove', (e) => {
-    if (e.currentTarget && cachedBoundingX !== null && cachedContainerWidth !== null) {
-      const left = (e as MouseEvent).clientX - cachedBoundingX;
-
-      requestAnimationFrame(() => {
-        lineContainer.style.left = `${left}px`;
-        const currTime = (maxDuration * (left - 8)) / cachedContainerWidth;
-        const [f, u] = formatDuration(currTime);
-        timeElement.textContent = `${f}${u}`;
-
-        if (left < 9 || left > cachedContainerWidth + 8) {
-          lineContainer.style.display = 'none';
-        } else {
-          lineContainer.style.display = 'block';
-        }
-      });
-    }
-  });
-  flameGraphContainer.addEventListener('mouseleave', () => {
-    if (lineContainer) lineContainer.style.display = 'none';
-  });
+  setupTimeCursor({ container: flameGraphContainer, indicator: lineContainer, timeLabel: timeElement, ruler: timeContainer, maxDuration, signal, padLeft: FLAME_PAD_LEFT + 4 });
 }
 
 window.flameGraphChart = flameGraphChart;
@@ -409,39 +427,19 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
   const debouncedRender = debounce(fullRender, 150);
   [...RESIZE_EVENTS, 'waterfallResize'].forEach((e) => window.addEventListener(e, debouncedRender, { signal }));
 
-  // Time cursor indicator
+  // Time cursor — no signal passed; cleanup via returned function to avoid signal lifecycle issues
   const wfContainer = document.querySelector('#waterfall-container-' + renderAt) as HTMLElement;
   const wfIndicator = document.querySelector('#wf-time-indicator-' + renderAt) as HTMLElement;
   const wfTimeLabel = document.querySelector('#wf-time-label-' + renderAt) as HTMLElement;
   const wfTimeRuler = document.querySelector('#waterfall-time-container-' + renderAt) as HTMLElement;
   if (wfContainer && wfIndicator && wfTimeLabel && wfTimeRuler) {
-    let wfCachedLeft: number | null = null;
-    let wfCachedWidth: number | null = null;
-    const updateWfCache = () => {
-      const rect = wfTimeRuler.getBoundingClientRect();
-      wfCachedLeft = rect.left;
-      wfCachedWidth = rect.width - SCROLL_BAR_WIDTH;
-    };
-    updateWfCache();
-    RESIZE_EVENTS.forEach((e) => window.addEventListener(e, updateWfCache, { signal }));
-    window.addEventListener('waterfallResize', updateWfCache, { signal });
-
-    wfContainer.addEventListener('mousemove', (e) => {
-      if (wfCachedLeft === null || wfCachedWidth === null) return;
-      const x = e.clientX - wfCachedLeft;
-      requestAnimationFrame(() => {
-        if (x < 0 || x > wfCachedWidth!) {
-          wfIndicator.style.display = 'none';
-        } else {
-          wfIndicator.style.display = 'block';
-          wfIndicator.style.left = `${wfTimeRuler.offsetLeft + x}px`;
-          const currTime = (maxDuration * x) / wfCachedWidth!;
-          const [f, u] = formatDuration(currTime);
-          wfTimeLabel.textContent = `${f}${u}`;
-        }
-      });
-    }, { signal });
-    wfContainer.addEventListener('mouseleave', () => { wfIndicator.style.display = 'none'; }, { signal });
+    const old = (wfContainer as any).__wfCursorCleanup as (() => void) | undefined;
+    if (old) old();
+    (wfContainer as any).__wfCursorCleanup = setupTimeCursor({
+      container: wfContainer, indicator: wfIndicator, timeLabel: wfTimeLabel, ruler: wfTimeRuler,
+      maxDuration, boundingEl: wfTimeRuler, resizeEvents: [...RESIZE_EVENTS, 'waterfallResize'],
+      indicatorLeft: (x) => wfTimeRuler.offsetLeft + x,
+    });
   }
 }
 
