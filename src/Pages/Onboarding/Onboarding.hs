@@ -8,6 +8,7 @@ module Pages.Onboarding.Onboarding (
   pricingPage,
   checkIntegrationGet,
   onboardingStepSkipped,
+  dismissChecklistH,
   proxyLandingH,
   DiscordForm (..),
   NotifChannelForm (..),
@@ -256,6 +257,14 @@ onboardingStepSkipped pid stepM = do
       addRespHeaders ""
 
 
+dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+dismissChecklistH pid = do
+  (_, project) <- Sessions.sessionAndProject pid
+  let newCompleted = insertIfNotExist "checklist_dismissed" project.onboardingStepsCompleted
+  void $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed=? WHERE id=? |] (newCompleted, pid)
+  addRespHeaders ""
+
+
 getNextStep :: Text -> Text
 getNextStep "Integration" = "Pricing"
 getNextStep _ = "Info"
@@ -355,7 +364,7 @@ onboardingCompleteBody pid = do
       iconBadgeWith_ "p-3" "h-8 w-8" "rounded-full" SuccessBadge "circle-check"
       div_ [class_ "flex flex-col gap-2"] do
         h3_ [class_ " text-textStrong  text-2xl"] "Onboarding completed!"
-        p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start using exploring the monoscope dashboard by clicking the button below."
+        p_ [class_ " text-textWeak text-sm"] "You're all set! You can now start exploring the monoscope dashboard by clicking the button below."
       a_ [class_ "btn-primary py-2  rounded-lg text-center mt-1", href_ $ "/p/" <> pid.toText <> "/"] "Go to your dashboard"
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
@@ -823,13 +832,13 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
       stepIndicator 1 "Tell us a little bit about you" ""
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
         div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
-          forM_ ([("first Name", "firstName", firstName), ("last Name", "lastName", lastName), ("company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
+          forM_ ([("First Name", "firstName", firstName), ("Last Name", "lastName", lastName), ("Company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
             formField_ FieldMd def{value = val} label name True Nothing
           let createSelectField selected label name (opts :: [(Text, Text)]) = formSelectField_ FieldMd label name True do
                 option_ [value_ ""] ""
                 forM_ opts \(k, v) -> option_ (value_ k : [selected_ selected | selected == k]) $ toHtml v
-          createSelectField cSize "company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
-          createSelectField fUsFrm "where Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
+          createSelectField cSize "Company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
+          createSelectField fUsFrm "How Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
         div_ [class_ "items-center gap-1 flex"] $ do
           button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 

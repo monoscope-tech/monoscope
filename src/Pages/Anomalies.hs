@@ -1207,9 +1207,9 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
                       $ ZeroState
                         { icon = "empty-set"
                         , title = "No Issues Or Errors."
-                        , description = "Start monitoring errors that happened during a request."
-                        , actionText = "Error reporting guide"
-                        , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#reporting-errors-to-monoscope"
+                        , description = "Issues and errors appear here automatically once you integrate an SDK."
+                        , actionText = "View SDK setup guides"
+                        , destination = Right "https://monoscope.tech/docs/sdks/"
                         }
                 }
           }

@@ -315,7 +315,7 @@ chartsPage pid metricList sources source mFilter nextUrl = do
     if V.null metricList
       then
         div_ [class_ "w-full flex items-center justify-center h-96"]
-          $ Components.emptyState_ (Just "chart-line") "No metrics found" "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data." Nothing ""
+          $ Components.emptyState_ (Just "chart-line") "No metrics found" "Metrics will appear here once your application starts sending telemetry data." (Just "https://monoscope.tech/docs/sdks/") "View SDK setup guides"
       else
         div_ [class_ "w-full grid grid-cols-3 gap-4", id_ "metric_list_container"]
           $ chartList pid source metricList nextUrl
@@ -409,7 +409,7 @@ dataPointsPage pid metrics refCounts = do
                        in [ class_ "cursor-pointer"
                           , term "_" $ "on pointerdown or click set #global-data-drawer.checked to true then set #global-data-drawer-content.innerHTML to #loader-tmp.innerHTML then fetch `" <> detailUrl <> "` then set #global-data-drawer-content.innerHTML to it then htmx.process(#global-data-drawer-content) then _hyperscript.processNode(#global-data-drawer-content) then window.evalScriptsFromContent(#global-data-drawer-content)"
                           ]
-              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "There are no metrics to display at the moment. Metrics will appear here once your application starts sending telemetry data.", actionText = "", destination = Right ""}
+              , Table.zeroState = Just Table.ZeroState{icon = "chart-line", title = "No metrics found", description = "Metrics will appear here once your application starts sending telemetry data.", actionText = "View SDK setup guides", destination = Right "https://monoscope.tech/docs/sdks/"}
               }
         }
 

@@ -25,6 +25,9 @@ import Data.Time.Clock (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -185,6 +188,8 @@ alertUpsertPostH pid form = do
         _ -> baseMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
+  when (isNothing alertId) do
+    void $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'created_monitor') WHERE id = ? AND NOT ('created_monitor' = ANY(onboarding_steps_completed)) |] (Only pid)
   addSuccessToast "Monitor was updated successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 

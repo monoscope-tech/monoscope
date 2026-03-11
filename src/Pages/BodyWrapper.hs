@@ -41,7 +41,7 @@ onboardingChecklist_ project = do
       createdMonitor = V.elem "created_monitor" steps
       setupNotifs = V.elem "NotifChannel" steps
       items =
-        [ (hasEvents, "Send first event", "/p/" <> pid <> "/onboarding?step=Integration", "satellite-dish")
+        [ (hasEvents, "Send first event", "/p/" <> pid <> "/onboarding?step=Integration", "paper-plane")
         , (exploredLogs, "Explore logs", "/p/" <> pid <> "/log_explorer", "magnifying-glass")
         , (createdMonitor, "Create a monitor", "/p/" <> pid <> "/monitors/new", "bell")
         , (setupNotifs, "Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope")
@@ -644,68 +644,74 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 transition transform bg-bgOverlay p-4 absolute w-[20rem] rounded-2xl shadow-lg opacity-100 scale-100"
+    , class_ "origin-top-right z-40 bg-bgOverlay p-2 absolute w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
     ]
     do
-      div_ [class_ "p-2 pb-4 "] do
-        div_ [class_ "flex mt-2 mb-4"] do
-          faSprite_ "folders" "regular" "h-5 w-5 mr-2"
-          div_ do
-            strong_ [class_ "block"] $ toHtml currProject.title
-            small_ [class_ "block"] $ toHtml currProject.paymentPlan
-        nav_ [] do
-          when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
-            $ a_
-              [class_ "p-3 flex gap-3 items-center rounded-sm hover:bg-fillHover cursor-pointer", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
-              (faSprite_ "dollar-sign" "regular" "h-5 w-5" >> span_ "Manage billing")
-      div_ [class_ "border-t border-strokeWeak p-2"] do
-        div_ [class_ "flex justify-between content-center items-center py-5 mb-2 "] do
-          a_ [href_ "/"] $ h3_ [] "Switch projects"
-          a_ [class_ "bg-fillBrand-strong flex pl-3 pr-4 py-2 rounded-xl text-textInverse-strong space-x-2", href_ "/p/new"] do
-            faSprite_ "plus" "regular" "h-5 w-5 bg-fillBrand-strong rounded-xl" >> span_ [class_ "inline-block px-1"] "Add"
-        div_ do
+      when (V.length projects > 1) do
+        div_ [class_ "p-1 pb-2"] do
           div_ [class_ "relative"] do
-            div_ [class_ "absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-6 w-4"
+            div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
             input_
-              [ class_ "pl-12 w-full  bg-fillWeak rounded-2xl border-0 p-3"
-              , placeholder_ "Search Projects"
-              , [__|on input show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()|]
+              [ type_ "search", Aria.label_ "Search projects"
+              , class_ "pl-10 w-full bg-fillWeak rounded-lg border-0 py-2 px-3 text-sm"
+              , placeholder_ "Search..."
+              , [__|on input
+                  show .project_item in #projectsContainer when its textContent.toLowerCase() contains my value.toLowerCase()
+                  then set visibleCount to #projectsContainer.querySelectorAll('.project_item:not([style*="display: none"])').length
+                  if visibleCount == 0 remove .hidden from #noProjectsFound
+                  else add .hidden to #noProjectsFound end|]
               ]
-          div_ [class_ "space-y-2 py-4 ", id_ "projectsContainer"] do
-            projects & mapM_ \project ->
-              a_ [class_ "flex justify-between p-2 project_item", href_ $ "/p/" <> project.id.toText] do
-                div_ [class_ "space-x-3"] (faSprite_ "folders" "regular" "h-5 w-5 inline-block" >> span_ [class_ "inline-block"] (toHtml project.title))
-                when (currProject.id == project.id) $ faSprite_ "circle-check" "regular" "h-6 w-6 text-iconSuccess"
+      div_ [class_ "space-y-0.5 max-h-[50vh] overflow-y-auto", id_ "projectsContainer"] do
+        projects & mapM_ \project -> do
+          let isActive = currProject.id == project.id
+          let activeCls = if isActive then " bg-fillWeak font-medium" else " hover:bg-fillHover"
+          a_ [class_ $ "flex justify-between items-center py-2 px-2.5 rounded-lg transition-colors duration-100 project_item min-w-0" <> activeCls, href_ $ "/p/" <> project.id.toText] do
+            span_ [class_ "truncate"] $ toHtml project.title
+            when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
+        p_ [class_ "hidden text-textWeak text-sm text-center py-4", id_ "noProjectsFound"] "No matching projects"
+      div_ [class_ "border-t border-strokeWeak mt-1 pt-1"] do
+        a_ [class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm", href_ "/"] do
+          faSprite_ "grid" "regular" "h-3.5 w-3.5 text-textWeak" >> span_ "All projects"
+        a_ [class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm", href_ "/p/new"] do
+          faSprite_ "plus" "regular" "h-3.5 w-3.5 text-textWeak" >> span_ "New project"
+        when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
+          $ a_
+            [class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
+            (faSprite_ "dollar-sign" "regular" "h-3.5 w-3.5 text-textWeak" >> span_ "Manage billing")
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker border-strokeWeak text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60  h-screen transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60 h-screen transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+  -- Right border resize handle
+  label_ [term "for" "sidenav-toggle", class_ "absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
+    input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
     div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
-      a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex"] do
-        -- Full logos (shown when sidebar is expanded)
+      -- Expanded: full logo
+      a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex", Aria.label_ "Home"] do
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      label_ [class_ "cursor-pointer text-strokeStrong tap-target", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
-        input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
-        faSprite_ "side-chevron-left-in-box" "regular" " h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
-    div_ [class_ "mt-4 sd-px-0 dropdown block"] do
+      -- Toggle sidebar (chevron rotates based on state)
+      label_ [term "for" "sidenav-toggle", class_ "cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] flex items-center", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
+        faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
+    div_ [class_ "mt-4 dropdown block"] do
       a_
-        [ class_ "flex flex-row border border-strokeWeak bg-fillWeaker text-textStrong hover:bg-fillWeak gap-2 justify-center items-center rounded-xl cursor-pointer py-3 group-has-[#sidenav-toggle:checked]/pg:px-3 transition-colors duration-100"
+        [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-xl cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-3 group-has-[#sidenav-toggle:checked]/pg:px-3 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
         , tabindex_ "0"
         , Aria.haspopup_ "listbox"
         , Aria.label_ $ "Switch project, current: " <> project.title
+        , term "data-tippy-placement" "right"
+        , term "data-tippy-content" $ project.title <> " — Switch project"
         ]
         do
-          -- Collapsed: show first letter abbreviation
-          span_ [class_ "w-6 h-6 rounded-md bg-fillBrand-weak text-textBrand text-xs font-semibold flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:hidden shrink-0"] $ toHtml $ T.take 1 project.title
+          span_ [class_ "w-8 h-8 group-has-[#sidenav-toggle:checked]/pg:w-6 group-has-[#sidenav-toggle:checked]/pg:h-6 rounded-lg group-has-[#sidenav-toggle:checked]/pg:rounded-md bg-fillBrand-weak text-textBrand text-sm group-has-[#sidenav-toggle:checked]/pg:text-xs font-semibold flex items-center justify-center shrink-0"] $ toHtml $ T.take 1 project.title
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
-          faSprite_ "angles-up-down" "regular" "w-4 hidden group-has-[#sidenav-toggle:checked]/pg:block"
-      div_ [tabindex_ "0", class_ "dropdown-content z-40", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
+          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
+      div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
     nav_ [class_ "mt-5 flex flex-col gap-1 text-textWeak"] do
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then "bg-fillWeak text-textStrong font-medium border-l-2 border-l-strokeBrand-strong border-y border-y-transparent border-r border-r-transparent" else "border-l-2 border-transparent hover:bg-fillWeak hover:text-textStrong transition-colors duration-100"
+        let activeCls = if isActive then "bg-fillBrand-weak text-textStrong font-medium border-l-2 border-l-strokeBrand-strong border-y border-y-transparent border-r border-r-transparent" else "border-l-2 border-transparent hover:bg-fillWeak hover:text-textStrong transition-colors duration-100"
         let iconCls = if isActive then "w-4 h-4 shrink-0 text-textBrand" else "w-4 h-4 shrink-0"
         a_
           [ href_ mUrl
@@ -727,17 +733,16 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "border-r bg-fillWeaker
         avatarUrl = "/api/avatar/" <> currUser.id.toText
 
     -- Dark mode toggle
-    div_ [Aria.label_ "Toggle dark mode"] do
-      -- Expanded: sun + toggle + moon
-      label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
-        faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
-        input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
-        faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
-      -- Collapsed: show sun (light) / moon (dark) with swap
-      label_ [class_ "swap swap-rotate group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", term "data-tippy-placement" "right", term "data-tippy-content" "Toggle dark mode"] do
-        input_ [type_ "checkbox", class_ "theme-controller", id_ "dark-mode-toggle-swap", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
-        span_ [class_ "swap-off"] $ faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
-        span_ [class_ "swap-on"] $ faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
+    -- Dark mode toggle
+    -- Expanded: sun + toggle + moon
+    label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
+      faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
+      input_ [type_ "checkbox", class_ "toggle toggle-sm theme-controller", id_ "dark-mode-toggle", Aria.label_ "Toggle dark mode", onclick_ "toggleDarkMode()"]
+      faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
+    -- Collapsed: centered icon button
+    label_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex justify-center items-center py-2 rounded-lg hover:bg-fillWeak cursor-pointer transition-colors duration-100", Aria.label_ "Toggle dark mode", term "data-tippy-placement" "right", term "data-tippy-content" "Toggle dark mode", onclick_ "toggleDarkMode()"] do
+      span_ [class_ "dark:hidden"] $ faSprite_ "sun-bright" "regular" "h-4 w-4 text-textWeak"
+      span_ [class_ "hidden dark:inline-flex"] $ faSprite_ "moon-stars" "regular" "h-4 w-4 text-textWeak"
 
     -- User avatar popover
     div_ [class_ "dropdown dropdown-top group-has-[#sidenav-toggle:checked]/pg:dropdown-top block group/user"] do

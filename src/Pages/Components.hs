@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateWithSteps_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
@@ -62,6 +62,26 @@ emptyState_ iconM title subTxt urlM btnText =
                   [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"]
                     ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
              in a_ attrs $ toHtml btnText
+
+
+-- | Empty state with numbered quick-start steps
+emptyStateWithSteps_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> [(Text, Text)] -> Html ()
+emptyStateWithSteps_ iconM title subTxt urlM btnText steps =
+  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-8 sm:px-12 flex flex-col gap-4 empty-state"] do
+    div_ [] $ faSprite_ (fromMaybe "empty" iconM) "regular" "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong"
+    div_ [class_ "flex flex-col gap-1.5"] do
+      h2_ [class_ "text-base text-textStrong font-semibold"] $ toHtml title
+      p_ [class_ "text-sm text-textWeak"] $ toHtml subTxt
+    div_ [class_ "flex flex-col gap-2 text-left text-sm"] do
+      forM_ (zip [(1 :: Int) ..] steps) \(n, (icon, label)) ->
+        div_ [class_ "flex items-center gap-3"] do
+          span_ [class_ "flex items-center justify-center h-6 w-6 rounded-full bg-fillBrand-weak text-textBrand text-xs font-bold shrink-0"] $ toHtml (show n)
+          faSprite_ icon "regular" "w-4 h-4 text-textWeak shrink-0"
+          span_ [class_ "text-textStrong"] $ toHtml label
+    whenJust urlM \u ->
+      unless (T.null btnText)
+        $ let attrs = [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"] ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
+           in a_ attrs $ toHtml btnText
 
 
 -- | Filtered empty state - for when search/filters return no results

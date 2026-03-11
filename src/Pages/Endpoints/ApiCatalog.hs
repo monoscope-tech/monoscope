@@ -76,9 +76,9 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
                       $ ZeroState
                         { icon = "empty-set"
                         , title = "No " <> requestType <> " Requests Monitored."
-                        , description = "You're currently not monitoring your " <> T.toLower requestType <> " integrations."
-                        , actionText = "See monitoring guide"
-                        , destination = Right "https://monoscope.tech/docs/sdks/nodejs/expressjs/#monitoring-axios-requests"
+                        , description = "Once you integrate an SDK, your " <> T.toLower requestType <> " requests appear here automatically."
+                        , actionText = "View SDK setup guides"
+                        , destination = Right "https://monoscope.tech/docs/sdks/"
                         }
                 }
           }
@@ -247,8 +247,8 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                       $ ZeroState
                         { icon = "empty-set"
                         , title = "Waiting for events"
-                        , description = "You're currently not sending any data to monoscope from your backends yet."
-                        , actionText = "Read the setup guide"
+                        , description = "Once you integrate an SDK, your endpoints appear here automatically."
+                        , actionText = "View SDK setup guides"
                         , destination = Right "https://monoscope.tech/docs/sdks/"
                         }
                 , header = Just $ div_ [class_ "mb-4"] $ case hostM of
