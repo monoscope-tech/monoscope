@@ -460,23 +460,6 @@ bodyWrapper bcfg child = do
       div_ [id_ "toast-announcer", Aria.live_ "polite", Aria.atomic_ "true", class_ "sr-only"] ""
       -- HTMX progress bar for long operations
       div_ [id_ "htmx-progress", class_ "htmx-progress"] ""
-      div_
-        [ style_ "z-index:99999"
-        , class_ "pt-24 sm:hidden justify-center z-50 w-full p-4 bg-fillWeak overflow-y-auto inset-0 h-full max-h-full"
-        , tabindex_ "-1"
-        ]
-        do
-          div_ [class_ "relative mx-auto max-h-full", style_ "width: min(90vw, 500px)"]
-            $ div_ [class_ "bg-bgOverlay rounded-lg drop-shadow-md border-1 w-full"] do
-              div_ [class_ "flex items-start justify-between p-6 space-x-2  border-b rounded-t"] do
-                h3_ [class_ "text-xl font-semibold text-textStrong"] "Only Desktop Browsers are Supported for now!"
-              -- Modal body
-              div_ [class_ "w-full"] $ div_ [class_ "p-6 space-y-6", style_ "height:50vh; width:100%"] do
-                p_ [class_ ""] "Due to the heavy visualization usecases we're solving, APItoolkit is not supported on mobile, and can only be used from a desktop browser at the moment."
-                p_ [class_ ""] "We're diligently working on expanding its availability to other platforms, and we'll keep you updated as we make progress. "
-                p_ [] "Don't hesitate to let us know if this is a very important feature for your team, then we can prioritize it"
-              -- Modal footer
-              div_ [class_ "flex w-full justify-end items-center p-6 space-x-2 border-t border-strokeMedium rounded-b"] pass
       case bcfg.sessM of
         Nothing -> do
           section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
@@ -486,41 +469,46 @@ bodyWrapper bcfg child = do
         Just sess ->
           let currUser = sess.persistentSession.user.getUser
               sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem
-           in section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
-                sideNav'
-                section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
-                  when
-                    (currUser.email == "hello@monoscope.tech")
-                    loginBanner
-                  unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                  section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
-                    when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
-                    if bcfg.isSettingsPage
-                      then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
-                      else child
-                  div_ [class_ "h-0 shrink"] do
-                    Components.drawer_ "global-data-drawer" Nothing Nothing ""
-                    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
-                    -- Modal for copying widgets to other dashboards
-                    Components.modal_ "dashboards-modal" "" do
-                      -- Hidden fields to store widget and dashboard IDs
-                      input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
-                      input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
+           in do
+                -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
+                input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
+                section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
+                  sideNav'
+                  section_ [class_ "h-full overflow-y-hidden grow flex flex-col"] do
+                    when
+                      (currUser.email == "hello@monoscope.tech")
+                      loginBanner
+                    unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                    section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
+                      when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
+                      if bcfg.isSettingsPage
+                        then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
+                        else child
+                    div_ [class_ "h-0 shrink"] do
+                      Components.drawer_ "global-data-drawer" Nothing Nothing ""
+                      template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
+                      -- Modal for copying widgets to other dashboards
+                      Components.modal_ "dashboards-modal" "" do
+                        -- Hidden fields to store widget and dashboard IDs
+                        input_ [type_ "hidden", id_ "dashboards-modal-widget-id", name_ "widget_id"]
+                        input_ [type_ "hidden", id_ "dashboards-modal-source-dashboard-id", name_ "source_dashboard_id"]
 
-                      div_
-                        [ id_ "dashboards-modal-content"
-                        , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
-                        , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
-                        , hxTrigger_ "loadDashboards"
-                        , hxSelect_ "#itemsListPage"
-                        , hxSwap_ "innerHTML"
-                        , hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value}"
-                        ]
-                        do
-                          div_ [class_ "skeleton h-16 w-full"] ""
-                          div_ [class_ "skeleton h-16 w-full"] ""
-                          div_ [class_ "skeleton h-16 w-full"] ""
+                        div_
+                          [ id_ "dashboards-modal-content"
+                          , class_ "dashboards-list space-y-3 max-h-160 overflow-y-auto"
+                          , hxGet_ ("/p/" <> maybe "" (.id.toText) bcfg.currProject <> "/dashboards?embedded=true")
+                          , hxTrigger_ "loadDashboards"
+                          , hxSelect_ "#itemsListPage"
+                          , hxSwap_ "innerHTML"
+                          , hxVals_ "js:{copy_widget_id: document.getElementById('dashboards-modal-widget-id').value, source_dashboard_id: document.getElementById('dashboards-modal-source-dashboard-id').value}"
+                          ]
+                          do
+                            div_ [class_ "skeleton h-16 w-full"] ""
+                            div_ [class_ "skeleton h-16 w-full"] ""
+                            div_ [class_ "skeleton h-16 w-full"] ""
 
+      -- Mobile nav backdrop (at body level, after section, so it paints on top)
+      label_ [term "for" "mobile-nav-toggle", class_ "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 hidden group-has-[#mobile-nav-toggle:checked]/pg:max-md:block cursor-default", Aria.label_ "Close menu"] ""
       externalHeadScripts_ bcfg.config
       alerts_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
@@ -679,19 +667,20 @@ projectsDropDown currProject projects = do
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
-sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker text-sm min-w-15 shrink-0 w-15 group-has-[#sidenav-toggle:checked]/pg:w-60 h-screen transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
-  -- Right border resize handle
-  label_ [term "for" "sidenav-toggle", class_ "absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
+sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-15 md:shrink-0 md:w-15 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
+  -- Right border resize handle (desktop only)
+  label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
-    div_ [class_ "py-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
+    div_ [class_ "pt-3.5 pb-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       -- Expanded: full logo
       a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex", Aria.label_ "Home"] do
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
         img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-      -- Toggle sidebar (chevron rotates based on state)
-      label_ [term "for" "sidenav-toggle", class_ "cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] flex items-center", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
+      -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
+      label_ [term "for" "sidenav-toggle", class_ "max-md:hidden cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] flex items-center", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
         faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
+      label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     div_ [class_ "mt-4 dropdown block"] do
       a_
         [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-xl cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-3 group-has-[#sidenav-toggle:checked]/pg:px-3 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
@@ -706,7 +695,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
       div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
-    nav_ [class_ "mt-5 flex flex-col gap-1 text-textWeak"] do
+    nav_ [class_ "mt-5 flex flex-col gap-1 text-textWeak", [__|on click set #mobile-nav-toggle.checked to false|]] do
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then "bg-fillBrand-weak text-textStrong font-medium border-l-2 border-l-strokeBrand-strong border-y border-y-transparent border-r border-r-transparent" else "border-l-2 border-transparent hover:bg-fillWeak hover:text-textStrong transition-colors duration-100"
@@ -780,6 +769,9 @@ navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Sessions.User -> May
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full px-4 py-2 flex flex-row border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
+      whenJust projectM \_ -> do
+        div_ [class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
+        div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, url, icon) -> do
         a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
@@ -805,14 +797,14 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
 alerts_ :: Html ()
 alerts_ = do
   template_ [id_ "successToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-success w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+    div_ [role_ "alert", class_ "alert alert-success max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
       faSprite_ "circle-check" "solid" "stroke-current shrink-0 w-6 h-6"
       span_ [class_ "title"] "Something succeeded"
   template_ [id_ "errorToastTmpl"] do
-    div_ [role_ "alert", class_ "alert alert-error w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
+    div_ [role_ "alert", class_ "alert alert-error max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
       faSprite_ "circle-exclamation" "solid" "stroke-current shrink-0 w-6 h-6"
       span_ [class_ "title"] "Something failed"
-  section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 space-y-3", id_ "toastsParent"] ""
+  section_ [class_ "fixed top-0 right-0 z-50 pt-14 pr-5 max-md:left-0 max-md:px-4 space-y-3 pointer-events-none [&>*]:pointer-events-auto", id_ "toastsParent"] ""
   script_
     [type_ "text/javascript"]
     [text|
@@ -832,23 +824,23 @@ alerts_ = do
 
 loginBanner :: Html ()
 loginBanner = do
-  div_ [class_ "flex items-center justify-between border-b border-strokeWeak bg-fillWeak px-4 py-1.5 gap-3 text-sm"] do
+  div_ [class_ "flex items-center justify-between border-b border-strokeWeak bg-fillWeak px-4 py-1.5 gap-2 text-sm max-md:flex-wrap"] do
     div_ [class_ "flex items-center gap-2"] do
       faSprite_ "flask" "regular" "h-4 w-4 text-iconBrand"
       span_ [class_ "font-medium text-textStrong"] "Demo Project"
       span_ [class_ "hidden sm:inline text-textWeak"] "· Explore APIToolkit's features"
-    div_ [class_ "flex items-center gap-3"] do
-      a_ [class_ "text-textBrand hover:underline underline-offset-2", href_ "https://monoscope.tech/docs/onboarding/"] "Docs"
-      a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
+    div_ [class_ "flex items-center gap-2 max-md:gap-1.5 max-md:ml-auto"] do
+      a_ [class_ "text-textBrand hover:underline underline-offset-2 max-md:hidden", href_ "https://monoscope.tech/docs/onboarding/"] "Docs"
+      a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium max-md:hidden", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillBrand-strong hover:opacity-90 text-textInverse-strong text-xs font-medium", href_ "/login"] "Start Free Trial"
 
 
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
-  section_ [class_ "flex h-full w-full"] do
-    nav_ [class_ "w-72 h-full p-4 pt-8 border-r border-r-strokWeak"] do
-      h1_ [class_ "text-xl pl-3 font-semibold"] "Settings"
-      ul_ [class_ "flex flex-col mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+  section_ [class_ "flex max-md:flex-col h-full w-full"] do
+    nav_ [class_ "md:w-72 md:h-full p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak"] do
+      h1_ [class_ "text-xl pl-3 font-semibold max-md:hidden"] "Settings"
+      ul_ [class_ "flex max-md:flex-row max-md:flex-wrap md:flex-col md:mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
       pageHtml
 

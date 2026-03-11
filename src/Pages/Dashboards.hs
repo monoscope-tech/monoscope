@@ -218,7 +218,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     whenJust (findVarToPrompt activeTab variables) \v -> variablePickerModal_ pid dashId activeTabSlug' allParams v False
 
   -- Render variables and tabs in the same container
-  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-sm px-4 py-1 gap-4 items-center flex-wrap sticky top-0 z-10"] do
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs px-4 py-1 gap-4 items-center flex-wrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> do
       -- Get active tab from path-based slug or fall back to first tab

@@ -32,6 +32,10 @@ module.exports = {
     'group-has-[.tmplRadio4:checked]/md:border',
     'group-has-[.tmplRadio4:checked]/md:block',
 
+    'group-has-[#mobile-nav-toggle:checked]/pg:max-md:block',
+    'group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0',
+    'group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden',
+
     'basis-full',
     'w-[16ch] ',
   ],
