@@ -726,15 +726,15 @@ renderSortMenu sortCfg = do
 -- Pagination footer with per-page selector and navigation
 renderPaginationFooter :: Pagination -> Html ()
 renderPaginationFooter pg = div_ [class_ "flex items-center justify-between px-4 py-3"] do
-  div_ [class_ "flex items-center gap-2"] do
-    div_ [class_ "flex rounded-md border border-strokeWeak overflow-hidden"] $ forM_ [25, 50, 100] \pp ->
-      button_ ([class_ $ "cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors " <> if pp == pg.perPage then "bg-fillStrong text-textInverse-strong" else "bg-bgRaised text-textWeak hover:bg-fillWeak", type_ "button"] <> if pp == pg.perPage then [] else pgAttrs (mkUrl 0 pp)) $ toHtml (show pp)
-    span_ [class_ "text-sm text-textWeak ml-2"] "Items per page"
   div_ [class_ "flex items-center gap-4"] do
     span_ [class_ "text-sm text-textWeak tabular-nums"] $ toHtml $ show startItem <> "-" <> show endItem <> " of " <> show pg.totalCount
     div_ [class_ "flex gap-1"] do
       navBtn "chevron-left" (pg.currentPage > 0) (mkUrl (pg.currentPage - 1) pg.perPage)
       navBtn "chevron-right" (endItem < pg.totalCount) (mkUrl (pg.currentPage + 1) pg.perPage)
+  div_ [class_ "flex items-center gap-2"] do
+    span_ [class_ "text-sm text-textWeak mr-2"] "Items per page"
+    div_ [class_ "flex rounded-md border border-strokeWeak overflow-hidden"] $ forM_ [25, 50, 100] \pp ->
+      button_ ([class_ $ "cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors " <> if pp == pg.perPage then "bg-fillWeak text-textStrong" else "bg-bgRaised text-textWeak hover:bg-fillWeak", type_ "button"] <> if pp == pg.perPage then [] else pgAttrs (mkUrl 0 pp)) $ toHtml (show pp)
   where
     startItem = pg.currentPage * pg.perPage + 1
     endItem = min ((pg.currentPage + 1) * pg.perPage) pg.totalCount

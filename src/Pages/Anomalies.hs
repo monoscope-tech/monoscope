@@ -1284,7 +1284,7 @@ periodToggle_ baseUrl targetId currentPeriod =
     forM_ ["24h" :: Text, "7d" :: Text] \val ->
       let url = deleteParam "period" baseUrl <> "&period=" <> val
        in button_
-            [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillStrong text-textInverse-strong" (val == currentPeriod)
+            [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillWeak text-textStrong" (val == currentPeriod)
             , type_ "button"
             , hxGet_ url
             , hxTarget_ $ "#" <> targetId
