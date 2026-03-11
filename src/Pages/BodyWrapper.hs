@@ -670,15 +670,12 @@ projectsDropDown currProject projects = do
             span_ [class_ "truncate"] $ toHtml project.title
             when isActive $ faSprite_ "check" "regular" "h-3.5 w-3.5 text-textBrand shrink-0"
         p_ [class_ "hidden text-textWeak text-sm text-center py-4", id_ "noProjectsFound"] "No matching projects"
+      let actionLink attrs icon label = a_ (class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm" : attrs) $ faSprite_ icon "regular" "h-3.5 w-3.5 text-textWeak" >> span_ label
       div_ [class_ "border-t border-strokeWeak mt-1 pt-1"] do
-        a_ [class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm", href_ "/"] do
-          faSprite_ "grid" "regular" "h-3.5 w-3.5 text-textWeak" >> span_ "All projects"
-        a_ [class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm", href_ "/p/new"] do
-          faSprite_ "plus" "regular" "h-3.5 w-3.5 text-textWeak" >> span_ "New project"
+        actionLink [href_ "/"] "grid" "All projects"
+        actionLink [href_ "/p/new"] "plus" "New project"
         when (currProject.paymentPlan == "UsageBased" || currProject.paymentPlan == "GraduatedPricing")
-          $ a_
-            [class_ "flex items-center gap-2 py-2 px-2.5 rounded-lg hover:bg-fillHover cursor-pointer text-sm", hxGet_ [text| /p/$pidTxt/manage_subscription |]]
-            (faSprite_ "dollar-sign" "regular" "h-3.5 w-3.5 text-textWeak" >> span_ "Manage billing")
+          $ actionLink [hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
 
 
 sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
