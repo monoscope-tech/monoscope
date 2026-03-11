@@ -1,8 +1,8 @@
 module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), onboardingChecklist_) where
 
 import Data.CaseInsensitive qualified as CI
-import Data.Text qualified as T
 import Data.Default (Default)
+import Data.Text qualified as T
 import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
@@ -45,8 +45,8 @@ onboardingChecklist_ project = do
         , (exploredLogs, "Explore logs", "/p/" <> pid <> "/log_explorer", "magnifying-glass")
         , (createdMonitor, "Create a monitor", "/p/" <> pid <> "/monitors/new", "bell")
         , (setupNotifs, "Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope")
-        ] ::
-          [(Bool, Text, Text, Text)]
+        ]
+          :: [(Bool, Text, Text, Text)]
       doneCount = length $ filter (\(d, _, _, _) -> d) items
       totalCount = length items
       allDone = doneCount == totalCount
