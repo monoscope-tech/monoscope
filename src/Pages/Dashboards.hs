@@ -1060,7 +1060,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
                     toHtml tabName
               mkTab "Overview" (effectiveActiveTab /= "edit" && effectiveActiveTab /= "alerts")
               mkTab "Edit" (effectiveActiveTab == "edit")
-              mkTab "Alerts" (effectiveActiveTab == "alerts")
+              mkTab "Monitors" (effectiveActiveTab == "alerts")
           when isNewWidget $ h3_ [class_ "text-lg font-semibold text-textStrong"] "Add a new widget"
 
         div_ [class_ "flex items-center gap-3"] do
@@ -1183,7 +1183,7 @@ widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget 
       input_ [type_ "hidden", name_ "query", value_ $ fromMaybe "" widget.query]
       input_ [type_ "hidden", name_ "vizType", value_ $ case widget.wType of Widget.WTTimeseries -> "timeseries"; Widget.WTTimeseriesLine -> "timeseries_line"; _ -> "timeseries"]
 
-      Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate alert"} "Alert name" "title" True Nothing
+      Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate monitor"} "Name" "title" True Nothing
       -- Monitor Schedule section (shared component)
       Alerts.monitorScheduleSection_ True 5 5 (Just "threshold_exceeded") (Just chartTargetId)
       -- Thresholds section (shared component)
@@ -1203,10 +1203,10 @@ widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget 
 
       -- Action buttons
       div_ [class_ "flex items-center justify-end gap-2 pt-4 pb-20 mt-4 border-t border-strokeWeak"] do
-        when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm", hxDelete_ alertEndpoint, hxSwap_ "none"] "Remove Alert"
+        when hasAlert $ button_ [type_ "button", class_ "btn btn-ghost btn-sm", hxDelete_ alertEndpoint, hxSwap_ "none"] "Remove monitor"
         button_ [type_ "submit", class_ "btn btn-primary btn-sm"] do
           faSprite_ "plus" "regular" "w-3.5 h-3.5"
-          if hasAlert then "Update Alert" else "Create Alert"
+          if hasAlert then "Update monitor" else "Create monitor"
 
 
 --------------------------------------------------------------------
@@ -1260,7 +1260,7 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
   case form.alertEnabled of
     Nothing -> do
       _ <- Monitors.deleteMonitorsByWidgetIds [form.widgetId]
-      addSuccessToast "Alert removed from widget" Nothing
+      addSuccessToast "Monitor removed from widget" Nothing
       addRespHeaders $ toHtml ("" :: Text)
     Just _ -> do
       -- Convert to AlertUpsertForm and reuse convertToQueryMonitor
@@ -1299,14 +1299,14 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
 
       let queryMonitor = Alerts.convertToQueryMonitor pid now queryMonitorId alertForm
       _ <- Monitors.queryMonitorUpsert queryMonitor
-      addSuccessToast "Widget alert configured successfully" Nothing
+      addSuccessToast "Widget monitor configured successfully" Nothing
       addRespHeaders $ toHtml ("" :: Text)
 
 
 widgetAlertDeleteH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 widgetAlertDeleteH _pid widgetId = do
   _ <- Monitors.deleteMonitorsByWidgetIds [widgetId]
-  addSuccessToast "Alert removed from widget" Nothing
+  addSuccessToast "Monitor removed from widget" Nothing
   addRespHeaders $ toHtml ("" :: Text)
 
 

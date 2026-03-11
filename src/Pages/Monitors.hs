@@ -308,15 +308,15 @@ monitorsPageGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Alerts"
-          , menuItem = Just "Alerts"
+          , pageTitle = "Monitors"
+          , menuItem = Just "Monitors"
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
           , freeTierExceeded = freeTierExceeded
           , config = appCtx.env
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4"
-                "Create Alert"
+                "Create monitor"
           }
   addRespHeaders $ AlertPage $ PageCtx bwconf (monitorsPageContent_ pid monitors)
 
@@ -329,9 +329,9 @@ monitorsPageContent_ pid monitors = do
     when (V.null monitors)
       $ div_ [class_ "flex flex-col items-center justify-center py-16 text-center"] do
         faSprite_ "bell-slash" "regular" "h-12 w-12 text-iconNeutral mb-4"
-        h3_ [class_ "text-lg font-medium text-textStrong mb-2"] "No alerts configured yet"
-        p_ [class_ "text-textWeak mb-4"] "Create an alert to get notified when your queries match certain conditions."
-        a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] "Create Alert"
+        h3_ [class_ "text-lg font-medium text-textStrong mb-2"] "No monitors configured yet"
+        p_ [class_ "text-textWeak mb-4"] "Create a monitor to get notified when your queries match certain conditions."
+        a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] "Create monitor"
     unless (V.null monitors) do
       div_ [class_ "flex gap-4 mb-4"] do
         div_ [class_ "badge badge-lg badge-ghost tabular-nums"] $ toHtml $ "Active: " <> show (V.length activeMonitors)
@@ -343,7 +343,7 @@ monitorsPageContent_ pid monitors = do
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)
 alertTeamDeleteH pid monitorId teamId = do
   _ <- Monitors.monitorRemoveTeam pid monitorId teamId
-  addSuccessToast "Team removed from alert successfully" Nothing
+  addSuccessToast "Team removed from monitor successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 
 

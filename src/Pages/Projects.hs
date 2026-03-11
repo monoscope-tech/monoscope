@@ -967,7 +967,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
                       " Send Test"
               div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ [text|/p/${pid.toText}/integrations/history|], hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
       div_ [class_ "flex-1 space-y-4"] do
-        lazySection_ "monitors-section" "bell" "Alerts" "Search alerts..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
+        lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
         lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText team.id)
         lazySection_ "services-section" "server" "Services" "Search services..." ""
     unless isEveryone $ teamModal pid (Just team) whiteList emailWhiteList channelWhiteList discordWhiteList True mempty

@@ -272,7 +272,7 @@ logQueryBox_ config = do
                   |]
                   ]
                 <> [checked_ | config.alert]
-              span_ "create alert"
+              span_ "create monitor"
 
   -- Include initialization code for the query editor
   queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType

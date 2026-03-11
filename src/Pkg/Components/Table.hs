@@ -342,25 +342,27 @@ instance ToHtml TabFilter where
             ]
             do
               span_ $ toHtml opt.name
-              whenJust opt.count $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] . show
+              whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
 
 
 -- Core Rendering Functions
 
 renderTable :: Table a -> Html ()
 renderTable tbl =
-  let tableContent = div_ [class_ $ tbl.config.containerClasses <> " pb-24", id_ $ tbl.config.elemID <> "_page"] do
-        whenJust tbl.features.search $ renderSearch tbl.config.elemID
+  let isEmpty = V.null tbl.rows && isJust tbl.features.zeroState
+      tableContent = div_ [class_ $ tbl.config.containerClasses <> bool " pb-24" "" isEmpty, id_ $ tbl.config.elemID <> "_page"] do
+        unless isEmpty $ whenJust tbl.features.search $ renderSearch tbl.config.elemID
         whenJust tbl.features.header id
         div_ [class_ $ "grid overflow-hidden my-0 group/grid" <> if tbl.config.noSurface then "" else " surface-table", id_ $ tbl.config.elemID <> "_grid"] do
           let divCls = if tbl.config.noDividers then "" else " divide-y"
           form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
-            when (V.null tbl.rows) $ whenJust tbl.features.zeroState renderZeroState
-            div_ [class_ "w-full flex-col"] do
-              whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
-              div_ [id_ "rowsContainer", class_ divCls] do
-                renderRows tbl
+            when isEmpty $ whenJust tbl.features.zeroState renderZeroState
+            unless isEmpty do
+              div_ [class_ "w-full flex-col"] do
+                whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
+                div_ [id_ "rowsContainer", class_ divCls] do
+                  renderRows tbl
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
         when (isJust tbl.features.treeConfig) treeScript

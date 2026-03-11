@@ -392,7 +392,7 @@ dataPointsPage pid metrics refCounts = do
                     div_ [class_ "flex gap-2 items-center text-xs"] do
                       span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Dashboards"] do faSprite_ "grid" "regular" "w-3 h-3"; toHtml $ show d
                       span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Widgets"] do faSprite_ "chart-line" "regular" "w-3 h-3"; toHtml $ show w
-                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Alerts"] do faSprite_ "bell" "regular" "w-3 h-3"; toHtml $ show a
+                      span_ [class_ "flex gap-1 items-center badge badge-ghost", data_ "tippy-content" "Monitors"] do faSprite_ "bell" "regular" "w-3 h-3"; toHtml $ show a
                 )
                 & Table.withAttrs [class_ "w-40"]
             ]

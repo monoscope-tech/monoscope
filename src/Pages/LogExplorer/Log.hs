@@ -1112,8 +1112,8 @@ alertConfigurationForm_ project alertM teams = do
         div_ [class_ "w-8 h-8 rounded-full bg-fillBrand-weak flex items-center justify-center shrink-0"]
           $ faSprite_ "bell" "regular" "w-4 h-4 text-iconBrand"
         div_ [] do
-          h3_ [class_ "text-base font-semibold text-textStrong"] "Create Alert"
-          p_ [class_ "text-xs text-textWeak hidden sm:block"] "Monitor logs and get notified on thresholds"
+          h3_ [class_ "text-base font-semibold text-textStrong"] "Create monitor"
+          p_ [class_ "text-xs text-textWeak hidden sm:block"] "Get notified when your query matches specific conditions"
       -- Close button only
       button_
         [ type_ "button"
@@ -1139,7 +1139,7 @@ alertConfigurationForm_ project alertM teams = do
         ]
         do
           input_ [type_ "hidden", name_ "alertId", value_ $ maybe "" ((.id.toText)) alertM]
-          formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Alert name" "title" True Nothing
+          formField_ FieldSm def{value = maybe "" (\x -> x.alertConfig.title) alertM, placeholder = "e.g. High error rate on checkout API"} "Name" "title" True Nothing
 
           -- Monitor Schedule section (shared component)
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
@@ -1167,4 +1167,4 @@ alertConfigurationForm_ project alertM teams = do
               ]
               do
                 faSprite_ "plus" "regular" "w-3.5 h-3.5"
-                if isJust alertM then "Update alert" else "Create Alert"
+                if isJust alertM then "Update monitor" else "Create monitor"

@@ -383,9 +383,9 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     -- Alert status indicator (visible on hover, always visible when alerting/warning)
     whenJust widget.alertId \_ -> do
       let (iconColor, iconType, tooltip) = case widget.alertStatus of
-            Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Alert triggered")
+            Just "alerting" -> ("text-fillError-strong", "bell-exclamation", "Monitor triggered")
             Just "warning" -> ("text-fillWarning-strong", "bell", "Warning threshold exceeded")
-            _ -> ("text-iconNeutral", "bell", "Alert configured")
+            _ -> ("text-iconNeutral", "bell", "Monitor configured")
           visibilityClass = case widget.alertStatus of
             Just "alerting" -> ""
             Just "warning" -> ""
