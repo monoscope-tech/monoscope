@@ -33,6 +33,8 @@ const getErrorIndicator = () =>
     'span',
     {
       class: 'bg-fillError-strong rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold',
+      title: 'Error',
+      'aria-label': 'Error',
     },
     elt(
       'span',
@@ -185,7 +187,7 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     }
     const textColor = getContrastTextColor(item.itemStyle.color);
     const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs', style: `color: ${textColor}` }, item.name);
-    const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
+    const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1 tabular-nums', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
     div.appendChild(text);
     div.appendChild(tim);
     container.appendChild(div);
@@ -354,33 +356,38 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
 
   // Parse bar data once from DOM attributes, pre-compute colors
   const barEls = container.querySelectorAll<HTMLElement>('[id^="waterfall-bar-"]');
-  const barData: { el: HTMLElement; start: number; duration: number; color: string; textColor: string; label: string }[] = [];
+  const barData: { el: HTMLElement; start: number; duration: number; color: string; textColor: string; label: string; hasErrors: boolean; spanName: string; service: string }[] = [];
   let min = Infinity, max = -Infinity;
   barEls.forEach((el) => {
     const start = Number(el.dataset.start);
     const duration = Number(el.dataset.duration);
-    const color = resolveColor(el.dataset.service || '', serviceColors);
+    const service = el.dataset.service || '';
+    const color = resolveColor(service, serviceColors);
     const [t, u] = formatDuration(duration);
     min = Math.min(min, start);
     max = Math.max(max, start + duration);
-    barData.push({ el, start, duration, color, textColor: getContrastTextColor(color), label: `${Math.floor(Number(t))} ${u}` });
+    barData.push({ el, start, duration, color, textColor: getContrastTextColor(color), label: `${Math.floor(Number(t))} ${u}`, hasErrors: el.dataset.hasErrors === 'true', spanName: el.dataset.spanName || '', service });
   });
   const maxDuration = max - min || 1;
 
   const renderBars = () => {
     const firstWidth = barData[0]?.el.clientWidth;
     if (!firstWidth) return;
-    for (const { el, start, duration, color, textColor, label } of barData) {
+    for (const { el, start, duration, color, textColor, label, hasErrors, spanName, service } of barData) {
       const offset = start - min;
       const leftPx = Math.max(0, (firstWidth * offset) / maxDuration);
       const widthPx = Math.max((firstWidth * duration) / maxDuration, 2);
+      const pct = (duration / maxDuration) * 100;
 
       el.innerHTML = '';
       const bar = elt('div', {
-        class: 'absolute top-1 bottom-1 rounded-sm flex items-center justify-end overflow-hidden',
+        class: 'absolute top-1 bottom-1 rounded-sm flex items-center overflow-hidden',
         style: `left:${leftPx}px;width:${widthPx}px;background-color:${color};`,
+        onmouseenter: (e: MouseEvent) => showTooltip(e, `${service} · ${spanName} — ${label} (${pct.toFixed(1)}%)`),
+        onmouseleave: () => hideTooltip(),
       });
-      const tim = elt('span', { class: 'text-xs shrink-0 mr-1 tabular-nums', style: `color:${textColor}` }, label);
+      if (hasErrors) bar.appendChild(getErrorIndicator());
+      const tim = elt('span', { class: 'text-xs shrink-0 mr-1 ml-auto tabular-nums', style: `color:${textColor}` }, label);
       bar.appendChild(tim);
       el.appendChild(bar);
     }
@@ -400,7 +407,42 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
   }
 
   const debouncedRender = debounce(fullRender, 150);
-  RESIZE_EVENTS.forEach((e) => window.addEventListener(e, debouncedRender, { signal }));
+  [...RESIZE_EVENTS, 'waterfallResize'].forEach((e) => window.addEventListener(e, debouncedRender, { signal }));
+
+  // Time cursor indicator
+  const wfContainer = document.querySelector('#waterfall-container-' + renderAt) as HTMLElement;
+  const wfIndicator = document.querySelector('#wf-time-indicator-' + renderAt) as HTMLElement;
+  const wfTimeLabel = document.querySelector('#wf-time-label-' + renderAt) as HTMLElement;
+  const wfTimeRuler = document.querySelector('#waterfall-time-container-' + renderAt) as HTMLElement;
+  if (wfContainer && wfIndicator && wfTimeLabel && wfTimeRuler) {
+    let wfCachedLeft: number | null = null;
+    let wfCachedWidth: number | null = null;
+    const updateWfCache = () => {
+      const rect = wfTimeRuler.getBoundingClientRect();
+      wfCachedLeft = rect.left;
+      wfCachedWidth = rect.width - SCROLL_BAR_WIDTH;
+    };
+    updateWfCache();
+    RESIZE_EVENTS.forEach((e) => window.addEventListener(e, updateWfCache, { signal }));
+    window.addEventListener('waterfallResize', updateWfCache, { signal });
+
+    wfContainer.addEventListener('mousemove', (e) => {
+      if (wfCachedLeft === null || wfCachedWidth === null) return;
+      const x = e.clientX - wfCachedLeft;
+      requestAnimationFrame(() => {
+        if (x < 0 || x > wfCachedWidth!) {
+          wfIndicator.style.display = 'none';
+        } else {
+          wfIndicator.style.display = 'block';
+          wfIndicator.style.left = `${wfTimeRuler.offsetLeft + x}px`;
+          const currTime = (maxDuration * x) / wfCachedWidth!;
+          const [f, u] = formatDuration(currTime);
+          wfTimeLabel.textContent = `${f}${u}`;
+        }
+      });
+    }, { signal });
+    wfContainer.addEventListener('mouseleave', () => { wfIndicator.style.display = 'none'; }, { signal });
+  }
 }
 
 window.waterFallGraphChart = waterFallGraphChart;

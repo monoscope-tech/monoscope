@@ -552,9 +552,9 @@ tracePage pid traceItem spanRecords = do
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#span_list', '#trace-tabs', 't-tab-active')"] "Spans List"
               div_ [class_ "flex items-center gap-2"] do
-                stBox (show $ length spanRecords) Nothing
-                stBox (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
-                stBox (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
+                stBox "Spans" (show $ length spanRecords) Nothing
+                stBox "Errors" (show $ length $ V.filter (\s -> s.status == Just SSError) spanRecords) $ Just (faSprite_ "alert-triangle" "regular" "w-3 h-3 text-iconError")
+                stBox "Duration" (toText $ getDurationNSMS traceItem.traceDurationNs) $ Just (faSprite_ "clock" "regular" "w-3 h-3 text-iconNeutral")
             div_ [class_ "flex gap-2 w-full items-center"] do
               div_ [class_ "flex items-center gap-2 w-full rounded-lg px-3 grow-1 h-9 border border-strokeWeak bg-fillWeaker"] do
                 faSprite_ "magnifying-glass" "regular" "w-3 h-3 text-iconNeutral"
@@ -615,7 +615,7 @@ tracePage pid traceItem spanRecords = do
                           $ div_ [class_ $ "h-full pl-2 text-xs font-medium " <> color, style_ $ "width:" <> percent <> "%"] pass
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
-            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%"] do
+            div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%", id_ $ "waterfall-container-" <> traceItem.traceId] do
               div_
                 [ class_ "absolute top-0 bottom-0 w-2 cursor-col-resize z-20 flex justify-center waterfall-divider group"
                 , style_ "left:calc(var(--wf-left) - 4px)"
@@ -639,9 +639,15 @@ tracePage pid traceItem spanRecords = do
                      set document.body.style.cursor to ''
                    |]
                 ]
-                $ div_ [class_ "w-px h-full bg-strokeWeak group-hover:bg-fillBrand-strong group-active:bg-fillBrand-strong transition-colors pointer-events-none"] pass
-              div_ [class_ "flex sticky top-0 z-10 bg-bgBase border-b border-b-strokeWeak h-8 text-xs"] do
-                div_ [class_ "shrink-0", style_ "width:var(--wf-left)"] pass
+                $ div_ [class_ "w-px h-full bg-strokeWeak group-hover:bg-fillBrand-strong group-active:bg-fillBrand-strong transition-colors pointer-events-none relative"] do
+                    div_ [class_ "absolute top-1/2 -translate-y-1/2 -translate-x-[3px] w-2 h-6 flex flex-col justify-center gap-px opacity-0 group-hover:opacity-100 transition-opacity"] do
+                      forM_ [1 :: Int .. 3] \_ -> div_ [class_ "w-full h-px bg-fillBrand-strong rounded-full"] pass
+              div_ [class_ "h-full top-0 absolute z-30 hidden pointer-events-none", id_ $ "wf-time-indicator-" <> traceItem.traceId] do
+                div_ [class_ "relative h-full"] do
+                  div_ [class_ "text-xs top-1 absolute -translate-x-1/2 whitespace-nowrap bg-bgOverlay px-1 rounded text-textStrong", id_ $ "wf-time-label-" <> traceItem.traceId] ""
+                  div_ [class_ "h-full w-px bg-strokeBrand-strong mt-5"] pass
+              div_ [class_ "flex sticky top-0 z-10 bg-bgBase border-b border-b-strokeWeak h-8 text-xs items-end"] do
+                div_ [class_ "shrink-0 px-2 pb-1 text-textWeak font-medium", style_ "width:var(--wf-left)"] "Service / Span"
                 div_ [class_ "relative grow min-w-0", id_ $ "waterfall-time-container-" <> traceItem.traceId] pass
               div_ [class_ "py-1", id_ $ "waterfall-rows-" <> traceItem.traceId] do
                 waterFallTree pid rootSpans traceItem.traceId serviceColors
@@ -779,12 +785,12 @@ getServiceData :: Telemetry.SpanRecord -> ServiceData
 getServiceData sp = ServiceData{name = getServiceName sp.resource, duration = sp.spanDurationNs}
 
 
-stBox :: Text -> Maybe (Html ()) -> Html ()
-stBox value iconM =
-  div_ [class_ "flex items-center px-2 gap-2 border-r last:border-r-0"] do
+stBox :: Text -> Text -> Maybe (Html ()) -> Html ()
+stBox label value iconM =
+  div_ [class_ "flex items-center px-2 gap-1.5 border-r last:border-r-0", title_ label] do
     whenJust iconM id
-    span_ [class_ "text-textStrong text-sm"] $ toHtml value
-    if isNothing iconM then span_ [class_ "font-medium text-textWeak text-xs"] "Spans" else pass
+    span_ [class_ "text-textStrong text-sm tabular-nums"] $ toHtml value
+    span_ [class_ "font-medium text-textWeak text-xs"] $ toHtml label
 
 
 buildSpanMap :: V.Vector Telemetry.SpanRecord -> MapS.Map (Maybe Text) [Telemetry.SpanRecord]
@@ -865,6 +871,7 @@ buildSpanTree_ pid sp trId level scol = do
           , term "data-start" $ show sp.spanRecord.startTime
           , term "data-duration" $ show sp.spanRecord.spanDurationNs
           , term "data-service" sp.spanRecord.serviceName
+          , term "data-span-name" sp.spanRecord.spanName
           , term "data-has-errors" $ bool "false" "true" sp.spanRecord.hasErrors
           ]
           pass
