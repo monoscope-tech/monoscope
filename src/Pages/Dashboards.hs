@@ -684,20 +684,11 @@ processEagerWidget :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, 
 processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTAnomalies -> do
     (issues, _) <- Issues.selectIssues pid Nothing (Just False) (Just False) 2 0 Nothing Nothing "24h" [] []
-    let issuesVM = V.fromList $ map (AnomalyList.IssueVM False True now "24h") issues
     pure
       $ widget
       & #html
         ?~ renderText
-          ( div_ [class_ "flex flex-col gap-4 h-full w-full overflow-hidden"] $ forM_ issuesVM \vm@(AnomalyList.IssueVM hideByDefault _ _ _ issue) ->
-              div_ [class_ "border border-strokeWeak rounded-2xl overflow-hidden"] do
-                Table.renderRowWithColumns
-                  [ class_ $ "flex gap-8 items-start itemsListItem " <> if hideByDefault then "surface-raised rounded-2xl" else "px-0.5 py-4"
-                  , style_ (if hideByDefault then "display:none" else "")
-                  ]
-                  (AnomalyList.issueColumns issue.projectId "24h")
-                  vm
-          )
+          (div_ [class_ "flex flex-col gap-3 h-full w-full overflow-hidden"] $ forM_ issues $ AnomalyList.issueCardCompact_ pid now)
   Widget.WTStat -> fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget
   Widget.WTTable -> do
     -- Fetch table data

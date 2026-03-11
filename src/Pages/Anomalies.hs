@@ -29,6 +29,8 @@ module Pages.Anomalies (
   -- Pattern group members
   errorGroupMembersGetH,
   errorUnmergePostH,
+  -- Shared rendering helpers
+  issueCardCompact_,
 )
 where
 
@@ -1493,6 +1495,20 @@ renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
     inlineBtn tip icon hxAction extraAttrs =
       button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxAction] <> extraAttrs)
         $ faSprite_ icon "regular" "h-3.5 w-3.5"
+
+
+issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
+issueCardCompact_ pid now issue = do
+  let (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator (isJust issue.acknowledgedAt) (isJust issue.archivedAt) issue.severity
+      issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText issue.id
+  a_ [href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] do
+    div_ [class_ "flex items-center gap-2 min-w-0"] do
+      span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
+      span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show issue.seqNum
+      span_ [class_ "text-sm font-medium text-textStrong truncate min-w-0"] $ renderIssueTitle_ issue
+      severityBadge_ issue.severity
+      span_ [class_ "text-xs text-textWeak shrink-0 ml-auto"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto now $ zonedTimeToUTC issue.createdAt
+    issuePreview_ issue
 
 
 severityBadge_ :: Text -> Html ()
