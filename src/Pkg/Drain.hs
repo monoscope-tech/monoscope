@@ -15,6 +15,7 @@ module Pkg.Drain (
   getAllLogGroups,
   normalizePlaceholder,
   drainPlaceholders,
+  stripMetadataBlobs,
 ) where
 
 import Data.Char (isSpace)
@@ -336,11 +337,47 @@ tokenizeForDrain content =
       else V.fromList $ words content
 
 
+-- | Strip metadata blob segments (resource/attributes JSON) from summary text.
+-- Metadata values can span multiple whitespace-separated tokens (e.g. JSON with
+-- spaces in string values), causing per-request variation in Drain patterns when
+-- high-cardinality fields like @span_id@ leak into the template.
+--
+-- >>> stripMetadataBlobs "method;bold⇒GET attributes;text-textWeak⇒{\"ctx\":\"auto settlement\",\"id\":\"abc\"} INFO"
+-- "method;bold\8658GET INFO"
+--
+-- >>> stripMetadataBlobs "no metadata here"
+-- "no metadata here"
+stripMetadataBlobs :: T.Text -> T.Text
+stripMetadataBlobs t = foldl' stripOne t metaPrefixes
+  where
+    metaPrefixes = ["resource;text-textWeak\8658", "attributes;text-textWeak\8658"]
+    stripOne txt prefix = case T.breakOn prefix txt of
+      (_, rest) | T.null rest -> txt
+      (before, match) ->
+        let remaining = dropJsonValue $ T.drop (T.length prefix) match
+         in stripOne (T.unwords $ filter (not . T.null) [T.stripEnd before, T.stripStart remaining]) prefix
+    dropJsonValue txt = case T.uncons txt of
+      Just ('{', _) -> scanBraces 0 txt
+      Just ('[', _) -> scanBraces 0 txt
+      _ -> T.dropWhile (not . isSpace) txt
+    scanBraces depth txt = case T.uncons txt of
+      Nothing -> ""
+      Just (c, rest)
+        | c == '{' || c == '[' -> scanBraces (depth + 1) rest
+        | (c == '}' || c == ']') && depth <= 1 -> rest
+        | c == '}' || c == ']' -> scanBraces (depth - 1) rest
+        | c == '"' -> scanBraces depth (skipStr rest)
+        | otherwise -> scanBraces depth rest
+    skipStr txt = case T.uncons txt of
+      Nothing -> ""
+      Just ('\\', rest) -> skipStr (T.drop 1 rest)
+      Just ('"', rest) -> rest
+      Just (_, rest) -> skipStr rest
+
+
 -- | Markup-aware tokenizer for summary fields that preserves @field;style⇒value@ format.
--- Splits by words (avoids looksLikeJson false positives on markup tokens).
--- For tokens containing ⇒: preserves the prefix, normalizes only the value after ⇒.
--- Filters out resource/attributes metadata blobs (high-cardinality container metadata).
--- Collapses consecutive @\<*\>@ wildcards to prevent Drain level-1 branch fragmentation.
+-- Strips resource/attributes metadata blobs (high-cardinality JSON that spans multiple
+-- words) before tokenization, then normalizes markup values.
 --
 -- >>> import Data.Vector qualified as V
 -- >>> V.toList $ generateSummaryDrainTokens "status_code;badge-2xx⇒200"
@@ -354,14 +391,13 @@ tokenizeForDrain content =
 --
 -- >>> V.toList $ generateSummaryDrainTokens "method;bold⇒GET resource;text-textWeak⇒{\"container\":{\"id\":\"abc\"}} INFO started"
 -- ["method;bold\8658GET","INFO","started"]
+--
+-- >>> V.toList $ generateSummaryDrainTokens "severity_text;badge-error⇒ERROR msg attributes;text-textWeak⇒{\"ctx\":\"auto settlement\",\"span_id\":\"abc\"}"
+-- ["severity_text;badge-error\8658ERROR","msg"]
 generateSummaryDrainTokens :: T.Text -> V.Vector T.Text
 generateSummaryDrainTokens content =
-  V.fromList $ map normalizeMarkupToken $ filter (not . isMetadataBlob) $ words content
+  V.fromList $ map normalizeMarkupToken $ words $ stripMetadataBlobs content
   where
-    isMetadataBlob tok =
-      any
-        (`T.isPrefixOf` tok)
-        ["resource;text-textWeak\8658", "attributes;text-textWeak\8658"]
     normalizeMarkupToken tok = case T.breakOn "\8658" tok of
       (prefix, rest)
         | Just val <- T.stripPrefix "\8658" rest -> prefix <> "\8658" <> normalizePlaceholders (replaceAllFormats val)
