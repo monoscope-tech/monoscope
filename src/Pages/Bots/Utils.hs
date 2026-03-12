@@ -230,7 +230,7 @@ installedSuccess :: Text -> Maybe Projects.ProjectId -> Html ()
 installedSuccess botPlatform pidM = do
   navBar
   section_ [class_ "min-h-screen  flex flex-col justify-center"] do
-    div_ [class_ "max-w-4xl mx-auto px-4"] do
+    div_ [class_ "max-w-4xl mx-auto max-md:px-2 px-4"] do
       div_ [class_ "bg-bgBase border border-strokeWeak rounded-3xl border border-fillWeak overflow-hidden"] do
         div_ [class_ "bg-gradient-to-r from-fillSuccess-weak to-fillBrand-weak px-8 py-10 text-center"] do
           div_ [class_ "inline-flex items-center justify-center w-16 h-16 bg-bgRaised rounded-full mb-4 shadow-lg"] do

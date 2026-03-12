@@ -170,7 +170,7 @@ listProjectsBody sessM projects demoProject showDemoProject = do
         a_ [class_ "btn btn-ghost btn-sm", href_ "https://monoscope.tech/docs/", target_ "_blank"] "Docs"
         a_ [class_ "btn btn-ghost btn-sm text-textError", href_ "/logout"] "Logout"
 
-  section_ [id_ "main-content", class_ "mx-auto px-4 py-6 pb-36 pt-20 overflow-y-auto h-full"] do
+  section_ [id_ "main-content", class_ "mx-auto max-md:px-2 px-4 py-6 pb-36 pt-20 overflow-y-auto h-full"] do
     div_ [class_ "flex justify-between items-center mb-8"] do
       h2_ [class_ "text-textStrong text-3xl font-semibold"] "Projects"
       a_ [class_ "btn btn-primary btn-sm", href_ "/p/new"] (faSprite_ "plus" "regular" "h-4 w-4 mr-2" >> "New Project")
@@ -919,7 +919,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
         div_ [class_ "w-full max-h-96 overflow-y-auto", id_ secId] do
           unless (T.null url) $ a_ [hxGet_ url, hxTrigger_ "intersect once", hxTarget_ $ "#" <> secId, hxSwap_ "outerHTML"] ""
           div_ [class_ "flex flex-col items-center justify-center py-8 text-center gap-2"] (faSprite_ icon "regular" "h-6 w-6 text-iconNeutral" >> div_ [class_ "text-sm text-textWeak"] (toHtml $ "No " <> T.toLower title <> " linked"))
-  section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "px-4 w-full"] do
+  section_ [id_ "main-content", class_ "w-full py-8"] $ div_ [class_ "max-md:px-2 px-4 w-full"] do
     div_ [class_ "mb-6 flex items-center gap-3"] do
       a_ [href_ ("/p/" <> pid.toText <> "/manage_teams"), class_ "text-iconNeutral hover:text-iconBrand"] $ faSprite_ "arrow-left" "regular" "h-4 w-4"
       h2_ [class_ "text-textStrong text-3xl font-semibold flex items-center gap-2"] do
@@ -1413,7 +1413,7 @@ pricingUpdateGetH pid = do
 pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 pricingPage_ pid lemon critical paymentPlan enableFreeTier basicAuthEnabled = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
-    div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 px-4"] do
+    div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 max-md:px-2 px-4"] do
       h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
       paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled
 

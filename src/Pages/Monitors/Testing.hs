@@ -206,7 +206,7 @@ renderNameCol item = do
       (dotColor, displayName, _) = statusInfo item.currentStatus
       isMuted = isJust item.mutedUntil
   div_ [class_ "flex flex-col gap-1 py-0.5"] do
-    div_ [class_ "flex items-center gap-2"] do
+    div_ [class_ "flex items-center gap-2 max-md:flex-wrap"] do
       span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), term "data-tippy-content" $ bool "Inactive" "Active" isActive] ""
       a_ [href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
       when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False displayName
@@ -495,7 +495,7 @@ unifiedMonitorOverviewH pid monitorId = do
 -- | Unified overview page that handles both monitor types
 unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
 unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
-  section_ [class_ "pt-2 mx-auto px-4 w-full flex flex-col gap-4 h-full overflow-y-auto"] do
+  section_ [class_ "pt-2 mx-auto max-md:px-2 px-4 w-full flex flex-col gap-4 h-full overflow-y-auto"] do
     -- Title + status badge
     div_ [class_ "flex items-center gap-3"] do
       h1_ [class_ "text-2xl font-semibold text-textStrong"] $ toHtml $ bool alert.alertConfig.title "(Untitled)" (T.null alert.alertConfig.title)

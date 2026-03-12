@@ -332,7 +332,7 @@ instance ToHtml TabFilter where
                 do
                   toHtml opt.name
                   whenJust opt.count $ span_ [class_ "text-textDisabled text-xs font-normal"] . toHtml . show
-      else div_ [class_ "tabs tabs-box tabs-outline items-center"] do
+      else div_ [class_ "tabs tabs-box tabs-outline tabs-xs md:tabs-sm items-center"] do
         let uri = deleteParam "filter" tf.currentURL
         forM_ tf.options \opt ->
           a_
@@ -366,7 +366,7 @@ renderTable tbl =
         -- Pagination footer outside the raised surface
         whenJust tbl.features.pagination renderPaginationFooter
         when (isJust tbl.features.treeConfig) treeScript
-      paddedContent = if tbl.config.addPadding then div_ [class_ "px-4 pt-4 pb-2"] tableContent else tableContent
+      paddedContent = if tbl.config.addPadding then div_ [class_ "max-md:px-2 px-4 pt-4 pb-2"] tableContent else tableContent
    in case tbl.config.containerId of
         Just cid -> div_ [class_ "w-full", id_ cid] paddedContent
         Nothing -> paddedContent
@@ -380,7 +380,7 @@ renderRows tbl =
         $ thead_ do
           tr_ do
             when (isJust tbl.features.rowId)
-              $ th_ [class_ $ tbl.config.thClasses <> " w-8"]
+              $ th_ [class_ $ tbl.config.thClasses <> " w-8 max-md:hidden"]
               $ input_
                 [ term "aria-label" "Select All"
                 , type_ "checkbox"
@@ -408,7 +408,7 @@ renderRows tbl =
                     _ -> Nothing
               th_ (c.attrs <> baseAttrs <> sortAttrs) do
                 span_ [class_ "flex items-center gap-2"] do
-                  toHtml c.name
+                  span_ [class_ $ bool "max-md:hidden" "" (idx > 0)] $ toHtml c.name
                   whenJust c.headerExtra id
                   when isSorted $ case sortOrder of
                     Just Asc -> faSprite_ "arrow-up" "regular" "w-3 h-3"
@@ -438,7 +438,7 @@ treeRowAttrs row tc =
 -- List mode: render columns in a flex container (no table wrapper/headers)
 {-# INLINE renderListRow #-}
 renderListRow :: Table a -> a -> Html ()
-renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:gap-8 items-start itemsListItem py-3 hover:bg-fillWeaker transition-colors duration-75"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
+renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:gap-8 items-start itemsListItem py-3 hover:bg-fillWeak transition-colors duration-75"]) $ forM_ tbl.columns \c -> div_ c.attrs $ c.render row
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
@@ -448,9 +448,9 @@ renderListRow tbl row = div_ (treeAttrs <> rowAttrs <> [class_ "flex gap-4 md:ga
 {-# INLINE renderTableRow #-}
 renderTableRow :: Table a -> a -> Html ()
 renderTableRow tbl row =
-  tr_ ([class_ "hover:bg-fillWeaker transition-colors duration-75 itemsListItem"] <> treeAttrs <> rowAttrs <> linkHandler) do
+  tr_ ([class_ "hover:bg-fillWeak transition-colors duration-75 itemsListItem"] <> treeAttrs <> rowAttrs <> linkHandler) do
     when (isJust tbl.features.rowId)
-      $ td_ [class_ "w-8 align-top pt-4"] do
+      $ td_ [class_ "w-8 align-top pt-4 max-md:hidden"] do
         whenJust tbl.features.rowId \getId ->
           input_
             $ [ term "aria-label" "Select Item"
@@ -472,7 +472,7 @@ renderTableRow tbl row =
 
 renderHeaderBulkActions :: [BulkAction] -> Html ()
 renderHeaderBulkActions bulkActions =
-  span_ [class_ "inline-flex gap-2 ml-2"] do
+  span_ [class_ "inline-flex gap-2 ml-2 max-md:hidden"] do
     forM_ bulkActions \blkA ->
       button_
         [ class_ "btn btn-xs btn-disabled group-has-[.bulkactionItemCheckbox:checked]/grid:text-white group-has-[.bulkactionItemCheckbox:checked]/grid:bg-fillBrand-strong group-has-[.bulkactionItemCheckbox:checked]/grid:pointer-events-auto!"
@@ -660,7 +660,7 @@ renderToolbar tbl =
 
 renderSearch :: Text -> SearchMode -> Html ()
 renderSearch elemID searchMode =
-  label_ [class_ "input input-sm flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
+  label_ [class_ "input input-sm max-md:hidden flex w-full h-9 bg-transparent border border-strokeWeak shadow-none overflow-hidden items-center gap-2"] do
     faSprite_ "magnifying-glass" "regular" "w-4 h-4 opacity-70"
     case searchMode of
       ServerSide url ->
@@ -725,13 +725,13 @@ renderSortMenu sortCfg = do
 
 -- Pagination footer with per-page selector and navigation
 renderPaginationFooter :: Pagination -> Html ()
-renderPaginationFooter pg = div_ [class_ "flex items-center justify-between px-4 py-3"] do
+renderPaginationFooter pg = div_ [class_ "flex items-center justify-between max-md:flex-wrap max-md:gap-2 px-4 py-3"] do
   div_ [class_ "flex items-center gap-4"] do
     span_ [class_ "text-sm text-textWeak tabular-nums"] $ toHtml $ show startItem <> "-" <> show endItem <> " of " <> show pg.totalCount
     div_ [class_ "flex gap-1"] do
       navBtn "chevron-left" (pg.currentPage > 0) (mkUrl (pg.currentPage - 1) pg.perPage)
       navBtn "chevron-right" (endItem < pg.totalCount) (mkUrl (pg.currentPage + 1) pg.perPage)
-  div_ [class_ "flex items-center gap-2"] do
+  div_ [class_ "max-md:hidden flex items-center gap-2"] do
     span_ [class_ "text-sm text-textWeak mr-2"] "Items per page"
     div_ [class_ "flex rounded-md border border-strokeWeak overflow-hidden"] $ forM_ [25, 50, 100] \pp ->
       button_ ([class_ $ "cursor-pointer px-3 py-1.5 text-sm font-medium transition-colors " <> if pp == pg.perPage then "bg-fillWeak text-textStrong" else "bg-bgRaised text-textWeak hover:bg-fillWeak", type_ "button"] <> if pp == pg.perPage then [] else pgAttrs (mkUrl 0 pp)) $ toHtml (show pp)

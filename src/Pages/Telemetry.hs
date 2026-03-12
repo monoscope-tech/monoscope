@@ -535,18 +535,18 @@ tracePage pid traceItem spanRecords = do
       rootSpans = buildSpanTree spanRecords
   div_ [class_ "w-full p-2", id_ "trace_span_container"] $ do
     div_ [class_ "flex flex-col w-full gap-4 pb-4"] $ do
-      div_ [class_ "flex justify-between items-center"] do
+      div_ [class_ "flex flex-wrap justify-between items-center gap-y-1"] do
         div_ [class_ "flex items-center gap-4"] $ do
-          h3_ [class_ "whitespace-nowrap  font-semibold text-textStrong"] "Trace Breakdown"
+          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Breakdown"
         div_ [class_ "flex items-center gap-2"] $ do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
           button_ [class_ "p-0 m-0 cursor-pointer trace-collapse-btn", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
             faSprite_ "side-chevron-left" "regular" "w-5 h-5 text-iconBrand rotate-180"
 
-      div_ [class_ "flex gap-1 w-full mt-5"] $ do
+      div_ [class_ "flex gap-1 w-full max-md:mt-2 mt-5"] $ do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
           div_ [class_ "flex flex-col gap-2"] do
-            div_ [class_ "flex justify-between mb-2"] do
+            div_ [class_ "flex flex-wrap justify-between gap-y-1 mb-2"] do
               div_ [class_ "flex items-center gap-2 text-textWeak font-medium"] do
                 button_ [class_ "a-tab text-sm px-3 py-1.5 border-b-2 border-b-transparent t-tab-active", onpointerdown_ "navigatable(this, '#flame_graph', '#trace-tabs', 't-tab-active')"] "Timeline"
                 button_ [class_ "a-tab text-sm px-3 border-b-2 border-b-transparent py-1.5", onpointerdown_ "navigatable(this, '#water_fall', '#trace-tabs', 't-tab-active')"] "Waterfall"
@@ -581,9 +581,9 @@ tracePage pid traceItem spanRecords = do
                       faSprite_ "chevron-down" "regular" "h-3 w-3"
               button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden", id_ "reset-zoom-btn"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
-            div_ [class_ "flex gap-2 w-full pt-2"] do
+            div_ [class_ "flex max-md:flex-col gap-2 w-full pt-2"] do
               div_
-                [ class_ "w-[65%] group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
+                [ class_ "md:w-[65%] w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
                 , id_ $ "flame-graph-container-" <> traceItem.traceId
                 ]
                 do
@@ -594,7 +594,7 @@ tracePage pid traceItem spanRecords = do
                       div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ $ "line-time-" <> traceItem.traceId] "2 ms"
                       div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
 
-              div_ [class_ "border rounded-lg w-[35%] overflow-x-hidden"] do
+              div_ [class_ "border rounded-lg md:w-[35%] w-full overflow-x-hidden"] do
                 h3_ [class_ "w-full flex px-3 py-2 font-medium justify-between items-center text-xs text-textWeak border-b"] do
                   span_ [] "Services"
                   span_ [] "Exec Time %"

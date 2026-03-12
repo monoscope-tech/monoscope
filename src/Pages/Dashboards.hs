@@ -218,7 +218,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     whenJust (findVarToPrompt activeTab variables) \v -> variablePickerModal_ pid dashId activeTabSlug' allParams v False
 
   -- Render variables and tabs in the same container
-  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs px-4 py-1 gap-4 items-center flex-wrap sticky top-0 z-10"] do
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 gap-4 items-center flex-wrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> do
       -- Get active tab from path-based slug or fall back to first tab
@@ -293,7 +293,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
     let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result `elem` [Nothing, Just []]]
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
@@ -1459,7 +1459,7 @@ dashboardsGet_ dg = do
             forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml team.handle
             forM_ (V.toList dash.tags) \tag -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml tag
 
-    let renderModifiedCol dash = span_ [class_ "monospace text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
+    let renderModifiedCol dash = span_ [class_ "text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
     let renderTeamsCol dash = forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml team.handle
 
@@ -1471,9 +1471,9 @@ dashboardsGet_ dg = do
 
     let renderWidgetsCol dash = do
           let count = getWidgetCount dash
-          span_ [class_ "flex items-center gap-2 text-textWeak", data_ "tippy-content" $ "There are " <> show count <> " charts/widgets in this dashboard"] do
-            faSprite_ "chart-area" "regular" "w-4 h-4 text-iconNeutral"
-            span_ [class_ "leading-none monospace tabular-nums"] $ toHtml $ show count
+          span_ [class_ "flex items-center gap-1.5 text-textWeak", data_ "tippy-content" $ show count <> " widget" <> if count == 1 then "" else "s"] do
+            faSprite_ "grid" "regular" "w-3.5 h-3.5 text-iconNeutral"
+            span_ [class_ "leading-none tabular-nums"] $ toHtml $ show count
 
     let tableCols = case dg.copyMode of
           Just _ ->
@@ -1505,7 +1505,7 @@ dashboardsGet_ dg = do
                         , hxSwap_ "none"
                         , [__| on htmx:afterRequest set #dashboards-modal.checked to false |]
                         ]
-                      Nothing -> [class_ "group/row hover:bg-fillWeaker"]
+                      Nothing -> [class_ "group/row"]
                   , Table.bulkActions =
                       if noBulkActions
                         then []

@@ -334,9 +334,9 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
       severityBadge _ = pass
   div_ [class_ "flex h-full overflow-hidden relative group/ai"] do
     -- LEFT: scrollable main content
-    div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto pt-8 px-4 pb-8 space-y-4"] do
+    div_ [class_ "flex-1 min-w-0 min-h-0 overflow-y-auto max-md:pt-5 pt-8 max-md:px-3 px-4 pb-8 max-md:space-y-3 space-y-4"] do
       -- Header: title
-      h3_ [class_ "text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
+      h3_ [class_ "max-md:text-xl text-2xl font-semibold text-textStrong flex flex-wrap items-center gap-1"] $ if "⇒" `T.isInfixOf` issue.title then renderSummaryText_ issue.title else toHtml issue.title
       unless (issue.recommendedAction == Issues.defaultRecommendedAction)
         $ p_ [class_ "text-sm text-textWeak max-w-3xl"]
         $ toHtml issue.recommendedAction
@@ -376,7 +376,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 refreshId = "anomaly-chart-refresh"
             div_ [id_ refreshId, class_ "hidden", term "_" "on submit trigger 'update-query' on window"] ""
             div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-              div_ [class_ "px-4 py-3 flex items-center justify-between gap-3 border-b border-strokeWeak"] do
+              div_ [class_ "px-4 py-2 flex flex-wrap items-center justify-between gap-x-3 gap-y-1 border-b border-strokeWeak"] do
                 span_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] $ toHtml chartTitle
                 div_ [class_ "flex items-center gap-2"] do
                   TimePicker.timepicker_ (Just refreshId) currentRange Nothing
@@ -436,7 +436,7 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
           -- Stack trace + Activity side by side
           div_ [class_ "flex flex-col lg:flex-row gap-4 lg:items-start"] do
             div_ [class_ "min-w-0 flex-1"]
-              $ details_ [class_ "surface-raised rounded-2xl group/details", term "open" ""]
+              $ details_ [class_ "surface-raised rounded-2xl group/details", term "open" "", term "_" "init if window.innerWidth < 768 remove @open from me"]
               $ do
                 summary_ [class_ "px-4 py-3 flex items-center gap-2 cursor-pointer list-none [&::-webkit-details-marker]:hidden"] do
                   faSprite_ "code" "regular" "w-3.5 h-3.5 text-textWeak"
@@ -480,20 +480,20 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 , Widget.hideLegend = Just True
                 }
       div_ [class_ "surface-raised rounded-2xl overflow-hidden", id_ "error-details-container", makeAttribute "tabindex" "-1", onkeydown_ "if(event.key==='Escape'&&this.classList.contains('investigation-fullscreen'))document.getElementById('investigation-fullscreen-btn').click()"] do
-        div_ [class_ "px-4 border-b border-strokeWeak flex items-center justify-between"] do
-          div_ [class_ "flex items-center gap-2"] do
+        div_ [class_ "max-md:px-3 px-4 border-b border-strokeWeak flex max-md:flex-col md:items-center md:justify-between"] do
+          div_ [class_ "flex items-center gap-2 max-md:py-1.5"] do
             faSprite_ "magnifying-glass-chart" "regular" "w-3.5 h-3.5 text-textWeak"
             h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
-            button_ [class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer transition-colors tap-target", Aria.label_ "Toggle fullscreen", id_ "investigation-fullscreen-btn", onclick_ "var c=document.getElementById('error-details-container'),u=this.querySelector('use'),h=u.getAttribute('href');c.classList.toggle('investigation-fullscreen');u.setAttribute('href',c.classList.contains('investigation-fullscreen')?h.replace('#expand','#compress'):h.replace('#compress','#expand'));window.scrollTo({top:0})"] do
+            button_ [class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", id_ "investigation-fullscreen-btn", onclick_ "var c=document.getElementById('error-details-container'),u=this.querySelector('use'),h=u.getAttribute('href');c.classList.toggle('investigation-fullscreen');u.setAttribute('href',c.classList.contains('investigation-fullscreen')?h.replace('#expand','#compress'):h.replace('#compress','#expand'));window.scrollTo({top:0})"] do
               faSprite_ "expand" "regular" "w-3 h-3 text-textWeak"
-          div_ [class_ "flex items-center"] do
+          div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4"] do
             let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
-                navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-3 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
-                tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-3 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
+                navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
+                tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
             forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
-            span_ [class_ "mx-4 w-px h-4 bg-strokeWeak"] pass
+            span_ [class_ "max-md:mx-2 mx-4 w-px h-4 bg-strokeWeak"] pass
             forM_ [("#span-content" :: Text, "Trace" :: Text, True), ("#log-content" :: Text, "Logs" :: Text, False), ("#replay-content" :: Text, "Replay" :: Text, False)] tabBtn
-        div_ [class_ "p-2 w-full overflow-x-hidden investigation-content"] do
+        div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
           div_ [class_ "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
             div_ [id_ "trace_container", class_ "grow-1 lg:max-w-[80%] lg:w-1/2 lg:min-w-[20%] shrink-1"]
               $ maybe
@@ -575,15 +575,20 @@ errorResolveAction pid errId errState canResolve =
     let actionUrl = "/p/" <> pid.toText <> "/issues/errors/" <> UUID.toText errId.unErrorPatternId <> "/resolve"
     div_ [id_ "error-resolve-action"] do
       if errState == ErrorPatterns.ESResolved
-        then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] "Resolved"
+        then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] do
+          faSprite_ "circle-check" "regular" "w-4 h-4"
+          span_ [class_ "max-md:hidden"] "Resolved"
         else
           button_
-            [ class_ "btn btn-sm btn-ghost text-textSuccess hover:bg-fillSuccess-weak"
+            [ class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak"
+            , Aria.label_ "Resolve issue"
             , hxPost_ actionUrl
             , hxTarget_ "#error-resolve-action"
             , hxSwap_ "outerHTML"
             ]
-            "Resolve"
+            do
+              faSprite_ "circle-check" "regular" "w-4 h-4"
+              span_ [class_ "max-md:hidden"] "Resolve"
 
 
 errorSubscriptionAction :: (HasField "id" err ErrorPatterns.ErrorPatternId, HasField "notifyEveryMinutes" err Int, HasField "subscribed" err Bool) => Projects.ProjectId -> err -> Html ()
@@ -602,8 +607,8 @@ errorSubscriptionAction pid err = do
     do
       span_ [class_ "text-xs text-textWeak flex items-center gap-1"] do
         faSprite_ "bell" "regular" "w-3 h-3"
-        "Notify every"
-      select_ [class_ "select select-sm w-36", name_ "notifyEveryMinutes"] do
+        span_ [class_ "max-md:hidden"] "Notify every"
+      select_ [class_ "select select-sm max-md:w-20 w-36", name_ "notifyEveryMinutes", Aria.label_ "Notification frequency"] do
         option_ ([value_ "0"] <> [selected_ "true" | not isActive]) "Off"
         let opts :: [(Int, Text)]
             opts = [(10, "10 min"), (20, "20 min"), (30, "30 min"), (60, "1 hr"), (360, "6 hrs"), (1440, "24 hrs")]
@@ -1255,8 +1260,8 @@ instance ToHtml AnomalyListGet where
 issueRowAttrs :: IssueVM -> [Attribute]
 issueRowAttrs (IssueVM _ _ _ _ issue) =
   [class_ $ "group/row hover:bg-fillWeaker " <> bg] <> case issue.severity of
-    "critical" -> [style_ "box-shadow: inset 2px 0 0 var(--color-fillError-strong)"]
-    "warning" -> [style_ "box-shadow: inset 2px 0 0 var(--color-fillWarning-strong)"]
+    "critical" -> [style_ "box-shadow: inset 3px 0 0 var(--color-fillError-strong)"]
+    "warning" -> [style_ "box-shadow: inset 3px 0 0 var(--color-fillWarning-strong)"]
     _ -> []
   where
     bg = case issue.severity of
@@ -1302,7 +1307,7 @@ issueColumns pid period = issueColumnsWithToggle pid period Nothing
 issueColumnsWithToggle :: Projects.ProjectId -> Text -> Maybe (Html ()) -> [Column IssueVM]
 issueColumnsWithToggle pid period toggleM =
   [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
-  , col ("Events (" <> period <> ")") renderIssueEventsCol & withAttrs [class_ "w-24"]
+  , col ("Events (" <> period <> ")") renderIssueEventsCol & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Last Seen" renderIssueDateCol & withAttrs [class_ "w-24 max-md:hidden"]
   , col "Activity" renderIssueChartCol & withAttrs [class_ "w-40 max-md:hidden"] & maybe identity withColHeaderExtra toggleM
   ]
@@ -1454,6 +1459,7 @@ renderIssueTitle_ :: Issues.IssueL -> Html ()
 renderIssueTitle_ issue
   | T.null title = "(Untitled)"
   | "⇒" `T.isInfixOf` title = renderSummaryText_ title
+  | looksLikeRawPattern title = span_ [class_ "font-mono text-[0.8125rem] break-all"] $ renderWithPlaceholders_ title
   | otherwise = renderWithPlaceholders_ title
   where
     title = stripIssuePrefix issue.title
@@ -1461,6 +1467,7 @@ renderIssueTitle_ issue
       foldl' (\t pfx -> fromMaybe t $ T.stripPrefix pfx t)
         <*> const
           ["New Log Pattern: ", "Log Pattern Spike: ", "Log Pattern Drop: ", "New Log Pattern Detected: "]
+    looksLikeRawPattern t = any (`T.isInfixOf` t) [";right-", "v{", "<*>", "]{", "ERROR ERROR"]
 
 
 -- | Render text with <> placeholders styled as distinct tokens
@@ -1474,24 +1481,36 @@ renderWithPlaceholders_ = go
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
-renderIssueMainCol pid (IssueVM _ _ currTime _ issue) = do
+renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
   let isAcknowledged = isJust issue.acknowledgedAt
       isArchived = isJust issue.archivedAt
       (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived issue.severity
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText issue.id
   div_ [class_ "flex flex-col gap-1 py-0.5 min-w-0"] do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
-      span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
-      span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show issue.seqNum
-      a_ [href_ issueUrl, class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors line-clamp-2 break-all"] $ renderIssueTitle_ issue
-      severityBadge_ issue.severity
-      issueStateBadge_ issue.latestStateEvent
-      when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
-      div_ [class_ "flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity"] do
+      div_ [class_ "text-sm line-clamp-2 min-w-0"] do
+        span_ [class_ $ "inline-flex align-middle mr-1 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
+        span_ [class_ "text-xs tabular-nums mr-1 text-textWeak max-md:text-textStrong max-md:font-medium"] $ toHtml $ "#" <> show issue.seqNum <> " "
+        a_ [href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] $ renderIssueTitle_ issue
+      span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] do
+        severityBadge_ issue.severity
+        issueStateBadge_ issue.latestStateEvent
+        when isAcknowledged $ span_ [class_ "badge badge-sm badge-ghost gap-1"] do faSprite_ "check" "regular" "h-3 w-3"; "Ack'd"
+      div_ [class_ "shrink-0 flex gap-1 items-center opacity-0 group-hover/row:opacity-100 has-[:focus-within]:opacity-100 transition-opacity max-md:hidden"] do
         inlineBtn (bool "Acknowledge" "Unacknowledge" isAcknowledged) "check" (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
         inlineBtn (bool "Archive" "Unarchive" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
-    issuePreview_ issue
-    span_ [class_ "hidden max-md:inline text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+    div_ [class_ "hidden max-md:flex items-center gap-1.5 flex-wrap"] do
+      severityBadge_ issue.severity
+      issueStateBadge_ issue.latestStateEvent
+    div_ [class_ "max-md:hidden"] $ issuePreview_ issue
+    div_ [class_ "hidden max-md:flex items-center justify-between text-xs text-textWeak"] do
+      div_ [class_ "flex items-center gap-1.5"] do
+        span_ [class_ $ "tabular-nums" <> bool "" " font-medium text-textStrong" (issue.eventCount > 100)] $ toHtml $ show issue.eventCount <> bool " event" " events" (issue.eventCount /= 1) <> " (" <> period <> ")"
+        span_ [class_ "opacity-30"] "·"
+        span_ [] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
+      div_ [class_ "flex items-center gap-3"] do
+        button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged] $ toHtml $ bool "Ack" "Unack" isAcknowledged
+        button_ [type_ "button", class_ "cursor-pointer text-textBrand tap-target font-medium", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived] $ toHtml $ bool "Archive" "Unarchive" isArchived
   where
     inlineBtn tip icon hxAction extraAttrs =
       button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxAction] <> extraAttrs)
@@ -1563,13 +1582,14 @@ anomalyAcknowledgeButton pid aid acked host = do
   let acknowledgeAnomalyEndpoint = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText aid <> if acked then "/unacknowledge" else "/acknowledge?host=" <> host
   a_
     [ class_ $ "btn btn-sm gap-1.5 " <> if acked then "bg-fillSuccess-weak text-textSuccess border-strokeSuccess-weak" else "btn-primary"
-    , term "data-tippy-content" "acknowledge issue"
+    , term "data-tippy-content" $ if acked then "unacknowledge issue" else "acknowledge issue"
+    , Aria.label_ $ if acked then "Unacknowledge issue" else "Acknowledge issue"
     , hxGet_ acknowledgeAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
     do
       faSprite_ "check" "regular" "w-4 h-4"
-      if acked then "Acknowledged" else "Acknowledge"
+      span_ [class_ "max-md:hidden"] $ if acked then "Acknowledged" else "Acknowledge"
 
 
 anomalyArchiveButton :: Projects.ProjectId -> Issues.IssueId -> Bool -> Html ()
@@ -1578,12 +1598,13 @@ anomalyArchiveButton pid aid archived = do
   a_
     [ class_ $ "btn btn-sm btn-ghost gap-1.5 " <> if archived then "bg-fillWarning-weak text-textWarning border-strokeWarning-weak" else ""
     , term "data-tippy-content" $ if archived then "unarchive" else "archive"
+    , Aria.label_ $ if archived then "Unarchive issue" else "Archive issue"
     , hxGet_ archiveAnomalyEndpoint
     , hxSwap_ "outerHTML"
     ]
     do
       faSprite_ "archive" "regular" "w-4 h-4"
-      if archived then "Unarchive" else "Archive"
+      span_ [class_ "max-md:hidden"] $ if archived then "Unarchive" else "Archive"
 
 
 issueTypeLabel :: Issues.IssueType -> Bool -> Html ()
