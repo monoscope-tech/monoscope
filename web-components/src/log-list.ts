@@ -1702,13 +1702,14 @@ export class LogList extends LitElement {
     if (column === 'id') return html`<td class="p-0 m-0 whitespace-nowrap col-id pl-2.5"></td>`;
 
     const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+    // Tailwind safelist: class="max-md:static"
     const config = {
       pattern_count: { title: 'count', classes: 'shrink-0' },
       volume: { title: '~volume', classes: 'shrink-0' },
       level: { title: 'status', classes: 'shrink-0' },
       timestamp: { title: 'timestamp', classes: 'shrink-0' },
       created_at: { title: 'timestamp', classes: 'shrink-0' },
-      latency_breakdown: { title: 'latency', classes: 'sticky right-0 shrink-0' },
+      latency_breakdown: { title: 'latency', classes: 'sticky right-0 max-md:static shrink-0' },
       status_code: { title: 'status', classes: 'shrink-0' },
       method: { title: 'method', classes: 'shrink-0' },
       raw_url: { title: column, classes: 'shrink-0' },
@@ -1775,7 +1776,7 @@ export class LogList extends LitElement {
               </td>`;
             })}
           ${this.logsColumns.includes('latency_breakdown')
-            ? html`<td class="sticky right-0 bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
+            ? html`<td class="sticky right-0 max-md:static bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
             : nothing}
         </tr>
       `;
@@ -2180,7 +2181,7 @@ const skeletonCell = (idx: number, totalCols: number) => {
   const classes = clsx(
     'bg-bgBase relative pl-2',
     idx === 0 && 'w-3',
-    idx === totalCols - 1 && 'sticky right-0 z-10',
+    idx === totalCols - 1 && 'sticky right-0 max-md:static z-10',
     idx > 0 && idx < totalCols - 1 && getSkeletonColumnWidth(idx)
   );
 

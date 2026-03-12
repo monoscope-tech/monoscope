@@ -192,8 +192,8 @@ logQueryBox_ config = do
               ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-1"] do
-        div_ [class_ "flex items-center gap-2"] do
+      div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
+        div_ [class_ "flex items-center gap-2 max-md:gap-1"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
             let isCustom = maybe False (\s -> s `notElem` map fst knownPatternFields) config.patternSelected
@@ -241,22 +241,23 @@ logQueryBox_ config = do
         -- Results will be rendered by the virtual table component
 
         div_
-          [ class_ "flex justify-end gap-2 max-md:hidden"
-          , [__|init 
+          [ class_ "flex justify-end gap-2"
+          , [__|init
             if window.location.hash.includes('create-alert-toggle')
                 set #create-alert-toggle.checked to true
                 set #viz-timeseries.checked to true
                 call updateVizTypeInUrl('timeseries', true)
                 set widgetJSON.type to 'timeseries'
                 send 'update-widget' to #visualization-widget-container
-              end 
-          
+              end
+
           |]
           ]
           do
-            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
-              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
-            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
+            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block max-md:block"] do
+              input_ [type_ "checkbox", class_ "checkbox checkbox-sm max-md:checkbox-xs rounded-sm toggle-chart"] >> span_ "hide timeline"
+              script_ "if(window.innerWidth<768){const c=document.currentScript.parentElement.querySelector('.toggle-chart');if(c)c.checked=true;}"
+            fieldset_ [class_ "fieldset max-md:hidden"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
               input_
                 $ [ type_ "checkbox"
                   , id_ "create-alert-toggle"

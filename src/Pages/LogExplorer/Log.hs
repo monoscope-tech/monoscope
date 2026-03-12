@@ -907,12 +907,7 @@ apiLogsPage page = do
           , patternSelected = page.targetPattern
           }
 
-      div_ [class_ "hidden max-md:flex items-center gap-1.5 text-xs text-textWeak cursor-pointer mt-1", [__|on click toggle .hidden on next .timeline then toggle .hidden on .chart-show-label in me then toggle .hidden on .chart-hide-label in me|]] do
-        faSprite_ "chart-bar" "regular" "w-3.5 h-3.5 text-iconNeutral"
-        span_ [class_ "chart-show-label"] "Show charts"
-        span_ [class_ "chart-hide-label hidden"] "Hide charts"
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
-        script_ "if(window.innerWidth<768)document.currentScript.parentElement.classList.add('hidden')"
         Widget.widget_ page.chartWidget
         div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
     div_ [class_ "flex max-md:flex-col h-full gap-3.5 overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
@@ -925,10 +920,10 @@ apiLogsPage page = do
             [ placeholder_ "Search filters..."
             , class_ "rounded-lg pl-10 pr-3 py-1.5 border border-strokeStrong w-full"
             , term "data-filterParent" "facets-container"
-            , [__| on keyup 
-                    if the event's key is 'Escape' 
-                      set my value to '' then trigger keyup 
-                    else 
+            , [__| on keyup
+                    if the event's key is 'Escape'
+                      set my value to '' then trigger keyup
+                    else
                       show <div.facet-section-group/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                       show <div.facet-section/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
                       show <div.facet-value/> in #{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()
@@ -941,7 +936,7 @@ apiLogsPage page = do
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
       div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-        -- Filters and row count header
+        -- Filters and row count header (on mobile: single compact row with chart toggle merged in)
         div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max max-md:w-full bg-bgBase -mb-6 max-md:mb-0 group-has-[#viz-patterns:checked]/pg:mb-0"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
