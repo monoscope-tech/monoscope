@@ -7,6 +7,28 @@ const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc'];
 
+const showNoDataOverlay = (chartId: string) => {
+  const el = $(`${chartId}`);
+  if (!el) return;
+  const parent = el.parentElement;
+  if (!parent) return;
+  let overlay = parent.querySelector('.chart-no-data') as HTMLElement;
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.className = 'chart-no-data absolute inset-0 flex items-center justify-center z-10 pointer-events-none';
+    overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">No data for the selected time range</p></div>`;
+    parent.style.position = 'relative';
+    parent.appendChild(overlay);
+  }
+  overlay.classList.remove('hidden');
+};
+
+const hideNoDataOverlay = (chartId: string) => {
+  const el = $(`${chartId}`);
+  const overlay = el?.parentElement?.querySelector('.chart-no-data') as HTMLElement;
+  if (overlay) overlay.classList.add('hidden');
+};
+
 const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
   // For timeseries_stat widgets with generic column names, use the default blue color
   // This ensures stat widgets (total requests, etc.) show in blue as expected
@@ -160,6 +182,11 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
 
     chart.hideLoading();
+    if (!dataset || dataset.length === 0) {
+      showNoDataOverlay(chartId);
+    } else {
+      hideNoDataOverlay(chartId);
+    }
     chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source), true);
     if ((window as any).barChart) {
       (window as any).barChart.dispatchAction({
@@ -171,6 +198,8 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     window.dispatchEvent(new CustomEvent('chart-updated', { detail: { chartId } }));
   } catch (e) {
     console.error('Failed to fetch new data:', e);
+    chart.hideLoading();
+    showNoDataOverlay(chartId);
   } finally {
     // Batch DOM updates after fetch completes
     requestAnimationFrame(() => {

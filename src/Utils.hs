@@ -1368,6 +1368,6 @@ prettyTimeShort now t =
    in if
         | s < 60 -> T.show s <> " sec ago"
         | s < 3600 -> T.show (s `div` 60) <> " min ago"
-        | s < 86400 -> T.show (s `div` 3600) <> " hrs ago"
-        | s < 604800 -> T.show (s `div` 86400) <> " days ago"
-        | otherwise -> T.show (s `div` 604800) <> " wks ago"
+        | s < 86400 -> let h = s `div` 3600 in T.show h <> bool " hrs" " hr" (h == 1) <> " ago"
+        | s < 604800 -> let d = s `div` 86400 in T.show d <> bool " days" " day" (d == 1) <> " ago"
+        | otherwise -> let w = s `div` 604800 in T.show w <> bool " wks" " wk" (w == 1) <> " ago"

@@ -486,12 +486,12 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
             h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wide"] "Investigation"
             button_ [class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer transition-colors max-md:hidden", Aria.label_ "Toggle fullscreen", id_ "investigation-fullscreen-btn", onclick_ "var c=document.getElementById('error-details-container'),u=this.querySelector('use'),h=u.getAttribute('href');c.classList.toggle('investigation-fullscreen');u.setAttribute('href',c.classList.contains('investigation-fullscreen')?h.replace('#expand','#compress'):h.replace('#compress','#expand'));window.scrollTo({top:0})"] do
               faSprite_ "expand" "regular" "w-3 h-3 text-textWeak"
-          div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4"] do
+          div_ [class_ "flex items-center max-md:overflow-x-auto max-md:-mx-4 max-md:px-4 max-md:pb-1.5"] do
             let aUrl = "/p/" <> pid.toText <> "/issues/" <> issueId
                 navLink (href, isActive, tooltip, lbl) = a_ [href_ href, class_ $ bool "text-textWeak hover:text-textStrong" "text-textBrand font-medium" isActive <> " text-xs py-2.5 max-md:px-2 px-3 cursor-pointer transition-colors", term "data-tippy-content" tooltip] $ toHtml lbl
                 tabBtn (target, lbl, isActive) = button_ [class_ $ "text-xs py-2.5 max-md:px-2 px-3 cursor-pointer err-tab font-medium" <> bool "" " t-tab-active" isActive, onclick_ $ "navigatable(this, '" <> target <> "', '#error-details-container', 't-tab-active', 'err')"] $ toHtml lbl
             forM_ [(aUrl <> "?first_occurrence=true", isFirst, "Show first trace the error occured" :: Text, "First" :: Text), (aUrl, not isFirst, "Show recent trace the error occured" :: Text, "Recent" :: Text)] navLink
-            span_ [class_ "max-md:mx-2 mx-4 w-px h-4 bg-strokeWeak"] pass
+            span_ [class_ "mx-3 w-px h-4 bg-strokeWeak max-md:mx-2"] pass
             forM_ [("#span-content" :: Text, "Trace" :: Text, True), ("#log-content" :: Text, "Logs" :: Text, False), ("#replay-content" :: Text, "Replay" :: Text, False)] tabBtn
         div_ [class_ "max-md:p-1 p-2 w-full overflow-x-hidden investigation-content"] do
           div_ [class_ "flex flex-col lg:flex-row w-full err-tab-content", id_ "span-content"] do
@@ -504,21 +504,20 @@ anomalyDetailPage pid issue tr spanRecs errM now isFirst members tp = do
                 (\t -> tracePage pid t spanRecs)
                 tr
             div_ [class_ "transition-opacity duration-200 mx-1 hidden lg:block", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
-            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto investigation-details", id_ "log_details_container"] do
+            div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden max-h-[500px] lg:w-1/2 w-c-scroll overflow-y-auto investigation-details", id_ "log_details_container", term "hx-on::after-swap" "if(window.innerWidth<1024)this.scrollIntoView({behavior:'smooth',block:'start'})"] do
               htmxOverlayIndicator_ "details_indicator"
               whenJust (spanRecs V.!? 0) \sr ->
                 div_ [hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> sr.uSpanId <> "/" <> formatUTC sr.timestamp <> "/detailed", hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect once", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
         div_ [id_ "log-content", class_ "hidden err-tab-content"] do
-          div_ [class_ "flex flex-col gap-4"] do
-            virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.base.recentTraceId)) <> "\""))) Nothing
+          virtualTable pid (Just ("/p/" <> pid.toText <> "/log_explorer?json=true&query=" <> toUriStr ("kind==\"log\" AND context___trace_id==\"" <> fromMaybe "" (errM >>= (.base.recentTraceId)) <> "\""))) Nothing
 
-          div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
-            let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
-            bool
-              (div_ [class_ "flex flex-col gap-4"] $ emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide")
-              (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
-              (not $ V.null withSessionIds)
+        div_ [id_ "replay-content", class_ "hidden err-tab-content"] do
+          let withSessionIds = V.catMaybes $ (\sr -> (`lookupValueText` "id") =<< Map.lookup "session" =<< sr.attributes) <$> spanRecs
+          bool
+            (emptyState_ (Just "video") "No Replay Available" "No session replays associated with this trace" (Just "https://monoscope.tech/docs/sdks/Javascript/browser/") "Session Replay Guide")
+            (div_ [class_ "border border-r border-l w-max mx-auto"] $ termRaw "session-replay" [id_ "sessionReplay", term "initialSession" $ V.head withSessionIds, class_ "shrink-1 flex flex-col", term "projectId" pid.toText, term "containerId" "sessionPlayerWrapper"] ("" :: Text))
+            (not $ V.null withSessionIds)
 
       when (issue.issueType /= Issues.RuntimeException) $ activityPanel_ pid issueId ""
 

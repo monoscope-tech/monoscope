@@ -768,7 +768,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Sessions.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-strokeWeak items-center"] do
-    div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
+    div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do
       whenJust projectM \_ -> do
         div_ [class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
@@ -778,7 +778,7 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3"
       let targetPage = Components.getTargetPage pageTitle
-          titleBase = "font-normal text-xl p-1 rounded-md leading-none"
+          titleBase = "font-normal text-xl p-1 rounded-md leading-none truncate"
       if targetPage /= "" && isJust pageTitleSuffix
         then whenJust projectM \p -> a_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] $ toHtml pageTitle
         else label_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
