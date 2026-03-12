@@ -218,7 +218,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     whenJust (findVarToPrompt activeTab variables) \v -> variablePickerModal_ pid dashId activeTabSlug' allParams v False
 
   -- Render variables and tabs in the same container
-  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 gap-4 items-center flex-wrap sticky top-0 z-10"] do
+  when (isJust dash.variables || isJust dash.tabs) $ div_ [class_ "flex bg-bgRaised backdrop-blur-xs max-md:px-2 px-4 py-1 max-md:py-0.5 gap-4 max-md:gap-2 items-center flex-wrap sticky top-0 z-10"] do
     -- Tabs section (on the left) - now using htmx for lazy loading
     whenJust dash.tabs \tabs -> do
       -- Get active tab from path-based slug or fall back to first tab
@@ -229,7 +229,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           baseTabUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/"
           -- Build query string from current params (excluding internal keys and expand param)
           queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
-      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none", id_ "dashboard-tabs-container"] do
+      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabSlug = slugify tab.name
               isActive = idx == activeTabIdx
@@ -301,7 +301,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
       widgetOrderUrl = "/p/" <> pidText <> "/dashboards/" <> dashIdText <> "/widgets_order" <> maybe "" ("?tab=" <>) activeTabSlug
       constantsJson = decodeUtf8 $ AE.encode $ M.fromList [(k, fromMaybe "" v) | (k, v) <- allParams, "const-" `T.isPrefixOf` k]
 
-  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
+  section_ [class_ "h-full"] $ div_ [class_ "mx-auto mb-20 pt-2 pb-6 max-md:pb-20 max-md:px-2 px-4 gap-3.5 w-full flex flex-col group/pg", id_ "dashboardPage", data_ "constants" constantsJson] do
     let emptyConstants = [c.key | c <- fromMaybe [] dash.constants, c.result `elem` [Nothing, Just []]]
     unless (null emptyConstants) $ div_ [class_ "alert alert-warning text-sm"] do
       faSprite_ "circle-exclamation" "regular" "w-4 h-4"
@@ -370,21 +370,32 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             if (!gridEl.classList.contains('grid-stack-initialized')) {
               const wrapper = gridEl.closest('.dashboard-grid-wrapper');
               try {
-                const isMobile = window.innerWidth < 768;
                 const grid = GridStack.init({
-                  column: isMobile ? 1 : 12,
-                  acceptWidgets: true,
+                  column: 12,
                   cellHeight: '5rem',
-                  margin: isMobile ? '0.5rem 0' : '1rem 0.5rem 1rem 0.5rem',
+                  margin: '1rem 0.5rem',
                   handleClass: 'grid-stack-handle',
                   styleInHead: true,
-                  staticGrid: isMobile,
                   float: false,
-                  animate: !isMobile,
-                  columnOpts: { breakpoints: [{w: 768, c: 1}] },
+                  animate: true,
+                  columnOpts: {
+                    breakpointForWindow: true,
+                    breakpoints: [{w: 768, c: 1}],
+                    layout: 'list'
+                  },
                 }, gridEl);
+                let lastCol = grid.getColumn();
+                if (lastCol === 1) grid.setStatic(true);
+                new ResizeObserver(() => {
+                  const col = grid.getColumn();
+                  if (col !== lastCol) {
+                    lastCol = col;
+                    grid.setStatic(col === 1);
+                  }
+                }).observe(gridEl);
 
                 grid.on('removed change', debounce(() => {
+                  if (grid.getColumn() === 1) return;
                   const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
                   if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
                   htmx.trigger(document.body, 'widget-order-changed');
@@ -411,17 +422,19 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 parentWidget.dataset.originalH = parentWidget.getAttribute('gs-h') || '0';
               }
 
-              const nestedMobile = window.innerWidth < 768;
               const nestedInstance = GridStack.init({
-                column: nestedMobile ? 1 : 12,
+                column: 12,
                 acceptWidgets: true,
                 cellHeight: '5rem',
-                margin: nestedMobile ? '0.5rem 0' : '1rem 0.5rem 1rem 0.5rem',
+                margin: '1rem 0.5rem',
                 handleClass: 'nested-grid-stack-handle',
                 styleInHead: true,
-                staticGrid: nestedMobile,
-                animate: !nestedMobile,
-                columnOpts: { breakpoints: [{w: 768, c: 1}] },
+                animate: true,
+                columnOpts: {
+                  breakpointForWindow: true,
+                  breakpoints: [{w: 768, c: 1}],
+                  layout: 'list'
+                },
               }, nestedEl);
 
               // Auto-fit group to children
@@ -452,6 +465,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               nestedInstance.on('change added removed', autoFitGroupToChildren);
               requestAnimationFrame(autoFitGroupToChildren);
               nestedInstance.on('removed change', debounce(() => {
+                if (window.innerWidth < 768) return;
                 const collapsingWidget = nestedEl.closest('[data-collapse-action]');
                 if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
                 htmx.trigger(document.body, 'widget-order-changed');
@@ -954,7 +968,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
               , config = appCtx.config
               , freeTierExceeded = freeTierExceeded
               , headContent = Just dashboardHeadContent_
-              , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
+              , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
                   TimePicker.timepicker_ Nothing currentRange Nothing
                   TimePicker.refreshButton_
                   dashboardActions_ pid dashId Nothing currentRange
@@ -2161,7 +2175,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , config = appCtx.config
           , freeTierExceeded = freeTierExceeded
           , headContent = Just dashboardHeadContent_
-          , pageActions = Just $ div_ [class_ "flex gap-3 items-center"] do
+          , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
               dashboardActions_ pid dashId (Just tabSlug) currentRange
@@ -2231,12 +2245,12 @@ dashboardSkeleton_ :: Html ()
 dashboardSkeleton_ = div_ [class_ "dashboard-skeleton absolute inset-0 z-10 bg-bgBase flex flex-col items-center justify-center"] do
   loadingIndicatorWith_ LdLG LdSpinner "text-fillBrand-strong"
   p_ [class_ "text-sm text-textWeak mt-3"] "Loading dashboard..."
-  div_ [class_ "grid grid-cols-12 gap-4 mt-8 w-full max-w-4xl px-8"] do
-    div_ [class_ "col-span-8 h-32 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 h-32 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
-    div_ [class_ "col-span-4 h-24 rounded-lg skeleton-shimmer"] ""
+  div_ [class_ "grid grid-cols-12 max-md:grid-cols-1 gap-4 mt-8 w-full max-w-4xl px-8"] do
+    div_ [class_ "col-span-8 max-md:col-span-1 h-32 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 max-md:col-span-1 h-32 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 max-md:col-span-1 h-24 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 max-md:hidden h-24 rounded-lg skeleton-shimmer"] ""
+    div_ [class_ "col-span-4 max-md:hidden h-24 rounded-lg skeleton-shimmer"] ""
 
 
 -- | Render a single tab content panel
@@ -2306,9 +2320,9 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
 -- | Unified dashboard actions (add widget button, yaml drawer, context menu)
 dashboardActions_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
 dashboardActions_ pid dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
-  span_ [class_ "text-fillDisabled mr-2"] "|"
-  Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
-  yamlEditorDrawer_ pid dashId
+  span_ [class_ "text-fillDisabled mr-2 max-md:hidden"] "|"
+  div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+  div_ [class_ "max-md:hidden"] $ yamlEditorDrawer_ pid dashId
   div_ [class_ "dropdown dropdown-end"] do
     div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
     ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-bgOverlay rounded-box p-2 w-52 shadow-sm leading-none"] do

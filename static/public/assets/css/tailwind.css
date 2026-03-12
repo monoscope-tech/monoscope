@@ -2398,3 +2398,58 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
     transform: none;
   }
 }
+
+/* Mobile dashboard layout */
+@media (max-width: 767px) {
+  /* Override GridStack absolute positioning with flex flow on mobile */
+  .grid-stack {
+    display: flex !important;
+    flex-direction: column;
+    gap: 0.5rem;
+    height: auto !important;
+  }
+  .grid-stack > .grid-stack-item {
+    position: relative !important;
+    top: auto !important;
+    left: auto !important;
+    width: 100% !important;
+  }
+  .grid-stack-item > .grid-stack-item-content {
+    position: relative !important;
+    height: 100% !important;
+  }
+  /* Non-autofit widgets (charts) get a sensible mobile height */
+  .grid-stack-item:not([data-mobile-autofit]) {
+    height: 180px !important;
+    min-height: 180px !important;
+    flex: none !important;
+  }
+  /* Shimmer skeleton while chart content hasn't rendered */
+  .grid-stack-item:not([data-mobile-autofit]) > .grid-stack-item-content:empty {
+    background: linear-gradient(90deg, var(--color-fillWeaker) 25%, var(--color-fillWeak) 50%, var(--color-fillWeaker) 75%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 0.5rem;
+  }
+  /* Bottom padding so last widget clears the chat FAB */
+  .grid-stack > .grid-stack-item:last-child {
+    margin-bottom: 4rem;
+  }
+  /* Content widgets auto-fit to their content */
+  .grid-stack-item[data-mobile-autofit] {
+    height: auto !important;
+  }
+  .grid-stack-item[data-mobile-autofit] > .grid-stack-item-content {
+    height: auto !important;
+  }
+  /* Nested stat cards inside groups: compact on mobile */
+  .nested-grid > .grid-stack-item {
+    height: 120px !important;
+    min-height: 120px !important;
+    flex: none !important;
+  }
+  /* Nested grids: override GridStack inline min-height */
+  .nested-grid.grid-stack {
+    min-height: auto !important;
+  }
+}

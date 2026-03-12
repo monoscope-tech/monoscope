@@ -2229,7 +2229,7 @@ function emptyState(cols: number) {
   return html`
     <tr class="w-full flex justify-center">
       <td colspan=${String(cols)} class="w-full mx-auto">
-        <div class="w-max mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
+        <div class="max-w-full mx-auto my-8 text-center p-5 sm:py-14 sm:px-24 flex flex-col gap-4">
           <div class="relative">
             <div class="absolute inset-0 -m-8">
               <div class="w-full h-full rounded-full bg-gradient-to-b from-fillBrand-weak to-transparent opacity-20 blur-xl"></div>
@@ -2239,14 +2239,14 @@ function emptyState(cols: number) {
             </div>
           </div>
           <div class="flex flex-col gap-3">
-            <h2 class="text-2xl text-textStrong font-bold bg-gradient-to-r from-textStrong to-textBrand bg-clip-text text-transparent">
+            <h2 class="text-2xl text-textStrong font-bold">
               ${title}
             </h2>
             <p class="text-sm max-w-md font-medium text-textWeak leading-relaxed">${subText}</p>
             <a
               href="https://monoscope.tech/docs/sdks/"
               target="_BLANK"
-              class="btn text-sm w-max mx-auto btn-primary bg-gradient-to-r from-fillBrand-strong to-fillBrand-weak hover:shadow-lg transition-all duration-300 hover:scale-105 border-0"
+              class="btn text-sm w-max mx-auto btn-primary border-0"
             >
               Read integration guides
             </a>

@@ -773,23 +773,23 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
         div_ [class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, url, icon) -> do
-        a_ [class_ "p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] do
+        a_ [class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
-        faSprite_ "chevron-right" "regular" "w-3 h-3"
+        faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
       let targetPage = Components.getTargetPage pageTitle
-          titleBase = "font-normal text-xl p-1 rounded-md leading-none truncate"
+          titleBase = "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate"
       if targetPage /= "" && isJust pageTitleSuffix
         then whenJust projectM \p -> a_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] $ toHtml pageTitle
         else label_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
       -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
-      span_ [id_ "pageTitleSuffix", class_ "flex items-center gap-1"] $ whenJust pageTitleSuffix \suffix -> do
+      span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust pageTitleSuffix \suffix -> do
         faSprite_ "chevron-right" "regular" "w-3 h-3"
         -- Make tab name clickable if modal ID is provided
         case pageTitleSuffixModalId of
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
-      whenJust docsLink \link -> a_ [class_ "text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
+      whenJust docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM \tabs -> div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust pageActionsM)] tabs
     div_ [class_ $ "flex-1 flex items-center justify-end text-sm" <> maybe " max-md:hidden" (const "") pageActionsM] $ whenJust pageActionsM id
 

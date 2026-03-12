@@ -623,11 +623,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , freeTierExceeded = freeTierExceeded
               , config = authCtx.config
               , headContent = headContent
-              , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
+              , pageActions = Just $ div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
                   label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
                     input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-3 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex  py-1 px-3 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
                   Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
                   Components.refreshButton_
               , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
@@ -864,7 +864,7 @@ virtualTable pid initialFetchUrl modeM = do
 
 apiLogsPage :: ApiLogsPageData -> Html ()
 apiLogsPage page = do
-  section_ [class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
+  section_ [class_ "mx-auto pt-2 max-md:px-2 px-4 gap-3.5 max-md:gap-2 w-full flex flex-col h-full overflow-y-hidden overflow-x-hidden pb-2 group/pg", id_ "apiLogsPage"] do
     template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
 
     div_ [class_ "fixed z-[9999] hidden right-0 w-max h-max border rounded top-32 bg-bgBase shadow-lg", id_ "sessionPlayerWrapper"] do
@@ -907,12 +907,17 @@ apiLogsPage page = do
           , patternSelected = page.targetPattern
           }
 
-      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 ", style_ "aspect-ratio: 10 / 1;"] do
+      div_ [class_ "hidden max-md:flex items-center gap-1.5 text-xs text-textWeak cursor-pointer mt-1", [__|on click toggle .hidden on next .timeline then toggle .hidden on .chart-show-label in me then toggle .hidden on .chart-hide-label in me|]] do
+        faSprite_ "chart-bar" "regular" "w-3.5 h-3.5 text-iconNeutral"
+        span_ [class_ "chart-show-label"] "Show charts"
+        span_ [class_ "chart-hide-label hidden"] "Hide charts"
+      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
+        script_ "if(window.innerWidth<768)document.currentScript.parentElement.classList.add('hidden')"
         Widget.widget_ page.chartWidget
-        Widget.widget_ page.latencyWidget
-    div_ [class_ "flex h-full gap-3.5 overflow-y-hidden", id_ "facets_and_loglist"] do
+        div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
+    div_ [class_ "flex max-md:flex-col h-full gap-3.5 overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
       -- FACETS
-      div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden ", id_ "facets-container"] do
+      div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
           span_ [class_ "absolute inset-y-0 left-3 flex items-center", Aria.hidden_ "true"]
             $ faSprite_ "magnifying-glass" "regular" "w-4 h-4 text-iconNeutral"
@@ -931,13 +936,13 @@ apiLogsPage page = do
             ]
         whenJust page.facets renderFacets
 
-      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] $ resizer_ "facets-container" "facets_width" True
+      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden"] $ resizer_ "facets-container" "facets_width" True
 
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
       div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
         -- Filters and row count header
-        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max max-md:w-full bg-bgBase -mb-6 max-md:mb-0 group-has-[#viz-patterns:checked]/pg:mb-0"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
@@ -946,7 +951,8 @@ apiLogsPage page = do
             input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
             script_
               [text|
-              document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
+              if (window.innerWidth < 768) document.getElementById('toggle-filters').checked = true;
+              else document.getElementById('toggle-filters').checked = localStorage.getItem('toggle-filter-checked') === 'true';
               // Ensure editor layout is correct on initial load
               setTimeout(() => {
                 const editor = document.getElementById('filterElement');
@@ -1003,14 +1009,14 @@ apiLogsPage page = do
           div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
 
       -- Alert configuration panel on the right
-      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block"] $ resizer_ "alert_container" "alert_width" False
+      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden"] $ resizer_ "alert_container" "alert_width" False
 
-      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block", id_ "alert_container", style_ "width: 500px;"] do
+      div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
         alertConfigurationForm_ page.project page.alert page.teams
 
-      div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+      div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block max-md:hidden " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
-      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto", id_ "log_details_container"] do
+      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase", id_ "log_details_container", term "hx-on::after-swap" "if(window.innerWidth<768)this.classList.add('details-open')"] do
         htmxOverlayIndicator_ "details_indicator"
         whenJust page.targetEvent \te -> do
           script_
@@ -1018,9 +1024,10 @@ apiLogsPage page = do
             document.addEventListener('DOMContentLoaded', function() {
               const detailsContainer = document.getElementById('log_details_container');
               if (detailsContainer) {
+                if (window.innerWidth < 768) detailsContainer.classList.add('details-open');
                 const queryWidth = new URLSearchParams(window.location.search).get('details_width');
                 const storedWidth = localStorage.getItem('resizer-details_width');
-                
+
                 if (queryWidth) detailsContainer.style.width = queryWidth + 'px';
                 else if (storedWidth && !storedWidth.endsWith('px')) detailsContainer.style.width = storedWidth + 'px';
                 else if (storedWidth) detailsContainer.style.width = storedWidth;

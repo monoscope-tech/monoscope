@@ -56,23 +56,21 @@ unitToSeconds unit =
 
 -- Test parseSince with different time units
 -- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "2H"
--- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 2 Hours",""))
+-- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("2H",""))
 --
 -- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "30M"
--- (Just 2024-10-31 11:30:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 30 Minutes",""))
+-- (Just 2024-10-31 11:30:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("30M",""))
 --
 -- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "7D"
--- (Just 2024-10-24 12:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 7 Days",""))
+-- (Just 2024-10-24 12:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("7D",""))
 --
 parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseSince now since =
   either (const (Nothing, Nothing, Nothing)) buildResult (parse timeParser "" since)
   where
-    buildResult (num, unit) = (Just start, Just now, Just ("Last " <> show num <> " " <> pluralize num label, ""))
+    buildResult (num, unit) = (Just start, Just now, Just (T.toUpper since, ""))
       where
-        (secs, label) = fromMaybe (0, "") (unitToSeconds unit)
-        pluralize 1 lbl = fromMaybe lbl $ T.stripSuffix "s" lbl
-        pluralize _ lbl = lbl
+        (secs, _) = fromMaybe (0, "") (unitToSeconds unit)
         start = addUTCTime (negate . secondsToNominalDiffTime . fromIntegral $ num * secs) now
 
     timeParser :: Parser (Int, String)
@@ -84,7 +82,7 @@ parseSince now since =
 --
 -- Test with since value (uses current time as end)
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker (Just "2H") Nothing Nothing)
--- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("Last 2 Hours",""))
+-- (Just 2024-10-31 10:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("2H",""))
 --
 -- Test with from/to values
 -- >>> parseTimeRange (Unsafe.read "2024-10-31 12:00:00 UTC") (TimePicker Nothing (Just "2024-10-31T08:00:00Z") (Just "2024-10-31T10:00:00Z"))
@@ -139,19 +137,19 @@ timepicker_ submitForm currentRange targetIdM = do
     , term "style" $ "anchor-name:--" <> targetPr <> "-timepicker-anchor"
     , term "popovertargetaction" "toggle"
     , term "onclick" "event.stopPropagation()"
-    , class_ "flex items-center gap-2 py-2 px-3 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
+    , class_ "flex items-center gap-2 max-md:gap-1.5 py-2 max-md:py-1.5 px-3 max-md:px-2 border border-strokeWeak rounded-lg shadow-xs text-sm text-textWeak cursor-pointer"
     ]
     do
       faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral"
       let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
-      span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "Last Hour" (\(s, e) -> s <> if T.null e then "" else "-" <> e) currentRange)
-      span_ [id_ "offsetIndicator", class_ "text-[10px] opacity-50"] "UTC+00"
+      span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "1H" (\(s, e) -> s <> if T.null e then "" else " - " <> e) currentRange)
+      span_ [id_ "offsetIndicator", class_ "text-[10px] opacity-50 max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
   -- DaisyUI popover content
   div_ [class_ "relative w-max"] do
     div_
-      [ class_ "border dropdown dropdown-end menu w-96 rounded-box bg-bgOverlay shadow-lg"
+      [ class_ "border dropdown dropdown-end menu w-96 max-md:w-[calc(100vw-1rem)] rounded-box bg-bgOverlay shadow-lg"
       , term "popover" "manual"
       , id_ $ targetPr <> "-timepicker-popover"
       , term "style" $ "position-anchor:--" <> targetPr <> "-timepicker-anchor"
@@ -172,7 +170,7 @@ timepicker_ submitForm currentRange targetIdM = do
                 li_ $ a_
                   [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2"
                   , term "data-value" val
-                  , term "data-title" title
+                  , term "data-title" val
                   , termRaw "_" onClickHandler
                   ]
                   do
@@ -261,7 +259,7 @@ refreshButton_ :: Html ()
 refreshButton_ = do
   div_ [class_ "join"] do
     label_
-      [ class_ "cursor-pointer px-3 flex items-center border border-strokeWeak rounded-l-lg shadow-xs leading-none join-item"
+      [ class_ "cursor-pointer px-3 max-md:px-2 flex items-center border border-strokeWeak rounded-l-lg shadow-xs leading-none join-item"
       , data_ "tippy-content" "Refresh"
       , Aria.label_ "Refresh"
       , [__| on click trigger 'update-query' on window then
@@ -270,8 +268,8 @@ refreshButton_ = do
       ]
       $ faSprite_ "arrows-rotate" "regular" "w-3.5 h-3.5 text-iconNeutral"
     div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeWeak rounded-r-lg shadow-xs group/rf"] do
-      div_ [class_ "cursor-pointer py-2 px-3 flex gap-1.5 items-center leading-none text-sm", tabindex_ "0", data_ "tippy-content" "Auto-refresh interval"] do
-        span_ [class_ "auto-refresh-span text-textWeak"] "Off"
+      div_ [class_ "cursor-pointer py-2 px-3 max-md:px-2 flex gap-1.5 max-md:gap-1 items-center leading-none text-sm", tabindex_ "0", data_ "tippy-content" "Auto-refresh interval"] do
+        span_ [class_ "auto-refresh-span text-textWeak max-md:hidden"] "Off"
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
 
       ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-bgOverlay rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do

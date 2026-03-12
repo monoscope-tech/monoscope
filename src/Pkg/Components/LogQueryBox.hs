@@ -153,7 +153,7 @@ logQueryBox_ config = do
                 "Submit"
             label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse APItoolkit AI without losing your query"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
-          div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0"] do
+          div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
             unless (isJust config.targetWidgetPreview)
               $ queryLibrary_ config.pid config.queryLibSaved config.queryLibRecent
 
@@ -167,7 +167,7 @@ logQueryBox_ config = do
                 ("" :: Text)
 
             unless (isJust config.targetWidgetPreview) $ do
-              div_ [class_ "gap-[2px] flex items-center"] do
+              div_ [class_ "gap-[2px] flex items-center max-md:hidden"] do
                 span_ [class_ "text-textWeak"] "in"
                 select_
                   [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-bgBase border-strokeStrong"
@@ -181,7 +181,7 @@ logQueryBox_ config = do
                     option_ (value_ "root-spans" : ([selected_ "true" | target == "root-spans"])) "Trace Root Spans"
                     option_ (value_ "service-entry-spans" : ([selected_ "true" | target == "service-entry-spans"])) "Service Entry Spans"
 
-              div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end"] do
+              div_ [class_ "dropdown dropdown-hover dropdown-bottom dropdown-end max-md:hidden"] do
                 div_ [class_ "rounded-lg px-3 py-1 text-textStrong inline-flex items-center border border-strokeStrong h-full", tabindex_ "0", role_ "button", Aria.label_ "Save query"] $ faSprite_ "floppy-disk" "regular" "h-5 w-5 text-iconNeutral"
                 ul_ [tabindex_ "0", class_ "dropdown-content border menu bg-bgOverlay rounded-box z-1 w-60 p-2 shadow-lg"] do
                   li_ $ label_ [Lucid.for_ "saveQueryMdl", onclick_ "document.getElementById('saveQueryMdl').dataset.pendingQuery = null;"] "Save query to Query Library"
@@ -192,7 +192,7 @@ logQueryBox_ config = do
               ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      div_ [class_ "flex items-between justify-between"] do
+      div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-1"] do
         div_ [class_ "flex items-center gap-2"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
@@ -241,7 +241,7 @@ logQueryBox_ config = do
         -- Results will be rendered by the virtual table component
 
         div_
-          [ class_ "flex justify-end gap-2"
+          [ class_ "flex justify-end gap-2 max-md:hidden"
           , [__|init 
             if window.location.hash.includes('create-alert-toggle')
                 set #create-alert-toggle.checked to true

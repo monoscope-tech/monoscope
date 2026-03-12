@@ -359,10 +359,11 @@ widgetHelper_ w' = case w.wType of
       | w.standalone == Just True = ""
       | otherwise = ""
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
+    autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTTraces, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
       if w.naked == Just True
         then Relude.id
-        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs) . div_ [class_ "grid-stack-item-content h-full [.grid-stack_&]:h-auto"]
+        else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full [.grid-stack_&]:h-auto"]
 
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
@@ -374,9 +375,9 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
       span_ ([class_ "truncate"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ toHtml $ maybeToMonoid title
       whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
-    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) subValueM) $ toHtml $ maybeToMonoid subValueM
+    span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
     span_ [class_ "hidden", id_ $ wId <> "_loader"] $ Utils.faSprite_ "spinner" "regular" "w-4 h-4 animate-spin"
   div_ [class_ "text-iconNeutral flex items-center gap-0.5"] do

@@ -224,6 +224,7 @@ expandedItemView pid item aptSp leftM rightM = do
             then add .hidden to #resizer-details_width-wrapper
             then add .opacity-0 to #resizer-details_width-wrapper
             then add .pointer-events-none to #resizer-details_width-wrapper
+            then remove .details-open from #log_details_container
             then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
             then call updateUrlState('details_width', '', 'delete')
             then call updateUrlState('target_event', '0px', 'delete')
