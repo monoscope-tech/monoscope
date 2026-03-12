@@ -880,14 +880,14 @@ processOneMinuteErrors scheduledTime pid = do
                   SET errors = u.errors
                   FROM (SELECT unnest(?::text[]) AS span_id, unnest(?::text[]) AS trace_id,
                                unnest(?::jsonb[]) AS errors) u
-                  WHERE o.project_id = ? AND o.context___span_id = u.span_id AND o.context___trace_id = u.trace_id |]
-            (spanIds, traceIds, errorsJson, pid)
+                  WHERE o.project_id = ? AND o.timestamp >= ? AND o.timestamp < ? AND o.context___span_id = u.span_id AND o.context___trace_id = u.trace_id |]
+            (spanIds, traceIds, errorsJson, pid, oneMinuteAgo, scheduledTime)
         Relude.when (fromIntegral rowsUpdated /= V.length updates)
           $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= V.length updates, "actual" AE..= rowsUpdated])
       -- Append "err:<hash>" to otel hashes using array_append + guard (same pattern as pat: hashes)
       let hashToSpans = HM.toList $ V.foldl' (\acc e -> maybe acc (\sId -> HM.insertWith (\new old -> let !r = new <> old in r) ("err:" <> e.hash) [sId] acc) e.spanId) HM.empty allErrors
       forM_ hashToSpans \(hashTag, sIds) ->
-        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, PGArray sIds, hashTag)
+        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, oneMinuteAgo, scheduledTime, PGArray sIds, hashTag)
       Relude.when (V.length spansWithErrors == 2000)
         $ processErrorsPaginated oneMinuteAgo (skip + 2000)
 

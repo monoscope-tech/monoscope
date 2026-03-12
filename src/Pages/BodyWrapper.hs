@@ -767,7 +767,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
 
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Sessions.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
-  nav_ [id_ "main-navbar", class_ "w-full px-4 py-2 flex flex-row border-strokeWeak items-center"] do
+  nav_ [id_ "main-navbar", class_ "w-full px-4 py-2 flex flex-row flex-wrap border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1"] do
       whenJust projectM \_ -> do
         div_ [class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
@@ -790,7 +790,7 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
       whenJust docsLink \link -> a_ [class_ "text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
-    whenJust tabsM id
+    whenJust tabsM \tabs -> div_ [class_ "max-md:order-last max-md:w-full max-md:pt-1"] tabs
     div_ [class_ "flex-1 flex items-center justify-end text-sm"] $ whenJust pageActionsM id
 
 

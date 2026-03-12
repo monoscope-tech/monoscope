@@ -51,7 +51,7 @@ statBox_ pid iconM title helpInfo val bckupValM valClsM = do
 -- Pass Nothing for icon to use default, or Just "icon-name" for custom icon
 emptyState_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> Html ()
 emptyState_ iconM title subTxt urlM btnText =
-  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-8 sm:px-12 flex flex-col gap-3 empty-state"] do
+  section_ [class_ "max-w-max mx-auto my-8 text-center p-5 sm:py-8 sm:px-12 flex flex-col gap-3 empty-state"] do
     div_ [] $ faSprite_ (fromMaybe "empty" iconM) "regular" "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong"
     div_ [class_ "flex flex-col gap-1.5"] do
       h2_ [class_ "text-base text-textStrong font-semibold"] $ toHtml title

@@ -1454,6 +1454,10 @@ dashboardsGet_ dg = do
               then span_ [class_ "font-medium text-textStrong"] $ toHtml $ dashTitle dash.title
               else a_ [href_ baseUrl, class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml $ dashTitle dash.title
             unless inCopyMode $ starButton_ dg.projectId dash.id (isJust dash.starredSince)
+          div_ [class_ "hidden max-md:flex items-center gap-2 mt-1 text-xs text-textWeak flex-wrap"] do
+            span_ [class_ "tabular-nums"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e" dash.updatedAt
+            forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml team.handle
+            forM_ (V.toList dash.tags) \tag -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml tag
 
     let renderModifiedCol dash = span_ [class_ "monospace text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 
@@ -1474,16 +1478,16 @@ dashboardsGet_ dg = do
     let tableCols = case dg.copyMode of
           Just _ ->
             [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"]
-            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
-            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
-            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24 max-md:hidden"]
             ]
           Nothing ->
             [ Table.col "Name" renderNameCol & Table.withAttrs [class_ "min-w-0"] & Table.withSort "title"
-            , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44"] & Table.withSort "updated_at"
-            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48"]
-            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48"]
-            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24"]
+            , Table.col "Last Modified" renderModifiedCol & Table.withAttrs [class_ "w-44 max-md:hidden"] & Table.withSort "updated_at"
+            , Table.col "Teams" renderTeamsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+            , Table.col "Tags" renderTagsCol & Table.withAttrs [class_ "w-48 max-md:hidden"]
+            , Table.col "Widgets" renderWidgetsCol & Table.withAttrs [class_ "w-24 max-md:hidden"]
             ]
 
     let table =

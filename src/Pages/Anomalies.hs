@@ -1303,8 +1303,8 @@ issueColumnsWithToggle :: Projects.ProjectId -> Text -> Maybe (Html ()) -> [Colu
 issueColumnsWithToggle pid period toggleM =
   [ col "Issue" (renderIssueMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
   , col ("Events (" <> period <> ")") renderIssueEventsCol & withAttrs [class_ "w-24"]
-  , col "Last Seen" renderIssueDateCol & withAttrs [class_ "w-24"]
-  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-40"] & maybe identity withColHeaderExtra toggleM
+  , col "Last Seen" renderIssueDateCol & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Activity" renderIssueChartCol & withAttrs [class_ "w-40 max-md:hidden"] & maybe identity withColHeaderExtra toggleM
   ]
 
 
@@ -1474,7 +1474,7 @@ renderWithPlaceholders_ = go
 
 
 renderIssueMainCol :: Projects.ProjectId -> IssueVM -> Html ()
-renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
+renderIssueMainCol pid (IssueVM _ _ currTime _ issue) = do
   let isAcknowledged = isJust issue.acknowledgedAt
       isArchived = isJust issue.archivedAt
       (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator isAcknowledged isArchived issue.severity
@@ -1491,6 +1491,7 @@ renderIssueMainCol pid (IssueVM _ _ _ _ issue) = do
         inlineBtn (bool "Acknowledge" "Unacknowledge" isAcknowledged) "check" (hxGet_ $ issueUrl <> bool "/acknowledge" "/unacknowledge" isAcknowledged) []
         inlineBtn (bool "Archive" "Unarchive" isArchived) "archive" (hxGet_ $ issueUrl <> bool "/archive" "/unarchive" isArchived) []
     issuePreview_ issue
+    span_ [class_ "hidden max-md:inline text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC issue.createdAt
   where
     inlineBtn tip icon hxAction extraAttrs =
       button_ ([type_ "button", term "data-tippy-content" tip, class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", hxSwap_ "outerHTML", hxTarget_ "closest .itemsListItem", hxAction] <> extraAttrs)

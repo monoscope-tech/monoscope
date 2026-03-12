@@ -143,10 +143,10 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           { config = def{elemID = "monitorsListForm", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
           , columns =
               [ col "Name" renderNameCol & withAttrs [class_ "min-w-0"]
-              , col "Teams" (\i -> forM_ i.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48"]
-              , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28"]
-              , col "Last Run" renderLastRunCol & withAttrs [class_ "w-28"]
-              , col "Threshold" renderThresholdCol & withAttrs [class_ "w-40"]
+              , col "Teams" (\i -> forM_ i.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral mr-1"] $ toHtml handle) & withAttrs [class_ "w-48 max-md:hidden"]
+              , col "Schedule" (\i -> span_ [class_ "text-xs text-textWeak whitespace-nowrap tabular-nums"] $ toHtml i.schedule) & withAttrs [class_ "w-28 max-md:hidden"]
+              , col "Last Run" renderLastRunCol & withAttrs [class_ "w-28 max-md:hidden"]
+              , col "Threshold" renderThresholdCol & withAttrs [class_ "w-40 max-md:hidden"]
               ]
           , rows = allItems
           , features =
@@ -180,7 +180,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
                 faSprite_ "bell" "regular" "h-4 w-4"
-                "Create monitor"
+                span_ [class_ "max-md:hidden"] "Create monitor"
           , navTabs =
               Just
                 $ toHtml
@@ -224,6 +224,10 @@ renderNameCol item = do
         inlineBtn "Delete" "trash" (hxDelete_ $ base <> "/alerts/" <> item.monitorId) [hxConfirm_ "Are you sure you want to delete this monitor?"]
     div_ [class_ "flex items-center gap-1.5"] do
       span_ [class_ "text-xs text-textStrong/70 font-mono line-clamp-2 bg-fillWeaker border border-strokeWeak rounded px-1.5 py-0.5", term "data-tippy-content" item.details.query] $ toHtml item.details.query
+    div_ [class_ "hidden max-md:flex items-center gap-2 text-xs text-textWeak flex-wrap"] do
+      span_ [class_ "tabular-nums"] $ toHtml item.schedule
+      span_ [] $ maybe "Never run" (toHtml . prettyTimeShort item.now) item.lastRun
+      forM_ item.teamBadges \(_, handle) -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml handle
   where
     isActive = item.status == "Active"
     inlineBtn tip icon hxAction extraAttrs =
