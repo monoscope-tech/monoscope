@@ -229,7 +229,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           baseTabUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/"
           -- Build query string from current params (excluding internal keys and expand param)
           queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
-      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline", id_ "dashboard-tabs-container"] do
+      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none", id_ "dashboard-tabs-container"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabSlug = slugify tab.name
               isActive = idx == activeTabIdx
@@ -238,7 +238,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           a_
             [ role_ "tab"
             , href_ $ tabUrl <> queryStr
-            , class_ $ "tab flex items-center gap-2" <> if isActive then " tab-active" else ""
+            , class_ $ "tab flex items-center gap-2 max-md:whitespace-nowrap" <> if isActive then " tab-active" else ""
             , id_ $ "tab-link-" <> dashId.toText <> "-" <> show idx
             , hxGet_ tabContentUrl
             , hxTarget_ "#dashboard-tabs-content"
@@ -253,9 +253,17 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               toHtml tab.name
               span_ [class_ "htmx-indicator", id_ $ "tab-indicator-" <> dashId.toText <> "-" <> show idx] $ faSprite_ "spinner" "regular" "w-3 h-3 animate-spin"
 
-    -- Variables section (pushed to the right)
-    whenJust dash.variables \variables ->
-      div_ [class_ $ "flex gap-2 flex-wrap " <> if isJust dash.tabs then "ml-auto" else ""] do
+    -- Variables section (pushed to the right, collapsible on mobile)
+    whenJust dash.variables \variables -> do
+      -- Mobile toggle button
+      input_ [type_ "checkbox", class_ "hidden peer/vars", id_ "dash-vars-toggle"]
+      label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeaker border border-strokeWeak rounded-lg px-2 py-1 flex items-center gap-1 peer-checked/vars:hidden"] do
+        faSprite_ "filter" "regular" "w-3 h-3"
+        "Filters"
+      label_ [Lucid.for_ "dash-vars-toggle", class_ "md:hidden cursor-pointer text-xs text-textWeak bg-fillWeak border border-strokeWeak rounded-lg px-2 py-1 hidden peer-checked/vars:flex items-center gap-1"] do
+        faSprite_ "filter" "regular" "w-3 h-3"
+        "Hide Filters"
+      div_ [class_ $ "max-md:hidden max-md:peer-checked/vars:flex flex gap-2 flex-wrap max-md:w-full max-md:pt-1 " <> if isJust dash.tabs then "ml-auto max-md:ml-0" else ""] do
         forM_ variables \var -> fieldset_ [class_ "border border-strokeStrong bg-fillWeaker p-0 inline-block rounded-lg dash-variable text-sm"] do
           legend_ [class_ "px-1 ml-2 text-xs"] $ toHtml $ fromMaybe var.key var.title <> memptyIfFalse (var.required == Just True) " *"
           let whitelist =
@@ -362,16 +370,18 @@ dashboardPage_ pid dashId dash dashVM allParams = do
             if (!gridEl.classList.contains('grid-stack-initialized')) {
               const wrapper = gridEl.closest('.dashboard-grid-wrapper');
               try {
+                const isMobile = window.innerWidth < 768;
                 const grid = GridStack.init({
-                  column: 12,
+                  column: isMobile ? 1 : 12,
                   acceptWidgets: true,
                   cellHeight: '5rem',
-                  margin: '1rem 0.5rem 1rem 0.5rem',
+                  margin: isMobile ? '0.5rem 0' : '1rem 0.5rem 1rem 0.5rem',
                   handleClass: 'grid-stack-handle',
                   styleInHead: true,
-                  staticGrid: false,
+                  staticGrid: isMobile,
                   float: false,
-                  animate: true,
+                  animate: !isMobile,
+                  columnOpts: { breakpoints: [{w: 768, c: 1}] },
                 }, gridEl);
 
                 grid.on('removed change', debounce(() => {
@@ -401,15 +411,17 @@ dashboardPage_ pid dashId dash dashVM allParams = do
                 parentWidget.dataset.originalH = parentWidget.getAttribute('gs-h') || '0';
               }
 
+              const nestedMobile = window.innerWidth < 768;
               const nestedInstance = GridStack.init({
-                column: 12,
+                column: nestedMobile ? 1 : 12,
                 acceptWidgets: true,
                 cellHeight: '5rem',
-                margin: '1rem 0.5rem 1rem 0.5rem',
+                margin: nestedMobile ? '0.5rem 0' : '1rem 0.5rem 1rem 0.5rem',
                 handleClass: 'nested-grid-stack-handle',
                 styleInHead: true,
-                staticGrid: false,
-                animate: true,
+                staticGrid: nestedMobile,
+                animate: !nestedMobile,
+                columnOpts: { breakpoints: [{w: 768, c: 1}] },
               }, nestedEl);
 
               // Auto-fit group to children
