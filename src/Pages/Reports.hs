@@ -358,7 +358,7 @@ singleReportPage (reportType, dateLabel, emailHtml) =
 
 reportsPage :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Bool -> Bool -> Html ()
 reportsPage pid reports nextUrl _daily _weekly =
-  div_ [class_ "flex flex-row h-full w-full border-t"] do
+  div_ [class_ "flex flex-col md:flex-row h-full w-full border-t"] do
     when (V.null reports)
       $ div_ [class_ "flex h-full w-full justify-center items-center"]
       $ div_ [class_ "flex flex-col items-center justify-center py-16 px-4"]
@@ -367,10 +367,10 @@ reportsPage pid reports nextUrl _daily _weekly =
           $ faSprite_ "empty" "regular" "h-12 w-12"
         h3_ [class_ "text-xl text-textStrong mb-2"] "No reports generated for this project yet."
     unless (V.null reports) do
-      div_ [class_ "w-1/3 border-r border-strokeWeak p-4 overflow-y-auto"] do
-        div_ [class_ "mt-4 space-y-4 w-full"] do
+      div_ [class_ "w-full md:w-1/3 md:border-r border-b md:border-b-0 border-strokeWeak p-4 overflow-x-auto md:overflow-y-auto"] do
+        div_ [class_ "mt-4 flex flex-row md:flex-col gap-4 w-full"] do
           -- "Week to Date" live preview entry
-          div_ [class_ "w-full flex flex-col border border-strokeBrand-weak bg-fillBrand-weak/10 rounded-lg cursor-pointer hover:bg-fillWeaker"] do
+          div_ [class_ "shrink-0 w-64 md:w-full flex flex-col border border-strokeBrand-weak bg-fillBrand-weak/10 rounded-lg cursor-pointer hover:bg-fillWeaker"] do
             div_ [class_ "w-full"] do
               a_
                 [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"
@@ -389,7 +389,7 @@ reportsPage pid reports nextUrl _daily _weekly =
                     "Week to Date"
           -- Historical reports
           reportListItems pid reports nextUrl
-      div_ [class_ "w-2/3 overflow-y-auto"] do
+      div_ [class_ "w-full md:w-2/3 overflow-y-auto"] do
         div_ [class_ "flex h-full", id_ "detailSidebar"] do
           -- Auto-load the live preview on initial page load
           a_
@@ -405,10 +405,10 @@ reportsPage pid reports nextUrl _daily _weekly =
 
 reportListItems :: Projects.ProjectId -> V.Vector Issues.ReportListItem -> Maybe Text -> Html ()
 reportListItems pid reports nextUrl =
-  div_ [class_ "space-y-4 w-full"] do
+  div_ [class_ "flex flex-row md:flex-col gap-4 w-full"] do
     forM_ reports $ \report -> do
       let isWeeklyData = report.reportType == "weekly"
-      div_ [class_ "w-full flex flex-col border border-strokeWeak rounded-lg cursor-pointer hover:bg-fillWeaker"] do
+      div_ [class_ "shrink-0 w-64 md:w-full flex flex-col border border-strokeWeak rounded-lg cursor-pointer hover:bg-fillWeaker"] do
         div_ [class_ "w-full"] do
           a_
             [ class_ "w-full p-4 flex justify-between hover:bg-fillHover cursor-pointer"

@@ -127,6 +127,8 @@ emailCss =
     .monoscope-email .footer-col-left, .monoscope-email .footer-col-right { display: block !important; width: 100% !important; text-align: left !important; padding: 0 !important; }
     .monoscope-email .footer-col-right { padding-top: 16px !important; }
     .monoscope-email .footer-icons { float: none !important; }
+    .monoscope-email .report-table th:nth-child(n+2), .monoscope-email .report-table td:nth-child(n+2) { display: none !important; }
+    .monoscope-email .stat-number { font-size: 22px !important; white-space: nowrap !important; }
   }
   @media (prefers-color-scheme: dark) {
     .monoscope-email p, .monoscope-email ul, .monoscope-email ol, .monoscope-email li, .monoscope-email h1, .monoscope-email h2, .monoscope-email h3 { color: #ffffff !important; }
@@ -502,10 +504,10 @@ weeklyReportEmail d =
       table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ do
         td_ [width_ "50%", style_ "text-align: center; padding: 16px 0;"] do
           p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Total project events"
-          p_ [style_ "margin: 0; font-size: 28px; font-weight: 700;"] $ toHtml $ formatWithCommas (fromIntegral d.totalEvents)
+          p_ [class_ "stat-number", style_ "margin: 0; font-size: 28px; font-weight: 700; white-space: nowrap;"] $ toHtml $ formatWithCommas (fromIntegral d.totalEvents)
         td_ [width_ "50%", style_ "text-align: center; padding: 16px 0; border-left: 1px solid #dee2e7;"] do
           p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Total project errors"
-          p_ [style_ "margin: 0; font-size: 28px; font-weight: 700;"] $ toHtml $ formatWithCommas (fromIntegral d.totalErrors)
+          p_ [class_ "stat-number", style_ "margin: 0; font-size: 28px; font-weight: 700; white-space: nowrap;"] $ toHtml $ formatWithCommas (fromIntegral d.totalErrors)
 
       -- Charts: stacked full-width
       chartBlock "Events" d.eventsChartUrl
