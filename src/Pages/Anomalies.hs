@@ -578,17 +578,16 @@ errorResolveAction pid errId errState canResolve =
         then button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true"] do
           faSprite_ "circle-check" "regular" "w-4 h-4"
           span_ [class_ "max-md:hidden"] "Resolved"
-        else
-          button_
-            [ class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak"
-            , Aria.label_ "Resolve issue"
-            , hxPost_ actionUrl
-            , hxTarget_ "#error-resolve-action"
-            , hxSwap_ "outerHTML"
-            ]
-            do
-              faSprite_ "circle-check" "regular" "w-4 h-4"
-              span_ [class_ "max-md:hidden"] "Resolve"
+        else button_
+          [ class_ "btn btn-sm btn-ghost gap-1.5 text-textSuccess hover:bg-fillSuccess-weak"
+          , Aria.label_ "Resolve issue"
+          , hxPost_ actionUrl
+          , hxTarget_ "#error-resolve-action"
+          , hxSwap_ "outerHTML"
+          ]
+          do
+            faSprite_ "circle-check" "regular" "w-4 h-4"
+            span_ [class_ "max-md:hidden"] "Resolve"
 
 
 errorSubscriptionAction :: (HasField "id" err ErrorPatterns.ErrorPatternId, HasField "notifyEveryMinutes" err Int, HasField "subscribed" err Bool) => Projects.ProjectId -> err -> Html ()
