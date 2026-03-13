@@ -7,7 +7,6 @@ import Data.Default
 import Data.Map qualified as Map
 import Data.Text qualified as T ()
 import Data.Vector qualified as V
-import GHC.Show qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
