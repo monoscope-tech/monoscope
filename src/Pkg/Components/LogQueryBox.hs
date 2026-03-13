@@ -7,6 +7,7 @@ import Data.Default
 import Data.Map qualified as Map
 import Data.Text qualified as T ()
 import Data.Vector qualified as V
+import GHC.Show qualified
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -17,7 +18,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Pages.Components (modal_)
-import GHC.Show qualified
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
