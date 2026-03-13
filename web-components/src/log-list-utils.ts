@@ -153,7 +153,7 @@ export const getErrorClassification = (reqVec: any[], colIdxMap: ColIdxMap) => {
 
 // Template helper functions
 export const faSprite = (iconName: string, kind: string, classes: string): TemplateResult =>
-  html`<svg class="${classes}"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
+  html`<svg class="${classes}" fill="currentColor"><use href="/public/assets/svgs/fa-sprites/${kind}.svg#${iconName}"></use></svg>`;
 
 export const renderBadge = (classes: string, title: string, tooltip?: string): TemplateResult =>
   html`<span

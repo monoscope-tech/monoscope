@@ -455,16 +455,15 @@
     transition: background-color 150ms ease-out, color 150ms ease-out, border-color 150ms ease-out;
   }
 
-  /* Dropdown chevron rotation */
-  .dropdown summary svg,
-  .dropdown [tabindex] svg,
+  /* Dropdown chevron rotation — only target the last svg (the chevron) */
+  .dropdown summary > svg:last-child,
+  .dropdown [tabindex] > svg:last-child,
   details summary > svg:last-child {
     transition: transform 200ms var(--ease-out-expo);
   }
-  .dropdown:has(:focus) summary svg,
-  .dropdown[open] summary svg,
   details[open] summary > svg:last-child,
-  .dropdown:has(.dropdown-content:not(.hidden)) [tabindex] svg {
+  .dropdown[open] summary > svg:last-child,
+  .dropdown.dropdown-open [tabindex] > svg:last-child {
     transform: rotate(180deg);
   }
 

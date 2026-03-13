@@ -1,3 +1,4 @@
+{-# OPTIONS_GHC -Wno-orphans #-}
 module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryEditorInitializationCode, LogQueryBoxConfig (..), visualizationTabs_) where
 
 import Data.Aeson qualified as AE
@@ -19,6 +20,9 @@ import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
+instance Default (Html ()) where def = mempty
+instance Show (Html ()) where show _ = "Html()"
+
 sortedSchemaFieldNames :: [Text]
 sortedSchemaFieldNames = sort $ Map.keys Schema.telemetrySchema.fields
 
@@ -39,11 +43,13 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   -- ^ Whether to update the URL when the query changes
   , targetWidgetPreview :: Maybe Text
   -- ^ ID of the widget preview element to update when the query changes
-  , mobileExtra :: Html ()
+  , mobileExtra :: Maybe (Html ())
   -- ^ Extra content rendered mobile-only in the viz tabs row
   }
   deriving (Generic, Show)
   deriving anyclass (Default)
+
+
 
 
 -- | Reusable log query box component that can be used in both Logs and Dashboards pages
@@ -195,7 +201,7 @@ logQueryBox_ config = do
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
       div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
-        div_ [class_ "flex items-center gap-2 max-md:gap-1"] do
+        div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
             let isCustom = maybe False (\s -> s `notElem` map fst knownPatternFields) config.patternSelected
@@ -237,13 +243,18 @@ logQueryBox_ config = do
             datalist_ [id_ "pattern-field-list"]
               $ forM_ sortedSchemaFieldNames \f ->
                 option_ [value_ f] ""
-          span_ [class_ "text-textDisabled mx-2 text-xs"] "|"
+          span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
+          -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
+          fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 group-has-[.default-chart:checked]/pg:block"] do
+            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart"] >> span_ [class_ "text-xs"] "hide timeline"
+            script_ "if(window.innerWidth<768){const c=document.currentScript.parentElement.querySelector('.toggle-chart');if(c)c.checked=true;}"
 
-        -- Results will be rendered by the virtual table component
+        whenJust config.mobileExtra \extra ->
+          div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full hidden"] extra
 
         div_
-          [ class_ "flex justify-end gap-2"
+          [ class_ "flex justify-end gap-2 max-md:hidden"
           , [__|init
             if window.location.hash.includes('create-alert-toggle')
                 set #create-alert-toggle.checked to true
@@ -256,10 +267,9 @@ logQueryBox_ config = do
           |]
           ]
           do
-            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block max-md:block"] do
-              input_ [type_ "checkbox", class_ "checkbox checkbox-sm max-md:checkbox-xs rounded-sm toggle-chart"] >> span_ "hide timeline"
-              script_ "if(window.innerWidth<768){const c=document.currentScript.parentElement.querySelector('.toggle-chart');if(c)c.checked=true;}"
-            fieldset_ [class_ "fieldset max-md:hidden"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
+            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
+              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
+            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
               input_
                 $ [ type_ "checkbox"
                   , id_ "create-alert-toggle"

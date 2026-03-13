@@ -206,6 +206,14 @@ buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) 
 -- >>> import Data.Aeson
 
 
+rowCountDisplay_ :: Text -> Text -> Text -> Html ()
+rowCountDisplay_ suffix countText suffixText =
+  div_ [] do
+    span_ [class_ "text-textStrong", id_ $ "row-count-display" <> dashSuffix] $ toHtml countText
+    span_ [class_ "text-textStrong", id_ $ "row-count-suffix" <> dashSuffix] $ toHtml suffixText
+  where dashSuffix = if T.null suffix then "" else "-" <> suffix
+
+
 -- | Render facet data for Log Explorer sidebar in a compact format
 -- | The facet counts are already scaled in the Fields.getFacetSummary function based on the selected time range
 -- | Facets are normally generated for a 24-hour period, but will be proportionally adjusted for the user's time selection
@@ -890,6 +898,8 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "1 hour", name_ "expiresIn", id_ "expire_input"]
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
+    let countText = prettyPrintCount page.queryResultCount
+        suffixText = bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
     div_ [class_ "w-full"] do
       logQueryBox_
         LogQueryBoxConfig
@@ -905,6 +915,16 @@ apiLogsPage page = do
           , targetWidgetPreview = Nothing
           , alert = isJust page.alert
           , patternSelected = page.targetPattern
+          , mobileExtra = Just do
+              label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
+                faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
+                span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
+                span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
+                "filters"
+                input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters-mobile", onchange_ "document.getElementById('toggle-filters').checked = this.checked; document.getElementById('toggle-filters').dispatchEvent(new Event('change'));"]
+                script_ "if(window.innerWidth<768) document.getElementById('toggle-filters-mobile').checked=true;"
+              span_ [class_ "text-strokeWeak text-xs"] "·"
+              rowCountDisplay_ "mobile" countText suffixText
           }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
@@ -936,14 +956,14 @@ apiLogsPage page = do
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
       div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
-        -- Filters and row count header (on mobile: single compact row with chart toggle merged in)
-        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max max-md:w-full bg-bgBase -mb-6 max-md:mb-0 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+        -- Filters and row count header
+        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
             span_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden"] "Hide"
             "filters"
-            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
+            input_ [type_ "checkbox", class_ "toggle-filters hidden", id_ "toggle-filters", onchange_ "localStorage.setItem('toggle-filter-checked', this.checked); var m=document.getElementById('toggle-filters-mobile'); if(m) m.checked=this.checked; setTimeout(() => { const editor = document.getElementById('filterElement'); if (editor && editor.refreshLayout) editor.refreshLayout(); }, 200);"]
             script_
               [text|
               if (window.innerWidth < 768) document.getElementById('toggle-filters').checked = true;
@@ -957,9 +977,7 @@ apiLogsPage page = do
               }, 300);
             |]
           span_ [class_ "text-strokeWeak "] "|"
-          div_ [class_ ""] do
-            span_ [class_ "text-textStrong", id_ "row-count-display"] $ toHtml $ prettyPrintCount page.queryResultCount
-            span_ [class_ "text-textStrong", id_ "row-count-suffix"] $ toHtml $ bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
+          rowCountDisplay_ "" countText suffixText
 
         -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
         div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden"] do

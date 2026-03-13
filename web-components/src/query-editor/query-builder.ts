@@ -1053,7 +1053,7 @@ export class QueryBuilderComponent extends LitElement {
     return html`
       <div class="flex flex-wrap items-center gap-2 text-sm max-md:gap-1">
         <!-- AGG Section -->
-        <div class="flex items-center gap-1">
+        <div class="flex items-center gap-1 max-md:hidden">
           <span class="text-xs text-textDisabled monospace" data-tippy-content="Apply aggregation functions like count, sum, avg, etc.">agg:</span>
           <div class="flex flex-wrap gap-1">
             ${this.aggregations.map(
@@ -1155,7 +1155,7 @@ export class QueryBuilderComponent extends LitElement {
         ${
           this.aggregations.length > 0
             ? html`
-                <div class="flex items-center ml-4 gap-1">
+                <div class="flex items-center ml-4 gap-1 max-md:hidden">
                   <span class="text-xs text-textDisabled monospace" data-tippy-content="Group results by field value">by:</span>
                   <div class="flex flex-wrap gap-1">
                     ${this.groupByFields.map((field, index) => {
@@ -1309,7 +1309,7 @@ export class QueryBuilderComponent extends LitElement {
         ${
           this.sortFields.length > 0
             ? html`
-                <div class="flex items-center ml-4 gap-1">
+                <div class="flex items-center ml-4 gap-1 max-md:hidden">
                   <div class="flex flex-wrap gap-1">
                     ${this.sortFields.map(
                       (sort, index) => html`
@@ -1348,7 +1348,7 @@ export class QueryBuilderComponent extends LitElement {
         ${
           this.limitValue !== null
             ? html`
-                <div class="flex items-center ml-4 gap-1">
+                <div class="flex items-center ml-4 gap-1 max-md:hidden">
                   <div class="flex flex-wrap gap-1">
                     <div class="text-xs text-textDisabled monospace bg-bgWeaker">
                       [<span class="text-textDisabled">limit:</span>

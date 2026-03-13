@@ -531,17 +531,26 @@ export class LogList extends LitElement {
     };
   }
 
+  private rowCountEls: (HTMLElement | null)[] | null = null;
+  private getRowCountEls() {
+    return this.rowCountEls ??= ['row-count-display', 'row-count-suffix', 'row-count-display-mobile', 'row-count-suffix-mobile'].map(id => document.getElementById(id));
+  }
+
   private updateRowCountDisplay() {
-    const countElement = document.getElementById('row-count-display');
-    if (!countElement) return;
-    const suffixEl = document.getElementById('row-count-suffix');
+    const [countEl, suffixEl, mobileCount, mobileSuffix] = this.getRowCountEls();
+    if (!countEl) return;
+    let countText: string, suffixText: string;
     if (this.mode === 'patterns') {
-      countElement.textContent = `${this.formatCount(this.totalPatterns)} patterns`;
-      if (suffixEl) suffixEl.textContent = ` found (based on ${this.formatCount(this.totalCount)} logs)`;
+      countText = `${this.formatCount(this.totalPatterns)} patterns`;
+      suffixText = ` found (based on ${this.formatCount(this.totalCount)} logs)`;
     } else {
-      countElement.textContent = this.formatCount(this.loadedCount);
-      if (suffixEl) suffixEl.textContent = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
+      countText = this.formatCount(this.loadedCount);
+      suffixText = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
     }
+    countEl.textContent = countText;
+    if (suffixEl) suffixEl.textContent = suffixText;
+    if (mobileCount) mobileCount.textContent = countText;
+    if (mobileSuffix) mobileSuffix.textContent = suffixText;
   }
 
   private showLoadingSpinner(show: boolean) {
@@ -1902,9 +1911,9 @@ export class LogList extends LitElement {
           <button
             tabindex="0"
             role="button"
-            class=${`flex cursor-pointer items-center justify-center gap-1 px-2 py-1 text-xs rounded focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
+            class=${`flex cursor-pointer items-center justify-center gap-1 px-2 py-1 text-xs rounded text-textWeak hover:text-textStrong focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
           >
-            ${faSprite('gear', 'regular', `h-3 w-3 `)}
+            ${faSprite('gear', 'regular', `h-3 w-3`)}
             <span class="sm:inline hidden">Options</span>
           </button>
           <div tabindex="0" class="dropdown-content space-y-2 bg-bgBase border w-64 border-strokeWeak p-2 text-sm rounded shadow">

@@ -1143,6 +1143,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               , targetWidgetPreview = Just widgetPreviewId
               , alert = False
               , patternSelected = Nothing
+              , mobileExtra = Nothing
               }
           details_ [class_ "text-xs text-textWeak"] do
             summary_ [class_ "cursor-pointer hover:text-textStrong select-none transition-colors"] "Show generated SQL"
