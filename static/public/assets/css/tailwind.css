@@ -56,6 +56,9 @@
 }
 
 @theme {
+  --text-2xs: 0.625rem;
+  --text-2xs--line-height: 0.875rem;
+
   /* Animation duration constants */
   --duration-fast: 100ms;
   --duration-normal: 150ms;
@@ -1369,6 +1372,12 @@ code, pre, .code, .monospace {
 @utility input-txt {
   @apply shadow-xs focus:ring-strokeFocus focus:border-strokeFocus block w-full sm:text-sm border-strokeWeak rounded-md;
 }
+@utility scrollbar-hide {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+  &::-webkit-scrollbar { display: none; }
+}
+
 @utility neg-rotate-90 {
   /* Added because using - in class name prefix via hyperscript doesnt work*/
   @apply -rotate-90;
@@ -2106,6 +2115,19 @@ code, pre, .code, .monospace {
   @apply border-strokeWeak;
 }
 
+/* Variable picker modal */
+.var-picker-backdrop { backdrop-filter: blur(4px); }
+.var-opt.active { background-color: var(--color-fillWeak); }
+.var-opt.var-opt-current { color: var(--color-primary); font-weight: 500; }
+.var-opt.var-opt-current:not(.active) { background-color: color-mix(in oklch, var(--color-primary) 6%, transparent); }
+.var-picker-hints kbd.kbd {
+  color: inherit;
+  border-color: currentColor;
+  background: transparent;
+  opacity: 0.5;
+  box-shadow: none;
+}
+
 /* Dashboard variable selectors */
 .dash-variable .tagify {
   --tags-border-color: transparent;
@@ -2121,7 +2143,6 @@ code, pre, .code, .monospace {
 .dash-variable .tagify--select {
   cursor: pointer;
 }
-
 
 .dash-variable .tagify__tag {
   min-width: 100%;

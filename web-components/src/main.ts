@@ -282,7 +282,7 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
     skipInvalid: true,
     templates: {
       tag: window.tagifyTemplateFunc,
-      dropdownItemNoMatch: (data: any) => `No suggestion found for: ${data.value}`,
+      dropdownItemNoMatch: (data: any) => `No match for: ${data.value}`,
     },
     editTags: { clicks: 2, keepInvalid: false },
     dropdown: {

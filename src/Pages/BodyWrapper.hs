@@ -828,7 +828,7 @@ loginBanner = do
     div_ [class_ "flex items-center gap-2"] do
       faSprite_ "flask" "regular" "h-4 w-4 text-iconBrand"
       span_ [class_ "font-medium text-textStrong"] "Demo Project"
-      span_ [class_ "hidden sm:inline text-textWeak"] "· Explore APIToolkit's features"
+      span_ [class_ "hidden sm:inline text-textWeak"] "· Explore Monoscope's features"
     div_ [class_ "flex items-center gap-2 max-md:gap-1.5 max-md:ml-auto"] do
       a_ [class_ "text-textBrand hover:underline underline-offset-2 max-md:hidden", href_ "https://monoscope.tech/docs/onboarding/"] "Docs"
       a_ [class_ "py-1 px-2.5 rounded-lg bg-fillWeak hover:bg-fillHover text-textStrong border border-strokeWeak text-xs font-medium max-md:hidden", href_ "https://calendar.app.google/1a4HG5GZYv1sjjZG6"] "Book Demo"
@@ -838,24 +838,25 @@ loginBanner = do
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
   section_ [class_ "flex max-md:flex-col h-full w-full"] do
-    nav_ [class_ "md:w-72 md:h-full p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak"] do
-      h1_ [class_ "text-xl pl-3 font-semibold max-md:hidden"] "Settings"
-      ul_ [class_ "flex max-md:flex-row max-md:flex-wrap md:flex-col md:mt-6 gap-0.5 w-full"] $ mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
+    nav_ [class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide"] do
+      h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
+      ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full"] do
+        -- Mobile hamburger to open main sidebar
+        li_ [class_ "md:hidden shrink-0"] $
+          div_ [class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $
+            faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
+        mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
       pageHtml
 
 
 navBottomList :: Text -> [(Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
 navBottomList pidTxt =
-  [ ("gear", "Project settings", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
-  , ("key", "API keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
-  , ("user-plus", "Manage members", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
-  , ("users", "Manage teams", "/p/" <> pidTxt <> "/manage_teams", Nothing, Nothing, Nothing)
-  , ("dollar", "Manage billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
+  [ ("gear", "General", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
+  , ("key", "API Keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
+  , ("users", "Team", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
   , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , ("bucket", "Your S3 bucket", "/p/" <> pidTxt <> "/byob_s3", Nothing, Nothing, Nothing)
-  , ("github", "GitHub Sync", "/p/" <> pidTxt <> "/settings/git-sync", Nothing, Nothing, Nothing)
-  , ("trash", "Delete project", "/p/" <> pidTxt <> "/settings/delete", Nothing, Nothing, Nothing)
+  , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
   ]
 
 
@@ -864,7 +865,7 @@ renderNavBottomItem curr (iconName, linkText, link, targetBlankM, onClickM, hxGe
   let
     isActive = curr == linkText
     defaultAttrs =
-      [ class_ $ "flex gap-3 items-center px-3 py-2 rounded-lg " <> if isActive then "bg-fillBrand-weak text-textBrand" else "hover:bg-fillWeak text-textWeak"
+      [ class_ $ "flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap " <> if isActive then "bg-fillBrand-weak text-textBrand" else "hover:bg-fillWeak text-textWeak"
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
       ]
@@ -877,7 +878,7 @@ renderNavBottomItem curr (iconName, linkText, link, targetBlankM, onClickM, hxGe
     li_ [] do
       a_ attrs $ do
         faSprite_ iconName "regular" "shrink-0 h-4 w-4"
-        span_ [class_ "text-lg"] (toHtml linkText)
+        span_ [class_ "text-sm font-medium"] (toHtml linkText)
 
 
 externalHeadScripts_ :: EnvConfig -> Html ()

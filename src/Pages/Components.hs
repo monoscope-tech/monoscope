@@ -1,4 +1,4 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateWithSteps_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage) where
+module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateWithSteps_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
@@ -648,7 +648,7 @@ formField_ size cfg lbl name required customM =
         _ -> input_ $ [class_ inputCls, value_ cfg.value, name_ name, id_ name, type_ cfg.inputType, placeholder_ cfg.placeholder] <> [required_ "true" | required] <> cfg.extraAttrs
   where
     (wrapperCls, labelCls, inputCls, textareaCls, reqCls) = case size of
-      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full", "text-textError")
+      FieldSm -> ("fieldset flex-1 min-w-0", "label text-xs text-textStrong", "input input-sm w-full", "textarea textarea-sm w-full leading-relaxed", "text-textError")
       FieldMd -> ("fieldset", "label flex w-full items-center gap-1 text-textStrong", "input w-full h-12", "textarea w-full", "text-textWeak")
 
 
@@ -834,3 +834,42 @@ colorChip_ color icon label = span_ [class_ $ "inline-flex items-center gap-1.5 
 
 metadataChip_ :: Monad m => Text -> Text -> HtmlT m ()
 metadataChip_ = colorChip_ ""
+
+
+-- | Standard settings page layout: scrollable container with padded, max-width section
+settingsSection_ :: Monad m => HtmlT m () -> HtmlT m ()
+settingsSection_ body = div_ [class_ "w-full h-full overflow-y-auto"] do
+  section_ [class_ "py-6 px-4 sm:py-8 sm:px-8 lg:px-12 max-w-2xl space-y-6"] body
+
+
+settingsH2_ :: Monad m => Text -> HtmlT m ()
+settingsH2_ = h2_ [class_ "text-textStrong text-xl sm:text-2xl font-bold tracking-tight"] . toHtml
+
+
+-- | Uppercase section label used in settings subsections
+sectionLabel_ :: Monad m => Text -> HtmlT m ()
+sectionLabel_ = h3_ [class_ "text-xs font-semibold text-textWeak uppercase tracking-wider"] . toHtml
+
+
+-- | Info banner with brand background and info icon
+infoBanner_ :: Monad m => HtmlT m () -> HtmlT m ()
+infoBanner_ content = div_ [class_ "rounded-lg bg-fillBrand-weak p-3 text-xs text-textStrong"] do
+  faSprite_ "circle-info" "regular" "h-3.5 w-3.5 inline mr-1.5"
+  content
+
+
+-- | Navigation link row for settings pages (icon + title + description + chevron)
+settingsNavLink_ :: Monad m => Text -> Text -> Text -> Text -> HtmlT m ()
+settingsNavLink_ href icon title desc =
+  a_ [href_ href, class_ "flex items-center justify-between gap-3 p-3 group hover:bg-fillWeaker transition-colors first:rounded-t-xl last:rounded-b-xl"] do
+    div_ [class_ "flex items-center gap-3 min-w-0"] do
+      faSprite_ icon "solid" "h-4 w-4 text-iconNeutral shrink-0"
+      div_ [class_ "min-w-0"] do
+        span_ [class_ "text-sm font-medium text-textStrong block"] $ toHtml title
+        p_ [class_ "text-xs text-textWeak"] $ toHtml desc
+    faSprite_ "chevron-right" "regular" "w-3 h-3 text-iconNeutral shrink-0"
+
+
+-- | Hyperscript attribute for a save button that activates when its parent form changes
+dirtyFormSaveAttr_ :: Attribute
+dirtyFormSaveAttr_ = [__| on change from closest <form/> remove @disabled from me then remove .btn-ghost from me then remove .text-textWeak from me then add .btn-primary to me |]

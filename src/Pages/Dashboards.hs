@@ -84,7 +84,7 @@ import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, tagInput_)
+import Pages.Components (FieldCfg (..), FieldSize (..), formField_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -615,31 +615,96 @@ findVarToPrompt activeTab variables =
    in tabRequiredVar <|> listToMaybe (unsetRequiredVars variables)
 
 
--- | Render variable picker modal (auto-opens via hyperscript init)
+-- | Render inline variable picker (command-palette style selector)
 variablePickerModal_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> [(Text, Maybe Text)] -> Dashboards.Variable -> Bool -> Html ()
 variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
-  let modalId = "varPicker-" <> var.key
-      varTitle = fromMaybe var.key var.title
-      queryBase = queryStringFrom $ filter (\(k, _) -> k /= "var-" <> var.key && k /= activeTabSlugKey) allParams
+  let varTitle = fromMaybe var.key var.title
+      varKey = "var-" <> var.key
+      queryBase = queryStringFrom $ filter (\(k, _) -> k /= varKey && k /= activeTabSlugKey) allParams
       tabPath = maybe "" ("/tab/" <>) activeTabSlug
-      oobAttr = if useOob then [id_ $ modalId <> "-container", hxSwapOob_ "beforeend:body"] else []
+      urlPrefix = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> varKey <> "="
+      oobAttr = if useOob then [id_ $ "varPicker-" <> var.key <> "-container", hxSwapOob_ "beforeend:body"] else []
+      opts = fromMaybe [] var.options
+      optCount = length opts
   div_ oobAttr do
-    Components.modalWith_ modalId def{autoOpen = True, boxClass = "min-w-80 max-w-md gap-4"} Nothing do
-      h3_ [class_ "font-semibold text-lg"] $ toHtml $ "Select " <> varTitle
-      p_ [class_ "text-sm text-textWeak"] $ toHtml $ "This view requires a " <> varTitle <> " to be selected."
-      whenJust var.helpText $ p_ [class_ "text-sm text-textWeak italic"] . toHtml
-      input_
-        [ type_ "text"
-        , class_ "input input-bordered w-full"
-        , placeholder_ "Search..."
-        , [__|on keyup if event's key is 'Escape' set my value to '' then trigger keyup else show <.var-opt/> in closest .modal-box when its textContent.toLowerCase() contains my value.toLowerCase()|]
-        ]
-      div_ [class_ "max-h-64 overflow-y-auto flex flex-col gap-1"]
-        $ forM_ (fromMaybe [] var.options) \opt -> do
-          let optVal = opt Unsafe.!! 0
-              optLbl = fromMaybe optVal (opt !!? 1)
-              url = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> tabPath <> queryBase <> (if T.null queryBase then "?" else "&") <> "var-" <> var.key <> "=" <> optVal
-          a_ [class_ "var-opt p-2 rounded hover:bg-fillWeak cursor-pointer", href_ url] $ toHtml optLbl
+    div_ [class_ "var-picker-backdrop fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40", style_ "z-index:99999", [__|on click if event.target is me remove me|]] do
+      div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
+        span_ [class_ "text-2xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
+        span_ [class_ "var-picker-count text-xs text-white/80 dark:text-white/50", data_ "total" (T.pack $ show optCount)] $ toHtml $ show optCount <> " items"
+      div_ [class_ "var-picker w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", [__|on click halt the event's bubbling|]] do
+        div_ [class_ "px-3 border-b border-base-300"] do
+          input_
+            [ type_ "text"
+            , class_ "w-full py-2.5 bg-transparent outline-none text-sm"
+            , placeholder_ $ "Search " <> T.toLower varTitle <> "s..."
+            , autofocus_
+            , [__|on input
+                set :q to my value.toLowerCase()
+                show <.var-opt/> in closest .var-picker when its textContent.toLowerCase() contains :q
+                for opt in <a.var-opt/> in closest .var-picker remove .active from opt end
+                set :first to the first <a.var-opt:not([style*='display: none'])/> in closest .var-picker
+                if :first then add .active to :first end
+                set :visible to the <a.var-opt:not([style*='display: none'])/> in closest .var-picker
+                set :empty to the first <.var-picker-empty/> in closest .var-picker
+                set :counter to the first <.var-picker-count/> in closest .var-picker
+                if :visible.length === 0 then show :empty else hide :empty end
+                set :total to :counter.dataset.total
+                if :q.length > 0 then put `${:visible.length} of ${:total} items` into :counter
+                else put `${:total} items` into :counter end
+              end
+              on keydown[key=='Escape']
+                set :bd to closest .var-picker-backdrop
+                remove :bd
+              end
+              on keydown[key=='Enter']
+                set :a to the first <a.active/> in closest .var-picker
+                if :a then call :a.click() end
+              end
+              on keydown[key=='ArrowDown'] halt the event
+                set :a to the first <a.active/> in closest .var-picker
+                if :a then
+                  set :n to :a.nextElementSibling
+                  repeat while :n and :n.style.display === 'none' set :n to :n.nextElementSibling end
+                  if :n then remove .active from :a then add .active to :n then call :n.scrollIntoView({block:'nearest'}) end
+                else
+                  set :f to the first <a.var-opt:not([style*='display: none'])/> in closest .var-picker
+                  if :f then add .active to :f end
+                end
+              end
+              on keydown[key=='ArrowUp'] halt the event
+                set :a to the first <a.active/> in closest .var-picker
+                if :a then
+                  set :p to :a.previousElementSibling
+                  repeat while :p and :p.style.display === 'none' set :p to :p.previousElementSibling end
+                  if :p then remove .active from :a then add .active to :p then call :p.scrollIntoView({block:'nearest'}) end
+                end
+              |]
+            ]
+        div_ [class_ "max-h-80 overflow-y-auto p-1"] do
+          forM_ (zip [0 :: Int ..] opts) \(idx, opt) -> do
+            let optVal = opt Unsafe.!! 0
+                optLbl = fromMaybe optVal (opt !!? 1)
+                isCurrent = var.value == Just optVal
+            a_ [ class_ $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
+                  <> bool "" " active" (idx == 0)
+                  <> bool "" " var-opt-current" isCurrent
+               , href_ $ urlPrefix <> optVal
+               ] do
+              span_ [class_ "truncate flex-1"] $ toHtml optLbl
+              when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
+          div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
+      -- Keyboard hints
+      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"] do
+        div_ [class_ "flex items-center gap-1.5"] do
+          "Navigate"
+          kbd_ [class_ "kbd kbd-xs"] "\x2191"
+          kbd_ [class_ "kbd kbd-xs"] "\x2193"
+        div_ [class_ "flex items-center gap-1.5"] do
+          "Select"
+          kbd_ [class_ "kbd kbd-xs"] "\x21B5"
+        div_ [class_ "flex items-center gap-1.5"] do
+          "Close"
+          kbd_ [class_ "kbd kbd-xs"] "esc"
 
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.

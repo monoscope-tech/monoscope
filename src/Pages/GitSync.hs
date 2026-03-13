@@ -35,7 +35,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadge_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadge_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.GitHub qualified as GitHub
 import Relude hiding (ask)
@@ -151,7 +151,7 @@ gitSyncSettingsGetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "GitHub Sync", isSettingsPage = True, config = ctx.config}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = ctx.config}
   addRespHeaders $ bodyWrapper bwconf $ gitSyncSettingsPage ctx.env.hostUrl pid syncM
 
 
@@ -193,11 +193,8 @@ gitSyncSettingsDeleteH pid = do
 
 
 gitSyncSettingsPage :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
-gitSyncSettingsPage hostUrl pid syncM = div_ [class_ "w-full h-full overflow-y-auto"] do
-  section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
-    div_ [class_ "mb-2"] do
-      h2_ [class_ "text-textStrong text-xl font-semibold"] "GitHub Sync"
-      p_ [class_ "text-textWeak text-sm mt-1"] "Sync dashboards with a GitHub repository. Changes pushed to the repo will be synced automatically."
+gitSyncSettingsPage hostUrl pid syncM = settingsSection_ do
+    settingsH2_ "GitHub Sync"
     div_ [id_ "git-sync-content"] $ gitSyncSettingsView hostUrl pid syncM
 
 
@@ -213,91 +210,72 @@ gitSyncSettingsView hostUrl pid syncM = do
       Just sync -> connectedView hostUrl pid sync actionUrl webhookUrl isViaApp
 
 
--- | View when not connected - shows GitHub App as primary with PAT fallback
 notConnectedView :: Projects.ProjectId -> Text -> Text -> Html ()
 notConnectedView pid actionUrl installUrl = do
-  -- GitHub App install card (primary option)
-  div_ [class_ "surface-raised rounded-2xl p-6 space-y-4"] do
-    div_ [class_ "flex items-center gap-3 mb-4"] do
-      iconBadgeLg_ BrandBadge "github"
-      div_ do
-        h3_ [class_ "text-lg font-semibold text-textStrong"] "Connect to GitHub"
-        p_ [class_ "text-sm text-textWeak"] "Sync dashboards with your repository automatically"
-    p_ [class_ "text-sm text-textWeak"] "Install our GitHub App to connect your repository. Webhooks are configured automatically for instant syncing."
-    a_ [href_ installUrl, class_ "btn btn-primary w-full gap-2"] do
-      faSprite_ "github" "regular" "w-4 h-4"
+  -- GitHub App (primary)
+  div_ [class_ "space-y-3"] do
+    p_ [class_ "text-sm text-textWeak"] "Install the GitHub App to sync dashboards with your repository. Webhooks are configured automatically."
+    a_ [href_ installUrl, class_ "btn btn-sm btn-primary gap-2"] do
+      faSprite_ "github" "regular" "w-3.5 h-3.5"
       "Install GitHub App"
 
-  -- PAT fallback (collapsible)
-  div_ [class_ "surface-raised rounded-2xl overflow-hidden"] do
-    div_ [class_ "collapse collapse-arrow"] do
-      input_ [type_ "checkbox", class_ "peer"]
-      div_ [class_ "collapse-title flex items-center gap-2 text-sm font-medium text-textWeak peer-checked:text-textStrong"] do
-        faSprite_ "key" "regular" "w-4 h-4"
+  -- PAT fallback
+  div_ [class_ "pt-6 border-t border-strokeWeak"] do
+    details_ [class_ "group"] do
+      summary_ [class_ "text-xs font-medium text-textWeak cursor-pointer list-none flex items-center gap-1.5 hover:text-textStrong"] do
+        faSprite_ "chevron-right" "solid" "w-3 h-3 transition-transform group-open:rotate-90"
         "Or connect with Personal Access Token"
-      div_ [class_ "collapse-content"] do
-        form_ [class_ "pt-4 space-y-4", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
-          div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] do
-            formField_ FieldSm def{placeholder = "acme-corp"} "Repository Owner" "owner" True Nothing
-            formField_ FieldSm def{placeholder = "observability-config"} "Repository Name" "repo" True Nothing
-            formField_ FieldSm def{value = "main", placeholder = "main"} "Branch" "branch" True Nothing
-            formField_ FieldSm def{inputType = "password", placeholder = "ghp_..."} "Access Token" "accessToken" True Nothing
-          formField_ FieldSm def{placeholder = "monoscope"} "Path Prefix" "pathPrefix" False Nothing
-          p_ [class_ "text-xs text-textWeak"] do
-            "Personal access token with Contents read/write permission. "
-            "Path prefix is optional — dashboards are stored in "
-            code_ [class_ "text-textBrand"] "dashboards/"
-          div_ [class_ "flex justify-end"] do
-            button_ [class_ "btn btn-sm btn-outline gap-1", type_ "submit"] do
-              "Connect with PAT"
-              htmxIndicator_ "indicator" LdXS
+      form_ [class_ "pt-4 space-y-3", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
+        div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+          formField_ FieldSm def{placeholder = "acme-corp"} "Repository Owner" "owner" True Nothing
+          formField_ FieldSm def{placeholder = "observability-config"} "Repository Name" "repo" True Nothing
+          formField_ FieldSm def{value = "main", placeholder = "main"} "Branch" "branch" True Nothing
+          formField_ FieldSm def{inputType = "password", placeholder = "ghp_..."} "Access Token" "accessToken" True Nothing
+        formField_ FieldSm def{placeholder = "monoscope"} "Path Prefix" "pathPrefix" False Nothing
+        p_ [class_ "text-xs text-textWeak"] do
+          "Token needs Contents read/write permission. Dashboards stored in "
+          code_ [class_ "text-textBrand"] "dashboards/"
+        button_ [class_ "btn btn-sm btn-outline gap-1", type_ "submit"] do
+          "Connect with PAT"
+          htmxIndicator_ "indicator" LdXS
 
 
--- | View when connected - shows repo info and webhook URL
 connectedView :: Text -> Projects.ProjectId -> GitSync.GitHubSync -> Text -> Text -> Bool -> Html ()
 connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
-  -- Connection status card
-  div_ [class_ "surface-raised rounded-2xl p-4"] do
-    div_ [class_ "flex items-center justify-between"] do
-      div_ [class_ "flex items-center gap-3"] do
-        iconBadge_ SuccessBadge "circle-check"
-        div_ do
-          h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
-          p_ [class_ "text-xs text-textWeak"] do
-            toHtml $ sync.branch <> " branch"
-            span_ [class_ "mx-1"] "•"
-            if isViaApp then "via GitHub App" else "via Personal Access Token"
-      connectionBadge_ "Connected"
+  -- Status line
+  div_ [class_ "flex items-center justify-between"] do
+    div_ [class_ "flex items-center gap-2 text-sm"] do
+      faSprite_ "circle-check" "solid" "w-3.5 h-3.5 text-iconSuccess"
+      span_ [class_ "font-medium text-textStrong"] $ toHtml $ sync.owner <> "/" <> sync.repo
+      span_ [class_ "text-textWeak"] $ toHtml $ "(" <> sync.branch <> ", " <> (if isViaApp then "GitHub App" else "PAT") <> ")"
+    connectionBadge_ "Connected"
 
-  -- Repository settings card (for updates)
-  form_ [class_ "space-y-6", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
-    div_ [class_ "surface-raised rounded-2xl p-4 space-y-4"] do
-      label_ [class_ "text-sm font-medium text-textStrong block"] "Repository Settings"
-      div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] do
-        formField_ FieldSm def{value = sync.owner, placeholder = "acme-corp"} "Repository Owner" "owner" True Nothing
-        formField_ FieldSm def{value = sync.repo, placeholder = "observability-config"} "Repository Name" "repo" True Nothing
-        formField_ FieldSm def{value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
-        unless isViaApp $ formField_ FieldSm def{inputType = "password", placeholder = "Leave empty to keep current"} "Access Token" "accessToken" False Nothing
-      formField_ FieldSm def{value = sync.pathPrefix, placeholder = "monoscope"} "Path Prefix" "pathPrefix" False Nothing
-      p_ [class_ "text-xs text-textWeak"] do
-        "Dashboards are stored in "
-        code_ [class_ "text-textBrand"] $ toHtml $ if T.null sync.pathPrefix then "dashboards/" else sync.pathPrefix <> "/dashboards/"
+  -- Repository settings
+  form_ [class_ "space-y-4", hxPost_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content", hxIndicator_ "#indicator"] do
+    div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+      formField_ FieldSm def{value = sync.owner, placeholder = "acme-corp"} "Repository Owner" "owner" True Nothing
+      formField_ FieldSm def{value = sync.repo, placeholder = "observability-config"} "Repository Name" "repo" True Nothing
+      formField_ FieldSm def{value = sync.branch, placeholder = "main"} "Branch" "branch" True Nothing
+      unless isViaApp $ formField_ FieldSm def{inputType = "password", placeholder = "Leave empty to keep current"} "Access Token" "accessToken" False Nothing
+    formField_ FieldSm def{value = sync.pathPrefix, placeholder = "monoscope"} "Path Prefix" "pathPrefix" False Nothing
+    p_ [class_ "text-xs text-textWeak"] do
+      "Dashboards stored in "
+      code_ [class_ "text-textBrand"] $ toHtml $ if T.null sync.pathPrefix then "dashboards/" else sync.pathPrefix <> "/dashboards/"
 
-    -- Webhook URL card
-    div_ [class_ "surface-raised rounded-2xl p-4 space-y-2"] do
+    -- Webhook URL
+    div_ [class_ "pt-4 border-t border-strokeWeak space-y-2"] do
       div_ [class_ "flex items-center justify-between"] do
-        div_ do
-          label_ [class_ "text-sm font-medium text-textStrong block"] "Webhook URL"
-          p_ [class_ "text-xs text-textWeak"] $ if isViaApp then "Configured automatically by GitHub App" else "Add this to your repository for automatic syncing"
-        button_ [type_ "button", class_ "btn btn-sm btn-ghost gap-1", onclick_ ("navigator.clipboard.writeText('" <> webhookUrl <> "'); this.querySelector('span').textContent='Copied!'; setTimeout(() => this.querySelector('span').textContent='Copy', 2000)")] do
+        sectionLabel_ "Webhook URL"
+        button_ [type_ "button", class_ "btn btn-xs btn-ghost gap-1", onclick_ ("navigator.clipboard.writeText('" <> webhookUrl <> "'); this.querySelector('span').textContent='Copied!'; setTimeout(() => this.querySelector('span').textContent='Copy', 2000)")] do
           faSprite_ "copy" "regular" "w-3 h-3"
           span_ "Copy"
-      div_ [class_ "bg-fillWeak rounded-lg px-3 py-2 font-mono text-sm text-textWeak break-all"] $ toHtml webhookUrl
+      div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
+      when (not isViaApp) $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
     -- Actions
-    div_ [class_ "flex items-center justify-between"] do
-      button_ [class_ "btn btn-sm btn-outline gap-1", type_ "submit"] do
-        "Update Settings"
+    div_ [class_ "flex items-center justify-between pt-2"] do
+      button_ [class_ "btn btn-sm btn-primary gap-1", type_ "submit"] do
+        "Save"
         htmxIndicator_ "indicator" LdXS
       label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "disconnect-modal"] do
         faSprite_ "link-slash" "regular" "w-3 h-3"
@@ -306,7 +284,7 @@ connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
   confirmModal_ "disconnect-modal" "Disconnect GitHub?" "This will stop syncing dashboards with your repository. Dashboards will remain unchanged." [hxDelete_ actionUrl, hxSwap_ "innerHTML", hxTarget_ "#git-sync-content"] "Disconnect"
 
   -- Setup instructions for PAT users
-  unless isViaApp $ div_ [class_ "surface-raised rounded-2xl p-4"] do
+  unless isViaApp $ div_ [class_ "pt-6 border-t border-strokeWeak"] do
     div_ [class_ "prose prose-sm max-w-none"] $ renderMarkdown $ setupInstructions webhookUrl
 
 
@@ -469,7 +447,7 @@ githubAppReposH pid instIdParam = do
           case reposResult of
             Left err -> pure $ div_ [class_ "text-textError p-4"] $ toHtml $ "Failed to list repos: " <> err
             Right repos -> pure $ repoSelectionView pid instId repos
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "GitHub Sync", isSettingsPage = True, config = ctx.config}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = ctx.config}
   addRespHeaders $ bodyWrapper bwconf $ repoSelectionPage content
 
 

@@ -48,6 +48,7 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Effectful.PostgreSQL qualified as DB
+import Fmt (commaizeF, fmt)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Lucid
@@ -61,7 +62,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadgeXs_, iconBadge_, modalWith_, paymentPlanPicker)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
@@ -123,47 +124,30 @@ bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext -- Get auth context
-  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Your S3 bucket", isSettingsPage = True, config = appCtx.config}
+  let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
   addRespHeaders $ bodyWrapper bwconf $ bringS3Page pid project.s3Bucket
 
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
-bringS3Page pid s3BucketM = div_ [class_ "w-full h-full overflow-y-auto"] do
-  section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
-    -- Header
-    div_ [class_ "mb-2"] do
-      h2_ [class_ "text-textStrong text-xl font-semibold"] "Bring Your Own S3 Bucket"
-      p_ [class_ "text-textWeak text-sm mt-1"] "Connect your own S3 or S3-compatible storage for OpenTelemetry and session replay data"
+bringS3Page pid s3BucketM = settingsSection_ do
+    div_ [class_ "flex items-center justify-between"] do
+      settingsH2_ "S3 Bucket"
+      div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
 
-    form_ [class_ "space-y-6", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
-      -- Connection status card
-      div_ [class_ "surface-raised rounded-2xl p-4"] do
-        div_ [class_ "flex items-center justify-between"] do
-          div_ [class_ "flex items-center gap-3"] do
-            iconBadge_ BrandBadge "bucket"
-            div_ do
-              h3_ [class_ "text-sm font-medium text-textStrong"] "Connection Status"
-              p_ [class_ "text-xs text-textWeak"] "Your bucket connection state"
-          div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
+    form_ [class_ "space-y-4", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
+      div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+        formField_ FieldSm def{value = maybe "" (.accessKey) s3BucketM, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
+        formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
+        formField_ FieldSm def{value = maybe "" (.region) s3BucketM, placeholder = "Region"} "Region" "region" True Nothing
+        formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
+      formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
+      p_ [class_ "text-xs text-textWeak"] "For S3-compatible providers like MinIO, DigitalOcean Spaces, etc."
 
-      -- Credentials card
-      div_ [class_ "surface-raised rounded-2xl p-4 space-y-4"] do
-        label_ [class_ "text-sm font-medium text-textStrong block"] "Bucket Credentials"
-        div_ [class_ "grid grid-cols-1 gap-4 md:grid-cols-2"] do
-          formField_ FieldSm def{value = maybe "" (.accessKey) s3BucketM, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
-          formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
-          formField_ FieldSm def{value = maybe "" (.region) s3BucketM, placeholder = "Region"} "Region" "region" True Nothing
-          formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
-        formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
-        p_ [class_ "text-xs text-textWeak"] "Optional: For S3-compatible providers like MinIO, DigitalOcean Spaces, etc."
-
-      -- Actions
-      div_ [class_ "flex items-center justify-between"] do
+      div_ [class_ "flex items-center justify-between pt-2"] do
         div_ [class_ "flex items-center gap-3"] do
-          button_ [class_ "btn btn-sm btn-outline gap-1"] do
+          button_ [class_ "btn btn-sm btn-primary gap-1"] do
             "Validate & Save"
             htmxIndicator_ "indicator" LdXS
-          span_ [class_ "text-xs text-textWeak"] "Auto-saves on success"
         when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
           faSprite_ "trash" "regular" "w-3 h-3"
           span_ "Remove"
@@ -244,7 +228,7 @@ apiGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "API keys"
+          , pageTitle = "API Keys"
           , isSettingsPage = True
           , config = appCtx.config
           }
@@ -261,22 +245,18 @@ instance ToHtml ApiGet where
 
 apiKeysPage :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Html ()
 apiKeysPage pid apiKeys = do
-  section_ [class_ "w-full mx-auto px-16 py-16 overflow-hidden overflow-y-scroll"] do
-    div_ [class_ "flex justify-between items-center mb-6"] do
-      div_ [class_ "flex flex-col gap-2"] do
-        h2_ [class_ "text-xl font-semibold text-textStrong leading-7"] "Manage API keys"
-        p_ [class_ "text-sm text-textWeak leading-tight"] "Create and revoke your API keys"
-      pass
+  settingsSection_ do
+    div_ [class_ "flex justify-between items-center"] do
+      settingsH2_ "API Keys"
+      modalWith_ "apikey-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
+        iconBadgeLg_ BrandBadge "key"
+        span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
+        form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-4", hxTarget_ "#main-content"] do
+          div_ [class_ "flex flex-col"] do
+            p_ [class_ "text-textWeak"] "Please input a title for your API key."
+            div_ $ input_ [class_ "input px-4 py-2 mt-6 border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title", required_ "true", maxlength_ "100"]
+          div_ [class_ "flex w-full"] $ button_ [type_ "submit", class_ "btn btn-primary w-full"] "Create key"
     apiMainContent pid apiKeys Nothing
-
-    modalWith_ "apikey-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-primary"] "Create an API key") do
-      iconBadgeLg_ BrandBadge "key"
-      span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
-      form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-4", hxTarget_ "#main-content"] do
-        div_ [class_ "flex flex-col"] do
-          p_ [class_ "text-textWeak"] "Please input a title for your API key."
-          div_ $ input_ [class_ "input px-4 py-2 mt-6 border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title"]
-        div_ [class_ "flex w-full"] $ button_ [type_ "submit", class_ "btn btn-primary w-full"] "Create key"
 
 
 apiMainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
@@ -308,21 +288,21 @@ makeApiKeysTable pid apiKeys elemId =
     { config = def{Table.elemID = elemId, Table.renderAsTable = True}
     , columns = apiKeyColumns pid
     , rows = V.indexed apiKeys
-    , features = Table.Features{rowLink = Nothing, rowId = Nothing, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], selectRow = Nothing, bulkActions = [], search = Nothing, tabs = Nothing, sort = Nothing, sortableColumns = Nothing, tableHeaderActions = Nothing, pagination = Nothing, zeroState = Nothing, header = Nothing, treeConfig = Nothing}
+    , features = Table.Features{rowLink = Nothing, rowId = Nothing, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], selectRow = Nothing, bulkActions = [], search = Nothing, tabs = Nothing, sort = Nothing, sortableColumns = Nothing, tableHeaderActions = Nothing, pagination = Nothing, zeroState = Just Table.ZeroState{icon = "key", title = "No API keys", description = "Create an API key to start integrating with your project.", actionText = "", destination = Right ""}, header = Nothing, treeConfig = Nothing}
     }
 
 
 apiKeyColumns :: Projects.ProjectId -> [Table.Column (Int, ProjectApiKeys.ProjectApiKey)]
 apiKeyColumns pid =
   [ Table.col "Title" \(_, apiKey) ->
-      span_ [class_ "text-textStrong font-semibold text-sm truncate"] $ toHtml apiKey.title
+      span_ [class_ "text-textStrong font-semibold text-sm truncate min-w-0 block max-w-48"] $ toHtml apiKey.title
   , Table.col "Key" \(i, apiKey) -> do
       let idx = "key-" <> show i
-      div_ [class_ "whitespace-nowrap w-full flex items-center text-sm text-textWeak"] do
-        span_ [class_ $ "mr-2 w-full " <> idx] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
-        div_ [class_ "hidden group-hover/row:flex justify-between items-center gap-3"] do
+      div_ [class_ "whitespace-nowrap w-full flex items-center gap-2 text-sm text-textWeak"] do
+        span_ [class_ $ "min-w-0 " <> idx] $ toHtml $ T.take 8 apiKey.keyPrefix <> T.replicate 20 "*"
+        div_ [class_ "flex items-center gap-1.5 shrink-0 ml-auto"] do
           button_
-            [ class_ "text-textBrand"
+            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer"
             , term "data-key" apiKey.keyPrefix
             , term "data-state" "hide"
             , type_ "button"
@@ -341,9 +321,9 @@ apiKeyColumns pid =
                    put "Show key" into my @data-tippy-content
                  end |]
             ]
-            $ faSprite_ "eye" "regular" "h-4 w-4 text-iconNeutral"
+            $ faSprite_ "eye" "regular" "h-3.5 w-3.5 text-iconNeutral"
           button_
-            [ class_ "text-textBrand cursor-pointer"
+            [ class_ "p-1 rounded hover:bg-fillWeaker cursor-pointer"
             , type_ "button"
             , term "data-key" apiKey.keyPrefix
             , [__| on click if 'clipboard' in window.navigator then
@@ -352,28 +332,26 @@ apiKeyColumns pid =
                           end |]
             , term "data-tippy-content" "Copy key"
             ]
-            $ faSprite_ "clipboard-copy" "regular" "h-4 w-4 text-iconNeutral"
+            $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
           if apiKey.active
             then button_
-              [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
+              [ class_ "p-1 rounded hover:bg-fillError-weak cursor-pointer"
               , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
               , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
               , hxTarget_ "#main-content"
               , id_ $ "key" <> show i
+              , term "data-tippy-content" "Revoke key"
               ]
-              do
-                faSprite_ "circle-xmark" "regular" "h-4 w-4 text-iconError"
-                span_ [class_ "text-textWeak"] "Revoke"
+              $ faSprite_ "circle-xmark" "regular" "h-3.5 w-3.5 text-iconError"
             else button_
-              [ class_ "text-textWeak flex gap-2 items-center cursor-pointer"
+              [ class_ "p-1 rounded hover:bg-fillSuccess-weak cursor-pointer"
               , hxPatch_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
               , hxConfirm_ $ "Are you sure you want to activate " <> apiKey.title <> " API Key?"
               , hxTarget_ "#main-content"
               , id_ $ "key" <> show i
+              , term "data-tippy-content" "Activate key"
               ]
-              do
-                faSprite_ "circle-check" "regular" "h-4 w-4 text-iconNeutral"
-                span_ [class_ "text-textWeak"] "Activate"
+              $ faSprite_ "circle-check" "regular" "h-3.5 w-3.5 text-iconSuccess"
   ]
 
 
@@ -650,7 +628,7 @@ manageBillingGetH pid from = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "Manage billing"
+          , pageTitle = "Billing"
           , isSettingsPage = True
           , config = appCtx.config
           }
@@ -660,60 +638,46 @@ manageBillingGetH pid from = do
 
 
 billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled = div_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
+billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled = div_ [id_ "main-content"] do
   let pidTxt = pid.toText
-  section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
-    div_ [class_ "mb-2"] do
-      h2_ [class_ "text-textStrong text-xl font-semibold"] "Manage billing"
-      p_ [class_ "text-textWeak text-sm mt-1"] "Track your usage and estimated costs"
+      isFree = paymentPlan == "Free"
+      planPrice = if isFree then "0" else if paymentPlan == "Bring your own storage" then "199" else "29" :: Text
+      estCost = "$" <> if isFree then "0" else T.replace "\"" "" amount
+  settingsSection_ do
+    settingsH2_ "Billing"
 
-    div_ [class_ "surface-raised rounded-2xl p-6 space-y-6"] do
-      div_ [class_ "flex items-center gap-2 mb-4"] do
-        iconBadgeXs_ BrandBadge "chart-line"
-        label_ [class_ "text-sm font-medium text-textStrong"] "Usage Overview"
+    -- Current plan row
+    div_ [class_ "flex items-center justify-between"] do
+      div_ [class_ "flex items-center gap-3"] do
+        span_ [class_ "text-sm font-medium text-textStrong"] $ toHtml paymentPlan
+        span_ [class_ "rounded-md text-textWeak bg-fillWeak border border-strokeWeak py-0.5 px-2 text-xs"] "Active"
+      div_ [class_ "flex items-baseline gap-0.5"] do
+        span_ [class_ "text-2xl text-textStrong font-bold tabular-nums"] $ toHtml $ "$" <> planPrice
+        span_ [class_ "text-textWeak text-sm"] "/mo"
 
-      div_ [class_ "grid grid-cols-2 gap-4"] do
-        div_ [class_ "flex flex-col gap-2"] do
-          div_ [class_ "text-4xl font-bold text-textStrong tabular-nums"] $ toHtml $ formatNumberWithCommas reqs
-          div_ [class_ "text-textWeak text-sm"] "Total Requests Made"
-          div_ [class_ "text-textWeak text-xs"] "*Calculation may not be up-to-date"
-        div_ [class_ "flex flex-col gap-2"] do
-          div_ [class_ "text-4xl font-bold text-textStrong tabular-nums"] $ toHtml $ "$" <> if paymentPlan == "Free" then "0" else T.replace "\"" "" amount
-          div_ [class_ "text-textWeak text-sm"] "Estimated Cost"
-          div_ [class_ "text-textWeak text-xs"] "*Based on current usage"
+    -- Usage section
+    div_ [class_ "border-t border-strokeWeak pt-6 space-y-4"] do
+      sectionLabel_ "This month"
+      div_ [class_ "grid grid-cols-2 gap-6"] do
+        div_ [] do
+          div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml @Text $ fmt (commaizeF reqs)
+          div_ [class_ "text-sm text-textWeak mt-0.5"] "Requests"
+        div_ [] do
+          div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
+          div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated cost"
+      unless (T.null last_reported)
+        $ div_ [class_ "text-xs text-textWeak"] $ toHtml $ "Updated " <> T.take 10 last_reported
 
-      div_ [class_ "border-t border-strokeWeak pt-4 space-y-3"] do
-        div_ [class_ "flex items-center gap-2 text-textWeak text-sm"] do
-          faSprite_ "regular-calendar-days-clock" "regular" "h-4 w-4"
-          span_ $ toHtml $ "Latest data: " <> T.take 19 last_reported
-        unless (paymentPlan == "Free")
-          $ a_ [class_ "flex items-center gap-2 text-textBrand hover:underline cursor-pointer text-sm font-medium", hxGet_ [text| /p/$pidTxt/manage_subscription |]] do
-            faSprite_ "link-simple" "regular" "h-4 w-4"
-            span_ "View on LemonSqueezy"
+    -- Actions
+    div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
+      label_ [Lucid.for_ "pricing-modal", class_ "btn btn-sm btn-primary cursor-pointer"] "Change plan"
+      unless isFree
+        $ a_ [class_ "btn btn-sm btn-ghost text-textBrand", hxGet_ [text| /p/$pidTxt/manage_subscription |]] "Manage subscription"
 
-    div_ [class_ "surface-raised rounded-2xl p-6 space-y-4"] do
-      div_ [class_ "flex items-center gap-2 mb-2"] do
-        iconBadgeXs_ SuccessBadge "dollar"
-        label_ [class_ "text-sm font-medium text-textStrong"] "Current Plan"
-
-      div_ [class_ "flex items-center justify-between p-4 border border-strokeWeak rounded-xl bg-fillWeaker"] do
-        div_ [class_ "flex flex-col gap-2"] do
-          span_ [class_ "text-textStrong font-semibold text-lg"] $ toHtml paymentPlan
-          span_ [class_ "rounded-lg text-textWeak bg-fillWeak border border-strokeWeak py-1 px-2.5 text-xs w-max"] "Active"
-        div_ [class_ "flex items-baseline gap-1"] do
-          span_ [class_ "text-textStrong text-xl"] "$"
-          span_ [class_ "text-4xl text-textStrong font-bold tabular-nums"] $ if paymentPlan == "Free" then "0" else if paymentPlan == "Bring your own storage" then "199" else "29"
-          span_ [class_ "text-textWeak text-sm ml-1"] "/month"
-
-      div_ [class_ "border-t border-strokeWeak pt-4"] do
-        div_ [class_ "text-textStrong text-sm font-semibold mb-2"] "Upgrade plan"
-        p_ [class_ "text-textWeak text-sm mb-4"] "Monoscope pricing, click on compare feature below to select the option that best suit your project."
-        label_ [Lucid.for_ "pricing-modal"] $ span_ [class_ "btn btn-primary btn-sm"] "Change plan"
   modalWith_ "pricing-modal" def{boxClass = "w-[1250px] max-w-[1300px] py-16 px-32", wrapperClass = "p-8"} Nothing do
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
-      span_ [class_ "text-textStrong text-2xl font-semibold"] "What's Included?"
-      p_ [class_ "mt-2 mb-4"] "See and compare what you get in each plan."
-      p_ [] "Please adjust the bar below to see difference in price as your events increase"
+      span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
+      p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
     paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled
 
 
@@ -729,10 +693,3 @@ calculateCycleStartDate start current =
    in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
 
 
-formatNumberWithCommas :: Int64 -> String
-formatNumberWithCommas n = reverse $ insertCommas $ reverse (show n)
-  where
-    insertCommas [] = []
-    insertCommas xs = case splitAt 3 xs of
-      (chunk, []) -> chunk
-      (chunk, rest) -> chunk ++ "," ++ insertCommas rest
