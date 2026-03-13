@@ -17,12 +17,13 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import NeatInterpolation (text)
 import Pages.Components (modal_)
+import GHC.Show qualified
 import Relude
 import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
 instance Default (Html ()) where def = mempty
-instance Show (Html ()) where showsPrec _ _ = showString "Html()"
+instance GHC.Show.Show (Html ()) where GHC.Show.show _ = "Html()"
 
 
 sortedSchemaFieldNames :: [Text]
