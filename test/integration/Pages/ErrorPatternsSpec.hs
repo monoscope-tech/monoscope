@@ -315,7 +315,11 @@ spec = aroundAll withTestResources do
         Nothing -> expectationFailure "No established pattern found for full-cycle test"
 
     it "5e. Concurrent spikes: two patterns spiking simultaneously both get issues" \tr -> do
-      -- Ensure we have at least 2 established, non-resolved patterns
+      -- Reset all established patterns to ESOngoing so prior tests don't reduce our pool
+      allRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
+      forM_ (filter (\r -> r.baselineState == BSEstablished && isJust r.baselineMean) allRates) \r ->
+        void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing frozenTime
+      -- Now find at least 2 established, non-resolved patterns
       errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
       let established = filter (\r -> r.baselineState == BSEstablished && isJust r.baselineMean && r.state /= ESResolved) errRates
       case established of
