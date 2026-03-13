@@ -211,7 +211,8 @@ rowCountDisplay_ suffix countText suffixText =
   div_ [] do
     span_ [class_ "text-textStrong", id_ $ "row-count-display" <> dashSuffix] $ toHtml countText
     span_ [class_ "text-textStrong", id_ $ "row-count-suffix" <> dashSuffix] $ toHtml suffixText
-  where dashSuffix = if T.null suffix then "" else "-" <> suffix
+  where
+    dashSuffix = if T.null suffix then "" else "-" <> suffix
 
 
 -- | Render facet data for Log Explorer sidebar in a compact format

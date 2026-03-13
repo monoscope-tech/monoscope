@@ -1,4 +1,5 @@
 {-# OPTIONS_GHC -Wno-orphans #-}
+
 module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryEditorInitializationCode, LogQueryBoxConfig (..), visualizationTabs_) where
 
 import Data.Aeson qualified as AE
@@ -22,6 +23,7 @@ import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 instance Default (Html ()) where def = mempty
 instance Show (Html ()) where show _ = "Html()"
+
 
 sortedSchemaFieldNames :: [Text]
 sortedSchemaFieldNames = sort $ Map.keys Schema.telemetrySchema.fields
@@ -48,8 +50,6 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   }
   deriving (Generic, Show)
   deriving anyclass (Default)
-
-
 
 
 -- | Reusable log query box component that can be used in both Logs and Dashboards pages
