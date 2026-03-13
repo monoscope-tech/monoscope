@@ -22,7 +22,7 @@ import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
 instance Default (Html ()) where def = mempty
-instance Show (Html ()) where show _ = "Html()"
+instance Show (Html ()) where showsPrec _ _ = showString "Html()"
 
 
 sortedSchemaFieldNames :: [Text]
