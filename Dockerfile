@@ -31,7 +31,7 @@ RUN rm -rf /var/lib/apt/lists/* || true
 WORKDIR /build
 
 # Copy cabal files for dependency caching
-COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.toml ./
+COPY *.cabal cabal.project* Setup.hs LICENSE auto-instrument-config.toml ./
 
 # Build Haskell dependencies (fast - already cached in deps image)
 RUN --mount=type=cache,target=/root/.cabal/store \
