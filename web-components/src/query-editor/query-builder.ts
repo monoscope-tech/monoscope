@@ -1051,7 +1051,7 @@ export class QueryBuilderComponent extends LitElement {
 
   render() {
     return html`
-      <div class="flex flex-wrap items-center gap-2 text-sm max-md:hidden">
+      <div class="flex flex-wrap items-center gap-2 text-sm max-md:gap-1">
         <!-- AGG Section -->
         <div class="flex items-center gap-1">
           <span class="text-xs text-textDisabled monospace" data-tippy-content="Apply aggregation functions like count, sum, avg, etc.">agg:</span>

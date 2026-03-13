@@ -39,6 +39,8 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   -- ^ Whether to update the URL when the query changes
   , targetWidgetPreview :: Maybe Text
   -- ^ ID of the widget preview element to update when the query changes
+  , mobileExtra :: Html ()
+  -- ^ Extra content rendered mobile-only in the viz tabs row
   }
   deriving (Generic, Show)
   deriving anyclass (Default)

@@ -1,3 +1,6 @@
+ALTER TABLE otel_logs_and_spans SET (timescaledb.compress, timescaledb.compress_orderby = 'timestamp DESC');
+ALTER TABLE telemetry.metrics SET (timescaledb.compress, timescaledb.compress_orderby = 'timestamp DESC');
+
 DO $$ BEGIN
   PERFORM add_compression_policy('otel_logs_and_spans', INTERVAL '1 hour', if_not_exists => true);
   PERFORM add_compression_policy('telemetry.metrics', INTERVAL '1 hour', if_not_exists => true);
