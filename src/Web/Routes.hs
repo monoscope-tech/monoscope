@@ -49,7 +49,7 @@ import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
-import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
+import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders)
 import Web.Auth (APItoolkitAuthContext, authHandler, renderError)
 import Web.Auth qualified as Auth
 
@@ -193,6 +193,7 @@ data Routes mode = Routes
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   }
   deriving stock (Generic)
 
@@ -398,8 +399,6 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , -- Pricing routes
     onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
   , pricingUpdateGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "update_pricing" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
-  , -- Proxy/landing
-    proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   }
   deriving stock (Generic)
 
@@ -435,6 +434,11 @@ server pool =
     , rrwebPost = Replay.replayPostH
     , avatarGet = avatarGetH
     , widgetPngGet = widgetPngGetH
+    , proxyLanding = \path ->
+        Onboarding.proxyLandingH path
+          & State.evalState @TriggerEvents Map.empty
+          & State.evalState @HXRedirectDest Nothing
+          & State.evalState @XWidgetJSON Nothing
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -622,7 +626,6 @@ projectsServer =
     , pricingUpdateGet = CreateProject.pricingUpdateGetH
     , onboardingDismissChecklist = Onboarding.dismissChecklistH
     , onboardingSkipped = Onboarding.onboardingStepSkipped
-    , proxyLanding = Onboarding.proxyLandingH
     }
 
 

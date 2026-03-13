@@ -26,6 +26,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
@@ -49,7 +50,9 @@ import Pkg.DeriveUtils (hashAssetFile)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, redirectCS)
+import Effectful (Eff, (:>))
+import Effectful.State.Static.Local qualified as State
+import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
 
@@ -508,20 +511,18 @@ integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
   div_ [class_ "w-full flex flex-col md:flex-row min-h-screen md:h-screen md:overflow-hidden group/pg"] do
     div_ [class_ "w-full md:w-1/2 bg-bgRaised md:h-full flex flex-col"] do
-      div_ [class_ "pt-20 md:pt-[156px] px-4 md:px-12 flex-shrink-0"]
+      div_ [class_ "pt-14 md:pt-[156px] px-4 md:px-12 flex-shrink-0"]
         $ div_ [class_ "max-w-xl"]
         $ stepIndicator 4 "Instrument your apps or servers"
         $ "/p/"
         <> pid.toText
         <> "/onboarding?step=NotifChannel"
-      div_ [class_ "flex-col w-full gap-4 flex mt-4 px-4 md:px-12 overflow-y-auto flex-grow"] do
-        p_ [class_ "text-textWeak leading-relaxed"] do
-          "Send Logs, Metrics or Traces. Select an item below for instructions. "
-          br_ []
-          "Click proceed when you're done integrating your applications."
+      div_ [class_ "flex-col w-full gap-3 md:gap-4 flex mt-3 md:mt-4 px-4 md:px-12 overflow-y-auto flex-grow pb-20 md:pb-4"] do
+        p_ [class_ "text-textWeak leading-relaxed text-sm md:text-base"] do
+          "Select your stack below for integration instructions."
 
-        div_ [class_ "mt-6 mb-0 p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
-          div_ [class_ "mb-2 text-textWeak"] "Your API Key"
+        div_ [class_ "mt-2 md:mt-6 mb-0 p-3 md:p-4 bg-fillWeak border border-strokeWeak rounded-xl"] do
+          div_ [class_ "mb-1.5 md:mb-2 text-textWeak text-sm"] "Your API Key"
           div_ [class_ "flex items-center gap-2"] do
             div_ [class_ "flex-1 monospace bg-bgBase p-3 border border-strokeWeak rounded-lg overflow-x-auto", id_ "api-key-display"] $ toHtml apikey
             button_
@@ -545,13 +546,14 @@ integrationsPage pid apikey =
             " to send sample data in seconds"
 
         -- Display integration groups
-        forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-6"] do
-          div_ [class_ "text-textWeak  text-xl mb-2"] $ toHtml groupName
+        forM_ integrationGroups \(groupName, langsList) -> div_ [class_ "mb-4 md:mb-6"] do
+          div_ [class_ "text-textWeak text-lg md:text-xl mb-2"] $ toHtml groupName
           div_ [class_ "grid grid-cols-2 gap-2"]
             $ forM_ langsList \(lang, langName, _) ->
               languageItem pid langName lang
 
-        div_ [class_ "flex items-center gap-4 py-8"] do
+        -- Inline CTA on desktop (mobile uses sticky bar)
+        div_ [class_ "max-md:hidden flex items-center gap-4 py-8"] do
           button_ [class_ "btn-primary px-8 py-3 text-xl rounded-xl cursor-pointer flex items-center", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
           a_
             [ class_ "px-4 py-3 flex items-center underline text-textBrand text-xl cursor-pointer"
@@ -559,6 +561,15 @@ integrationsPage pid apikey =
             , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
             ]
             "Skip"
+      -- Sticky CTA bar for mobile
+      div_ [class_ "md:hidden fixed bottom-0 left-0 right-0 bg-bgRaised border-t border-strokeWeak pl-4 pr-18 py-3 flex items-center gap-3 z-30"] do
+        button_ [class_ "btn-primary px-6 py-2.5 text-base rounded-xl cursor-pointer flex-1 flex items-center justify-center", hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check", hxSwap_ "none", hxIndicator_ "#loadingIndicator"] "Confirm & Proceed"
+        a_
+          [ class_ "px-3 py-2.5 flex items-center underline text-textBrand text-base cursor-pointer"
+          , type_ "button"
+          , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/skip?step=Integration"
+          ]
+          "Skip"
 
     div_ [class_ "w-full md:w-1/2 md:h-full overflow-hidden md:border-l border-weak", id_ "docs-panel"] do
       div_ [class_ "md:hidden sticky top-0 z-20 bg-bgBase border-b border-strokeWeak p-3 hidden", id_ "docs-panel-back"] do
@@ -582,7 +593,7 @@ integrationsPage pid apikey =
               -- Welcome text
               h2_ [class_ "text-3xl text-textStrong"] "👈 Select your stack on the left to begin"
               p_ [class_ "text-lg text-textWeak max-w-md leading-relaxed"] do
-                "You can also check out our youtube videos for more interactive walkthorughs."
+                "You can also check out our youtube videos for more interactive walkthroughs."
 
                 -- YouTube video embeds
                 div_ [class_ "grid grid-cols-2 gap-4 w-full"] do
@@ -881,39 +892,32 @@ onboardingConfigBody pid loca func = do
 inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Bool -> Html ()
 inviteTeamMemberModal pid emails enableFreetier = do
   div_ [id_ "invite-modal-container"] do
-    modalWith_ "inviteModal" def{autoOpen = True, boxClass = "bg-bgRaised", boxStyle = "animation: none !important;", wrapperClass = "p-8", hideClose = True} Nothing do
-      iconBadgeLg_ SuccessBadge "circle-check"
-      span_ [class_ "text-textStrong text-2xl"] "We've sent you a test notification"
-      div_ [class_ "text-textWeak"] "No notification? Close this modal and verify emails and channels."
-      div_ [class_ "h-1 w-full bg-fillWeak"] pass
-      div_ [class_ "flex-col gap-4 flex"] $ do
-        div_ [class_ "flex-col gap-5 flex"] $ do
-          div_ [class_ "w-full text-textWeak"] "The users below will be added to your project as team members"
+    modalWith_ "inviteModal" def{autoOpen = True, boxClass = "bg-bgRaised max-w-md", wrapperClass = "p-4 md:p-8"} Nothing do
+      div_ [class_ "flex items-center gap-3"] do
+        iconBadge_ SuccessBadge "circle-check"
+        span_ [class_ "text-textStrong text-xl"] "Test notification sent"
+      div_ [class_ "text-textWeak text-sm"] "No notification? Close this modal and verify your emails and channels."
+      details_ [class_ "w-full border-t border-strokeWeak pt-3"] $ do
+        summary_ [class_ "text-textBrand text-sm cursor-pointer"] "Invite team members"
+        div_ [class_ "flex-col gap-3 flex pt-3"] $ do
           when enableFreetier $ div_ [class_ "bg-fillInfo-weak border border-strokeInfo-weak rounded-lg p-3 flex items-start gap-2"] do
             faSprite_ "circle-info" "regular" "w-4 h-4 text-textInfo flex-shrink-0 mt-0.5"
-            p_ [class_ "text-sm text-textWeak"] "If you select the Free plan, additional team members will be invited but disabled until you upgrade."
-          div_ [class_ "w-full gap-4 flex flex-col"] $ do
-            div_ [class_ "w-full gap-2 flex items-center"] $ do
-              div_ [class_ "flex-col gap-1 inline-flex w-full"]
-                $ div_ [class_ "flex flex-col gap-1 w-full"]
-                $ do
-                  input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
-              button_ [class_ "btn-primary rounded-xl px-4 py-2 justify-center items-center flex text-white text-sm cursor-pointer", onpointerdown_ "appendMember()"] "invite"
-            div_ [class_ "w-full"] $ do
-              div_ [class_ "w-full text-textStrong text-sm"] "Members"
-              div_ [class_ "w-full border-t border-weak"] $ do
-                form_
-                  [ class_ "flex-col flex"
-                  , id_ "members-container"
-                  , hxPost_ $ "/p/" <> pid.toText <> "/manage_members?onboarding=true"
-                  , hxIndicator_ "#loadingIndicator"
-                  ]
-                  $ do
-                    inviteMemberItem "hidden"
-                    forM_ emails inviteMemberItem
-      div_ [class_ "modal-action w-full flex items-center justify-start gap-4 mt-2"] do
+            p_ [class_ "text-sm text-textWeak"] "Free plan members will be invited but disabled until you upgrade."
+          div_ [class_ "w-full gap-2 flex items-center"] $ do
+            input_ [class_ "input input-sm w-full", placeholder_ "email@example.com", type_ "email", id_ "add-member-input"]
+            button_ [class_ "btn-primary rounded-xl px-4 py-2 text-white text-sm cursor-pointer whitespace-nowrap", onpointerdown_ "appendMember()"] "Invite"
+          form_
+            [ class_ "flex-col flex"
+            , id_ "members-container"
+            , hxPost_ $ "/p/" <> pid.toText <> "/manage_members?onboarding=true"
+            , hxIndicator_ "#loadingIndicator"
+            ]
+            $ do
+              inviteMemberItem "hidden"
+              forM_ emails inviteMemberItem
+      div_ [class_ "modal-action w-full flex items-center justify-start gap-4"] do
         button_ [class_ "btn-primary px-8 py-2 text-lg rounded-xl cursor-pointer flex items-center", type_ "button", onpointerdown_ "htmx.trigger('#members-container', 'submit')"] "Proceed"
-        label_ [Lucid.for_ "inviteModal", class_ "text-textBrand underline cursor-pointer"] "Back"
+        label_ [Lucid.for_ "inviteModal", class_ "text-textWeak text-sm underline cursor-pointer"] "Close"
 
 
 functionalities :: [(Text, Text)]
@@ -963,19 +967,24 @@ createBinaryField kind name selectedValues (value, label) = do
 stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
   universalIndicator
-  div_ [class_ "flex-col gap-4 flex w-full"] $ do
+  div_ [class_ "flex-col gap-2 md:gap-4 flex w-full"] $ do
     a_ [href_ "/", class_ "absolute top-4 left-4 md:top-10 md:left-10 py-2 pr-2 rounded-xs"] do
       img_ [class_ "h-7 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
       img_ [class_ "h-7 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
-    div_ [class_ "flex-col gap-2 flex w-full"] $ do
-      div_ [class_ " text-textStrong text-base "] $ "Step " <> show step <> " of 5"
+    div_ [class_ "flex-col gap-1.5 md:gap-2 flex w-full"] $ do
+      div_ [class_ "flex items-center justify-between"] do
+        div_ [class_ "text-textStrong text-sm md:text-base"] $ "Step " <> show step <> " of 5"
+        when (step > 1)
+          $ a_ [class_ "flex items-center gap-1.5 text-textBrand text-sm md:hidden", href_ prevUrl] do
+            faSprite_ "arrow-left" "regular" "h-3.5 w-3.5"
+            span_ [] "Back"
       div_ [class_ "grid grid-cols-5 w-full gap-1"] $ do
-        forM_ [1 .. 5] $ \i -> div_ [class_ $ "h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
+        forM_ [1 .. 5] $ \i -> div_ [class_ $ "h-1.5 md:h-2 w-full rounded-sm " <> if step >= i then "btn-primary rounded-sm" else " bg-fillWeak shadow-sm border border-strokeWeak"] pass
       when (step > 1)
-        $ a_ [class_ "flex items-center gap-3 flex text-textBrand w-full mt-2", href_ prevUrl] do
+        $ a_ [class_ "max-md:hidden flex items-center gap-3 text-textBrand w-full mt-2", href_ prevUrl] do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
           span_ [] "Back"
-    span_ [class_ " text-textStrong text-2xl md:text-4xl mt-4"] $ toHtml title
+    span_ [class_ "text-textStrong text-xl md:text-4xl mt-1 md:mt-4"] $ toHtml title
 
 
 faQ :: Text -> Text -> Html ()
@@ -993,7 +1002,7 @@ universalIndicator =
 
 -- | Proxy handler for fetching documentation from monoscope.tech
 -- This bypasses CORS restrictions by fetching the content server-side
-proxyLandingH :: [Text] -> ATAuthCtx (RespHeaders Text)
+proxyLandingH :: (HTTP :> es, State.State TriggerEvents :> es, State.State HXRedirectDest :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders Text)
 proxyLandingH path = do
   let baseUrl = "https://monoscope.tech/"
       fullUrl = baseUrl <> T.intercalate "/" path
