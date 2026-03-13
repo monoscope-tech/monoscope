@@ -409,62 +409,63 @@ data IntegrationsConfig = IntegrationsConfig
 integrationsBody :: IntegrationsConfig -> Html ()
 integrationsBody IntegrationsConfig{..} = do
   section_ [id_ "main-content"] $ settingsSection_ do
-      let pid = projectId.toText
-      settingsH2_ "Integrations"
+    let pid = projectId.toText
+    settingsH2_ "Integrations"
 
-      infoBanner_ do
-        "Channels configured here are automatically included in the "
-        a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
-        " team."
+    infoBanner_ do
+      "Channels configured here are automatically included in the "
+      a_ [href_ ("/p/" <> pid <> "/manage_teams/everyone"), class_ "font-medium text-textBrand underline"] "@everyone"
+      " team."
 
-      let notifVals = hxVals_ "js:{notificationsChannel: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
-      div_ [id_ "integrations-form-section"] do
-        div_
-          [ hxPost_ [text|/p/$pid/notifications-channels|]
-          , notifVals
-          , hxSwap_ "none"
-          , hxTrigger_ "submit"
-          , id_ "notifsForm"
-          ]
-          do
-            let ems = decodeUtf8 $ AE.encode $ V.toList emails
-                tgs = decodeUtf8 $ AE.encode $ V.toList phones
-                integrations =
-                  [ ("email", "Email", Projects.NEmail, True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-                  , ("slack", "Slack", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels existingSlackChannels)
-                  , ("discord", "Discord", Projects.NDiscord, True, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
-                  , ("phone", "WhatsApp", Projects.NPhone, not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
-                  , ("pagerduty", "PagerDuty", Projects.NPagerduty, isJust pagerdutyData, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyData)
-                  ] :: [(Text, Text, Projects.NotificationChannel, Bool, Html (), Html ())]
-
-            div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-              forM_ integrations \(val, title, channel, configured, icon, content) ->
-                renderNotificationOption pid everyoneTeamId title val channel notifChannel configured icon content
-
-            div_ [class_ "mt-6"] do
-              button_
-                [ class_ "btn btn-sm btn-ghost"
-                , hxPost_ [text|/p/$pid/notifications-channels|]
-                , notifVals
-                , hxTarget_ "#integrations-form-section"
-                , hxSelect_ "#integrations-form-section"
-                , hxSwap_ "outerHTML swap:0.3s"
-                , [__| on change from closest <div/> put .btn-primary into my.className then put 'btn btn-sm btn-primary' into my.className end |]
+    let notifVals = hxVals_ "js:{notificationsChannel: Array.from(document.querySelectorAll('input[name=\"notifChannel\"]:checked')).map(i => i.value), phones: window.getTagValues('#phones_input'), emails: window.getTagValues('#emails_input'), slackChannels: window.getTagValues('#slack-channels-input')}"
+    div_ [id_ "integrations-form-section"] do
+      div_
+        [ hxPost_ [text|/p/$pid/notifications-channels|]
+        , notifVals
+        , hxSwap_ "none"
+        , hxTrigger_ "submit"
+        , id_ "notifsForm"
+        ]
+        do
+          let ems = decodeUtf8 $ AE.encode $ V.toList emails
+              tgs = decodeUtf8 $ AE.encode $ V.toList phones
+              integrations =
+                [ ("email", "Email", Projects.NEmail, True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
+                , ("slack", "Slack", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels existingSlackChannels)
+                , ("discord", "Discord", Projects.NDiscord, True, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
+                , ("phone", "WhatsApp", Projects.NPhone, not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
+                , ("pagerduty", "PagerDuty", Projects.NPagerduty, isJust pagerdutyData, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyData)
                 ]
-                "Save"
+                  :: [(Text, Text, Projects.NotificationChannel, Bool, Html (), Html ())]
 
-      -- Developer tools
-      div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
-        sectionLabel_ "Developer Tools"
-        div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
-          settingsNavLink_ ("/p/" <> pid <> "/byob_s3") "bucket" "S3 Bucket" "Connect your own S3-compatible storage"
-          settingsNavLink_ ("/p/" <> pid <> "/settings/git-sync") "github" "GitHub Sync" "Sync dashboards to a GitHub repository"
+          div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
+            forM_ integrations \(val, title, channel, configured, icon, content) ->
+              renderNotificationOption pid everyoneTeamId title val channel notifChannel configured icon content
 
-      -- Test History
-      div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
-        sectionLabel_ "Test History"
-        div_ [id_ "test-history", hxGet_ [text|/p/$pid/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
-          p_ [class_ "text-textWeak text-sm py-4"] "Loading..."
+          div_ [class_ "mt-6"] do
+            button_
+              [ class_ "btn btn-sm btn-ghost"
+              , hxPost_ [text|/p/$pid/notifications-channels|]
+              , notifVals
+              , hxTarget_ "#integrations-form-section"
+              , hxSelect_ "#integrations-form-section"
+              , hxSwap_ "outerHTML swap:0.3s"
+              , [__| on change from closest <div/> put .btn-primary into my.className then put 'btn btn-sm btn-primary' into my.className end |]
+              ]
+              "Save"
+
+    -- Developer tools
+    div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
+      sectionLabel_ "Developer Tools"
+      div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak"] do
+        settingsNavLink_ ("/p/" <> pid <> "/byob_s3") "bucket" "S3 Bucket" "Connect your own S3-compatible storage"
+        settingsNavLink_ ("/p/" <> pid <> "/settings/git-sync") "github" "GitHub Sync" "Sync dashboards to a GitHub repository"
+
+    -- Test History
+    div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
+      sectionLabel_ "Test History"
+      div_ [id_ "test-history", hxGet_ [text|/p/$pid/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
+        p_ [class_ "text-textWeak text-sm py-4"] "Loading..."
 
 
 renderInlineTestButton :: Text -> Text -> Maybe UUID.UUID -> Html ()
@@ -985,63 +986,63 @@ instance ToHtml ManageMembers where
 manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Html ()
 manageMembersBody pid projMembers paymentPlan =
   div_ [id_ "main-content"] $ settingsSection_ do
-      settingsH2_ "Team"
+    settingsH2_ "Team"
 
-      -- Tabs: Members | Teams
-      div_ [class_ "flex gap-1 border-b border-strokeWeak", [__| on load if window.location.hash is "#teams" then send click to #teams-tab-btn end |]] do
-        button_
-          [ class_ "px-4 py-2 text-sm font-medium border-b-2 border-textBrand text-textBrand a-tab-btn"
-          , id_ "members-tab-btn"
-          , term "data-target" "#members-tab-content"
-          , term "_" "on click remove .border-textBrand .text-textBrand from .a-tab-btn then add .border-transparent .text-textWeak to .a-tab-btn then remove .border-transparent .text-textWeak from me then add .border-textBrand .text-textBrand to me then add .hidden to .a-tab-panel then remove .hidden from #members-tab-content"
-          ]
-          "Members"
-        button_
-          [ class_ "px-4 py-2 text-sm font-medium border-b-2 border-transparent text-textWeak a-tab-btn"
-          , id_ "teams-tab-btn"
-          , term "data-target" "#teams-tab-content"
-          , term "_" "on click remove .border-textBrand .text-textBrand from .a-tab-btn then add .border-transparent .text-textWeak to .a-tab-btn then remove .border-transparent .text-textWeak from me then add .border-textBrand .text-textBrand to me then add .hidden to .a-tab-panel then remove .hidden from #teams-tab-content then send loadTeams to #teams-tab-content"
-          ]
-          "Teams"
+    -- Tabs: Members | Teams
+    div_ [class_ "flex gap-1 border-b border-strokeWeak", [__| on load if window.location.hash is "#teams" then send click to #teams-tab-btn end |]] do
+      button_
+        [ class_ "px-4 py-2 text-sm font-medium border-b-2 border-textBrand text-textBrand a-tab-btn"
+        , id_ "members-tab-btn"
+        , term "data-target" "#members-tab-content"
+        , term "_" "on click remove .border-textBrand .text-textBrand from .a-tab-btn then add .border-transparent .text-textWeak to .a-tab-btn then remove .border-transparent .text-textWeak from me then add .border-textBrand .text-textBrand to me then add .hidden to .a-tab-panel then remove .hidden from #members-tab-content"
+        ]
+        "Members"
+      button_
+        [ class_ "px-4 py-2 text-sm font-medium border-b-2 border-transparent text-textWeak a-tab-btn"
+        , id_ "teams-tab-btn"
+        , term "data-target" "#teams-tab-content"
+        , term "_" "on click remove .border-textBrand .text-textBrand from .a-tab-btn then add .border-transparent .text-textWeak to .a-tab-btn then remove .border-transparent .text-textWeak from me then add .border-textBrand .text-textBrand to me then add .hidden to .a-tab-panel then remove .hidden from #teams-tab-content then send loadTeams to #teams-tab-content"
+        ]
+        "Teams"
 
-      -- Members tab
-      div_ [id_ "members-tab-content", class_ "a-tab-panel space-y-6"] do
-        when (paymentPlan == "Free" && V.length projMembers > 1)
-          $ div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
-            faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
-            div_ do
-              p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
-              p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
+    -- Members tab
+    div_ [id_ "members-tab-content", class_ "a-tab-panel space-y-6"] do
+      when (paymentPlan == "Free" && V.length projMembers > 1)
+        $ div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
+          faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
+          div_ do
+            p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
+            p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
-        form_ [class_ "space-y-6", hxPost_ "", hxTarget_ "#main-content", hxSwap_ "outerHTML", hxIndicator_ "#submitIndicator"] do
-          div_ [class_ "space-y-3"] do
-            label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
-            div_ [class_ "flex gap-2"] do
-              input_ [type_ "email", name_ "emails", class_ "input input-sm input-bordered flex-1", placeholder_ "colleague@company.com", required_ "true"]
-              select_ [name_ "permissions", class_ "select select-sm select-bordered w-28"] do
-                option_ [value_ "admin"] "Admin"
-                option_ [value_ "edit"] "Editor"
-                option_ [value_ "view"] "Viewer"
-              button_ [class_ "btn btn-sm btn-primary gap-1", hxIndicator_ "#inviteIndicator"] do
-                htmxIndicator_ "inviteIndicator" LdXS
-                faSprite_ "paper-plane" "regular" "w-3 h-3"
-                span_ "Invite"
+      form_ [class_ "space-y-6", hxPost_ "", hxTarget_ "#main-content", hxSwap_ "outerHTML", hxIndicator_ "#submitIndicator"] do
+        div_ [class_ "space-y-3"] do
+          label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
+          div_ [class_ "flex gap-2"] do
+            input_ [type_ "email", name_ "emails", class_ "input input-sm input-bordered flex-1", placeholder_ "colleague@company.com", required_ "true"]
+            select_ [name_ "permissions", class_ "select select-sm select-bordered w-28"] do
+              option_ [value_ "admin"] "Admin"
+              option_ [value_ "edit"] "Editor"
+              option_ [value_ "view"] "Viewer"
+            button_ [class_ "btn btn-sm btn-primary gap-1", hxIndicator_ "#inviteIndicator"] do
+              htmxIndicator_ "inviteIndicator" LdXS
+              faSprite_ "paper-plane" "regular" "w-3 h-3"
+              span_ "Invite"
 
-          div_ [class_ "border-t border-strokeWeak"] ""
+        div_ [class_ "border-t border-strokeWeak"] ""
 
-          div_ [class_ "space-y-3"] do
-            div_ [class_ "flex items-center justify-between"] do
-              h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Team members (" <> show (V.length projMembers) <> ")"
-              when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] "Save changes"
-            div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
-              $ if V.null projMembers
-                then div_ [class_ "py-6 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
-                else V.imapM_ (memberRowWithStatus pid) projMembers
+        div_ [class_ "space-y-3"] do
+          div_ [class_ "flex items-center justify-between"] do
+            h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Team members (" <> show (V.length projMembers) <> ")"
+            when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] "Save changes"
+          div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
+            $ if V.null projMembers
+              then div_ [class_ "py-6 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
+              else V.imapM_ (memberRowWithStatus pid) projMembers
 
-      -- Teams tab (lazy loaded)
-      div_ [id_ "teams-tab-content", class_ "a-tab-panel hidden", hxGet_ $ "/p/" <> pid.toText <> "/manage_teams?what=partial", hxTrigger_ "loadTeams once", hxSwap_ "innerHTML", hxSelect_ "#main-content"] do
-        div_ [class_ "flex justify-center py-8"] do
-          span_ [class_ "loading loading-spinner loading-md"] ""
+    -- Teams tab (lazy loaded)
+    div_ [id_ "teams-tab-content", class_ "a-tab-panel hidden", hxGet_ $ "/p/" <> pid.toText <> "/manage_teams?what=partial", hxTrigger_ "loadTeams once", hxSwap_ "innerHTML", hxSelect_ "#main-content"] do
+      div_ [class_ "flex justify-center py-8"] do
+        span_ [class_ "loading loading-spinner loading-md"] ""
 
 
 memberRowWithStatus :: Projects.ProjectId -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
@@ -1438,38 +1439,38 @@ processProjectPostForm cpRaw pid = do
 createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
 createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
   div_ [id_ "main-content"] $ settingsSection_ do
-      settingsH2_ "Project Settings"
+    settingsH2_ "Project Settings"
 
-      form_
-        [ class_ "space-y-5 sm:space-y-8"
-        , hxPost_ $ "/p/update/" <> pid.toText
-        , hxTarget_ "#main-content"
-        , hxSwap_ "outerHTML"
-        , id_ "createUpdateBodyForm"
-        , hxIndicator_ "#createIndicator"
-        , [__| on change add .form-dirty to me |]
-        ]
-        do
-          -- Project details
-          div_ [class_ "space-y-4"] do
-            formField_ FieldSm def{value = cp.title, placeholder = "My Project"} "Project Name" "title" True Nothing
-            formSelectField_ FieldSm "Timezone" "timeZone" False do
-              option_ [value_ cp.timeZone] $ toHtml cp.timeZone
-            formField_ FieldSm def{inputType = "textarea", value = cp.description, placeholder = "What is this project about?", extraAttrs = [rows_ "3"]} "Description" "description" False Nothing
+    form_
+      [ class_ "space-y-5 sm:space-y-8"
+      , hxPost_ $ "/p/update/" <> pid.toText
+      , hxTarget_ "#main-content"
+      , hxSwap_ "outerHTML"
+      , id_ "createUpdateBodyForm"
+      , hxIndicator_ "#createIndicator"
+      , [__| on change add .form-dirty to me |]
+      ]
+      do
+        -- Project details
+        div_ [class_ "space-y-4"] do
+          formField_ FieldSm def{value = cp.title, placeholder = "My Project"} "Project Name" "title" True Nothing
+          formSelectField_ FieldSm "Timezone" "timeZone" False do
+            option_ [value_ cp.timeZone] $ toHtml cp.timeZone
+          formField_ FieldSm def{inputType = "textarea", value = cp.description, placeholder = "What is this project about?", extraAttrs = [rows_ "3"]} "Description" "description" False Nothing
 
-          -- Alert configuration
-          div_ [class_ "border-t border-strokeWeak pt-1"] $
-            alertConfiguration (isJust cp.endpointAlerts) (isJust cp.errorAlerts) (isJust cp.weeklyNotifs) (isJust cp.dailyNotifs)
+        -- Alert configuration
+        div_ [class_ "border-t border-strokeWeak pt-1"]
+          $ alertConfiguration (isJust cp.endpointAlerts) (isJust cp.errorAlerts) (isJust cp.weeklyNotifs) (isJust cp.dailyNotifs)
 
-          -- Save button: muted until form is dirty
-          div_ [class_ "flex justify-end pt-2"] do
-            button_ [id_ "saveBtn", class_ "btn gap-1.5 btn-ghost text-textWeak max-sm:btn-block max-sm:btn-md sm:btn-sm", type_ "submit", disabled_ "true", dirtyFormSaveAttr_] do
-              htmxIndicator_ "createIndicator" LdXS
-              faSprite_ "floppy-disk" "regular" "w-3 h-3"
-              span_ "Save Changes"
+        -- Save button: muted until form is dirty
+        div_ [class_ "flex justify-end pt-2"] do
+          button_ [id_ "saveBtn", class_ "btn gap-1.5 btn-ghost text-textWeak max-sm:btn-block max-sm:btn-md sm:btn-sm", type_ "submit", disabled_ "true", dirtyFormSaveAttr_] do
+            htmxIndicator_ "createIndicator" LdXS
+            faSprite_ "floppy-disk" "regular" "w-3 h-3"
+            span_ "Save Changes"
 
-      script_ do
-        [text|
+    script_ do
+      [text|
            const timezoneSelect = document.getElementById("timeZone");
            const timeZones = Intl.supportedValuesOf('timeZone');
            timeZones.forEach((tz) => {
@@ -1480,21 +1481,21 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
            });
         |]
 
-      -- Danger zone — compact
-      div_ [class_ "border border-strokeError-weak rounded-xl p-4 flex max-sm:flex-col sm:items-center sm:justify-between gap-4"] do
-        div_ [class_ "flex items-center gap-3 min-w-0"] do
-          iconBadge_ ErrorBadge "triangle-alert"
-          div_ [class_ "min-w-0"] do
-            h3_ [class_ "text-sm font-medium text-textStrong"] "Delete project"
-            p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
-        button_
-          [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1 shrink-0 max-sm:w-full"
-          , hxGet_ $ "/p/" <> pid.toText <> "/delete"
-          , hxConfirm_ "Are you sure you want to delete this project? This action cannot be undone."
-          ]
-          do
-            faSprite_ "trash" "regular" "w-3 h-3"
-            span_ "Delete Project"
+    -- Danger zone — compact
+    div_ [class_ "border border-strokeError-weak rounded-xl p-4 flex max-sm:flex-col sm:items-center sm:justify-between gap-4"] do
+      div_ [class_ "flex items-center gap-3 min-w-0"] do
+        iconBadge_ ErrorBadge "triangle-alert"
+        div_ [class_ "min-w-0"] do
+          h3_ [class_ "text-sm font-medium text-textStrong"] "Delete project"
+          p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
+      button_
+        [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1 shrink-0 max-sm:w-full"
+        , hxGet_ $ "/p/" <> pid.toText <> "/delete"
+        , hxConfirm_ "Are you sure you want to delete this project? This action cannot be undone."
+        ]
+        do
+          faSprite_ "trash" "regular" "w-3 h-3"
+          span_ "Delete Project"
 
 
 projectDeleteGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))

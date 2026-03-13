@@ -48,9 +48,9 @@ import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Effectful.PostgreSQL qualified as DB
-import Fmt (commaizeF, fmt)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
+import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Htmx (hxConfirm_, hxDelete_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
@@ -130,29 +130,29 @@ bringS3GetH pid = do
 
 bringS3Page :: Projects.ProjectId -> Maybe Projects.ProjectS3Bucket -> Html ()
 bringS3Page pid s3BucketM = settingsSection_ do
-    div_ [class_ "flex items-center justify-between"] do
-      settingsH2_ "S3 Bucket"
-      div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
+  div_ [class_ "flex items-center justify-between"] do
+    settingsH2_ "S3 Bucket"
+    div_ [id_ "connectedInd"] $ connectionBadge_ $ bool "Not connected" "Connected" (isJust s3BucketM)
 
-    form_ [class_ "space-y-4", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
-      div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
-        formField_ FieldSm def{value = maybe "" (.accessKey) s3BucketM, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
-        formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
-        formField_ FieldSm def{value = maybe "" (.region) s3BucketM, placeholder = "Region"} "Region" "region" True Nothing
-        formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
-      formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
-      p_ [class_ "text-xs text-textWeak"] "For S3-compatible providers like MinIO, DigitalOcean Spaces, etc."
+  form_ [class_ "space-y-4", hxPost_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd", hxIndicator_ "#indicator"] do
+    div_ [class_ "grid grid-cols-1 gap-3 md:grid-cols-2"] do
+      formField_ FieldSm def{value = maybe "" (.accessKey) s3BucketM, placeholder = "Access Key ID"} "Access Key ID" "accessKey" True Nothing
+      formField_ FieldSm def{inputType = "password", value = maybe "" (.secretKey) s3BucketM, placeholder = "Secret Access Key"} "Secret Access Key" "secretKey" True Nothing
+      formField_ FieldSm def{value = maybe "" (.region) s3BucketM, placeholder = "Region"} "Region" "region" True Nothing
+      formField_ FieldSm def{value = maybe "" (.bucket) s3BucketM, placeholder = "Bucket Name"} "Bucket Name" "bucket" True Nothing
+    formField_ FieldSm def{value = maybe "" (.endpointUrl) s3BucketM, placeholder = "https://s3.example.com", extraAttrs = [pattern_ "https?://.*"]} "Custom Endpoint" "endpointUrl" False Nothing
+    p_ [class_ "text-xs text-textWeak"] "For S3-compatible providers like MinIO, DigitalOcean Spaces, etc."
 
-      div_ [class_ "flex items-center justify-between pt-2"] do
-        div_ [class_ "flex items-center gap-3"] do
-          button_ [class_ "btn btn-sm btn-primary gap-1"] do
-            "Validate & Save"
-            htmxIndicator_ "indicator" LdXS
-        when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
-          faSprite_ "trash" "regular" "w-3 h-3"
-          span_ "Remove"
+    div_ [class_ "flex items-center justify-between pt-2"] do
+      div_ [class_ "flex items-center gap-3"] do
+        button_ [class_ "btn btn-sm btn-primary gap-1"] do
+          "Validate & Save"
+          htmxIndicator_ "indicator" LdXS
+      when (isJust s3BucketM) $ label_ [class_ "btn btn-sm btn-ghost text-textError hover:bg-fillError-weak", Lucid.for_ "remove-modal"] do
+        faSprite_ "trash" "regular" "w-3 h-3"
+        span_ "Remove"
 
-    confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
+  confirmModal_ "remove-modal" "Remove bucket?" "This will disconnect your S3 bucket. Data already stored will remain in your bucket." [hxDelete_ "", hxSwap_ "innerHTML", hxTarget_ "#connectedInd"] "Remove bucket"
 
 
 ----------------------------------------------------------------------
@@ -334,24 +334,26 @@ apiKeyColumns pid =
             ]
             $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
           if apiKey.active
-            then button_
-              [ class_ "p-1 rounded hover:bg-fillError-weak cursor-pointer"
-              , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-              , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
-              , hxTarget_ "#main-content"
-              , id_ $ "key" <> show i
-              , term "data-tippy-content" "Revoke key"
-              ]
-              $ faSprite_ "circle-xmark" "regular" "h-3.5 w-3.5 text-iconError"
-            else button_
-              [ class_ "p-1 rounded hover:bg-fillSuccess-weak cursor-pointer"
-              , hxPatch_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-              , hxConfirm_ $ "Are you sure you want to activate " <> apiKey.title <> " API Key?"
-              , hxTarget_ "#main-content"
-              , id_ $ "key" <> show i
-              , term "data-tippy-content" "Activate key"
-              ]
-              $ faSprite_ "circle-check" "regular" "h-3.5 w-3.5 text-iconSuccess"
+            then
+              button_
+                [ class_ "p-1 rounded hover:bg-fillError-weak cursor-pointer"
+                , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+                , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
+                , hxTarget_ "#main-content"
+                , id_ $ "key" <> show i
+                , term "data-tippy-content" "Revoke key"
+                ]
+                $ faSprite_ "circle-xmark" "regular" "h-3.5 w-3.5 text-iconError"
+            else
+              button_
+                [ class_ "p-1 rounded hover:bg-fillSuccess-weak cursor-pointer"
+                , hxPatch_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+                , hxConfirm_ $ "Are you sure you want to activate " <> apiKey.title <> " API Key?"
+                , hxTarget_ "#main-content"
+                , id_ $ "key" <> show i
+                , term "data-tippy-content" "Activate key"
+                ]
+                $ faSprite_ "circle-check" "regular" "h-3.5 w-3.5 text-iconSuccess"
   ]
 
 
@@ -666,7 +668,10 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
           div_ [class_ "text-2xl font-bold text-textStrong tabular-nums"] $ toHtml estCost
           div_ [class_ "text-sm text-textWeak mt-0.5"] "Estimated cost"
       unless (T.null last_reported)
-        $ div_ [class_ "text-xs text-textWeak"] $ toHtml $ "Updated " <> T.take 10 last_reported
+        $ div_ [class_ "text-xs text-textWeak"]
+        $ toHtml
+        $ "Updated "
+        <> T.take 10 last_reported
 
     -- Actions
     div_ [class_ "border-t border-strokeWeak pt-6 flex items-center gap-3"] do
@@ -691,5 +696,3 @@ calculateCycleStartDate start current =
         | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
         | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
    in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
-
-
