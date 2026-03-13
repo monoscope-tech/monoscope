@@ -33,8 +33,10 @@ import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, toList)
 import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Effectful (Eff, (:>))
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
+import Effectful.State.Static.Local qualified as State
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
@@ -50,8 +52,6 @@ import Pkg.DeriveUtils (hashAssetFile)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
 import System.Config (AuthContext (..), EnvConfig (..))
-import Effectful (Eff, (:>))
-import Effectful.State.Static.Local qualified as State
 import System.Types (ATAuthCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addErrorToast, addRespHeaders, redirectCS)
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, insertIfNotExist, loadingIndicator_, lookupValueText, onpointerdown_)
 import Web.FormUrlEncoded
@@ -1002,7 +1002,7 @@ universalIndicator =
 
 -- | Proxy handler for fetching documentation from monoscope.tech
 -- This bypasses CORS restrictions by fetching the content server-side
-proxyLandingH :: (HTTP :> es, State.State TriggerEvents :> es, State.State HXRedirectDest :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders Text)
+proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders Text)
 proxyLandingH path = do
   let baseUrl = "https://monoscope.tech/"
       fullUrl = baseUrl <> T.intercalate "/" path
