@@ -23,7 +23,6 @@ import Utils (displayTimestamp, faSprite_, formatUTC, onpointerdown_)
 
 
 instance Default (Html ()) where def = mempty
-instance GHC.Show.Show (Html ()) where GHC.Show.show _ = "Html()"
 
 
 sortedSchemaFieldNames :: [Text]
