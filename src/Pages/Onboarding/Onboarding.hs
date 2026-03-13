@@ -358,7 +358,7 @@ onboardingConfPostH pid form = do
 
 onboardingCompleteBody :: Projects.ProjectId -> Html ()
 onboardingCompleteBody pid = do
-  div_ [class_ "w-xl h-full flex items-center mx-auto relative"] $ do
+  div_ [class_ "w-full max-w-xl h-full flex items-center mx-auto relative px-4 md:px-0"] $ do
     canvas_ [id_ "drawing_canvas", class_ "absolute top-0 left-0  w-full"] pass
     div_ [class_ "flex-col gap-4 flex w-full p-14 my-auto border border-weak rounded-2xl"] $ do
       iconBadgeWith_ "p-3" "h-8 w-8" "rounded-full" SuccessBadge "circle-check"
@@ -371,12 +371,12 @@ onboardingCompleteBody pid = do
 
 pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
-  div_ [class_ "w-[1100px] mx-auto mt-[70px] mb-10 mx-auto"] $ do
+  div_ [class_ "w-full max-w-[1100px] mx-auto mt-[70px] mb-10 px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      div_ [class_ "w-1/2"] $ do
+      div_ [class_ "w-full md:w-1/2"] $ do
         stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
       paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled
-      div_ [class_ "flex flex-col gap-2 w-full"] do
+      div_ [class_ "flex flex-col gap-2 w-full pb-20"] do
         span_ [class_ "text-textStrong text-2xl mt-20"] "FAQ"
         div_ [class_ "join join-vertical w-full mt-4"] do
           faQ "What is an event?" "An event is any of span, log, or metric that you send to Monoscope."
@@ -506,15 +506,15 @@ integrationGroups =
 
 integrationsPage :: Projects.ProjectId -> Text -> Html ()
 integrationsPage pid apikey =
-  div_ [class_ "w-full flex h-screen overflow-hidden group/pg"] do
-    div_ [class_ "w-1/2 bg-bgRaised h-full flex flex-col"] do
-      div_ [class_ "pt-[156px] px-12 flex-shrink-0"]
+  div_ [class_ "w-full flex flex-col md:flex-row min-h-screen md:h-screen md:overflow-hidden group/pg"] do
+    div_ [class_ "w-full md:w-1/2 bg-bgRaised md:h-full flex flex-col"] do
+      div_ [class_ "pt-20 md:pt-[156px] px-4 md:px-12 flex-shrink-0"]
         $ div_ [class_ "max-w-xl"]
         $ stepIndicator 4 "Instrument your apps or servers"
         $ "/p/"
         <> pid.toText
         <> "/onboarding?step=NotifChannel"
-      div_ [class_ "flex-col w-full gap-4 flex mt-4 px-12 overflow-y-auto flex-grow"] do
+      div_ [class_ "flex-col w-full gap-4 flex mt-4 px-4 md:px-12 overflow-y-auto flex-grow"] do
         p_ [class_ "text-textWeak leading-relaxed"] do
           "Send Logs, Metrics or Traces. Select an item below for instructions. "
           br_ []
@@ -560,11 +560,20 @@ integrationsPage pid apikey =
             ]
             "Skip"
 
-    div_ [class_ "w-1/2 h-full overflow-hidden border-l border-weak"] do
-      div_ [class_ "h-full flex flex-col"] do
-        div_ [class_ "w-full h-full overflow-y-auto rounded-2xl blue-gradient-box bg-bgBase"] do
-          -- Welcome content shown when no integration is selected
-          div_ [class_ "p-12 text-center group-has-[.checkbox:checked]/pg:hidden flex items-center justify-center h-full"] do
+    div_ [class_ "w-full md:w-1/2 md:h-full overflow-hidden md:border-l border-weak", id_ "docs-panel"] do
+      div_ [class_ "md:hidden sticky top-0 z-20 bg-bgBase border-b border-strokeWeak p-3 hidden", id_ "docs-panel-back"] do
+        button_
+          [ class_ "flex items-center gap-2 text-textBrand cursor-pointer"
+          , type_ "button"
+          , onclick_ "event.preventDefault();event.stopPropagation();document.getElementById('docs-panel').classList.remove('open');this.parentElement.classList.add('hidden');"
+          ]
+          do
+            faSprite_ "arrow-left" "regular" "h-4 w-4"
+            span_ "Back to selection"
+      div_ [class_ "md:h-full flex flex-col"] do
+        div_ [class_ "w-full md:h-full overflow-y-auto rounded-2xl blue-gradient-box bg-bgBase"] do
+          -- Welcome content shown when no integration is selected (hidden on mobile)
+          div_ [class_ "max-md:hidden p-12 text-center group-has-[.checkbox:checked]/pg:hidden flex items-center justify-center h-full"] do
             div_ [class_ "flex flex-col w-full items-center gap-8"] do
               -- Icon/graphic
               div_ [class_ "p-6 bg-fillWeak rounded-full"] do
@@ -611,7 +620,7 @@ integrationsPage pid apikey =
           forM_ integrationGroups \(_, integrations) -> do
             forM_ integrations \(lang, langName, frameworks) ->
               div_ [class_ $ "p-4 lang-guide hidden group-has-[#check-" <> lang <> ":checked]/pg:block", id_ $ lang <> "_main"] do
-                div_ [class_ "px-8 sticky top-0 z-10 bg-bgBase py-2"]
+                div_ [class_ "px-2 md:px-8 sticky top-0 z-10 bg-bgBase py-2"]
                   $ div_ [class_ "inline-block tabs tabs-box tabs-outline p-0 bg-bgBase text-textWeak border ", role_ "tablist"]
                   $ forM_ (zip [0 ..] frameworks) \(idx, (fwName, fwIcon, fwPath)) ->
                     label_ [class_ "tab gap-2 items-center", Lucid.for_ $ "fw-tab-" <> lang <> "-" <> show idx] do
@@ -632,7 +641,7 @@ integrationsPage pid apikey =
                       unless (T.null fwIcon) $ img_ [class_ "h-5 w-5", src_ $ "https://monoscope.tech/assets/img/framework-logos/" <> fwIcon]
                       span_ $ toHtml fwName
 
-                div_ [class_ "relative p-8"] do
+                div_ [class_ "relative p-2 md:p-8"] do
                   div_ [id_ $ "fw-indicator-" <> lang, class_ "htmx-indicator flex justify-center py-5"]
                     $ loadingIndicator_ LdMD LdDots
                   div_
@@ -694,6 +703,9 @@ integrationsPage pid apikey =
 
       div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
 
+    -- Mobile overlay for docs panel
+    style_ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}}"
+
     -- Highlight.js for syntax highlighting (v11.11.1)
     link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
     script_ [src_ $(hashAssetFile "/public/assets/deps/highlightjs/highlight.min.js")] ("" :: Text)
@@ -739,23 +751,23 @@ languageItem pid lang ext = do
         , class_ "checkbox shrink-0"
         , id_ $ "check-" <> ext
         , value_ ext
-        , onchange_ $ "if(this.checked) { document.getElementById('" <> ext <> "_main').scrollIntoView({behavior: 'smooth'}); }"
+        , onchange_ $ "if(this.checked) { var dp=document.getElementById('docs-panel'); if(window.innerWidth<768){dp.classList.add('open');document.getElementById('docs-panel-back').classList.remove('hidden');requestAnimationFrame(function(){dp.scrollTop=0;});} else {requestAnimationFrame(function(){document.getElementById('" <> ext <> "_main').scrollIntoView({behavior:'smooth'});});} }"
         ]
-      div_ [class_ "flex w-full items-center justify-between"] do
-        div_ [class_ "flex items-center gap-2 text-sm "] do
+      div_ [class_ "flex w-full items-center justify-between overflow-hidden"] do
+        div_ [class_ "flex items-center gap-2 text-sm min-w-0"] do
           img_ [class_ "h-5 w-5", src_ $ "/public/assets/svgs/" <> ext <> ".svg"]
           span_ $ toHtml lang
         div_ [class_ "hidden group-has-[.checkbox:checked]/li:block text-sm toggle-target", id_ $ "integration-check-container" <> T.replace "#" "" lang] do
           div_
-            [ class_ "flex items-center gap-2 "
+            [ class_ "flex items-center gap-1 shrink-0"
             , hxGet_ $ "/p/" <> pid.toText <> "/onboarding/integration-check?language=" <> T.replace "#" "sharp" lang
             , hxSwap_ "innerHTML"
             , hxTarget_ $ "#integration-check-" <> ext
             , hxTrigger_ "load delay:5s"
             ]
             do
-              span_ [class_ " text-textStrong"] "waiting for events"
-              faSprite_ "spinner" "regular" "h-4 w-4 animate-spin"
+              span_ [class_ "text-textStrong hidden md:inline text-xs"] "waiting"
+              faSprite_ "spinner" "regular" "h-4 w-4 animate-spin shrink-0"
 
 
 -- Helper function to render connection status button
@@ -783,13 +795,13 @@ integrationCard serviceName iconPath isConnected connectUrl = do
 
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do
-  div_ [class_ "w-xl mx-auto mt-[156px] mb-10"] $ do
+  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] mb-10 px-4 md:px-0"] $ do
     div_ [id_ "inviteModalContainer"] pass
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 3 "How should we notify you about issues?" $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
       div_ [class_ "flex-col w-full gap-8 flex mt-4"] $ do
         div_ [class_ "w-full flex flex-col gap-8"] $ do
-          div_ [class_ "w-full gap-2 grid grid-cols-2"] $ do
+          div_ [class_ "w-full gap-2 grid grid-cols-1 md:grid-cols-2"] $ do
             integrationCard "Slack" "/public/assets/svgs/slack.svg" hasSlack slackUrl
             integrationCard "Discord" "/public/assets/svgs/discord.svg" hasDiscord discordUrl
           form_
@@ -827,7 +839,7 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
-  div_ [class_ "w-xl mx-auto mt-[156px]"] $ do
+  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 1 "Tell us a little bit about you" ""
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
@@ -845,7 +857,7 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func = do
-  div_ [class_ "w-xl mx-auto mt-[156px]"] $ do
+  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       stepIndicator 2 "Let's configure your project" $ "/p/" <> pid.toText <> "/onboarding?step=Info"
       form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"] $ do
@@ -952,7 +964,7 @@ stepIndicator :: Int -> Text -> Text -> Html ()
 stepIndicator step title prevUrl = do
   universalIndicator
   div_ [class_ "flex-col gap-4 flex w-full"] $ do
-    a_ [href_ "/", class_ "absolute top-10 left-10 py-2 pr-2 rounded-xs"] do
+    a_ [href_ "/", class_ "absolute top-4 left-4 md:top-10 md:left-10 py-2 pr-2 rounded-xs"] do
       img_ [class_ "h-7 dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
       img_ [class_ "h-7 hidden dark:block", src_ "/public/assets/svgs/logo_white.svg"]
     div_ [class_ "flex-col gap-2 flex w-full"] $ do
@@ -963,7 +975,7 @@ stepIndicator step title prevUrl = do
         $ a_ [class_ "flex items-center gap-3 flex text-textBrand w-full mt-2", href_ prevUrl] do
           faSprite_ "arrow-left" "regular" "h-4 w-4"
           span_ [] "Back"
-    span_ [class_ " text-textStrong text-4xl mt-4"] $ toHtml title
+    span_ [class_ " text-textStrong text-2xl md:text-4xl mt-4"] $ toHtml title
 
 
 faQ :: Text -> Text -> Html ()

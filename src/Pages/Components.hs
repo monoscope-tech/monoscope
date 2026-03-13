@@ -147,9 +147,9 @@ dateTime t endTM = do
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
 paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled = do
   let gridCols
-        | basicAuthEnabled = "grid-cols-2"
-        | freePricingEnabled = "grid-cols-3"
-        | otherwise = "grid-cols-2"
+        | basicAuthEnabled = "grid-cols-1 md:grid-cols-2"
+        | freePricingEnabled = "grid-cols-1 md:grid-cols-3"
+        | otherwise = "grid-cols-1 md:grid-cols-2"
   div_ [class_ "flex flex-col gap-8 w-full"] do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
