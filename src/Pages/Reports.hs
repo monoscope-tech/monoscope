@@ -12,11 +12,14 @@ module Pages.Reports (
   getSpanTypeStats,
   computeDurationChanges,
   EndpointStatsTuple,
+  anomalyTypeCounts,
 )
 where
 
 import Control.Lens (view, _2, _3, _5)
 import Data.Aeson qualified as AE
+import Database.PostgreSQL.Simple.Types (fromPGArray)
+import Deriving.Aeson qualified as DAE
 import Data.Default (def)
 import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
@@ -28,8 +31,8 @@ import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Htmx (hxGet_, hxSwap_, hxTarget_, hxTrigger_)
-import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Issues qualified as Issues
+import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
@@ -93,9 +96,10 @@ data IssueStat = IssueStat
   , critical :: Bool
   , severity :: Text
   , issueType :: Issues.IssueType
+  , activityBuckets :: Maybe [Int]
   }
   deriving stock (Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] IssueStat
 
 
 data ReportData = ReportData
@@ -114,33 +118,38 @@ data ReportData = ReportData
 
 -- | Shared widget definitions for chart URL generation
 eventsWidget, errorsWidget :: Widget.Widget
-eventsWidget = def{Widget.wType = WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"}
+eventsWidget = def{Widget.wType = WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), coalesce(status_code, level)"}
 errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
 
 
-anomalyTypeCounts :: Foldable f => (a -> Issues.IssueType) -> f a -> (Int, Int, Int)
-anomalyTypeCounts getType = foldl' (\(e, a, m) x -> (e + fromEnum (getType x == Issues.RuntimeException), a + fromEnum (getType x == Issues.ApiChange), m + fromEnum (getType x == Issues.QueryAlert))) (0, 0, 0)
+anomalyTypeCounts :: Foldable f => (a -> Issues.IssueType) -> f a -> (Int, Int, Int, Int, Int)
+anomalyTypeCounts getType = foldl' (\(e, a, m, lp, rc) x -> case getType x of
+  Issues.RuntimeException -> (e + 1, a, m, lp, rc)
+  Issues.ApiChange -> (e, a + 1, m, lp, rc)
+  Issues.QueryAlert -> (e, a, m + 1, lp, rc)
+  Issues.LogPattern -> (e, a, m, lp + 1, rc)
+  Issues.LogPatternRateChange -> (e, a, m, lp, rc + 1)) (0, 0, 0, 0, 0)
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> AE.Value
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int]) -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
       perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
       slowDbQueries' = (\(q, d, c) -> AE.object ["query" AE..= q, "averageDuration" AE..= d, "totalEvents" AE..= c]) <$> slowDbQueries
    in AE.object
         [ "endpoints" AE..= perf
-        , "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= errorsChange]
-        , "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= eventsChange]
+        , "events" AE..= AE.object ["total" AE..= totalEvents, "change" AE..= eventsChange]
+        , "errors" AE..= AE.object ["total" AE..= totalErrors, "change" AE..= errorsChange]
         , "spanTypeStats" AE..= spanStatsDiff
         , "slowDbQueries" AE..= slowDbQueries'
         , "errorDataset" AE..= Widget.toWidgetDataset chartErr
         , "eventsDataset" AE..= Widget.toWidgetDataset chartEv
-        , "issues" AE..= ((\(i, t, c, s, tp) -> IssueStat i t c s tp) <$> issues)
+        , "issues" AE..= ((\(i, t, c, s, tp, b) -> IssueStat i t c s tp (Just b)) <$> issues)
         ]
 
 
-getAnomaliesEmailTemplate :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> V.Vector AE.Value
-getAnomaliesEmailTemplate = V.map (\(i, t, c, s, tp) -> AE.object ["id" AE..= i, "title" AE..= t, "critical" AE..= c, "severity" AE..= s, "issueType" AE..= tp])
+getAnomaliesEmailTemplate :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int]) -> V.Vector AE.Value
+getAnomaliesEmailTemplate = V.map (\(i, t, c, s, tp, _) -> AE.object ["id" AE..= i, "title" AE..= t, "critical" AE..= c, "severity" AE..= s, "issueType" AE..= tp])
 
 
 -- | Moved from BackgroundJobs
@@ -182,8 +191,8 @@ computeDurationChanges current prev =
 
 -- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email
 -- Returns (dateLabel based on endTime, rendered email HTML)
-renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Int -> Bool -> ATAuthCtx (Text, Text)
-renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors anomalies performance slowQueries anomaliesCount freeTierExceeded = do
+renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int]) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
+renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
   tz <- liftIO $ loadTZFromDB (toString project.timeZone)
   let reportUrl' = ctx.env.hostUrl <> reportUrl
@@ -191,29 +200,33 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
       dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
       stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
       endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" endTime
-      totalAnom = V.length anomalies
-      (errTotal, apiTotal, qTotal) = anomalyTypeCounts (view _5) anomalies
-      pctOf n = if totalAnom == 0 then 0 else (fromIntegral n / fromIntegral totalAnom) * 99
+      (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (view _5) anomalies
   eventsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
   errorsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
-  let reportData =
+  let projectUrl = ctx.env.hostUrl <> "p/" <> pid.toText
+      reportData =
         ET.WeeklyReportData
           { userName
           , projectName = project.title
           , reportUrl = reportUrl'
+          , projectUrl
           , startDate = dayStart
           , endDate = dayEnd
           , eventsChartUrl = eventsUrl
           , errorsChartUrl = errorsUrl
           , totalEvents
           , totalErrors
-          , anomaliesCount
-          , runtimeErrorsPct = pctOf errTotal
-          , apiChangesPct = pctOf apiTotal
-          , alertsPct = pctOf qTotal
+          , eventsChangePct
+          , errorsChangePct
+          , runtimeErrorsCount = errTotal
+          , apiChangesCount = apiTotal
+          , alertsCount = qTotal
+          , logPatternCount = lpTotal
+          , rateChangeCount = rcTotal
           , anomalies
           , performance
           , slowQueries
+          , topPatterns
           , freeTierExceeded
           }
       (subj, html) = ET.weeklyReportEmail reportData
@@ -225,11 +238,11 @@ reportToEmailHtml :: Issues.Report -> Projects.Project -> Text -> ATAuthCtx (Tex
 reportToEmailHtml report project userName = case AE.fromJSON @ReportData report.reportJson of
   AE.Error _ -> pure ("", "Error: Could not parse report data")
   AE.Success rd -> do
-    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> rd.issues
+    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType, fromMaybe [] x.activityBuckets)) <$> rd.issues
         performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int, ep.durationDiffPct, ep.requestCount, ep.requestDiffPct)) <$> rd.endpoints
         slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
         reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
-    renderWeeklyEmail reportUrl project project.id userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) anomalies' performance slowQueries (length rd.issues) False
+    renderWeeklyEmail reportUrl project project.id userName report.startTime report.endTime (fromIntegral rd.events.total) (fromIntegral rd.errors.total) rd.events.change rd.errors.change anomalies' performance slowQueries V.empty False
 
 
 -- | Build live "week to date" email preview. Returns (dateLabel, emailHtml)
@@ -237,20 +250,28 @@ buildLiveReportEmailHtml :: Projects.ProjectId -> Projects.Project -> Text -> AT
 buildLiveReportEmailHtml pid project userName = do
   currentTime <- Time.currentTime
   let startTime = addUTCTime (negate $ 6 * 86400) currentTime
+      prevStart = addUTCTime (negate $ 12 * 86400) currentTime
   stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
+  statsPrev <- Telemetry.getProjectStatsForReport pid prevStart startTime
   let totalErrors = sum $ map (view _2) stats
       totalEvents = sum $ map (view _3) stats
+      totalErrorsPrev = sum $ map (view _2) statsPrev
+      totalEventsPrev = sum $ map (view _3) statsPrev
+      pctChange cur prev = if prev == 0 then 0.0 else fromIntegral (round ((fromIntegral (cur - prev) / fromIntegral prev * 100 :: Double) * 100)) / 100
+      eventsChangePct = pctChange totalEvents totalEventsPrev :: Double
+      errorsChangePct = pctChange totalErrors totalErrorsPrev :: Double
   slowQueries <- V.fromList <$> Telemetry.getDBQueryStats pid startTime currentTime
   endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
-  endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate $ 12 * 86400) currentTime) startTime
+  endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid prevStart startTime
   let performance = computeDurationChanges endpointStats endpointStatsPrev
   (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] []
-  let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
-  anomaliesCount <- Anomalies.countAnomalies pid "weekly"
+  let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType, fromPGArray x.activityBuckets)) <$> anomalies
+  patterns <- LogPatterns.getLogPatterns pid 10 0
+  let topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
   totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
   let reportUrl = "/p/" <> pid.toText <> "/reports"
       freeTierExceeded = project.paymentPlan == "FREE" && totalRequest > 5000
-  renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors anomalies' performance slowQueries anomaliesCount freeTierExceeded
+  renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded
 
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)

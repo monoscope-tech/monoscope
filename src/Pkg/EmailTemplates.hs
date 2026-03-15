@@ -489,19 +489,24 @@ data WeeklyReportData = WeeklyReportData
   { userName :: Text
   , projectName :: Text
   , reportUrl :: Text
+  , projectUrl :: Text
   , startDate :: Text
   , endDate :: Text
   , eventsChartUrl :: Text
   , errorsChartUrl :: Text
   , totalEvents :: Int
   , totalErrors :: Int
-  , anomaliesCount :: Int
-  , runtimeErrorsPct :: Double
-  , apiChangesPct :: Double
-  , alertsPct :: Double
-  , anomalies :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType)
+  , eventsChangePct :: Double
+  , errorsChangePct :: Double
+  , runtimeErrorsCount :: Int
+  , apiChangesCount :: Int
+  , alertsCount :: Int
+  , logPatternCount :: Int
+  , rateChangeCount :: Int
+  , anomalies :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int])
   , performance :: V.Vector (Text, Text, Text, Int, Double, Int, Double)
   , slowQueries :: V.Vector (Text, Int, Int)
+  , topPatterns :: V.Vector (Text, Int64, Text)
   , freeTierExceeded :: Bool
   }
   deriving stock (Generic)
@@ -511,42 +516,83 @@ weeklyReportEmail :: WeeklyReportData -> (Text, Html ())
 weeklyReportEmail d =
   ( "[···] Weekly Report for " <> d.projectName
   , emailBody do
+      emailGreeting (Just d.userName)
       h1_ [style_ "margin: 0 0 4px;"] $ toHtml d.projectName
       p_ [style_ "color: #57606a; margin: 0 0 16px;"] $ toHtml $ d.startDate <> " \8212 " <> d.endDate
       when d.freeTierExceeded $ p_ [style_ "color: #cf222e; margin: 0 0 16px;"] "Free tier limit exceeded \8212 report is incomplete."
 
-      -- Stats: two-column numbers
+      -- Stats: two-column numbers with change indicators
       table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ do
         td_ [width_ "50%", style_ "padding: 16px 0;"] do
           p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Events"
           p_ [class_ "stat-number", style_ "margin: 0; font-size: 28px; font-weight: 700; white-space: nowrap;"] $ toHtml $ formatWithCommas (fromIntegral d.totalEvents)
+          changeIndicator d.eventsChangePct False
         td_ [width_ "50%", style_ "padding: 16px 0; border-left: 1px solid #dee2e7; padding-left: 20px;"] do
           p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Errors"
           p_ [class_ "stat-number", style_ "margin: 0; font-size: 28px; font-weight: 700; white-space: nowrap; color: #cf222e;"] $ toHtml $ formatWithCommas (fromIntegral d.totalErrors)
+          changeIndicator d.errorsChangePct True
 
-      -- Charts: stacked full-width
+      -- Charts: full-width
       chartBlock "Events" d.eventsChartUrl
       chartBlock "Errors" d.errorsChartUrl
 
-      -- Issues breakdown bar
-      table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ $ td_ [style_ "padding: 20px 0;"] do
-        h3_ [style_ "margin: 0 0 12px; font-size: 18px;"] "Issues breakdown"
-        table_ [class_ "bar-track", width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "background-color: #dee2e7; border-radius: 8px; overflow: hidden;"] $ tr_ do
-          td_ [style_ "height: 12px; background-color: #f87171; padding: 0;", width_ $ show d.runtimeErrorsPct <> "%"] ""
-          td_ [style_ "height: 12px; background-color: #60a5fa; padding: 0;", width_ $ show d.apiChangesPct <> "%"] ""
-          td_ [style_ "height: 12px; background-color: #fbbf24; padding: 0;", width_ $ show d.alertsPct <> "%"] ""
-        table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "margin-top: 10px;"] $ tr_ do
-          barLegend "#f87171" "Runtime errors"
-          barLegend "#60a5fa" "API changes"
-          barLegend "#fbbf24" "Monitor alerts"
+      -- Issues breakdown bar with counts in legend (only non-zero categories)
+      let categories = filter (\(_, c, _) -> c > 0)
+            [ ("Runtime Errors", d.runtimeErrorsCount, "#cf222e")
+            , ("API Changes", d.apiChangesCount, "#377cfb")
+            , ("Monitor Alerts", d.alertsCount, "#bf8700")
+            , ("Log Patterns", d.logPatternCount, "#0969da")
+            , ("Rate Changes", d.rateChangeCount, "#e36209")
+            ]
+          totalCats = sum $ map (\(_, c, _) -> c) categories
+          pctOf n = if totalCats == 0 then 0 else (fromIntegral n / fromIntegral totalCats) * 99 :: Double
+      let totalIssues = V.length d.anomalies
+      when (totalIssues > 0 && not (null categories))
+        $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ $ td_ [style_ "padding: 20px 0;"] do
+          h3_ [style_ "margin: 0 0 12px; font-size: 18px;"] $ toHtml $ "Issues breakdown (" <> show totalIssues <> ")"
+          table_ [class_ "bar-track", width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "background-color: #dee2e7; border-radius: 8px; overflow: hidden;"] $ tr_ do
+            forM_ categories \(_, cnt, color) ->
+              td_ [style_ $ "height: 12px; background-color: " <> color <> "; padding: 0;", width_ $ show (pctOf cnt) <> "%"] ""
+          table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "margin-top: 10px;"] $ tr_ do
+            forM_ categories \(label, cnt, color) -> barLegendWithCount color label cnt
 
-      -- Anomalies table
-      unless (V.null d.anomalies)
-        $ reportTable ("Issues {" <> show d.anomaliesCount <> "}") []
+      -- Issues table: top 10 with type badges, sparkline, linked to issue page
+      unless (V.null d.anomalies) do
+        let maxIssues = 10
+            shown = V.take maxIssues d.anomalies
+            remaining = totalIssues - V.length shown
+            issueUrl iid = d.projectUrl <> "/issues/" <> iid.toText
+        reportTable ("Issues (" <> show totalIssues <> ")") ["Trend"]
+          $ V.toList (shown <&> \(iid, title, critical, _severity, iType, buckets) -> tr_ do
+              td_ [style_ "vertical-align: middle;"] do
+                issueTypeBadge iType critical
+                a_ [href_ (issueUrl iid), style_ "color: inherit; text-decoration: none;"] $ toHtml $ stripSummaryBadges title
+              td_ [width_ "120", style_ "vertical-align: middle; text-align: right;"]
+                $ sparklineImg buckets)
+          <> [tr_ $ td_ [colspan_ "2", style_ "text-align: center; color: #57606a; font-size: 14px;"]
+              $ a_ [href_ (d.projectUrl <> "/issues"), style_ "color: #377cfb; text-decoration: none;"]
+              $ toHtml @Text ("and " <> show remaining <> " more\8230") | remaining > 0]
+
+      -- Performance table (hidden when empty)
+      unless (V.null d.performance)
+        $ reportTable ("HTTP Endpoints (" <> show (V.length d.performance) <> ")") ["Avg Latency", "Change"]
         $ V.toList
+<<<<<<< HEAD
         $ d.anomalies
         <&> \(_, title, _, _, _) -> tr_ $ td_ $ toHtml title
+||||||| parent of 06e27c9b (improve report tmp)
+        $ d.anomalies <&> \(_, title, _, _, _) -> tr_ $ td_ $ toHtml title
+=======
+        $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
+            tr_ do
+              td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
+              td_ $ toHtml $ show dur <> "ms"
+              td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
+                $ toHtml
+                $ (if durChange > 0 then "+" else "") <> show durChange <> "%"
+>>>>>>> 06e27c9b (improve report tmp)
 
+<<<<<<< HEAD
       -- Performance table
       reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Avg Latency", "Change"]
         $ if V.null d.performance
@@ -563,8 +609,26 @@ weeklyReportEmail d =
                   <> "%"
 
       -- Slow queries table
+||||||| parent of 06e27c9b (improve report tmp)
+      -- Performance table
+      reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Avg Latency", "Change"]
+        $ if V.null d.performance
+          then [tr_ $ td_ [colspan_ "3"] "No performance data yet."]
+          else
+            V.toList $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
+              tr_ do
+                td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
+                td_ $ toHtml $ show dur <> "ms"
+                td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
+                  $ toHtml
+                  $ (if durChange > 0 then "+" else "") <> show durChange <> "%"
+
+      -- Slow queries table
+=======
+      -- Slow queries table (already hidden when empty)
+>>>>>>> 06e27c9b (improve report tmp)
       unless (V.null d.slowQueries)
-        $ reportTable ("Slow DB Queries {" <> show (V.length d.slowQueries) <> "}") ["Avg Latency", "Events"]
+        $ reportTable ("Slow DB Queries (" <> show (V.length d.slowQueries) <> ")") ["Avg Latency", "Events"]
         $ V.toList
         $ d.slowQueries
         <&> \(statement, total, latency) ->
@@ -572,6 +636,16 @@ weeklyReportEmail d =
             td_ $ span_ [class_ "monoscope-code"] $ toHtml statement
             td_ $ toHtml $ show latency <> "ms"
             td_ $ toHtml $ show total
+
+      -- Top log patterns
+      unless (V.null d.topPatterns)
+        $ reportTable ("Top Log Patterns (" <> show (V.length d.topPatterns) <> ")") ["Source", "Count"]
+        $ V.toList
+        $ d.topPatterns <&> \(pat, cnt, srcLabel) ->
+            tr_ do
+              td_ $ span_ [class_ "monoscope-code"] $ toHtml $ stripSummaryBadges pat
+              td_ $ toHtml srcLabel
+              td_ $ toHtml $ formatWithCommas (fromIntegral cnt)
 
       emailButton d.reportUrl "View Full Report"
   )
@@ -583,10 +657,69 @@ chartBlock label url = do
   img_ [src_ url, alt_ $ label <> " chart", width_ "600", style_ "max-width: 100%; height: auto; display: block; border: 1px solid #dee2e7; border-radius: 8px;"]
 
 
-barLegend :: Text -> Text -> Html ()
-barLegend color label = td_ [class_ "bar-legend", style_ "font-size: 12px; color: #57606a; padding: 0;"] do
+barLegendWithCount :: Text -> Text -> Int -> Html ()
+barLegendWithCount color label count = td_ [class_ "bar-legend", style_ "font-size: 12px; color: #57606a; padding: 0;"] do
   span_ [style_ $ "width: 8px; height: 8px; background-color: " <> color <> "; display: inline-block; border-radius: 50%; margin-right: 5px; vertical-align: middle;"] ""
-  toHtml label
+  toHtml $ label <> " (" <> show count <> ")"
+
+
+changeIndicator :: Double -> Bool -> Html ()
+changeIndicator pct invertColor
+  | pct == 0 = pure ()
+  | otherwise =
+      let isUp = pct > 0
+          arrow = if isUp then "\8593 " else "\8595 "
+          color
+            | invertColor = if isUp then "#cf222e" else "#1a7f37"
+            | otherwise = if isUp then "#1a7f37" else "#cf222e"
+       in p_ [style_ $ "margin: 4px 0 0; font-size: 14px; font-weight: 500; color: " <> color <> ";"]
+            $ toHtml $ arrow <> show (abs pct) <> "% vs last period"
+
+
+-- | Strip `field;style⇒value` summary badge tokens to plain text values
+stripSummaryBadges :: Text -> Text
+stripSummaryBadges = T.unwords . mapMaybe extractValue . T.words
+  where
+    extractValue token = case T.breakOn "\8658" token of
+      (_, "") -> Just token
+      (_, rest) -> let v = T.drop 1 rest in if T.null v then Nothing else Just v
+
+
+issueTypeBadge :: Issues.IssueType -> Bool -> Html ()
+issueTypeBadge iType critical =
+  let (label, color) = case iType of
+        Issues.RuntimeException -> ("Error", "#cf222e")
+        Issues.QueryAlert -> ("Alert", "#bf8700")
+        Issues.LogPattern -> ("Log Pattern", "#377cfb")
+        Issues.LogPatternRateChange -> ("Rate Change", "#bf8700")
+        Issues.ApiChange | critical -> ("Breaking", "#cf222e")
+        Issues.ApiChange -> ("Incremental", "#377cfb")
+   in span_ [style_ $ "display: inline-block; font-size: 11px; font-weight: 600; color: #fff; background-color: " <> color <> "; padding: 2px 8px; border-radius: 10px; margin-right: 8px; vertical-align: middle;"] $ toHtml label
+
+
+-- | Render an SVG sparkline as an inline data URI image (email-safe, works in dark/light mode)
+sparklineImg :: [Int] -> Html ()
+sparklineImg buckets
+  | null buckets || all (== 0) buckets = pure ()
+  | otherwise =
+      let peakVal = foldl' max 1 buckets
+          peak = fromIntegral @Int @Double peakVal
+          n = length buckets
+          h = 32 :: Int
+          barZone = 28 :: Int
+          gap = 2 :: Int
+          barW = max 3 (120 `div` n - gap)
+          w = n * (barW + gap)
+          bars = mconcat $ zipWith (\i v ->
+            let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
+                x = i * (barW + gap)
+                y = h - barH
+                opacity = if v == 0 then "0.2" else "0.7" :: Text
+             in "<rect x='" <> show x <> "' y='" <> show y <> "' width='" <> show barW <> "' height='" <> show barH <> "' rx='1.5' fill='%23377cfb' opacity='" <> opacity <> "'/>"
+            ) [0..] buckets
+          svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " <> show w <> " " <> show h <> "' width='" <> show w <> "' height='" <> show h <> "'>" <> bars <> "</svg>"
+          dataUri = "data:image/svg+xml," <> svg
+       in img_ [src_ dataUri, alt_ "trend", width_ "120", height_ "32", style_ "display: block;"]
 
 
 reportTable :: Text -> [Text] -> [Html ()] -> Html ()
@@ -673,19 +806,24 @@ sampleWeeklyReport eventsChart errorsChart =
       { userName = "Jane Doe"
       , projectName = "My API Project"
       , reportUrl = "https://app.monoscope.tech/p/sample-id/reports/sample-report"
+      , projectUrl = "https://app.monoscope.tech/p/sample-id"
       , startDate = "2025-01-01"
       , endDate = "2025-01-07"
       , eventsChartUrl = eventsChart
       , errorsChartUrl = errorsChart
       , totalEvents = 125000
       , totalErrors = 342
-      , anomaliesCount = 7
-      , runtimeErrorsPct = 42.8
-      , apiChangesPct = 28.6
-      , alertsPct = 28.6
-      , anomalies = V.fromList [(UUIDId UUID.nil, "TypeError: Cannot read property 'map'", True, "critical", Issues.RuntimeException), (UUIDId UUID.nil, "New endpoint detected: POST /api/orders", False, "medium", Issues.ApiChange)]
+      , eventsChangePct = 12.5
+      , errorsChangePct = -8.3
+      , runtimeErrorsCount = 3
+      , apiChangesCount = 1
+      , alertsCount = 1
+      , logPatternCount = 1
+      , rateChangeCount = 1
+      , anomalies = V.fromList [(UUIDId UUID.nil, "TypeError: Cannot read property 'map'", True, "critical", Issues.RuntimeException, [0, 2, 5, 12, 8, 3, 1]), (UUIDId UUID.nil, "New endpoint detected: POST /api/orders", False, "medium", Issues.ApiChange, [0, 0, 0, 1, 0, 0, 0]), (UUIDId UUID.nil, "Connection timeout pattern detected", False, "medium", Issues.LogPattern, [1, 3, 2, 0, 1, 4, 2]), (UUIDId UUID.nil, "Request rate spike on /api/users", False, "high", Issues.LogPatternRateChange, [0, 1, 1, 5, 12, 3, 0])]
       , performance = V.fromList [("api.example.com", "GET", "/api/v1/users", 245, -12.5, 5000, 8.3), ("api.example.com", "POST", "/api/v1/orders", 890, 45.2, 1200, -3.1)]
       , slowQueries = V.fromList [("SELECT * FROM users WHERE email = $1", 3400, 1250 :: Int)]
+      , topPatterns = V.fromList [("GET /api/v1/users/<*>", 4500, "URL path"), ("severity_text;badge-error⇒ERROR Failed to connect to database: connection refused at <*>", 1230, "Event summary"), ("Request timeout after <*> ms for endpoint <*>", 890, "Log body")]
       , freeTierExceeded = False
       }
 

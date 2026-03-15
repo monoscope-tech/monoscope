@@ -15,7 +15,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
-import Data.List as L (foldl, partition)
+import Data.List as L (partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
 import Data.Pool (withResource)
@@ -1298,13 +1298,13 @@ sendReportForProject pid rType = do
 
     (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] []
 
-    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType)) <$> anomalies
+    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType, fromPGArray x.activityBuckets)) <$> anomalies
 
     endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
     endpoint_rp <- LogQueries.getEndpointReportData pid typTxt
     let endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
-    total_anomalies <- Anomalies.countAnomalies pid typTxt
+    _total_anomalies <- Anomalies.countAnomalies pid typTxt
     previous_week <- LogQueries.getPreviousPeriodEndpointPerf pid typTxt
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
@@ -1341,31 +1341,36 @@ sendReportForProject pid rType = do
         _ -> do
           totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
           Relude.when (totalRequest > 0) do
+            patterns <- LogPatterns.getLogPatterns pid 10 0
             let dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                 sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                 dayStart = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone sevenDaysAgoUTCTime))
-                totalAnomalies = length anomalies'
-                (errTotal, apiTotal, qTotal) = L.foldl (\(e, a, m) (_, _, _, _, t) -> (e + if t == Issues.RuntimeException then 1 else 0, a + if t == Issues.ApiChange then 1 else 0, m + if t == Issues.QueryAlert then 1 else 0)) (0, 0, 0) anomalies'
-                pctOf n = if totalAnomalies == 0 then 0 else (fromIntegral n / fromIntegral totalAnomalies) * 99
+                (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = RP.anomalyTypeCounts (\(_, _, _, _, t, _) -> t) anomalies'
+                topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
             forM_ users \user -> do
               let reportData =
                     ET.WeeklyReportData
                       { userName = user.firstName
                       , projectName = pr.title
                       , reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
+                      , projectUrl = ctx.env.hostUrl <> "p/" <> pid.toText
                       , startDate = dayStart
                       , endDate = dayEnd
                       , eventsChartUrl = allQ
                       , errorsChartUrl = errQ
                       , totalEvents
                       , totalErrors
-                      , anomaliesCount = total_anomalies
-                      , runtimeErrorsPct = pctOf errTotal
-                      , apiChangesPct = pctOf apiTotal
-                      , alertsPct = pctOf qTotal
+                      , eventsChangePct = eventsChange
+                      , errorsChangePct = errorsChange
+                      , runtimeErrorsCount = errTotal
+                      , apiChangesCount = apiTotal
+                      , alertsCount = qTotal
+                      , logPatternCount = lpTotal
+                      , rateChangeCount = rcTotal
                       , anomalies = anomalies'
                       , performance = endpointPerformance
                       , slowQueries = slowDbQueries
+                      , topPatterns
                       , freeTierExceeded = pr.paymentPlan == "FREE" && totalRequest > 5000
                       }
                   (subj, html) = ET.weeklyReportEmail reportData
