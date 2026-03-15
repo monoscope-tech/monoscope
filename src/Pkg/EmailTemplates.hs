@@ -366,9 +366,12 @@ runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intr
         "."
       emailDivider
       forM_ (take maxErrorCards errors) (errorCard errorsUrl)
-      when (length errors > maxErrorCards) $
-        p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"] $
-          toHtml $ "and " <> show (length errors - maxErrorCards) <> " more error(s)…"
+      when (length errors > maxErrorCards)
+        $ p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"]
+        $ toHtml
+        $ "and "
+        <> show (length errors - maxErrorCards)
+        <> " more error(s)…"
       emailButton errorsUrl "View all errors"
   )
   where
@@ -381,18 +384,23 @@ errorCard errorsUrl e =
     tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
       p_ [class_ "error-card-header"] $ toHtml $ truncateText 120 e.errorType
       p_ [class_ "error-card-sub", style_ "word-break: break-word;"] $ toHtml $ truncateText 200 e.message
-      when hasDistinctRootCause $
-        p_ [style_ "margin: 6px 0 0; font-size: 13px; color: #24292f; word-break: break-word;"] $ do
+      when hasDistinctRootCause
+        $ p_ [style_ "margin: 6px 0 0; font-size: 13px; color: #24292f; word-break: break-word;"]
+        $ do
           b_ [style_ "color: #57606a;"] "Root cause: "
           toHtml $ truncateText 200 (e.rootErrorType <> ": " <> e.rootErrorMessage)
-    tr_ $ td_ [style_ "padding: 0 20px 12px 20px;"] $
-      p_ [class_ "error-card-meta", style_ "margin: 0; line-height: 1.6;"] $ do
-        let meta = filter ((/= "") . snd)
-              [ ("", fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
-              , ("", fromMaybe "" e.serviceName)
-              , ("", fromMaybe "" e.environment)
-              , ("", toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M %p" e.when)
-              ]
+    tr_
+      $ td_ [style_ "padding: 0 20px 12px 20px;"]
+      $ p_ [class_ "error-card-meta", style_ "margin: 0; line-height: 1.6;"]
+      $ do
+        let meta =
+              filter
+                ((/= "") . snd)
+                [ ("", fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+                , ("", fromMaybe "" e.serviceName)
+                , ("", fromMaybe "" e.environment)
+                , ("", toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M %p" e.when)
+                ]
         forM_ (zip [0 :: Int ..] meta) \(i, (_, val)) -> do
           when (i > 0) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
           toHtml val
@@ -401,17 +409,17 @@ errorCard errorsUrl e =
           lastLines = takeEnd 2 traceLines
           hasMore = length traceLines > 2
       div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" lastLines
-      when hasMore $
-        p_ [style_ "margin: 8px 0 0; font-size: 12px;"]
-          $ a_ [href_ (errorsUrl <> "by_hash/" <> e.hash), style_ "color: #377cfb; text-decoration: none;"]
-          $ toHtml @Text ("View full trace (" <> show (length traceLines) <> " lines) \8594")
+      when hasMore
+        $ p_ [style_ "margin: 8px 0 0; font-size: 12px;"]
+        $ a_ [href_ (errorsUrl <> "by_hash/" <> e.hash), style_ "color: #377cfb; text-decoration: none;"]
+        $ toHtml @Text ("View full trace (" <> show (length traceLines) <> " lines) \8594")
   where
     hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
     takeEnd n xs = drop (length xs - n) xs
 
+
 truncateText :: Int -> Text -> Text
 truncateText n t = if T.length t > n then T.take n t <> "…" else t
-
 
 
 -- =============================================================================
@@ -536,7 +544,8 @@ weeklyReportEmail d =
       unless (V.null d.anomalies)
         $ reportTable ("Issues {" <> show d.anomaliesCount <> "}") []
         $ V.toList
-        $ d.anomalies <&> \(_, title, _, _, _) -> tr_ $ td_ $ toHtml title
+        $ d.anomalies
+        <&> \(_, title, _, _, _) -> tr_ $ td_ $ toHtml title
 
       -- Performance table
       reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Avg Latency", "Change"]
@@ -549,17 +558,20 @@ weeklyReportEmail d =
                 td_ $ toHtml $ show dur <> "ms"
                 td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
                   $ toHtml
-                  $ (if durChange > 0 then "+" else "") <> show durChange <> "%"
+                  $ (if durChange > 0 then "+" else "")
+                  <> show durChange
+                  <> "%"
 
       -- Slow queries table
       unless (V.null d.slowQueries)
         $ reportTable ("Slow DB Queries {" <> show (V.length d.slowQueries) <> "}") ["Avg Latency", "Events"]
         $ V.toList
-        $ d.slowQueries <&> \(statement, total, latency) ->
-            tr_ do
-              td_ $ span_ [class_ "monoscope-code"] $ toHtml statement
-              td_ $ toHtml $ show latency <> "ms"
-              td_ $ toHtml $ show total
+        $ d.slowQueries
+        <&> \(statement, total, latency) ->
+          tr_ do
+            td_ $ span_ [class_ "monoscope-code"] $ toHtml statement
+            td_ $ toHtml $ show latency <> "ms"
+            td_ $ toHtml $ show total
 
       emailButton d.reportUrl "View Full Report"
   )

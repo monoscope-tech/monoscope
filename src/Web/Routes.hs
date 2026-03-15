@@ -792,7 +792,6 @@ emailTemplateNames :: [Text]
 emailTemplateNames = ["project-invite", "project-created", "project-deleted", "weekly-report", "runtime-errors", "anomaly-endpoint"]
 
 
-
 guardDevOnly :: ATBaseCtx ()
 guardDevOnly = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
