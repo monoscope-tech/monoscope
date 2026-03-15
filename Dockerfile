@@ -42,6 +42,7 @@ RUN --mount=type=cache,target=/root/.cabal/store \
 COPY src ./src
 COPY test ./test
 COPY app ./app
+COPY cli ./cli
 COPY proto ./proto
 
 # Build frontend assets (npm deps already installed in deps image)

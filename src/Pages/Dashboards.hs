@@ -67,7 +67,7 @@ import Effectful.Reader.Static (Reader, ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxIndicator_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxConfirm_, hxDelete_, hxExt_, hxGet_, hxPatch_, hxPost_, hxPushUrl_, hxPut_, hxSelect_, hxSwapOob_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogQueries qualified as LogQueries
@@ -229,29 +229,26 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           baseTabUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/tab/"
           -- Build query string from current params (excluding internal keys and expand param)
           queryStr = queryStringFrom $ filter (\(k, _) -> k `notElem` [activeTabSlugKey, "expand"]) allParams
-      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container"] do
+      div_ [role_ "tablist", class_ "tabs tabs-box tabs-outline max-md:flex-nowrap max-md:overflow-x-auto max-md:scrollbar-none max-md:[mask-image:linear-gradient(to_right,black_85%,transparent)]", id_ "dashboard-tabs-container", term "preload" "mouseover"] do
         forM_ (zip [0 ..] tabs) \(idx, tab) -> do
           let tabSlug = slugify tab.name
               isActive = idx == activeTabIdx
               tabUrl = baseTabUrl <> tabSlug
-              tabContentUrl = tabUrl <> "/content" <> queryStr
           a_
             [ role_ "tab"
             , href_ $ tabUrl <> queryStr
             , class_ $ "tab flex items-center gap-2 max-md:whitespace-nowrap" <> if isActive then " tab-active" else ""
-            , id_ $ "tab-link-" <> dashId.toText <> "-" <> show idx
-            , hxGet_ tabContentUrl
+            , hxGet_ $ tabUrl <> queryStr
             , hxTarget_ "#dashboard-tabs-content"
-            , hxSwap_ "innerHTML transition:true"
-            , hxPushUrl_ $ tabUrl <> queryStr
-            , hxIndicator_ $ "#tab-indicator-" <> dashId.toText <> "-" <> show idx
-            , -- Update active tab styling via htmx hyperscript
-              term "_" "on htmx:afterOnLoad remove .tab-active from .tab in #dashboard-tabs-container then add .tab-active to me"
+            , hxSelect_ "#dashboard-tabs-content"
+            , term "hx-select-oob" "#dashboard-tabs-container:morph"
+            , hxSwap_ "innerHTML"
+            , hxPushUrl_ "true"
+            , [__|on click set my.preloadState to 'DONE'|]
             ]
             do
               whenJust tab.icon \icon -> faSprite_ icon "regular" "w-4 h-4"
               toHtml tab.name
-              span_ [class_ "htmx-indicator", id_ $ "tab-indicator-" <> dashId.toText <> "-" <> show idx] $ faSprite_ "spinner" "regular" "w-3 h-3 animate-spin"
 
     -- Variables section (pushed to the right, collapsible on mobile)
     whenJust dash.variables \variables -> do
@@ -317,7 +314,13 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           div_ [class_ "dashboard-tabs-container", id_ "dashboard-tabs-content"] do
             -- Only render the active tab's content (other tabs load via htmx)
             case tabs !!? activeTabIdx of
-              Just activeTab -> tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
+              Just activeTab -> do
+                tabContentPanel_ pid dashId.toText activeTabIdx activeTab.name activeTab.widgets True False
+                -- Variable picker modal inside content div so it's included in HTMX tab swaps
+                whenJust dash.variables \variables -> do
+                  let activeTab' = activeTabSlug >>= \slug -> fmap snd . findTabBySlug tabs $ slug
+                  whenJust (findVarToPrompt activeTab' variables) \v ->
+                    variablePickerModal_ pid dashId activeTabSlug allParams v False
               Nothing -> pass
         Nothing -> do
           -- Fall back to old behavior for dashboards without tabs
