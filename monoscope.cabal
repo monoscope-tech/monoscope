@@ -79,6 +79,7 @@ extra-source-files:
     static/migrations/0051_issue_seq_num_fix.sql
     static/migrations/0052_compression_and_retention_policies.sql
     static/migrations/0053_device_auth_codes.sql
+    static/migrations/0054_command_palette_recents.sql
 
 source-repository head
   type: git
@@ -129,6 +130,7 @@ library
       Pages.Bots.Whatsapp
       Pages.Charts.Charts
       Pages.Charts.Types
+      Pages.CommandPalette
       Pages.Components
       Pages.Dashboards
       Pages.Endpoints.ApiCatalog

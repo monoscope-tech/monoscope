@@ -470,6 +470,21 @@ bodyWrapper bcfg child = do
           let currUser = sess.persistentSession.user.getUser
               sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem
            in do
+                -- Command palette global shortcut (Cmd+K / Ctrl+K)
+                whenJust bcfg.currProject \p ->
+                  span_
+                    [ data_ "palette-url" ("/p/" <> p.id.toText <> "/command-palette")
+                    , [__|on keydown[key=='k' and (metaKey or ctrlKey)] from window
+                    halt the event
+                    if <.cmd-palette-backdrop/> exists
+                      remove <.cmd-palette-backdrop/>
+                    else
+                      set :url to my.dataset.paletteUrl
+                      fetch `${:url}` then put the result at start of <body/>
+                    end
+                  end|]
+                    ]
+                    ""
                 -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
                 input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
                 section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
@@ -478,7 +493,9 @@ bodyWrapper bcfg child = do
                     when
                       (currUser.email == "hello@monoscope.tech")
                       loginBanner
-                    unless (bcfg.isSettingsPage || bcfg.hideNavbar) $ navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
+                    if bcfg.isSettingsPage || bcfg.hideNavbar
+                      then whenJust bcfg.currProject \p -> paletteTriggerFloating p
+                      else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
                       if bcfg.isSettingsPage
@@ -765,6 +782,26 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
+-- | Floating command palette trigger for pages without navbar (settings, etc.)
+paletteTriggerFloating :: Projects.Project -> Html ()
+paletteTriggerFloating p =
+  button_
+    [ class_ "fixed top-14 right-4 btn btn-sm btn-ghost bg-base-200 shadow-md gap-1.5 text-textWeak z-50"
+    , data_ "palette-url" ("/p/" <> p.id.toText <> "/command-palette")
+    , [__|on click
+          if <.cmd-palette-backdrop/> exists
+            remove <.cmd-palette-backdrop/>
+          else
+            set :url to my.dataset.paletteUrl
+            fetch `${:url}` then put the result at start of <body/>
+          end
+        end|]
+    ]
+    do
+      faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
+      kbd_ [class_ "kbd kbd-xs"] "\x2318K"
+
+
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Sessions.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-strokeWeak items-center"] do
@@ -791,7 +828,26 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
       whenJust docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust pageActionsM)]
-    div_ [class_ $ "flex-1 flex items-center justify-end text-sm" <> maybe " max-md:hidden" (const "") pageActionsM] $ whenJust pageActionsM id
+    div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> maybe " max-md:hidden" (const "") pageActionsM] do
+      -- Command palette trigger
+      whenJust projectM \p ->
+        button_
+          [ id_ "cmd-palette-trigger"
+          , class_ "btn btn-ghost btn-sm gap-1.5 text-textWeak max-md:hidden"
+          , data_ "palette-url" ("/p/" <> p.id.toText <> "/command-palette")
+          , [__|on click
+                if <.cmd-palette-backdrop/> exists
+                  remove <.cmd-palette-backdrop/>
+                else
+                  set :url to my.dataset.paletteUrl
+                  fetch `${:url}` then put the result at start of <body/>
+                end
+              end|]
+          ]
+          do
+            faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
+            kbd_ [class_ "kbd kbd-xs"] "\x2318K"
+      whenJust pageActionsM id
 
 
 alerts_ :: Html ()

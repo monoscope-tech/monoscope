@@ -44,6 +44,7 @@ import Web.Cookie (SetCookie)
 -- System and configuration imports
 import Deriving.Aeson qualified as DAE
 import Pages.Bots.Utils (verifyWidgetSignature)
+import Pages.CommandPalette qualified as CommandPalette
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
@@ -262,6 +263,9 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , githubAppCallback :: mode :- "github" :> "callback" :> QueryParam "installation_id" Int64 :> QueryParam "setup_action" Text :> QueryParam "state" Text :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , -- Command palette
+    commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ()))
+  , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Dev routes
     emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (RespHeaders (Html ()))
   , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (RespHeaders (Html ()))
@@ -518,6 +522,9 @@ cookieProtectedServer =
     , -- Endpoint handlers
       endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
+    , -- Command palette
+      commandPaletteGet = CommandPalette.commandPaletteH
+    , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
     , -- Dev routes
       emailPreviewList = emailPreviewListH
     , emailPreview = emailPreviewH

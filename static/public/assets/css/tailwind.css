@@ -2115,6 +2115,18 @@ code, pre, .code, .monospace {
   @apply border-strokeWeak;
 }
 
+/* Command palette */
+.cmd-palette-backdrop { backdrop-filter: blur(4px); }
+.cmd-item.active { background-color: var(--color-fillWeak); }
+.cmd-item:hover:not(.active) { background-color: var(--color-fillHover); }
+.cmd-palette-hints kbd.kbd {
+  color: inherit;
+  border-color: currentColor;
+  background: transparent;
+  opacity: 0.5;
+  box-shadow: none;
+}
+
 /* Variable picker modal */
 .var-picker-backdrop { backdrop-filter: blur(4px); }
 .var-opt.active { background-color: var(--color-fillWeak); }
