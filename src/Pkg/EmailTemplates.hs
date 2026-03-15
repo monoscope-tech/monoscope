@@ -503,26 +503,18 @@ weeklyReportEmail :: WeeklyReportData -> (Text, Html ())
 weeklyReportEmail d =
   ( "[···] Weekly Report for " <> d.projectName
   , emailBody do
-      emailGreeting (Just d.userName)
-      p_ do
-        "Here's the weekly report for your "
-        b_ $ toHtml d.projectName
-        " project on Monoscope from "
-        b_ $ toHtml d.startDate
-        " until "
-        b_ $ toHtml d.endDate
-        "."
-      when d.freeTierExceeded $ p_ [style_ "color: #cf222e;"] "Free tier limit was exceeded, hence the report is incomplete for the week."
-      emailDivider
+      h1_ [style_ "margin: 0 0 4px;"] $ toHtml d.projectName
+      p_ [style_ "color: #57606a; margin: 0 0 16px;"] $ toHtml $ d.startDate <> " \8212 " <> d.endDate
+      when d.freeTierExceeded $ p_ [style_ "color: #cf222e; margin: 0 0 16px;"] "Free tier limit exceeded \8212 report is incomplete."
 
       -- Stats: two-column numbers
       table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ do
-        td_ [width_ "50%", style_ "text-align: center; padding: 16px 0;"] do
-          p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Total project events"
+        td_ [width_ "50%", style_ "padding: 16px 0;"] do
+          p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Events"
           p_ [class_ "stat-number", style_ "margin: 0; font-size: 28px; font-weight: 700; white-space: nowrap;"] $ toHtml $ formatWithCommas (fromIntegral d.totalEvents)
-        td_ [width_ "50%", style_ "text-align: center; padding: 16px 0; border-left: 1px solid #dee2e7;"] do
-          p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Total project errors"
-          p_ [class_ "stat-number", style_ "margin: 0; font-size: 28px; font-weight: 700; white-space: nowrap;"] $ toHtml $ formatWithCommas (fromIntegral d.totalErrors)
+        td_ [width_ "50%", style_ "padding: 16px 0; border-left: 1px solid #dee2e7; padding-left: 20px;"] do
+          p_ [style_ "margin: 0 0 4px; font-size: 14px; color: #57606a;"] "Errors"
+          p_ [class_ "stat-number", style_ "margin: 0; font-size: 28px; font-weight: 700; white-space: nowrap; color: #cf222e;"] $ toHtml $ formatWithCommas (fromIntegral d.totalErrors)
 
       -- Charts: stacked full-width
       chartBlock "Events" d.eventsChartUrl
@@ -531,53 +523,45 @@ weeklyReportEmail d =
       -- Issues breakdown bar
       table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ $ td_ [style_ "padding: 20px 0;"] do
         h3_ [style_ "margin: 0 0 12px; font-size: 18px;"] "Issues breakdown"
-        -- Bar
         table_ [class_ "bar-track", width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "background-color: #dee2e7; border-radius: 8px; overflow: hidden;"] $ tr_ do
           td_ [style_ "height: 12px; background-color: #f87171; padding: 0;", width_ $ show d.runtimeErrorsPct <> "%"] ""
           td_ [style_ "height: 12px; background-color: #60a5fa; padding: 0;", width_ $ show d.apiChangesPct <> "%"] ""
           td_ [style_ "height: 12px; background-color: #fbbf24; padding: 0;", width_ $ show d.alertsPct <> "%"] ""
-        -- Legend
         table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "margin-top: 10px;"] $ tr_ do
           barLegend "#f87171" "Runtime errors"
-          barLegend "#60a5fa" "Api changes"
+          barLegend "#60a5fa" "API changes"
           barLegend "#fbbf24" "Monitor alerts"
 
       -- Anomalies table
-      reportTable ("Issues: Changes, Alerts, and Errors {" <> show d.anomaliesCount <> "}") ["First Seen", "Total Requests"]
-        $ if V.null d.anomalies
-          then [tr_ $ td_ [colspan_ "3"] "No anomalies detected yet."]
-          else
-            V.toList $ d.anomalies <&> \(_, title, _, _, _) ->
-              tr_ do td_ $ toHtml title; td_ "\8212"; td_ "\8212"
+      unless (V.null d.anomalies)
+        $ reportTable ("Issues {" <> show d.anomaliesCount <> "}") []
+        $ V.toList
+        $ d.anomalies <&> \(_, title, _, _, _) -> tr_ $ td_ $ toHtml title
 
       -- Performance table
-      reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Average Latency", "Latency Change"]
+      reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Avg Latency", "Change"]
         $ if V.null d.performance
           then [tr_ $ td_ [colspan_ "3"] "No performance data yet."]
           else
             V.toList $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
               tr_ do
                 td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
-                td_ $ toHtml $ show dur
-                td_ $ toHtml $ show durChange <> "%"
+                td_ $ toHtml $ show dur <> "ms"
+                td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
+                  $ toHtml
+                  $ (if durChange > 0 then "+" else "") <> show durChange <> "%"
 
       -- Slow queries table
-      reportTable ("Slow db operations {" <> show (V.length d.slowQueries) <> "}") ["Average Latency", "Total events"]
-        $ if V.null d.slowQueries
-          then [tr_ $ td_ [colspan_ "3"] "No slow queries detected."]
-          else
-            V.toList $ d.slowQueries <&> \(statement, total, latency) ->
-              tr_ do
-                td_ $ span_ [class_ "monoscope-code"] $ toHtml statement
-                td_ $ toHtml $ show latency
-                td_ $ toHtml $ show total
+      unless (V.null d.slowQueries)
+        $ reportTable ("Slow DB Queries {" <> show (V.length d.slowQueries) <> "}") ["Avg Latency", "Events"]
+        $ V.toList
+        $ d.slowQueries <&> \(statement, total, latency) ->
+            tr_ do
+              td_ $ span_ [class_ "monoscope-code"] $ toHtml statement
+              td_ $ toHtml $ show latency <> "ms"
+              td_ $ toHtml $ show total
 
-      emailButton d.reportUrl "View the Full Report"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl d.reportUrl
+      emailButton d.reportUrl "View Full Report"
   )
 
 
