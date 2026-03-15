@@ -290,17 +290,16 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
       maxItems: 50,
       fuzzySearch: true,
       position: 'input',
-      place: 'parent',
       caseSensitive: false,
       mapValueTo: 'name',
       searchKeys: ['value', 'name'],
-      // appendTarget: function () {
-      //   return this.DOM.scope;
-      // },
     },
   };
   const element = typeof selectorOrElement === 'string' ? document.querySelector(selectorOrElement) : selectorOrElement;
-  return new (window as any).Tagify(element, { ...defaultOptions, ...options });
+  const merged = { ...defaultOptions, ...options, dropdown: { ...defaultOptions.dropdown, ...options.dropdown } };
+  // editTags crashes in select mode (no tags to edit → closest() on undefined)
+  if (merged.mode === 'select') merged.editTags = false;
+  return new (window as any).Tagify(element, merged);
 };
 
 function tagifyTemplateFunc(tagData: any) {

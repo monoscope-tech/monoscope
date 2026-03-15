@@ -577,12 +577,6 @@ weeklyReportEmail d =
       unless (V.null d.performance)
         $ reportTable ("HTTP Endpoints (" <> show (V.length d.performance) <> ")") ["Avg Latency", "Change"]
         $ V.toList
-<<<<<<< HEAD
-        $ d.anomalies
-        <&> \(_, title, _, _, _) -> tr_ $ td_ $ toHtml title
-||||||| parent of 06e27c9b (improve report tmp)
-        $ d.anomalies <&> \(_, title, _, _, _) -> tr_ $ td_ $ toHtml title
-=======
         $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
             tr_ do
               td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
@@ -590,43 +584,8 @@ weeklyReportEmail d =
               td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
                 $ toHtml
                 $ (if durChange > 0 then "+" else "") <> show durChange <> "%"
->>>>>>> 06e27c9b (improve report tmp)
 
-<<<<<<< HEAD
-      -- Performance table
-      reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Avg Latency", "Change"]
-        $ if V.null d.performance
-          then [tr_ $ td_ [colspan_ "3"] "No performance data yet."]
-          else
-            V.toList $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
-              tr_ do
-                td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
-                td_ $ toHtml $ show dur <> "ms"
-                td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
-                  $ toHtml
-                  $ (if durChange > 0 then "+" else "")
-                  <> show durChange
-                  <> "%"
-
-      -- Slow queries table
-||||||| parent of 06e27c9b (improve report tmp)
-      -- Performance table
-      reportTable ("HTTP Endpoints {" <> show (V.length d.performance) <> "}") ["Avg Latency", "Change"]
-        $ if V.null d.performance
-          then [tr_ $ td_ [colspan_ "3"] "No performance data yet."]
-          else
-            V.toList $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
-              tr_ do
-                td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
-                td_ $ toHtml $ show dur <> "ms"
-                td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
-                  $ toHtml
-                  $ (if durChange > 0 then "+" else "") <> show durChange <> "%"
-
-      -- Slow queries table
-=======
       -- Slow queries table (already hidden when empty)
->>>>>>> 06e27c9b (improve report tmp)
       unless (V.null d.slowQueries)
         $ reportTable ("Slow DB Queries (" <> show (V.length d.slowQueries) <> ")") ["Avg Latency", "Events"]
         $ V.toList
