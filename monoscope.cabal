@@ -609,6 +609,7 @@ test-suite integration-tests
     , pg-entity
     , pg-transact
     , postgresql-simple
+    , process
     , proto-lens
     , relude >=1.2.0.0
     , resource-pool

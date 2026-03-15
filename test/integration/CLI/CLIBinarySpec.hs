@@ -2,6 +2,7 @@ module CLI.CLIBinarySpec (spec) where
 
 import Relude
 
+import Data.List (isInfixOf)
 import Data.Text qualified as T
 import System.Exit (ExitCode (..))
 import System.Process (readProcessWithExitCode)

@@ -400,6 +400,7 @@ tests:
       - ki-effectful
       - effectful-core
       - effectful-postgresql
+      - process
   unit-tests:
     main: Main.hs
     source-dirs: test/unit
