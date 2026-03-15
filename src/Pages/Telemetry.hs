@@ -295,12 +295,13 @@ chartsPage pid metricList inactive sources source mFilter nextUrl = do
           do
             option_ ([selected_ "all" | "all" == source] ++ [value_ "all"]) "All Services"
             forM_ sources $ \s -> option_ ([selected_ s | s == source] ++ [value_ s]) $ toHtml s
-        let metricNames = ordNub
-              $ ( \x ->
-                    let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
-                     in fromMaybe "" (viaNonEmpty head n) <> pr
-                )
-              <$> V.toList metricList
+        let metricNames =
+              ordNub
+                $ ( \x ->
+                      let (n, pr) = if length (T.splitOn "." x.metricName) == 1 then (T.splitOn "_" x.metricName, "_") else (T.splitOn "." x.metricName, ".")
+                       in fromMaybe "" (viaNonEmpty head n) <> pr
+                  )
+                <$> V.toList metricList
             stripTrailing t = fromMaybe t $ T.stripSuffix "." t <|> T.stripSuffix "_" t
         div_ [class_ "join flex-1 min-w-0"] do
           select_
@@ -377,7 +378,10 @@ inactiveMetricsList pid source metrics = do
   details_ [class_ "collapse collapse-arrow bg-bgRaised border border-strokeWeak mt-4"] do
     summary_ [class_ "collapse-title font-medium text-sm text-textWeak"]
       $ toHtml
-      $ show (V.length metrics) <> " inactive metric" <> (if V.length metrics /= 1 then "s" else "") <> " (no data in 7 days)"
+      $ show (V.length metrics)
+      <> " inactive metric"
+      <> (if V.length metrics /= 1 then "s" else "")
+      <> " (no data in 7 days)"
     div_ [class_ "collapse-content"] do
       div_ [class_ "flex flex-col divide-y divide-strokeWeak"] do
         forM_ metrics $ \metric -> do

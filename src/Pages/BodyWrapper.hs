@@ -17,7 +17,7 @@ import Pkg.DeriveUtils (hashAssetFile)
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicator_, loadingIndicatorWith_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicatorWith_, loadingIndicator_)
 
 
 -- Reusable htmx attrs for tab-style nav links (preload + morph swap)
@@ -940,6 +940,7 @@ navBottomList pidTxt =
 
 settingsContentTarget :: Text
 settingsContentTarget = "#settings-content"
+
 
 settingsLoadingId :: Text
 settingsLoadingId = "settings-loading"

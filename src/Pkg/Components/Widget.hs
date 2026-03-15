@@ -374,6 +374,7 @@ renderDottedTitle t = case T.breakOn "." t of
         span_ [class_ "truncate text-textWeak font-normal"] $ toHtml ("." <> mid)
         span_ [class_ "shrink-0"] $ toHtml lastSeg
 
+
 displayUnit :: Text -> Text
 displayUnit = \case
   "" -> ""
@@ -381,6 +382,7 @@ displayUnit = \case
   "{}" -> ""
   "By" -> " bytes"
   u -> " " <> u
+
 
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
 renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
