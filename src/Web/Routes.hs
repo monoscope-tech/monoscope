@@ -195,6 +195,8 @@ data Routes mode = Routes
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
+  , emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (Html ())
+  , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (Html ())
   }
   deriving stock (Generic)
 
@@ -266,9 +268,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Command palette
     commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ()))
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
-  , -- Dev routes
-    emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (RespHeaders (Html ()))
-  , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (RespHeaders (Html ()))
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
@@ -447,6 +446,8 @@ server pool =
           & State.evalState @XWidgetJSON Nothing
     , deviceCode = Auth.deviceCodeH
     , deviceToken = Auth.deviceTokenH
+    , emailPreviewList = emailPreviewListH
+    , emailPreview = emailPreviewH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -525,9 +526,6 @@ cookieProtectedServer =
     , -- Command palette
       commandPaletteGet = CommandPalette.commandPaletteH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
-    , -- Dev routes
-      emailPreviewList = emailPreviewListH
-    , emailPreview = emailPreviewH
     , -- Device auth
       deviceApprove = Auth.deviceApproveH
     , -- Sub-route handlers
@@ -794,16 +792,17 @@ emailTemplateNames :: [Text]
 emailTemplateNames = ["project-invite", "project-created", "project-deleted", "weekly-report", "runtime-errors", "anomaly-endpoint"]
 
 
-guardDevOnly :: ATAuthCtx ()
+
+guardDevOnly :: ATBaseCtx ()
 guardDevOnly = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   unless (T.toUpper ctx.config.environment == "DEV") $ Error.throwError err404
 
 
-emailPreviewListH :: ATAuthCtx (RespHeaders (Html ()))
+emailPreviewListH :: ATBaseCtx (Html ())
 emailPreviewListH = do
   guardDevOnly
-  addRespHeaders $ ET.emailWrapper "Email Templates" do
+  pure $ ET.emailWrapper "Email Templates" do
     ET.emailBody do
       h1_ "Email Template Previews"
       p_ "Click a template to preview:"
@@ -811,7 +810,7 @@ emailPreviewListH = do
         li_ [style_ "margin: 8px 0;"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
 
 
-emailPreviewH :: Text -> ATAuthCtx (RespHeaders (Html ()))
+emailPreviewH :: Text -> ATBaseCtx (Html ())
 emailPreviewH templateName = do
   guardDevOnly
   let (subject, content) = case templateName of
@@ -823,7 +822,7 @@ emailPreviewH templateName = do
         "anomaly-endpoint" -> ET.sampleAnomalyEndpoint
         "issue-assigned" -> ET.sampleIssueAssigned
         _ -> ("Unknown", p_ "Template not found")
-  addRespHeaders $ ET.emailWrapper subject content
+  pure $ ET.emailWrapper subject content
 
 
 -- =============================================================================

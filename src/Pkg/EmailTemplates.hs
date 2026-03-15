@@ -42,7 +42,6 @@ import Data.Vector qualified as V
 import Lucid
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogQueries qualified as LogQueries
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Utils (formatWithCommas)
@@ -105,8 +104,8 @@ emailCss =
   .monoscope-email .monoscope-code { background-color: #f6f8fa; border: 1px solid #dee2e7; border-radius: 6px; padding: 2px 6px; font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace; font-size: 14px; }
   .monoscope-email .highlight-box { background-color: #f6f8fa; border-radius: 12px; padding: 20px 24px; margin: 24px 0; }
   .monoscope-email .highlight-box p { margin: 0; color: #57606a; font-size: 15px; }
-  .monoscope-email .error-card { border: 1px solid #dee2e7; border-radius: 12px; border-left: 4px solid #cf222e; margin: 16px 0; }
-  .monoscope-email .error-card-header { color: #cf222e; font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .monoscope-email .error-card { border: 1px solid #dee2e7; border-radius: 12px; margin: 16px 0; }
+  .monoscope-email .error-card-header { color: #cf222e; font-size: 16px; font-weight: 600; margin: 0 0 4px; word-break: break-word; }
   .monoscope-email .error-card-sub { color: #57606a; font-size: 13px; margin: 0; }
   .monoscope-email .error-card-meta { font-size: 13px; color: #57606a; }
   .monoscope-email .error-card-label { font-weight: 600; color: #24292f; }
@@ -136,7 +135,7 @@ emailCss =
     .monoscope-email .monoscope-code { background-color: #1a1a1a !important; border-color: #333333 !important; color: #ffffff !important; }
     .monoscope-email .highlight-box { background-color: #1a1a1a !important; }
     .monoscope-email .highlight-box p { color: #aaaaaa !important; }
-    .monoscope-email .error-card { border-color: #333333 !important; border-left-color: #f87171 !important; background-color: transparent !important; }
+    .monoscope-email .error-card { border-color: #333333 !important; background-color: transparent !important; }
     .monoscope-email .error-card-header { color: #f87171 !important; }
     .monoscope-email .error-card-sub { color: #aaaaaa !important; }
     .monoscope-email .error-card-meta { color: #aaaaaa !important; }
@@ -243,10 +242,7 @@ emailHelpLinks = p_ do
 
 
 emailSignoff :: Html ()
-emailSignoff = p_ do
-  "Best regards,"
-  br_ []
-  "Monoscope Team"
+emailSignoff = p_ [style_ "color: #57606a;"] "\8212 Monoscope"
 
 
 emailFallbackUrl :: Text -> Html ()
@@ -367,36 +363,55 @@ runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intr
       p_ do
         toHtml intro
         b_ $ toHtml projectName
-        " project. A copy of this email was sent to all members of the project."
+        "."
       emailDivider
-      forM_ errors errorCard
+      forM_ (take maxErrorCards errors) (errorCard errorsUrl)
+      when (length errors > maxErrorCards) $
+        p_ [style_ "text-align: center; color: #57606a; font-size: 14px; margin: 16px 0;"] $
+          toHtml $ "and " <> show (length errors - maxErrorCards) <> " more error(s)…"
       emailButton errorsUrl "View all errors"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl errorsUrl
   )
+  where
+    maxErrorCards = 5
 
 
-errorCard :: ErrorPatterns.ATError -> Html ()
-errorCard e =
+errorCard :: Text -> ErrorPatterns.ATError -> Html ()
+errorCard errorsUrl e =
   table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-    tr_ $ td_ [style_ "padding: 15px 20px 5px 20px;"] do
-      p_ [class_ "error-card-header"] $ toHtml $ e.errorType <> ": " <> e.message
-      p_ [class_ "error-card-sub"] $ toHtml $ "Root cause: " <> e.rootErrorType <> ": " <> e.rootErrorMessage
-    tr_
-      $ td_ [style_ "padding: 10px 20px;"]
-      $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-        tr_ do
-          metaCell "When:" $ toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" e.when
-          metaCell "Technology:" $ maybe "" (toText . show) e.technology
-        tr_ do
-          metaCell "Hash:" e.hash
-          metaCell "Request:" $ fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath
-    tr_ $ td_ [style_ "padding: 10px 20px 20px 20px;"] do
-      h3_ [style_ "margin: 0 0 10px 0; font-size: 14px; font-weight: 600;"] "Stack Trace"
-      div_ [class_ "error-card-stack"] $ toHtml e.stackTrace
+    tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
+      p_ [class_ "error-card-header"] $ toHtml $ truncateText 120 e.errorType
+      p_ [class_ "error-card-sub", style_ "word-break: break-word;"] $ toHtml $ truncateText 200 e.message
+      when hasDistinctRootCause $
+        p_ [style_ "margin: 6px 0 0; font-size: 13px; color: #24292f; word-break: break-word;"] $ do
+          b_ [style_ "color: #57606a;"] "Root cause: "
+          toHtml $ truncateText 200 (e.rootErrorType <> ": " <> e.rootErrorMessage)
+    tr_ $ td_ [style_ "padding: 0 20px 12px 20px;"] $
+      p_ [class_ "error-card-meta", style_ "margin: 0; line-height: 1.6;"] $ do
+        let meta = filter ((/= "") . snd)
+              [ ("", fromMaybe "" e.requestMethod <> " " <> fromMaybe "" e.requestPath)
+              , ("", fromMaybe "" e.serviceName)
+              , ("", fromMaybe "" e.environment)
+              , ("", toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M %p" e.when)
+              ]
+        forM_ (zip [0 :: Int ..] meta) \(i, (_, val)) -> do
+          when (i > 0) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
+          toHtml val
+    when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 20px 15px 20px;"] do
+      let traceLines = T.lines e.stackTrace
+          lastLines = takeEnd 2 traceLines
+          hasMore = length traceLines > 2
+      div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" lastLines
+      when hasMore $
+        p_ [style_ "margin: 8px 0 0; font-size: 12px;"]
+          $ a_ [href_ (errorsUrl <> "by_hash/" <> e.hash), style_ "color: #377cfb; text-decoration: none;"]
+          $ toHtml @Text ("View full trace (" <> show (length traceLines) <> " lines) \8594")
+  where
+    hasDistinctRootCause = e.rootErrorType /= e.errorType || e.rootErrorMessage /= e.message
+    takeEnd n xs = drop (length xs - n) xs
+
+truncateText :: Int -> Text -> Text
+truncateText n t = if T.length t > n then T.take n t <> "…" else t
+
 
 
 -- =============================================================================
@@ -604,7 +619,7 @@ sampleProjectDeleted = projectDeletedEmail "Jane Doe" "My API Project"
 
 
 sampleRuntimeErrors :: (Text, Html ())
-sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2]
+sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3]
   where
     sampleError1 =
       def
@@ -616,7 +631,8 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
         , ErrorPatterns.hash = "abc123def"
         , ErrorPatterns.requestMethod = Just "GET"
         , ErrorPatterns.requestPath = Just "/api/v1/items"
-        , ErrorPatterns.technology = Just LogQueries.JsExpress
+        , ErrorPatterns.serviceName = Just "api-gateway"
+        , ErrorPatterns.environment = Just "production"
         }
     sampleError2 =
       def
@@ -628,6 +644,21 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
         , ErrorPatterns.hash = "xyz789abc"
         , ErrorPatterns.requestMethod = Just "POST"
         , ErrorPatterns.requestPath = Just "/api/v1/users"
+        , ErrorPatterns.serviceName = Just "user-service"
+        , ErrorPatterns.environment = Just "production"
+        }
+    sampleError3 =
+      def
+        { ErrorPatterns.errorType = "HttpException"
+        , ErrorPatterns.message = "HttpExceptionRequest Request { host = \"api.lemonsqueezy.com\" port = 443 secure = True requestHeaders = [(\"Authorization\",\"<REDACTED>\"),(\"User-Agent\",\"haskell wreq-0.5.4.3\")] path = \"/v1/subscriptions/\" queryString = \"\" method = \"GET\" } (StatusCodeException (Response {responseStatus = Status {statusCode = 403, statusMessage = \"Forbidden\"}}))"
+        , ErrorPatterns.rootErrorType = "StatusCodeException"
+        , ErrorPatterns.rootErrorMessage = "403 Forbidden from api.lemonsqueezy.com"
+        , ErrorPatterns.stackTrace = "at Network.Wreq.getWith (src/Network/Wreq.hs:112:5)\n  at Billing.LemonSqueezy.fetchSubscriptions (src/Billing/LemonSqueezy.hs:89:12)\n  at BackgroundJobs.syncSubscriptions (src/BackgroundJobs.hs:234:8)"
+        , ErrorPatterns.hash = "ls403err"
+        , ErrorPatterns.requestMethod = Just "GET"
+        , ErrorPatterns.requestPath = Just "/v1/subscriptions/"
+        , ErrorPatterns.serviceName = Just "billing-worker"
+        , ErrorPatterns.environment = Just "production"
         }
 
 

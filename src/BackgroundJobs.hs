@@ -343,13 +343,26 @@ processBackgroundJob authCtx bgJob =
                 sched 24 3600 (`LogPatternHourlyProcessing` p)
                 sched 288 300 (`FiveMinuteSpanProcessing` p)
                 sched 1440 60 (`OneMinuteErrorProcessing` p)
-                Relude.when (dayOfWeek currentDay == Monday)
-                  $ void
-                  $ createJob conn "background_jobs"
-                  $ BackgroundJobs.WeeklyReports p
 
             Relude.when projectJobsExist
               $ Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
+
+            -- Weekly reports scheduled independently of per-project idempotency guard,
+            -- so they aren't skipped when periodic jobs were already scheduled earlier.
+            Relude.when (dayOfWeek currentDay == Monday) $ liftIO $ withResource authCtx.jobsPool \conn -> do
+              existing <-
+                SimplePG.query
+                  conn
+                  [sql|SELECT COUNT(*)::int FROM background_jobs
+                       WHERE payload->>'tag' = 'WeeklyReports'
+                         AND payload->>'projectId' = ?
+                         AND run_at >= date_trunc('day', ?::timestamptz)
+                         AND status IN ('queued', 'locked', 'retry')|]
+                  (p, currentTime)
+              let alreadyQueued = case existing of
+                    [Only (c :: Int)] -> c > 0
+                    _ -> False
+              unless alreadyQueued $ void $ createJob conn "background_jobs" $ BackgroundJobs.WeeklyReports p
     HourlyJob scheduledTime hour -> unlessStale "HourlyJob" scheduledTime (2 * 3600) $ runHourlyJob scheduledTime hour
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
