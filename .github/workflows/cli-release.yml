@@ -4,6 +4,9 @@ on:
   push:
     tags: ['cli-v*']
 
+permissions:
+  contents: read
+
 env:
   LANG: C.UTF-8
 
