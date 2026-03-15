@@ -842,9 +842,9 @@ settingsWrapper pid current pageHtml = do
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
       ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full"] do
         -- Mobile hamburger to open main sidebar
-        li_ [class_ "md:hidden shrink-0"] $
-          div_ [class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $
-            faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
+        li_ [class_ "md:hidden shrink-0"]
+          $ div_ [class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]]
+          $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
         mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
     main_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
       pageHtml

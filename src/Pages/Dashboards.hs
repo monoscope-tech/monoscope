@@ -685,13 +685,16 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
             let optVal = opt Unsafe.!! 0
                 optLbl = fromMaybe optVal (opt !!? 1)
                 isCurrent = var.value == Just optVal
-            a_ [ class_ $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
+            a_
+              [ class_
+                  $ "var-opt flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
                   <> bool "" " active" (idx == 0)
                   <> bool "" " var-opt-current" isCurrent
-               , href_ $ urlPrefix <> optVal
-               ] do
-              span_ [class_ "truncate flex-1"] $ toHtml optLbl
-              when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
+              , href_ $ urlPrefix <> optVal
+              ]
+              do
+                span_ [class_ "truncate flex-1"] $ toHtml optLbl
+                when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
           div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
       -- Keyboard hints
       div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"] do

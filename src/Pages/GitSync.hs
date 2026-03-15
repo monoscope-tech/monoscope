@@ -194,8 +194,8 @@ gitSyncSettingsDeleteH pid = do
 
 gitSyncSettingsPage :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
 gitSyncSettingsPage hostUrl pid syncM = settingsSection_ do
-    settingsH2_ "GitHub Sync"
-    div_ [id_ "git-sync-content"] $ gitSyncSettingsView hostUrl pid syncM
+  settingsH2_ "GitHub Sync"
+  div_ [id_ "git-sync-content"] $ gitSyncSettingsView hostUrl pid syncM
 
 
 gitSyncSettingsView :: Text -> Projects.ProjectId -> Maybe GitSync.GitHubSync -> Html ()
