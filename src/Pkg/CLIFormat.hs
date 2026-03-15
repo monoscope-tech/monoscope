@@ -15,7 +15,7 @@ import Relude
 
 import Data.Aeson qualified as AE
 import Data.List qualified as L
-import Data.Scientific (FPFormat (Fixed), formatScientific)
+import Data.Scientific (FPFormat (..), Scientific, formatScientific, isInteger)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 
@@ -122,7 +122,7 @@ extractTextArray = withArray $ mapMaybe (\case AE.String s -> Just s; _ -> Nothi
 valToText :: AE.Value -> Text
 valToText (AE.String s) = s
 valToText AE.Null = ""
-valToText (AE.Number n) = toText $ formatScientific Fixed Nothing n
+valToText (AE.Number n) = showScientific n
 valToText (AE.Bool True) = "true"
 valToText (AE.Bool False) = "false"
 valToText v = decodeUtf8 $ AE.encode v
@@ -188,9 +188,15 @@ evalCond v cond
   | otherwise = False
 
 
+-- | Display-friendly formatting: integers without decimal, floats with minimal precision.
+showScientific :: Scientific -> Text
+showScientific n
+  | isInteger n = show (round n :: Integer)
+  | otherwise = toText $ formatScientific Fixed Nothing n
+
+
 sparklineBlocks :: Text
 sparklineBlocks = "▁▂▃▄▅▆▇█"
-
 
 -- | Convert a normalized value (0-1) to a sparkline bar character.
 --
