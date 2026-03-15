@@ -5,7 +5,7 @@ license: BSD3
 author: 'Author name here'
 maintainer: 'example@example.com'
 copyright: '2021 Author name here'
-language: GHC2021
+language: GHC2024
 spec-version: 0.36.0
 
 build-type: Custom
@@ -83,36 +83,30 @@ ghc-options:
   # - "-finfo-table-map"
 
 default-extensions:
+  # Already in GHC2024: BangPatterns, DataKinds, DeriveGeneric, DerivingStrategies,
+  #   ExplicitNamespaces, GADTs, LambdaCase, MonoLocalBinds, RoleAnnotations,
+  #   TupleSections, ViewPatterns (+ all GHC2021 extensions)
+  - AllowAmbiguousTypes
   - BlockArguments
-  - DataKinds
-  - MultilineStrings
-  - DerivingVia
   - DeriveAnyClass
-  - DerivingStrategies
+  - DerivingVia
   - DuplicateRecordFields
-  - ExplicitNamespaces
   - ExtendedDefaultRules
-  - LambdaCase
+  - MultilineStrings
   - MultiWayIf
   - NoImplicitPrelude
   - OverloadedLabels
   - OverloadedLists
   - OverloadedRecordDot
   - OverloadedStrings
+  - PackageImports
   - PatternSynonyms
   - QuasiQuotes
-  - RoleAnnotations
-  - UndecidableInstances
-  - TypeFamilies
   - RecordWildCards
   - TemplateHaskell
-  - AllowAmbiguousTypes
-  - TupleSections
+  - TypeFamilies
+  - UndecidableInstances
   - ViewPatterns
-  - DeriveGeneric
-  - BangPatterns
-  - GADTs
-  - PackageImports
 
 description: Please see the README on GitHub at <https://github.com/githubuser/monoscope#readme>
 
@@ -284,7 +278,7 @@ library:
     - zlib
 
 executables:
-  monoscope:
+  monoscope-server:
     main: Main.hs
     source-dirs: app
     ghc-options:
@@ -297,6 +291,40 @@ executables:
     dependencies:
       - monoscope
       - hs-opentelemetry-instrumentation-auto
+      - name: relude
+        version: '>= 1.2.0.0'
+        mixin:
+          - (Relude as Prelude)
+          - ''
+
+  monoscope:
+    main: Main.hs
+    source-dirs: cli/
+    ghc-options:
+      - -threaded
+    dependencies:
+      - monoscope
+      - optparse-applicative
+      - ansi-terminal
+      - directory
+      - http-client
+      - wreq
+      - yaml
+      - aeson
+      - aeson-pretty
+      - filepath
+      - unix
+      - lens
+      - text
+      - containers
+      - unliftio
+      - effectful
+      - effectful-core
+      - process
+      - mtl
+      - brick
+      - vty
+      - vector
       - name: relude
         version: '>= 1.2.0.0'
         mixin:
@@ -372,6 +400,7 @@ tests:
       - ki-effectful
       - effectful-core
       - effectful-postgresql
+      - process
   unit-tests:
     main: Main.hs
     source-dirs: test/unit

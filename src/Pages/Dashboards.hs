@@ -630,7 +630,7 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
     div_ [class_ "var-picker-backdrop fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40", style_ "z-index:99999", [__|on click if event.target is me remove me|]] do
       div_ [class_ "w-full max-w-lg flex items-center justify-between mb-2 px-3"] do
         span_ [class_ "text-2xs font-medium text-white dark:text-white/70 uppercase tracking-wider"] $ toHtml $ "Select " <> varTitle
-        span_ [class_ "var-picker-count text-xs text-white/80 dark:text-white/50", data_ "total" (T.pack $ show optCount)] $ toHtml $ show optCount <> " items"
+        span_ [class_ "var-picker-count text-xs text-white/80 dark:text-white/50", data_ "total" (show optCount)] $ toHtml $ show optCount <> " items"
       div_ [class_ "var-picker w-full max-w-lg bg-base-100 rounded-lg shadow-2xl border border-base-300 overflow-hidden", [__|on click halt the event's bubbling|]] do
         div_ [class_ "px-3 border-b border-base-300"] do
           input_
@@ -1552,7 +1552,7 @@ dashboardsGet_ dg = do
           div_ [class_ "hidden max-md:flex items-center gap-2 mt-1 text-xs text-textWeak flex-wrap"] do
             span_ [class_ "tabular-nums"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e" dash.updatedAt
             forM_ (getTeams dash) \team -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml team.handle
-            forM_ (V.toList dash.tags) \tag -> span_ [class_ "badge badge-sm badge-neutral"] $ toHtml tag
+            forM_ (V.toList dash.tags) $ span_ [class_ "badge badge-sm badge-neutral"] . toHtml
 
     let renderModifiedCol dash = span_ [class_ "text-xs text-textWeak tabular-nums", data_ "tippy-content" "Last modified date"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" dash.updatedAt
 

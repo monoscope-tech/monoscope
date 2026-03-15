@@ -270,7 +270,7 @@ connectedView hostUrl pid sync actionUrl webhookUrl isViaApp = do
           faSprite_ "copy" "regular" "w-3 h-3"
           span_ "Copy"
       div_ [class_ "bg-fillWeak rounded-lg px-3 py-1.5 font-mono text-xs text-textWeak break-all"] $ toHtml webhookUrl
-      when (not isViaApp) $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
+      unless isViaApp $ p_ [class_ "text-xs text-textWeak"] "Add this to your repository for automatic syncing."
 
     -- Actions
     div_ [class_ "flex items-center justify-between pt-2"] do

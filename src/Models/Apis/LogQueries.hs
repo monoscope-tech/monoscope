@@ -115,18 +115,18 @@ data RequestTypes
 
 
 -- normalize URLPatg based off the SDKTypes. Should allow us have custom logic to parse and transform url paths into a form we are happy with, per library
--- >>> normalizeUrlPath GoGin 200 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
--- "https://apitoolkit.io/abc/:bla"
+-- >>> normalizeUrlPath GoGin 200 "GET" "https://monoscope.tech/abc/:bla?q=abc"
+-- "https://monoscope.tech/abc/:bla"
 -- >>> normalizeUrlPath GoGin 200 "GET" "/abc/:bla?q=abc"
 -- "/abc/:bla"
 --
--- >>> normalizeUrlPath GoGin 404 "GET" "https://apitoolkit.io/abc/:bla?q=abc"
+-- >>> normalizeUrlPath GoGin 404 "GET" "https://monoscope.tech/abc/:bla?q=abc"
 -- ""
 --
--- >>> normalizeUrlPath JsExpress 200 "OPTIONS" "https://apitoolkit.io/abc/:bla?q=abc"
+-- >>> normalizeUrlPath JsExpress 200 "OPTIONS" "https://monoscope.tech/abc/:bla?q=abc"
 -- ""
--- >>> normalizeUrlPath JsExpress 200 "PATCH" "https://apitoolkit.io/abc/:bla?q=abc"
--- "https://apitoolkit.io/abc/:bla"
+-- >>> normalizeUrlPath JsExpress 200 "PATCH" "https://monoscope.tech/abc/:bla?q=abc"
+-- "https://monoscope.tech/abc/:bla"
 --
 normalizeUrlPath :: SDKTypes -> Int -> Text -> Text -> Text
 -- NOTE: Temporary workaround due to storing complex paths in the urlPath, which should be unaccepted, and messes with our logic
@@ -135,7 +135,7 @@ normalizeUrlPath _ statusCode _ urlPath = removeQueryParams statusCode urlPath
 
 
 -- removeQueryParams ...
--- >>> removeQueryParams 200 "https://apitoolkit.io/abc/:bla?q=abc"
+-- >>> removeQueryParams 200 "https://monoscope.tech/abc/:bla?q=abc"
 --
 -- Function to remove the query parameter section from a URL
 removeQueryParams :: Int -> Text -> Text

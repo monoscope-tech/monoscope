@@ -1,0 +1,20 @@
+{
+  "name": "@monoscope/cli",
+  "version": "0.1.0",
+  "description": "Monoscope CLI — terminal access to your observability platform",
+  "bin": {
+    "monoscope": "bin/monoscope.js"
+  },
+  "optionalDependencies": {
+    "@monoscope/cli-linux-x64": "0.1.0",
+    "@monoscope/cli-darwin-arm64": "0.1.0",
+    "@monoscope/cli-darwin-x64": "0.1.0",
+    "@monoscope/cli-win32-x64": "0.1.0"
+  },
+  "license": "BSD-3-Clause",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/monoscope-tech/monoscope"
+  },
+  "keywords": ["monoscope", "observability", "cli", "logs", "traces", "metrics"]
+}

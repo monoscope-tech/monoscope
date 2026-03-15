@@ -75,6 +75,10 @@ extra-source-files:
     static/migrations/0047_fix_anomaly_trigger_conflict.sql
     static/migrations/0048_error_pattern_llm_analysis.sql
     static/migrations/0049_delay_anomaly_job_batching.sql
+    static/migrations/0050_issue_seq_num.sql
+    static/migrations/0051_issue_seq_num_fix.sql
+    static/migrations/0052_compression_and_retention_policies.sql
+    static/migrations/0053_device_auth_codes.sql
 
 source-repository head
   type: git
@@ -141,6 +145,8 @@ library
       Pages.Share
       Pages.Telemetry
       Pkg.AI
+      Pkg.CLIFormat
+      Pkg.CLITestUtils
       Pkg.Components.LogQueryBox
       Pkg.Components.Table
       Pkg.Components.TimePicker
@@ -212,36 +218,27 @@ library
   hs-source-dirs:
       src
   default-extensions:
+      AllowAmbiguousTypes
       BlockArguments
-      DataKinds
-      MultilineStrings
-      DerivingVia
       DeriveAnyClass
-      DerivingStrategies
+      DerivingVia
       DuplicateRecordFields
-      ExplicitNamespaces
       ExtendedDefaultRules
-      LambdaCase
+      MultilineStrings
       MultiWayIf
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedRecordDot
       OverloadedStrings
+      PackageImports
       PatternSynonyms
       QuasiQuotes
-      RoleAnnotations
-      UndecidableInstances
-      TypeFamilies
       RecordWildCards
       TemplateHaskell
-      AllowAmbiguousTypes
-      TupleSections
+      TypeFamilies
+      UndecidableInstances
       ViewPatterns
-      DeriveGeneric
-      BangPatterns
-      GADTs
-      PackageImports
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -fplugin AutoInstrument
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
@@ -373,43 +370,97 @@ library
     , xxhash
     , yaml
     , zlib
-  default-language: GHC2021
+  default-language: GHC2024
 
 executable monoscope
   main-is: Main.hs
+  other-modules:
+      CLI.Commands
+      CLI.Config
+      CLI.Core
+      CLI.UI
   hs-source-dirs:
-      app
+      cli/
   default-extensions:
+      AllowAmbiguousTypes
       BlockArguments
-      DataKinds
-      MultilineStrings
-      DerivingVia
       DeriveAnyClass
-      DerivingStrategies
+      DerivingVia
       DuplicateRecordFields
-      ExplicitNamespaces
       ExtendedDefaultRules
-      LambdaCase
+      MultilineStrings
       MultiWayIf
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedRecordDot
       OverloadedStrings
+      PackageImports
       PatternSynonyms
       QuasiQuotes
-      RoleAnnotations
-      UndecidableInstances
-      TypeFamilies
       RecordWildCards
       TemplateHaskell
-      AllowAmbiguousTypes
-      TupleSections
+      TypeFamilies
+      UndecidableInstances
       ViewPatterns
-      DeriveGeneric
-      BangPatterns
-      GADTs
+  ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded
+  build-tool-depends:
+      proto-lens-protoc:proto-lens-protoc
+  build-depends:
+      aeson
+    , aeson-pretty
+    , ansi-terminal
+    , brick
+    , containers
+    , directory
+    , effectful
+    , effectful-core
+    , filepath
+    , http-client
+    , lens
+    , monoscope
+    , mtl
+    , optparse-applicative
+    , process
+    , relude >=1.2.0.0
+    , text
+    , unix
+    , unliftio
+    , vector
+    , vty
+    , wreq
+    , yaml
+  mixins:
+      relude (Relude as Prelude)
+    , relude 
+  default-language: GHC2024
+
+executable monoscope-server
+  main-is: Main.hs
+  hs-source-dirs:
+      app
+  default-extensions:
+      AllowAmbiguousTypes
+      BlockArguments
+      DeriveAnyClass
+      DerivingVia
+      DuplicateRecordFields
+      ExtendedDefaultRules
+      MultilineStrings
+      MultiWayIf
+      NoImplicitPrelude
+      OverloadedLabels
+      OverloadedLists
+      OverloadedRecordDot
+      OverloadedStrings
       PackageImports
+      PatternSynonyms
+      QuasiQuotes
+      RecordWildCards
+      TemplateHaskell
+      TypeFamilies
+      UndecidableInstances
+      ViewPatterns
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -fplugin AutoInstrument -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
@@ -420,7 +471,7 @@ executable monoscope
   mixins:
       relude (Relude as Prelude)
     , relude 
-  default-language: GHC2021
+  default-language: GHC2024
 
 test-suite doctests
   type: exitcode-stdio-1.0
@@ -428,36 +479,27 @@ test-suite doctests
   hs-source-dirs:
       test/doctests
   default-extensions:
+      AllowAmbiguousTypes
       BlockArguments
-      DataKinds
-      MultilineStrings
-      DerivingVia
       DeriveAnyClass
-      DerivingStrategies
+      DerivingVia
       DuplicateRecordFields
-      ExplicitNamespaces
       ExtendedDefaultRules
-      LambdaCase
+      MultilineStrings
       MultiWayIf
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedRecordDot
       OverloadedStrings
+      PackageImports
       PatternSynonyms
       QuasiQuotes
-      RoleAnnotations
-      UndecidableInstances
-      TypeFamilies
       RecordWildCards
       TemplateHaskell
-      AllowAmbiguousTypes
-      TupleSections
+      TypeFamilies
+      UndecidableInstances
       ViewPatterns
-      DeriveGeneric
-      BangPatterns
-      GADTs
-      PackageImports
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
@@ -467,12 +509,14 @@ test-suite doctests
     , hs-opentelemetry-instrumentation-auto
     , monoscope
     , relude >=1.2.0.0
-  default-language: GHC2021
+  default-language: GHC2024
 
 test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      CLI.CLIBinarySpec
+      CLI.CLISpec
       EndpointDiscoverySpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
@@ -507,36 +551,27 @@ test-suite integration-tests
   hs-source-dirs:
       test/integration
   default-extensions:
+      AllowAmbiguousTypes
       BlockArguments
-      DataKinds
-      MultilineStrings
-      DerivingVia
       DeriveAnyClass
-      DerivingStrategies
+      DerivingVia
       DuplicateRecordFields
-      ExplicitNamespaces
       ExtendedDefaultRules
-      LambdaCase
+      MultilineStrings
       MultiWayIf
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedRecordDot
       OverloadedStrings
+      PackageImports
       PatternSynonyms
       QuasiQuotes
-      RoleAnnotations
-      UndecidableInstances
-      TypeFamilies
       RecordWildCards
       TemplateHaskell
-      AllowAmbiguousTypes
-      TupleSections
+      TypeFamilies
+      UndecidableInstances
       ViewPatterns
-      DeriveGeneric
-      BangPatterns
-      GADTs
-      PackageImports
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       hspec-discover:hspec-discover
@@ -574,6 +609,7 @@ test-suite integration-tests
     , pg-entity
     , pg-transact
     , postgresql-simple
+    , process
     , proto-lens
     , relude >=1.2.0.0
     , resource-pool
@@ -587,7 +623,7 @@ test-suite integration-tests
     , uuid-quasi
     , vector
     , wreq
-  default-language: GHC2021
+  default-language: GHC2024
 
 test-suite unit-tests
   type: exitcode-stdio-1.0
@@ -604,36 +640,27 @@ test-suite unit-tests
   hs-source-dirs:
       test/unit
   default-extensions:
+      AllowAmbiguousTypes
       BlockArguments
-      DataKinds
-      MultilineStrings
-      DerivingVia
       DeriveAnyClass
-      DerivingStrategies
+      DerivingVia
       DuplicateRecordFields
-      ExplicitNamespaces
       ExtendedDefaultRules
-      LambdaCase
+      MultilineStrings
       MultiWayIf
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedRecordDot
       OverloadedStrings
+      PackageImports
       PatternSynonyms
       QuasiQuotes
-      RoleAnnotations
-      UndecidableInstances
-      TypeFamilies
       RecordWildCards
       TemplateHaskell
-      AllowAmbiguousTypes
-      TupleSections
+      TypeFamilies
+      UndecidableInstances
       ViewPatterns
-      DeriveGeneric
-      BangPatterns
-      GADTs
-      PackageImports
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
@@ -653,7 +680,7 @@ test-suite unit-tests
     , uuid
     , uuid-quasi
     , vector
-  default-language: GHC2021
+  default-language: GHC2024
 
 benchmark utils-bench
   type: exitcode-stdio-1.0
@@ -663,36 +690,27 @@ benchmark utils-bench
   hs-source-dirs:
       test/bench
   default-extensions:
+      AllowAmbiguousTypes
       BlockArguments
-      DataKinds
-      MultilineStrings
-      DerivingVia
       DeriveAnyClass
-      DerivingStrategies
+      DerivingVia
       DuplicateRecordFields
-      ExplicitNamespaces
       ExtendedDefaultRules
-      LambdaCase
+      MultilineStrings
       MultiWayIf
       NoImplicitPrelude
       OverloadedLabels
       OverloadedLists
       OverloadedRecordDot
       OverloadedStrings
+      PackageImports
       PatternSynonyms
       QuasiQuotes
-      RoleAnnotations
-      UndecidableInstances
-      TypeFamilies
       RecordWildCards
       TemplateHaskell
-      AllowAmbiguousTypes
-      TupleSections
+      TypeFamilies
+      UndecidableInstances
       ViewPatterns
-      DeriveGeneric
-      BangPatterns
-      GADTs
-      PackageImports
   ghc-options: -fwrite-ide-info -threaded -Weverything -Werror -fno-defer-typed-holes -Wno-error=deprecations -Wno-error=unused-packages -Wno-error=implicit-lift -Wno-error=missing-poly-kind-signatures -Wno-missing-exported-signatures -Wno-missing-import-lists -Wno-missed-specialisations -Wno-all-missed-specialisations -Wno-unsafe -Wno-safe -Wno-missing-local-signatures -Wno-monomorphism-restriction -Wno-missing-safe-haskell-mode -Wno-partial-fields -Wno-prepositive-qualified-module -Wno-missing-export-lists -Wno-orphans -Wno-missing-deriving-strategies -Wno-missing-role-annotations -Wno-unused-matches -Wno-missing-kind-signatures -Wno-type-defaults -Wno-unused-top-binds -Wno-unused-imports -Wno-error=incomplete-record-selectors -Wno-ambiguous-fields -threaded -rtsopts -with-rtsopts=-N
   build-tool-depends:
       proto-lens-protoc:proto-lens-protoc
@@ -702,4 +720,4 @@ benchmark utils-bench
     , monoscope
     , relude >=1.2.0.0
     , time
-  default-language: GHC2021
+  default-language: GHC2024

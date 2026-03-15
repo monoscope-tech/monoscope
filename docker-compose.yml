@@ -123,7 +123,7 @@ services:
     ports:
       - '5050:80'
     environment:
-      - PGADMIN_DEFAULT_EMAIL=admin@apitoolkit.io
+      - PGADMIN_DEFAULT_EMAIL=admin@monoscope.tech
       - PGADMIN_DEFAULT_PASSWORD=admin
       - PGADMIN_CONFIG_SERVER_MODE=False
       - PGADMIN_CONFIG_MASTER_PASSWORD_REQUIRED=False

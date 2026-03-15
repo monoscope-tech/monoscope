@@ -358,8 +358,8 @@ renderTable tbl =
           form_ [class_ $ "flex flex-col w-full" <> divCls, id_ tbl.config.elemID, onkeydown_ "return event.key != 'Enter';"] do
             when ((isJust tbl.features.rowId || isJust tbl.features.sort) && isNothing tbl.config.bulkActionsInHeader) $ renderToolbar tbl
             when isEmpty $ whenJust tbl.features.zeroState renderZeroState
-            unless isEmpty do
-              div_ [class_ "w-full flex-col"] do
+            unless isEmpty
+              $ div_ [class_ "w-full flex-col"] do
                 whenJust tbl.features.search \_ -> span_ [id_ "searchIndicator", class_ "htmx-indicator loading loading-sm loading-dots mx-auto"] ""
                 div_ [id_ "rowsContainer", class_ divCls] do
                   renderRows tbl

@@ -21,6 +21,9 @@ cypress:
 live-reload:
 	ghcid --command 'cabal repl monoscope --ghc-options="-Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.12.2' --test ':run Start.startApp' --warnings
 
+live-reload-cli:
+	ghcid --command 'cabal repl exe:monoscope --ghc-options="-O0 -Wno-error=unused-imports -Wno-error=unused-top-binds" --with-compiler=ghc-9.12.2' --warnings 2>&1 | tee build-cli.log
+
 live-test-reload:
 	ghcid --command 'cabal repl lib:monoscope test/unit/Main.hs --with-compiler=ghc-9.12.2' --test ':run main' --warnings
 
@@ -120,4 +123,25 @@ build-chart-cli:
 build-chart-cli-linux:
 	cd web-components && bun build --compile --target=bun-linux-x64 src/chart-cli.ts --outfile ../chart-cli
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-doctests build-chart-cli build-chart-cli-linux
+define tmux_run
+	@PANE=$$(tmux list-panes -F '#{pane_id} #{pane_current_command}' 2>/dev/null | grep -E 'ghcid|make|tee' | head -1 | awk '{print $$1}'); \
+	if [ -n "$$PANE" ]; then \
+		echo "Reusing pane $$PANE (sending C-c first)"; \
+		tmux send-keys -t "$$PANE" C-c; sleep 0.5; \
+		tmux send-keys -t "$$PANE" '$(1)' Enter; \
+	elif [ -n "$$TMUX" ]; then \
+		echo "Splitting a new pane"; \
+		tmux split-window -d -h '$(1)'; \
+	else \
+		echo "Not in tmux — running in foreground"; \
+		$(1); \
+	fi
+endef
+
+tmux-live-reload:
+	$(call tmux_run,make live-reload 2>&1 | tee build.log)
+
+tmux-live-reload-cli:
+	$(call tmux_run,make live-reload-cli 2>&1 | tee build-cli.log)
+
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli

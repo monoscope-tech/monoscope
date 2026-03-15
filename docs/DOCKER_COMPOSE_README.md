@@ -97,7 +97,7 @@ docker-compose --profile dev up -d
 
 Access at: <http://localhost:5050>
 
-- Email: <admin@apitoolkit.io>
+- Email: <admin@monoscope.tech>
 - Password: admin
 
 #### Test Database (Ephemeral)

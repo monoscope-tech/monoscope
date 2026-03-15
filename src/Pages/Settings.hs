@@ -643,7 +643,10 @@ billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Te
 billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled = div_ [id_ "main-content"] do
   let pidTxt = pid.toText
       isFree = paymentPlan == "Free"
-      planPrice = if isFree then "0" else if paymentPlan == "Bring your own storage" then "199" else "29" :: Text
+      planPrice
+        | isFree = "0"
+        | paymentPlan == "Bring your own storage" = "199"
+        | otherwise = "29" :: Text
       estCost = "$" <> if isFree then "0" else T.replace "\"" "" amount
   settingsSection_ do
     settingsH2_ "Billing"

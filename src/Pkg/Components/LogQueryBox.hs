@@ -249,8 +249,8 @@ logQueryBox_ config = do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart"] >> span_ [class_ "text-xs"] "hide timeline"
             script_ "if(window.innerWidth<768){const c=document.currentScript.parentElement.querySelector('.toggle-chart');if(c)c.checked=true;}"
 
-        whenJust config.mobileExtra \extra ->
-          div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full hidden"] extra
+        whenJust config.mobileExtra
+          $ div_ [class_ "md:hidden flex items-center gap-2 text-sm w-full hidden"]
 
         div_
           [ class_ "flex justify-end gap-2 max-md:hidden"

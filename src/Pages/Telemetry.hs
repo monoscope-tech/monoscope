@@ -514,9 +514,9 @@ metricRefCounts dashboards monitors metricNames = Map.fromList $ map countRefs m
       where
         matchingDashboards = filter (dashboardHasMetric mn) dashboards
         totalWidgets = sum $ map (countWidgetsWithMetric mn) dashboards
-    alertCount mn = length $ filter (\m -> any (`T.isInfixOf` m.logQuery) ["\"" <> mn <> "\"", "'" <> mn <> "'", "metric=" <> mn, "metric_name=" <> mn]) monitors
+    alertCount mn = length (filter (\m -> any (`T.isInfixOf` m.logQuery) ["\"" <> mn <> "\"", "'" <> mn <> "'", "metric=" <> mn, "metric_name=" <> mn]) monitors)
     dashboardHasMetric mn d = any (widgetRefsMetric mn) (allWidgets d)
-    countWidgetsWithMetric mn d = length $ filter (widgetRefsMetric mn) (allWidgets d)
+    countWidgetsWithMetric mn d = length (filter (widgetRefsMetric mn) (allWidgets d))
     allWidgets d = case d.schema of
       Nothing -> []
       Just schema -> schema.widgets <> maybe [] (concatMap (.widgets)) schema.tabs
