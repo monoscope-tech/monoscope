@@ -7,19 +7,167 @@ const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
 const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc'];
 
-const showNoDataOverlay = (chartId: string) => {
+// --- Concurrency limiter for fetch requests (max 3 in-flight) ---
+const MAX_CONCURRENT_FETCHES = 4;
+let activeFetches = 0;
+const fetchQueue: Array<() => void> = [];
+
+const limitedFetch = (url: string): Promise<Response> => {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      activeFetches++;
+      fetch(url).then(resolve, reject).finally(() => {
+        activeFetches--;
+        if (fetchQueue.length > 0) fetchQueue.shift()!();
+      });
+    };
+    if (activeFetches < MAX_CONCURRENT_FETCHES) run();
+    else fetchQueue.push(run);
+  });
+};
+
+// --- Staggered chart initialization, paused during scroll ---
+// Each echarts.init+setOption takes ~30-35ms which can't be split further.
+// We process 1 chart per rAF frame but pause entirely during active scrolling
+// to keep scroll buttery smooth. Charts resume init when scrolling stops.
+const initQueue: Array<{ fn: () => void; el: HTMLElement | null }> = [];
+let initScheduled = false;
+let isScrolling = false;
+let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+
+// Detect scroll on the main content container (or any parent that scrolls)
+const trackScroll = () => {
+  const scrollTarget = document.getElementById('main-content') || window;
+  scrollTarget.addEventListener('scroll', () => {
+    isScrolling = true;
+    if (scrollTimer) clearTimeout(scrollTimer);
+    scrollTimer = setTimeout(() => {
+      isScrolling = false;
+      ensureScheduled(); // resume init queue after scroll settles
+    }, 150);
+  }, { passive: true });
+};
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', trackScroll);
+else trackScroll();
+
+const processInitQueue = () => {
+  if (isScrolling) {
+    // Don't init charts while scrolling — reschedule for after scroll ends
+    initScheduled = false;
+    return;
+  }
+  if (initQueue.length > 0) {
+    initQueue.shift()!.fn(); // 1 chart per frame
+  }
+  if (initQueue.length > 0) {
+    requestAnimationFrame(processInitQueue);
+  } else {
+    initScheduled = false;
+  }
+};
+
+const ensureScheduled = () => {
+  if (!initScheduled && initQueue.length > 0 && !isScrolling) {
+    initScheduled = true;
+    requestAnimationFrame(processInitQueue);
+  }
+};
+
+// Observe queued chart containers - when one scrolls into view, move it to front
+const visibilityObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const idx = initQueue.findIndex(item => item.el === entry.target);
+    if (idx > 0) {
+      const [item] = initQueue.splice(idx, 1);
+      initQueue.unshift(item);
+    }
+    visibilityObserver.unobserve(entry.target);
+  }
+});
+
+// Deferred init for off-screen charts — only init when scrolled near viewport.
+// 600px rootMargin starts loading ahead of scroll so charts are ready before visible.
+const deferredInits = new Map<HTMLElement, () => void>();
+const deferredInitObserver = new IntersectionObserver((entries) => {
+  for (const entry of entries) {
+    if (!entry.isIntersecting) continue;
+    const fn = deferredInits.get(entry.target as HTMLElement);
+    if (fn) {
+      deferredInits.delete(entry.target as HTMLElement);
+      initQueue.push({ fn, el: entry.target as HTMLElement });
+      ensureScheduled();
+    }
+    deferredInitObserver.unobserve(entry.target);
+  }
+}, { rootMargin: '600px' });
+
+const queueChartInit = (fn: () => void, chartId?: string) => {
+  const el = chartId ? document.getElementById(chartId) : null;
+  if (!el) {
+    initQueue.push({ fn, el: null });
+    ensureScheduled();
+    return;
+  }
+  // Check if near viewport — init immediately; otherwise defer until scrolled near
+  const rect = el.getBoundingClientRect();
+  if (rect.top < window.innerHeight + 600 && rect.bottom > -200) {
+    initQueue.push({ fn, el });
+    visibilityObserver.observe(el);
+    ensureScheduled();
+  } else {
+    deferredInits.set(el, fn);
+    deferredInitObserver.observe(el);
+  }
+};
+
+// --- Shared ResizeObserver for all charts ---
+const sharedResizeObserver = new ResizeObserver((entries) => {
+  for (const entry of entries) {
+    const el = entry.target as HTMLElement;
+    if (el.id) queueChartResize(el.id);
+  }
+});
+
+// --- Shared MutationObserver for theme changes ---
+type ThemeCallback = (isDark: boolean, styles: Record<string, string>) => void;
+const themeCallbacks: Set<ThemeCallback> = new Set();
+let themeChangeScheduled = false;
+
+const sharedThemeObserver = new MutationObserver((mutations) => {
+  if (themeCallbacks.size === 0) return;
+  const themeChanged = mutations.some((m) => m.type === 'attributes' && m.attributeName === 'data-theme');
+  if (!themeChanged || themeChangeScheduled) return;
+  themeChangeScheduled = true;
+  requestAnimationFrame(() => {
+    const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
+    const computedStyle = getComputedStyle(document.body);
+    const styles = {
+      textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
+      tooltipBg: computedStyle.getPropertyValue('--color-bgRaised').trim(),
+      tooltipTextColor: computedStyle.getPropertyValue('--color-textStrong').trim(),
+      tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim(),
+    };
+    themeCallbacks.forEach(cb => cb(isDarkMode, styles));
+    themeChangeScheduled = false;
+  });
+});
+sharedThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
+
+const showNoDataOverlay = (chartId: string, message?: string) => {
   const el = $(`${chartId}`);
   if (!el) return;
   const parent = el.parentElement;
   if (!parent) return;
   let overlay = parent.querySelector('.chart-no-data') as HTMLElement;
+  const msg = message || 'No data for the selected time range';
   if (!overlay) {
     overlay = document.createElement('div');
     overlay.className = 'chart-no-data absolute inset-0 flex items-center justify-center z-10 pointer-events-none';
-    overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">No data for the selected time range</p></div>`;
     parent.style.position = 'relative';
     parent.appendChild(overlay);
   }
+  overlay.innerHTML = `<div class="text-center text-textWeak"><svg class="w-6 h-6 mx-auto mb-2 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M3 13h4l3-8 4 16 3-8h4"/></svg><p class="text-sm">${msg}</p></div>`;
   overlay.classList.remove('hidden');
 };
 
@@ -28,6 +176,7 @@ const hideNoDataOverlay = (chartId: string) => {
   const overlay = el?.parentElement?.querySelector('.chart-no-data') as HTMLElement;
   if (overlay) overlay.classList.add('hidden');
 };
+
 
 const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
   // For timeseries_stat widgets with generic column names, use the default blue color
@@ -104,7 +253,6 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   if (!shouldFetch) return;
 
   const { query, querySQL, pid, chartId, summarizeBy, summarizeByPrefix } = widgetData;
-
   // Batch DOM updates before fetch
   requestAnimationFrame(() => {
     const loader = $(`${chartId}_loader`);
@@ -150,7 +298,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       params.set('query_sql', querySQL);
     }
 
-    const { from, to, headers, dataset, rows_per_min, stats } = await fetch(`/chart_data?${params}`).then((res) => res.json());
+    const { from, to, headers, dataset, rows_per_min, stats } = await limitedFetch(`/chart_data?${params}`).then((res) => res.json());
     const trmHeaders = headers?.map((h: string) => {
       if (h === 'timestamp' || h === 'created_at') {
         return h;
@@ -167,7 +315,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     }
 
     const subtitle = $(`${chartId}Subtitle`);
-    subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)} rows/min`);
+    subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)}/min`);
 
     const value = $(`${chartId}Value`);
     if (value) {
@@ -177,7 +325,9 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
       const formattedValue = isDuration
         ? window.formatDuration(window.convertToNanoseconds(Number(stats[summarizeBy]), unit))
         : window.formatNumber(Number(stats[summarizeBy]));
-      value.innerHTML = `${summarizeByPrefix} ${formattedValue}`;
+      const displayUnit = {'': '', '1': '', '{}': '', 'By': ' bytes'}[unit] ?? ` ${unit}`;
+      const unitSuffix = isDuration ? '' : displayUnit;
+      value.innerHTML = `${summarizeByPrefix} ${formattedValue}${unitSuffix}`;
       value.classList.remove('hidden');
     }
 
@@ -199,7 +349,7 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
   } catch (e) {
     console.error('Failed to fetch new data:', e);
     chart.hideLoading();
-    showNoDataOverlay(chartId);
+    showNoDataOverlay(chartId, 'Failed to load data');
   } finally {
     // Batch DOM updates after fetch completes
     requestAnimationFrame(() => {
@@ -281,42 +431,29 @@ const queueChartResize = (chartId: string) => {
 };
 
 const chartWidget = (widgetData: WidGetData) => {
-  const { chartType, opt, chartId, query, querySQL } = widgetData,
+  const { chartType, opt, chartId } = widgetData,
     chartEl = $(chartId),
     liveStreamCheckbox = $('streamLiveData') as HTMLInputElement;
   let intervalId: NodeJS.Timeout | null = null;
 
   // Dispose of any existing chart instance before creating a new one
   const existingChart = (window as any).echarts.getInstanceByDom(chartEl);
-  if (existingChart) {
-    existingChart.dispose();
-  }
+  if (existingChart) existingChart.dispose();
 
-  // Determine theme based on current mode
   const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
   const theme = isDarkMode ? 'dark' : widgetData.theme || 'default';
-
-  // Initialize new chart
   const chart = (window as any).echarts.init(chartEl, theme);
   chart.group = 'default';
 
-  // Store the original base query to avoid stacking
   const baseQuery = widgetData.query;
   const userQuery = params().query;
-
-  // Ensure we don't use 'null' string as a query
-  if (userQuery && userQuery !== 'null') {
-    widgetData.query = baseQuery ? userQuery + ' | ' + baseQuery : userQuery;
-  } else {
-    widgetData.query = baseQuery;
-  }
-
-  // Timestamps already in ms from server (toWidgetDataset converts seconds to ms)
+  widgetData.query = (userQuery && userQuery !== 'null')
+    ? (baseQuery ? userQuery + ' | ' + baseQuery : userQuery)
+    : baseQuery;
 
   (window as any)[`${chartType}Chart`] = chart;
 
-  // Get CSS variable values from body (where theme is applied)
-  // Cache all computed style reads to minimize reflows
+  // Read computed styles once (shared across all charts via cache)
   const computedStyle = getComputedStyle(document.body);
   const styles = {
     textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
@@ -327,50 +464,36 @@ const chartWidget = (widgetData: WidGetData) => {
 
   if (styles.textColor) {
     opt.legend = opt.legend || {};
-    opt.legend.textStyle = opt.legend.textStyle || {};
-    opt.legend.textStyle.color = styles.textColor;
+    opt.legend.textStyle = { ...opt.legend.textStyle, color: styles.textColor };
   }
-
-  // Configure tooltip styling
-  opt.tooltip = opt.tooltip || {};
-  opt.tooltip.backgroundColor = styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
-  opt.tooltip.textStyle = opt.tooltip.textStyle || {};
-  opt.tooltip.textStyle.color = styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
-  opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
-  opt.tooltip.borderWidth = 1;
-
-  // Set chart background color to transparent (inherits from container)
+  opt.tooltip = {
+    ...opt.tooltip,
+    backgroundColor: styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)'),
+    textStyle: { ...opt.tooltip?.textStyle, color: styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333') },
+    borderColor: styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc'),
+    borderWidth: 1,
+  };
   opt.backgroundColor = 'transparent';
-
-  // Override server's background style with theme-appropriate one
   if (opt.series?.[0]?.backgroundStyle) {
     opt.series[0].backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
   }
 
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
-
-  // Expose threshold functionality on chart element
   (chartEl as any).applyThresholds = (thresholds: Record<string, number>) => applyThresholds(chart, thresholds);
 
-  // Use global resize queue to batch resize operations
-  const resizeObserver = new ResizeObserver(() => {
-    queueChartResize(chartId);
-  });
-  if (chartEl) {
-    resizeObserver.observe(chartEl);
-  }
+  // Use shared ResizeObserver instead of per-widget
+  if (chartEl) sharedResizeObserver.observe(chartEl);
 
-  liveStreamCheckbox &&
-    liveStreamCheckbox.addEventListener('change', () => {
-      if (liveStreamCheckbox.checked) {
-        intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), INITIAL_FETCH_INTERVAL);
-      } else {
-        if (intervalId) clearInterval(intervalId), (intervalId = null);
-      }
-    });
+  liveStreamCheckbox?.addEventListener('change', () => {
+    if (liveStreamCheckbox.checked) {
+      intervalId = setInterval(() => updateChartData(chart, opt, true, widgetData), INITIAL_FETCH_INTERVAL);
+    } else if (intervalId) {
+      clearInterval(intervalId);
+      intervalId = null;
+    }
+  });
 
   if (!opt.dataset.source && chartEl) {
-    const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
     chart.showLoading({
       text: 'Loading...',
       color: isDarkMode ? '#3B82F6' : '#1A74A8',
@@ -383,124 +506,58 @@ const chartWidget = (widgetData: WidGetData) => {
     ).observe(chartEl);
   }
 
-  // Listen for submit and add-query on specific elements
+  const updateQuery = () => {
+    const uq = params().query;
+    widgetData.query = (uq && uq !== 'null') ? (baseQuery ? uq + ' | ' + baseQuery : uq) : baseQuery;
+  };
+
   ['submit', 'add-query'].forEach((event) => {
     const selector = event === 'submit' ? '#log_explorer_form' : '#filterElement';
     document.querySelector(selector)?.addEventListener(event, (e: any) => {
-      console.log('widgets.ts listener fired', { event, source: e.detail?.source, selector });
-
-      const userQuery = params().query;
-      if (userQuery && userQuery !== 'null') {
-        widgetData.query = baseQuery ? userQuery + ' | ' + baseQuery : userQuery;
-      } else {
-        widgetData.query = baseQuery;
-      }
-
-      // Don't reload logs when expanding time range - they handle it themselves
-      if (window.logListTable && e.detail?.source !== 'expand-timerange') {
-        console.log('widgets.ts calling refetchLogs');
-        (window.logListTable as any).refetchLogs();
-      } else {
-        console.log('widgets.ts skipping refetchLogs, source:', e.detail?.source);
-      }
-
+      updateQuery();
+      if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
       updateChartData(chart, opt, true, widgetData);
     });
   });
 
-  // Listen for update-query only on window to avoid duplicate handling
   window.addEventListener('update-query', (e: any) => {
-    console.log('widgets.ts window listener fired', { source: e.detail?.source, ast: e.detail?.ast });
-
-    const userQuery = params().query;
-    if (userQuery && userQuery !== 'null') {
-      widgetData.query = baseQuery ? userQuery + ' | ' + baseQuery : userQuery;
-    } else {
-      widgetData.query = baseQuery;
-    }
-
-    if (e.detail?.ast) {
-      widgetData.queryAST = e.detail.ast;
-    }
-
-    // Don't reload logs when expanding time range - they handle it themselves
-    if (window.logListTable && e.detail?.source !== 'expand-timerange') {
-      console.log('widgets.ts calling refetchLogs');
-      (window.logListTable as any).refetchLogs();
-    } else {
-      console.log('widgets.ts skipping refetchLogs, source:', e.detail?.source);
-    }
-
+    updateQuery();
+    if (e.detail?.ast) widgetData.queryAST = e.detail.ast;
+    if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
     updateChartData(chart, opt, true, widgetData);
   });
 
+  // Register with shared theme observer instead of per-widget MutationObserver
+  const onThemeChange: ThemeCallback = (isDark, styles) => {
+    if (styles.textColor) {
+      opt.legend = opt.legend || {};
+      opt.legend.textStyle = { ...opt.legend.textStyle, color: styles.textColor };
+    }
+    opt.tooltip = {
+      ...opt.tooltip,
+      backgroundColor: styles.tooltipBg || (isDark ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)'),
+      textStyle: { ...opt.tooltip?.textStyle, color: styles.tooltipTextColor || (isDark ? '#e0e0e0' : '#333') },
+      borderColor: styles.tooltipBorderColor || (isDark ? '#555' : '#ccc'),
+      borderWidth: 1,
+    };
+    opt.backgroundColor = 'transparent';
+    opt.series?.forEach((s: any) => {
+      if (s.backgroundStyle) s.backgroundStyle = isDark ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
+    });
+    chart.setOption(opt, false);
+  };
+  themeCallbacks.add(onThemeChange);
+
   window.addEventListener('pagehide', () => {
     if (intervalId) clearInterval(intervalId);
-    resizeObserver.disconnect();
-  });
-
-  // Listen for theme changes
-  let themeChangeScheduled = false;
-  const observer = new MutationObserver((mutations) => {
-    const themeChanged = mutations.some((m) => m.type === 'attributes' && m.attributeName === 'data-theme');
-
-    if (themeChanged && !themeChangeScheduled) {
-      themeChangeScheduled = true;
-
-      requestAnimationFrame(() => {
-        const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
-
-        // Get CSS variable values from body (where theme is applied)
-        // Cache all computed style reads to minimize reflows
-        const computedStyle = getComputedStyle(document.body);
-        const styles = {
-          textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
-          tooltipBg: computedStyle.getPropertyValue('--color-bgRaised').trim(),
-          tooltipTextColor: computedStyle.getPropertyValue('--color-textStrong').trim(),
-          tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim(),
-        };
-
-        // Update theme-related options
-        if (styles.textColor) {
-          opt.legend = opt.legend || {};
-          opt.legend.textStyle = opt.legend.textStyle || {};
-          opt.legend.textStyle.color = styles.textColor;
-        }
-
-        // Configure tooltip styling
-        opt.tooltip = opt.tooltip || {};
-        opt.tooltip.backgroundColor = styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)');
-        opt.tooltip.textStyle = opt.tooltip.textStyle || {};
-        opt.tooltip.textStyle.color = styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333');
-        opt.tooltip.borderColor = styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc');
-        opt.tooltip.borderWidth = 1;
-
-        // Set chart background color to transparent
-        opt.backgroundColor = 'transparent';
-
-        // Update background style for series
-        if (opt.series?.[0]) {
-          opt.series.forEach((s: any) => {
-            if (s.backgroundStyle) {
-              s.backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
-            }
-          });
-        }
-
-        // Apply updated options without recreating the chart
-        chart.setOption(opt, false);
-        themeChangeScheduled = false;
-      });
-    }
-  });
-
-  observer.observe(document.body, {
-    attributes: true,
-    attributeFilter: ['data-theme'],
+    if (chartEl) sharedResizeObserver.unobserve(chartEl);
+    themeCallbacks.delete(onThemeChange);
   });
 };
 
+// Expose both direct and queued init
 (window as any).chartWidget = chartWidget;
+(window as any).queueChartInit = queueChartInit;
 
 /**
  * Format numbers with appropriate suffixes and precision

@@ -462,6 +462,7 @@ data MetricChartListData = MetricChartListData
   , metricType :: Text
   , metricUnit :: Text
   , metricDescription :: Text
+  , lastSeen :: UTCTime
   }
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -645,25 +646,21 @@ getTotalMetricsCount pid lastReported = do
       [sql| SELECT count(*) FROM telemetry.metrics WHERE project_id=? AND timestamp > ?|]
 
 
-getMetricChartListData :: (DB es, Time.Time :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> (Maybe UTCTime, Maybe UTCTime) -> Int -> Eff es [MetricChartListData]
-getMetricChartListData pid sourceM prefixM dateRange cursor = do
-  now <- Time.currentTime
-  let nowStr = formatUTC now
-      dateRangeStr = case dateRange of
-        (Nothing, Just b) -> "AND created_at BETWEEN '" <> nowStr <> "' AND '" <> formatUTC b <> "'"
-        (Just a, Just b) -> "AND created_at BETWEEN '" <> formatUTC a <> "' AND '" <> formatUTC b <> "'"
-        _ -> ""
-      sourceFilter = case sourceM of
+getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Eff es [MetricChartListData]
+getMetricChartListData pid sourceM prefixM = do
+  let sourceFilter = case sourceM of
         Nothing -> ""
         Just source -> if source == "" || source == "all" then "" else "AND service_name = '" <> source <> "'"
       prefixFilter = case prefixM of
         Nothing -> ""
         Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
-      cursorTxt = show cursor
       q =
         [text|
-          SELECT distinct metric_name, metric_type, metric_unit, metric_description
-          FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter $dateRangeStr OFFSET $cursorTxt LIMIT 20;
+          SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
+                 MAX(metric_description) as metric_description, MAX(updated_at) as last_seen
+          FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter
+          GROUP BY metric_name
+          ORDER BY MAX(updated_at) DESC, metric_name;
        |]
   PG.query (Query $ Relude.encodeUtf8 q) pid
 
@@ -696,7 +693,7 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
     q2 =
       [sql|
        INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description, service_name) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description
+       ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description, updated_at = current_timestamp
     |]
 
     rowsToInsert = V.map metricToTuple metrics

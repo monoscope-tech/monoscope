@@ -317,7 +317,7 @@ widget_ = widgetHelper_
 
 widgetHelper_ :: Widget -> Html ()
 widgetHelper_ w' = case w.wType of
-  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
+  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
     unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/issues")) (w.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
@@ -332,11 +332,11 @@ widgetHelper_ w' = case w.wType of
       when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
     div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
-  WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ renderTable w
-  WTLogs -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Logs widget coming soon"
-  WTTraces -> gridItem_ $ div_ [class_ $ "h-full group/wgt " <> paddingBtm] $ renderTraceTable w
-  WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full " <> paddingBtm] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
-  _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt " <> paddingBtm] $ renderChart w
+  WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderTable w
+  WTLogs -> gridItem_ $ div_ [class_ $ "h-full "] $ div_ [class_ "p-3"] "Logs widget coming soon"
+  WTTraces -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderTraceTable w
+  WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
+  _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt "] $ renderChart w
   where
     w = w' & #id %~ maybe (slugify <$> w'.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
@@ -355,9 +355,6 @@ widgetHelper_ w' = case w.wType of
     attrs =
       foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
         <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
-    paddingBtm
-      | w.standalone == Just True = ""
-      | otherwise = ""
     widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
     autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTTraces, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
@@ -366,6 +363,25 @@ widgetHelper_ w' = case w.wType of
         else div_ ([class_ "grid-stack-item h-full flex-1 [.nested-grid_&]:overflow-hidden ", id_ $ maybeToMonoid w.id <> "_widgetEl", data_ "widget" widgetJson] <> attrs <> autoFitAttr) . div_ [class_ "grid-stack-item-content h-full [.grid-stack_&]:h-auto"]
 
 
+renderDottedTitle :: Text -> Html ()
+renderDottedTitle t = case T.breakOn "." t of
+  (_, "") -> span_ [class_ "truncate"] $ toHtml t
+  (seg1, rest) -> do
+    span_ [class_ "shrink-0 text-textWeak font-normal"] $ toHtml seg1
+    case T.breakOnEnd "." (T.drop 1 rest) of
+      ("", lastSeg) -> span_ [class_ "shrink-0"] $ toHtml ("." <> lastSeg)
+      (mid, lastSeg) -> do
+        span_ [class_ "truncate text-textWeak font-normal"] $ toHtml ("." <> mid)
+        span_ [class_ "shrink-0"] $ toHtml lastSeg
+
+displayUnit :: Text -> Text
+displayUnit = \case
+  "" -> ""
+  "1" -> ""
+  "{}" -> ""
+  "By" -> " bytes"
+  u -> " " <> u
+
 renderWidgetHeader :: Widget -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Text, Text) -> Bool -> Html ()
 renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = div_ [class_ $ "leading-none flex justify-between items-center  " <> bool "grid-stack-handle" "" (widget.standalone == Just True), id_ $ wId <> "_header"] do
   when (widget._centerTitle == Just True) $ div_ ""
@@ -373,9 +389,9 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     span_ [class_ "text-sm text-textStrong font-semibold flex items-center gap-1 min-w-0"] do
       unless (widget.standalone == Just True) $ span_ [class_ "hidden group-hover/h:inline-flex"] $ Utils.faSprite_ "grip-dots-vertical" "regular" "w-4 h-4"
       whenJust widget.icon \icon -> span_ [] $ Utils.faSprite_ icon "regular" "w-4 h-4"
-      span_ ([class_ "truncate"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ toHtml $ maybeToMonoid title
+      span_ ([class_ "flex min-w-0 overflow-hidden", title_ $ maybeToMonoid title] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) title) $ renderDottedTitle $ maybeToMonoid title
       whenJust widget.description \desc -> span_ [class_ "hidden group-hover/wgt:inline-flex items-center", data_ "tippy-content" desc] $ Utils.faSprite_ "circle-info" "regular" "w-4 h-4"
-    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
+    span_ [class_ $ "bg-fillWeak border border-strokeWeak text-sm font-semibold px-2 py-1 rounded-3xl leading-none text-textWeak max-md:hidden whitespace-nowrap " <> if isJust valueM then "" else "hidden", id_ $ wId <> "Value"]
       $ whenJust valueM toHtml
     span_ ([class_ $ "text-textDisabled widget-subtitle text-sm max-md:hidden " <> bool "" "hidden" hideSub, id_ $ wId <> "Subtitle"] <> foldMap (\t -> [data_ "var-template" t | "{{var-" `T.isInfixOf` t]) subValueM) $ toHtml $ maybeToMonoid subValueM
     -- Add hidden loader with specific ID that can be toggled from JS
@@ -722,9 +738,10 @@ renderStatValue widget chartId valueM = div_ [class_ "flex flex-col gap-1"] do
 
 renderChart :: Widget -> Html ()
 renderChart widget = do
-  let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ Utils.prettyPrintCount (round r) <> " rows/min"
+  let rateM = widget.dataset >>= (.rowsPerMin) >>= \r -> Just $ Utils.prettyPrintCount (round r) <> "/min"
   let chartId = maybeToMonoid widget.id
-  let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Utils.prettyPrintCount $ round x
+  let unitSuffix = maybe "" displayUnit widget.unit
+  let valueM = widget.dataset >>= (.value) >>= \x -> Just $ Utils.prettyPrintCount (round x) <> unitSuffix
   let isStat = widget.wType `elem` [WTTimeseriesStat, WTStat]
   let gridStackHandleClass = if widget._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
   div_ [class_ "gap-0.5 flex flex-col h-full justify-end "] do
@@ -781,55 +798,42 @@ renderChart widget = do
                   warningThreshold: ${warningThresholdJS}
                 };
 
-                // Function to initialize this specific widget
-                function initializeThisWidget() {
-                  if (!window.widgetDepsReady) {
-                    // Dependencies not ready - wait for DOMContentLoaded (modules load before it fires)
-                    if (document.readyState === 'loading') {
-                      document.addEventListener('DOMContentLoaded', initializeThisWidget, { once: true });
-                    } else {
-                      // DOM loaded but deps still not ready - rare case, short retry
-                      setTimeout(initializeThisWidget, 50);
-                    }
-                    return;
-                  }
-
-                  // Parse chart options
+                function parseAndInit() {
                   const echartOpt = JSON.parse(config.echartOpt, (key, value) => {
                     if (typeof value === 'string' && value.trim().startsWith("function(")) {
-                      try {
-                        return eval('(' + value + ')');
-                      } catch (error) {
-                        console.error(`Error evaluating function for key "$${key}":`, error);
-                        return value;
-                      }
+                      try { return eval('(' + value + ')'); }
+                      catch (e) { return value; }
                     }
                     return value;
                   });
-                  
-                  // Check if the chart element exists
                   const chartEl = document.getElementById(config.chartId);
                   if (!chartEl) return;
-                  
-                  // Dispose of any existing chart instance before initializing a new one
-                  const existingChart = window.echarts && window.echarts.getInstanceByDom(chartEl);
-                  if (existingChart) {
-                    existingChart.dispose();
-                  }
-                  
+                  const existing = window.echarts && window.echarts.getInstanceByDom(chartEl);
+                  if (existing) existing.dispose();
                   window.bindFunctionsToObjects(echartOpt, echartOpt);
                   window.chartWidget({ ...config, opt: echartOpt });
                 }
 
-                // Initialize on page load
+                // Stagger initialization via queue to avoid blocking main thread
+                function initializeThisWidget() {
+                  if (!window.widgetDepsReady) {
+                    if (document.readyState === 'loading') {
+                      document.addEventListener('DOMContentLoaded', initializeThisWidget, { once: true });
+                    } else {
+                      setTimeout(initializeThisWidget, 50);
+                    }
+                    return;
+                  }
+                  if (window.queueChartInit) window.queueChartInit(parseAndInit, config.chartId);
+                  else parseAndInit();
+                }
+
                 if (document.readyState === 'loading') {
                   window.addEventListener('DOMContentLoaded', initializeThisWidget);
                 } else {
-                  // DOM already loaded, initialize now
                   initializeThisWidget();
                 }
 
-                // Register HTMX event handler
                 document.addEventListener('htmx:afterSwap', function(event) {
                   const swappedEl = event.detail.elt;
                   if (swappedEl && swappedEl.contains(document.getElementById(config.chartId))) {

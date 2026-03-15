@@ -605,6 +605,10 @@ runHourlyJob scheduledTime hour = do
   deviceCodesDeleted <- PG.execute [sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |] ()
   Relude.when (deviceCodesDeleted > 0) $ Log.logInfo "Cleaned up expired device auth codes" ("deleted_count", AE.toJSON deviceCodesDeleted)
 
+  -- Cleanup stale metrics metadata (not seen in 3 months)
+  staleMetricsDeleted <- PG.execute [sql| DELETE FROM telemetry.metrics_meta WHERE updated_at < now() - interval '3 months' |] ()
+  Relude.when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
+
   -- Compress & merge inactive replay sessions
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions

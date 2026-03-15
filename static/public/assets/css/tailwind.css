@@ -264,6 +264,10 @@
   .modal-toggle:not(:checked) + .modal:not(.modal-open) .modal-box {
     animation: modalOut 120ms ease-in forwards;
   }
+  /* Prevent modal flash when idiomorph adds new modal elements during htmx morph */
+  .modal-toggle:not(:checked) + .modal {
+    transition: none;
+  }
   @keyframes modalOut {
     from { opacity: 1; transform: scale(1); }
     to { opacity: 0; transform: scale(0.96); }
