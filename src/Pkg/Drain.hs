@@ -355,7 +355,7 @@ stripMetadataBlobs t = foldl' stripOne t metaPrefixes
       (_, rest) | T.null rest -> txt
       (before, match) ->
         let remaining = dropJsonValue $ T.drop (T.length prefix) match
-         in stripOne (T.unwords $ filter (not . T.null) [T.stripEnd before, T.stripStart remaining]) prefix
+         in stripOne (unwords $ filter (not . T.null) [T.stripEnd before, T.stripStart remaining]) prefix
     dropJsonValue txt = case T.uncons txt of
       Just ('{', _) -> scanBraces 0 txt
       Just ('[', _) -> scanBraces 0 txt

@@ -508,7 +508,7 @@ unifiedMonitorOverviewH pid monitorId = do
                         Nothing -> button_ [type_ "button", class_ mobItem, hxPost_ $ muteBase <> "/mute", hxSwap_ "none"] do
                           faSprite_ "bell-slash" "regular" "h-3.5 w-3.5"
                           "Mute"
-                      when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]) do
+                      when (alert.currentStatus `elem` [Monitors.MSAlerting, Monitors.MSWarning]) $
                         button_ [type_ "button", class_ mobItem, hxPost_ $ muteBase <> "/resolve", hxSwap_ "none"] do
                           faSprite_ "check" "regular" "h-3.5 w-3.5"
                           "Resolve"

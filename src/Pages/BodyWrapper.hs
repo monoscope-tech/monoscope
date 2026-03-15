@@ -47,11 +47,11 @@ onboardingChecklist_ project = do
         , (setupNotifs, "Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope")
         ]
           :: [(Bool, Text, Text, Text)]
-      doneCount = length $ filter (\(d, _, _, _) -> d) items
+      doneCount = length (filter (\(d, _, _, _) -> d) items)
       totalCount = length items
       allDone = doneCount == totalCount
       dismissed = V.elem "checklist_dismissed" steps
-  unless (allDone || dismissed) do
+  unless (allDone || dismissed) $
     div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
       -- Collapsed state: rocket icon
       div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
@@ -76,7 +76,7 @@ onboardingChecklist_ project = do
         div_ [class_ "h-0.5 w-full bg-strokeWeak rounded-full overflow-hidden mb-2"] do
           let pct = show (doneCount * 100 `div` totalCount :: Int)
           div_ [class_ "h-full bg-strokeBrand-strong rounded-full transition-all", style_ $ "width:" <> toText pct <> "%"] ""
-        let sorted = sortBy (comparing (Down . (\(d, _, _, _) -> d))) items
+        let sorted = sortOn (Down . (\(d, _, _, _) -> d)) items
         div_ [class_ "flex flex-col gap-0.5"] do
           forM_ sorted \(done, label, link, icon) ->
             a_
@@ -635,7 +635,7 @@ projectsDropDown currProject projects = do
     , class_ "origin-top-right z-40 bg-bgOverlay p-2 absolute w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
     ]
     do
-      when (V.length projects > 1) do
+      when (V.length projects > 1) $
         div_ [class_ "p-1 pb-2"] do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
@@ -790,7 +790,7 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
       whenJust docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
-    whenJust tabsM \tabs -> div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust pageActionsM)] tabs
+    whenJust tabsM $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust pageActionsM)]
     div_ [class_ $ "flex-1 flex items-center justify-end text-sm" <> maybe " max-md:hidden" (const "") pageActionsM] $ whenJust pageActionsM id
 
 

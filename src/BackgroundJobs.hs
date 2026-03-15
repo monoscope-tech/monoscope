@@ -416,7 +416,7 @@ processBackgroundJob authCtx bgJob =
       -- Gather all projects and usage data
       allProjects <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|] ()
       let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
-          lookupTitle pid = maybe (pid.toText) (.title) $ Map.lookup pid projectMap
+          lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
       allRows <- forM allProjects \(project :: Projects.Project) -> do
         events <- Telemetry.getTotalEventsToReport project.id since
@@ -600,6 +600,10 @@ runHourlyJob scheduledTime hour = do
   -- Cleanup expired query cache entries
   deletedCount <- QueryCache.cleanupExpiredCache
   Relude.when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
+
+  -- Cleanup expired device auth codes
+  deviceCodesDeleted <- PG.execute [sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |] ()
+  Relude.when (deviceCodesDeleted > 0) $ Log.logInfo "Cleaned up expired device auth codes" ("deleted_count", AE.toJSON deviceCodesDeleted)
 
   -- Compress & merge inactive replay sessions
   liftIO $ withResource ctx.jobsPool \conn ->

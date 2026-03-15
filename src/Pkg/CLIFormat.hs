@@ -1,10 +1,6 @@
 module Pkg.CLIFormat (
   colWidths,
   formatRow,
-  AgentEnvelope (..),
-  AgentMeta (..),
-  wrapOk,
-  wrapError,
   extractTextArray,
   extractRows,
   extractNumericRows,
@@ -20,7 +16,6 @@ import Relude
 import Data.Aeson qualified as AE
 import Data.Text qualified as T
 import Data.Vector qualified as V
-import Deriving.Aeson qualified as DAE
 
 
 -- | Pad text to a fixed width.
@@ -89,51 +84,6 @@ colWidths rows =
 formatRow :: [Int] -> [Text] -> Text
 formatRow widths cols =
   T.intercalate "  " $ zipWith padRight widths (cols <> repeat "")
-
-
-data AgentEnvelope = AgentEnvelope
-  { status :: Text
-  , agentData :: AE.Value
-  , meta :: AgentMeta
-  }
-  deriving stock (Generic)
-  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.StripPrefix "agent", DAE.CamelToSnake]] AgentEnvelope
-
-
-data AgentMeta = AgentMeta
-  { hints :: [Text]
-  , nextCommands :: [Text]
-  }
-  deriving stock (Generic)
-  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] AgentMeta
-
-
--- | Wrap a successful result in an agent envelope.
---
--- >>> import Data.Aeson (encode)
--- >>> encode (wrapOk ("hello" :: Text) ["h1"] ["c1"])
--- "{\"status\":\"ok\",\"data\":\"hello\",\"meta\":{\"hints\":[\"h1\"],\"next_commands\":[\"c1\"]}}"
-wrapOk :: AE.ToJSON a => a -> [Text] -> [Text] -> AgentEnvelope
-wrapOk val hints' cmds =
-  AgentEnvelope
-    { status = "ok"
-    , agentData = AE.toJSON val
-    , meta = AgentMeta{hints = hints', nextCommands = cmds}
-    }
-
-
--- | Wrap an error message in an agent envelope.
---
--- >>> import Data.Aeson (encode)
--- >>> encode (wrapError "fail" ["check logs"])
--- "{\"status\":\"error\",\"data\":{\"message\":\"fail\"},\"meta\":{\"hints\":[\"check logs\"],\"next_commands\":[]}}"
-wrapError :: Text -> [Text] -> AgentEnvelope
-wrapError msg hints' =
-  AgentEnvelope
-    { status = "error"
-    , agentData = AE.object ["message" AE..= msg]
-    , meta = AgentMeta{hints = hints', nextCommands = []}
-    }
 
 
 -- | Extract text values from a JSON array.
@@ -236,4 +186,4 @@ sparklineBar Nothing = " "
 sparklineBar (Just v) =
   let blocks = "▁▂▃▄▅▆▇█" :: Text
       idx = min 7 $ max 0 $ round (v * fromIntegral (T.length blocks - 1))
-   in T.singleton $ T.index blocks idx
+   in one $ T.index blocks idx
