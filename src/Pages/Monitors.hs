@@ -188,8 +188,9 @@ alertUpsertPostH pid form = do
         _ -> baseMonitor
 
   _ <- Monitors.queryMonitorUpsert queryMonitor
-  when (isNothing alertId) $
-    void $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'created_monitor') WHERE id = ? AND NOT ('created_monitor' = ANY(onboarding_steps_completed)) |] (Only pid)
+  when (isNothing alertId)
+    $ void
+    $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'created_monitor') WHERE id = ? AND NOT ('created_monitor' = ANY(onboarding_steps_completed)) |] (Only pid)
   addSuccessToast "Monitor was updated successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 

@@ -51,8 +51,8 @@ onboardingChecklist_ project = do
       totalCount = length items
       allDone = doneCount == totalCount
       dismissed = V.elem "checklist_dismissed" steps
-  unless (allDone || dismissed) $
-    div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
+  unless (allDone || dismissed)
+    $ div_ [id_ "onboarding-checklist", class_ "mt-5 pt-3 border-t border-strokeWeak"] do
       -- Collapsed state: rocket icon
       div_ [class_ "flex justify-center group-has-[#sidenav-toggle:checked]/pg:hidden"] do
         a_ [href_ $ "/p/" <> pid <> "/onboarding", class_ "relative tap-target", term "data-tippy-placement" "right", term "data-tippy-content" $ "Getting Started (" <> show doneCount <> "/" <> show totalCount <> ")"] do
@@ -635,8 +635,8 @@ projectsDropDown currProject projects = do
     , class_ "origin-top-right z-40 bg-bgOverlay p-2 absolute w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
     ]
     do
-      when (V.length projects > 1) $
-        div_ [class_ "p-1 pb-2"] do
+      when (V.length projects > 1)
+        $ div_ [class_ "p-1 pb-2"] do
           div_ [class_ "relative"] do
             div_ [class_ "absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none"] $ faSprite_ "magnifying-glass" "regular" "h-4 w-4 text-textWeak"
             input_
