@@ -299,7 +299,10 @@ window.createTagify = (selectorOrElement: string | Element, options: any = {}) =
   const merged = { ...defaultOptions, ...options, dropdown: { ...defaultOptions.dropdown, ...options.dropdown } };
   // editTags crashes in select mode (no tags to edit → closest() on undefined)
   if (merged.mode === 'select') merged.editTags = false;
-  return new (window as any).Tagify(element, merged);
+  const tagify = new (window as any).Tagify(element, merged);
+  // Position dropdown relative to scope, not hidden input (fixes top-left corner positioning)
+  if (tagify.settings.mode === 'select') tagify.settings.dropdown.appendTarget = tagify.DOM.scope;
+  return tagify;
 };
 
 function tagifyTemplateFunc(tagData: any) {
