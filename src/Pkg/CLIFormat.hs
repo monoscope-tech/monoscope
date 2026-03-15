@@ -198,6 +198,7 @@ showScientific n
 sparklineBlocks :: Text
 sparklineBlocks = "▁▂▃▄▅▆▇█"
 
+
 -- | Convert a normalized value (0-1) to a sparkline bar character.
 --
 -- >>> sparklineBar (Just 0.0)
