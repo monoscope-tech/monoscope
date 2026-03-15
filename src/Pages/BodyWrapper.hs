@@ -1,4 +1,4 @@
-module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), onboardingChecklist_) where
+module Pages.BodyWrapper (bodyWrapper, BWConfig (..), PageCtx (..), onboardingChecklist_, settingsContentTarget) where
 
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default)
@@ -7,7 +7,7 @@ import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -17,7 +17,7 @@ import Pkg.DeriveUtils (hashAssetFile)
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicator_)
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicator_, loadingIndicatorWith_)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -786,7 +786,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
 paletteTriggerFloating :: Projects.Project -> Html ()
 paletteTriggerFloating p =
   button_
-    [ class_ "fixed top-14 right-4 btn btn-sm btn-ghost bg-base-200 shadow-md gap-1.5 text-textWeak z-50"
+    [ class_ "fixed top-14 right-4 btn btn-sm btn-ghost bg-base-200 gap-1.5 text-textWeak z-50"
     , data_ "palette-url" ("/p/" <> p.id.toText <> "/command-palette")
     , [__|on click
           if <.cmd-palette-backdrop/> exists
@@ -893,46 +893,57 @@ loginBanner = do
 
 settingsWrapper :: Projects.ProjectId -> Text -> Html () -> Html ()
 settingsWrapper pid current pageHtml = do
+  let
+    navActiveStyles = "[&_.settings-nav-link]:hover:bg-fillWeak [&_.settings-nav-link]:text-textWeak [&_.settings-nav-link.active]:bg-fillBrand-weak [&_.settings-nav-link.active]:text-textBrand [&_.settings-nav-link.active]:hover:bg-fillBrand-weak"
+    syncActiveScript = [__|on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .settings-nav-link if link.getAttribute('href') is p add .active to link else remove .active from link end end|]
   section_ [class_ "flex max-md:flex-col h-full w-full"] do
-    nav_ [class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide"] do
+    nav_ [class_ "md:w-52 shrink-0 md:h-full max-md:px-3 max-md:py-2.5 p-4 md:pt-8 max-md:border-b max-md:border-b-strokeWeak md:border-r md:border-r-strokeWeak max-md:overflow-x-auto max-md:scrollbar-hide", term "preload" "mouseover"] do
       h1_ [class_ "text-lg pl-3 font-semibold text-textStrong max-md:hidden"] "Settings"
-      ul_ [class_ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full"] do
-        -- Mobile hamburger to open main sidebar
+      ul_ [class_ $ "flex max-md:flex-row max-md:flex-nowrap md:flex-col md:mt-4 gap-0.5 w-full " <> navActiveStyles, syncActiveScript] do
         li_ [class_ "md:hidden shrink-0"]
           $ div_ [class_ "flex items-center px-2.5 py-2 rounded-lg cursor-pointer text-strokeStrong hover:bg-fillWeak", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]]
           $ faSprite_ "side-chevron-left-in-box" "regular" "shrink-0 h-4.5 w-4.5 rotate-180"
         mapM_ (renderNavBottomItem current) $ navBottomList pid.toText
-    main_ [id_ "main-content", class_ "w-full h-full overflow-y-auto"] do
+    main_ [id_ "settings-content", class_ "relative w-full h-full overflow-y-auto"] do
+      div_ [id_ settingsLoadingId, class_ "htmx-indicator absolute inset-0 z-10 bg-bgBase/60 flex items-center justify-center"] do
+        loadingIndicatorWith_ LdMD LdSpinner "text-textBrand"
       pageHtml
 
 
-navBottomList :: Text -> [(Text, Text, Text, Maybe Text, Maybe Text, Maybe Text)]
+navBottomList :: Text -> [(Text, Text, Text)]
 navBottomList pidTxt =
-  [ ("gear", "General", "/p/" <> pidTxt <> "/settings", Nothing, Nothing, Nothing)
-  , ("key", "API Keys", "/p/" <> pidTxt <> "/apis", Nothing, Nothing, Nothing)
-  , ("users", "Team", "/p/" <> pidTxt <> "/manage_members", Nothing, Nothing, Nothing)
-  , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations", Nothing, Nothing, Nothing)
-  , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing", Nothing, Nothing, Nothing)
+  [ ("gear", "General", "/p/" <> pidTxt <> "/settings")
+  , ("key", "API Keys", "/p/" <> pidTxt <> "/apis")
+  , ("users", "Team", "/p/" <> pidTxt <> "/manage_members")
+  , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations")
+  , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing")
   ]
 
 
-renderNavBottomItem :: Text -> (Text, Text, Text, Maybe Text, Maybe Text, Maybe Text) -> Html ()
-renderNavBottomItem curr (iconName, linkText, link, targetBlankM, onClickM, hxGetM) =
-  let
-    isActive = curr == linkText
-    defaultAttrs =
-      [ class_ $ "flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap " <> if isActive then "bg-fillBrand-weak text-textBrand" else "hover:bg-fillWeak text-textWeak"
+settingsContentTarget :: Text
+settingsContentTarget = "#settings-content"
+
+settingsLoadingId :: Text
+settingsLoadingId = "settings-loading"
+
+
+renderNavBottomItem :: Text -> (Text, Text, Text) -> Html ()
+renderNavBottomItem curr (iconName, linkText, link) =
+  li_ [] do
+    a_
+      [ class_ $ "settings-nav-link flex gap-2 md:gap-3 items-center px-2.5 md:px-3 py-2 rounded-lg whitespace-nowrap" <> if curr == linkText then " active" else ""
       , term "data-tippy-placement" "right"
       , term "data-tippy-content" linkText
+      , href_ link
+      , hxGet_ link
+      , hxTarget_ settingsContentTarget
+      , hxSelect_ settingsContentTarget
+      , hxSwap_ "outerHTML"
+      , hxPushUrl_ "true"
+      , hxIndicator_ ("#" <> settingsLoadingId)
+      , [__|on click set my.preloadState to 'DONE'|]
       ]
-    attrs =
-      defaultAttrs
-        ++ [target_ "BLANK_" | isJust targetBlankM]
-        ++ maybe [] (\onClick -> [onclick_ onClick]) onClickM
-        ++ (if isJust hxGetM then [hxGet_ link, hxTarget_ "body"] else [href_ link])
-   in
-    li_ [] do
-      a_ attrs $ do
+      do
         faSprite_ iconName "regular" "shrink-0 h-4 w-4"
         span_ [class_ "text-sm font-medium"] (toHtml linkText)
 

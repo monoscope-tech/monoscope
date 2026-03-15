@@ -61,7 +61,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
@@ -251,7 +251,7 @@ apiKeysPage pid apiKeys = do
       modalWith_ "apikey-modal" def{boxClass = "p-8"} (Just $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Key") do
         iconBadgeLg_ BrandBadge "key"
         span_ [class_ "text-textStrong text-2xl font-semibold mb-1"] "Generate an API key"
-        form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-4", hxTarget_ "#main-content"] do
+        form_ [hxPost_ $ "/p/" <> pid.toText <> "/apis", class_ "flex flex-col gap-4", hxTarget_ settingsContentTarget] do
           div_ [class_ "flex flex-col"] do
             p_ [class_ "text-textWeak"] "Please input a title for your API key."
             div_ $ input_ [class_ "input px-4 py-2 mt-6 border w-full", type_ "text", placeholder_ "Enter your API key title", name_ "title", required_ "true", maxlength_ "100"]
@@ -339,7 +339,7 @@ apiKeyColumns pid =
                 [ class_ "p-1 rounded hover:bg-fillError-weak cursor-pointer"
                 , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
                 , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
-                , hxTarget_ "#main-content"
+                , hxTarget_ settingsContentTarget
                 , id_ $ "key" <> show i
                 , term "data-tippy-content" "Revoke key"
                 ]
@@ -349,7 +349,7 @@ apiKeyColumns pid =
                 [ class_ "p-1 rounded hover:bg-fillSuccess-weak cursor-pointer"
                 , hxPatch_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
                 , hxConfirm_ $ "Are you sure you want to activate " <> apiKey.title <> " API Key?"
-                , hxTarget_ "#main-content"
+                , hxTarget_ settingsContentTarget
                 , id_ $ "key" <> show i
                 , term "data-tippy-content" "Activate key"
                 ]

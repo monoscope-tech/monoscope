@@ -85,7 +85,7 @@ import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
@@ -1014,7 +1014,7 @@ manageMembersBody pid projMembers paymentPlan =
             p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
-      form_ [class_ "space-y-6", hxPost_ "", hxTarget_ "#main-content", hxSwap_ "outerHTML", hxIndicator_ "#submitIndicator"] do
+      form_ [class_ "space-y-6", hxPost_ "", hxTarget_ settingsContentTarget, hxSwap_ "outerHTML", hxIndicator_ "#submitIndicator"] do
         div_ [class_ "space-y-3"] do
           label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
           div_ [class_ "flex gap-2"] do
@@ -1040,7 +1040,7 @@ manageMembersBody pid projMembers paymentPlan =
               else V.imapM_ (memberRowWithStatus pid) projMembers
 
     -- Teams tab (lazy loaded)
-    div_ [id_ "teams-tab-content", class_ "a-tab-panel hidden", hxGet_ $ "/p/" <> pid.toText <> "/manage_teams?what=partial", hxTrigger_ "loadTeams once", hxSwap_ "innerHTML", hxSelect_ "#main-content"] do
+    div_ [id_ "teams-tab-content", class_ "a-tab-panel hidden", hxGet_ $ "/p/" <> pid.toText <> "/manage_teams?what=partial", hxTrigger_ "loadTeams once", hxSwap_ "innerHTML", hxSelect_ settingsContentTarget] do
       div_ [class_ "flex justify-center py-8"] do
         span_ [class_ "loading loading-spinner loading-md"] ""
 
@@ -1444,7 +1444,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
     form_
       [ class_ "space-y-5 sm:space-y-8"
       , hxPost_ $ "/p/update/" <> pid.toText
-      , hxTarget_ "#main-content"
+      , hxTarget_ settingsContentTarget
       , hxSwap_ "outerHTML"
       , id_ "createUpdateBodyForm"
       , hxIndicator_ "#createIndicator"
@@ -1471,14 +1471,16 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
 
     script_ do
       [text|
-           const timezoneSelect = document.getElementById("timeZone");
-           const timeZones = Intl.supportedValuesOf('timeZone');
-           timeZones.forEach((tz) => {
-             const option = document.createElement("option");
-             option.value = tz;
-             option.text = tz;
-             timezoneSelect.appendChild(option);
-           });
+           (() => {
+             const timezoneSelect = document.getElementById("timeZone");
+             const timeZones = Intl.supportedValuesOf('timeZone');
+             timeZones.forEach((tz) => {
+               const option = document.createElement("option");
+               option.value = tz;
+               option.text = tz;
+               timezoneSelect.appendChild(option);
+             });
+           })();
         |]
 
     -- Danger zone — compact
