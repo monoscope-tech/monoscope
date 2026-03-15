@@ -15,7 +15,7 @@ import Relude
 
 import Data.Aeson qualified as AE
 import Data.List qualified as L
-import Data.Scientific (formatScientific, FPFormat (Fixed))
+import Data.Scientific (FPFormat (Fixed), formatScientific)
 import Data.Text qualified as T
 import Data.Vector qualified as V
 
@@ -190,6 +190,7 @@ evalCond v cond
 
 sparklineBlocks :: Text
 sparklineBlocks = "▁▂▃▄▅▆▇█"
+
 
 -- | Convert a normalized value (0-1) to a sparkline bar character.
 --
