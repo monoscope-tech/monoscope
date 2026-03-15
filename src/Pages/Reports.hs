@@ -18,8 +18,6 @@ where
 
 import Control.Lens (view, _2, _3, _5)
 import Data.Aeson qualified as AE
-import Database.PostgreSQL.Simple.Types (fromPGArray)
-import Deriving.Aeson qualified as DAE
 import Data.Default (def)
 import Data.Map.Lazy qualified as Map
 import Data.Text qualified as T
@@ -27,6 +25,8 @@ import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Time.Zones (loadTZFromDB, utcToLocalTimeTZ)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Types (fromPGArray)
+import Deriving.Aeson qualified as DAE
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -123,12 +123,16 @@ errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summ
 
 
 anomalyTypeCounts :: Foldable f => (a -> Issues.IssueType) -> f a -> (Int, Int, Int, Int, Int)
-anomalyTypeCounts getType = foldl' (\(e, a, m, lp, rc) x -> case getType x of
-  Issues.RuntimeException -> (e + 1, a, m, lp, rc)
-  Issues.ApiChange -> (e, a + 1, m, lp, rc)
-  Issues.QueryAlert -> (e, a, m + 1, lp, rc)
-  Issues.LogPattern -> (e, a, m, lp + 1, rc)
-  Issues.LogPatternRateChange -> (e, a, m, lp, rc + 1)) (0, 0, 0, 0, 0)
+anomalyTypeCounts getType =
+  foldl'
+    ( \(e, a, m, lp, rc) x -> case getType x of
+        Issues.RuntimeException -> (e + 1, a, m, lp, rc)
+        Issues.ApiChange -> (e, a + 1, m, lp, rc)
+        Issues.QueryAlert -> (e, a, m + 1, lp, rc)
+        Issues.LogPattern -> (e, a, m, lp + 1, rc)
+        Issues.LogPatternRateChange -> (e, a, m, lp, rc + 1)
+    )
+    (0, 0, 0, 0, 0)
 
 
 buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int]) -> AE.Value

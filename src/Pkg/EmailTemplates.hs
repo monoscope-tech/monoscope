@@ -537,18 +537,22 @@ weeklyReportEmail d =
       chartBlock "Errors" d.errorsChartUrl
 
       -- Issues breakdown bar with counts in legend (only non-zero categories)
-      let categories = filter (\(_, c, _) -> c > 0)
-            [ ("Runtime Errors", d.runtimeErrorsCount, "#cf222e")
-            , ("API Changes", d.apiChangesCount, "#377cfb")
-            , ("Monitor Alerts", d.alertsCount, "#bf8700")
-            , ("Log Patterns", d.logPatternCount, "#0969da")
-            , ("Rate Changes", d.rateChangeCount, "#e36209")
-            ]
+      let categories =
+            filter
+              (\(_, c, _) -> c > 0)
+              [ ("Runtime Errors", d.runtimeErrorsCount, "#cf222e")
+              , ("API Changes", d.apiChangesCount, "#377cfb")
+              , ("Monitor Alerts", d.alertsCount, "#bf8700")
+              , ("Log Patterns", d.logPatternCount, "#0969da")
+              , ("Rate Changes", d.rateChangeCount, "#e36209")
+              ]
           totalCats = sum $ map (\(_, c, _) -> c) categories
           pctOf n = if totalCats == 0 then 0 else (fromIntegral n / fromIntegral totalCats) * 99 :: Double
       let totalIssues = V.length d.anomalies
       when (totalIssues > 0 && not (null categories))
-        $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] $ tr_ $ td_ [style_ "padding: 20px 0;"] do
+        $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
+        $ tr_
+        $ td_ [style_ "padding: 20px 0;"] do
           h3_ [style_ "margin: 0 0 12px; font-size: 18px;"] $ toHtml $ "Issues breakdown (" <> show totalIssues <> ")"
           table_ [class_ "bar-track", width_ "100%", cellpadding_ "0", cellspacing_ "0", style_ "background-color: #dee2e7; border-radius: 8px; overflow: hidden;"] $ tr_ do
             forM_ categories \(_, cnt, color) ->
@@ -563,27 +567,35 @@ weeklyReportEmail d =
             remaining = totalIssues - V.length shown
             issueUrl iid = d.projectUrl <> "/issues/" <> iid.toText
         reportTable ("Issues (" <> show totalIssues <> ")") ["Trend"]
-          $ V.toList (shown <&> \(iid, title, critical, _severity, iType, buckets) -> tr_ do
-              td_ [style_ "vertical-align: middle;"] do
-                issueTypeBadge iType critical
-                a_ [href_ (issueUrl iid), style_ "color: inherit; text-decoration: none;"] $ toHtml $ stripSummaryBadges title
-              td_ [width_ "120", style_ "vertical-align: middle; text-align: right;"]
-                $ sparklineImg buckets)
-          <> [tr_ $ td_ [colspan_ "2", style_ "text-align: center; color: #57606a; font-size: 14px;"]
-              $ a_ [href_ (d.projectUrl <> "/issues"), style_ "color: #377cfb; text-decoration: none;"]
-              $ toHtml @Text ("and " <> show remaining <> " more\8230") | remaining > 0]
+          $ V.toList
+            ( shown <&> \(iid, title, critical, _severity, iType, buckets) -> tr_ do
+                td_ [style_ "vertical-align: middle;"] do
+                  issueTypeBadge iType critical
+                  a_ [href_ (issueUrl iid), style_ "color: inherit; text-decoration: none;"] $ toHtml $ stripSummaryBadges title
+                td_ [width_ "120", style_ "vertical-align: middle; text-align: right;"]
+                  $ sparklineImg buckets
+            )
+          <> [ tr_
+                 $ td_ [colspan_ "2", style_ "text-align: center; color: #57606a; font-size: 14px;"]
+                 $ a_ [href_ (d.projectUrl <> "/issues"), style_ "color: #377cfb; text-decoration: none;"]
+                 $ toHtml @Text ("and " <> show remaining <> " more\8230")
+             | remaining > 0
+             ]
 
       -- Performance table (hidden when empty)
       unless (V.null d.performance)
         $ reportTable ("HTTP Endpoints (" <> show (V.length d.performance) <> ")") ["Avg Latency", "Change"]
         $ V.toList
-        $ V.take 10 d.performance <&> \(host, method, urlPath, dur, durChange, _, _) ->
-            tr_ do
-              td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
-              td_ $ toHtml $ show dur <> "ms"
-              td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
-                $ toHtml
-                $ (if durChange > 0 then "+" else "") <> show durChange <> "%"
+        $ V.take 10 d.performance
+        <&> \(host, method, urlPath, dur, durChange, _, _) ->
+          tr_ do
+            td_ do toHtml host; " "; span_ [class_ "monoscope-code"] $ toHtml method; " "; span_ [class_ "monoscope-code"] $ toHtml urlPath
+            td_ $ toHtml $ show dur <> "ms"
+            td_ [style_ if durChange > 0 then "color: #cf222e;" else "color: #1a7f37;"]
+              $ toHtml
+              $ (if durChange > 0 then "+" else "")
+              <> show durChange
+              <> "%"
 
       -- Slow queries table (already hidden when empty)
       unless (V.null d.slowQueries)
@@ -600,11 +612,12 @@ weeklyReportEmail d =
       unless (V.null d.topPatterns)
         $ reportTable ("Top Log Patterns (" <> show (V.length d.topPatterns) <> ")") ["Source", "Count"]
         $ V.toList
-        $ d.topPatterns <&> \(pat, cnt, srcLabel) ->
-            tr_ do
-              td_ $ span_ [class_ "monoscope-code"] $ toHtml $ stripSummaryBadges pat
-              td_ $ toHtml srcLabel
-              td_ $ toHtml $ formatWithCommas (fromIntegral cnt)
+        $ d.topPatterns
+        <&> \(pat, cnt, srcLabel) ->
+          tr_ do
+            td_ $ span_ [class_ "monoscope-code"] $ toHtml $ stripSummaryBadges pat
+            td_ $ toHtml srcLabel
+            td_ $ toHtml $ formatWithCommas (fromIntegral cnt)
 
       emailButton d.reportUrl "View Full Report"
   )
@@ -632,7 +645,10 @@ changeIndicator pct invertColor
             | invertColor = if isUp then "#cf222e" else "#1a7f37"
             | otherwise = if isUp then "#1a7f37" else "#cf222e"
        in p_ [style_ $ "margin: 4px 0 0; font-size: 14px; font-weight: 500; color: " <> color <> ";"]
-            $ toHtml $ arrow <> show (abs pct) <> "% vs last period"
+            $ toHtml
+            $ arrow
+            <> show (abs pct)
+            <> "% vs last period"
 
 
 -- | Strip `field;style⇒value` summary badge tokens to plain text values
@@ -669,13 +685,18 @@ sparklineImg buckets
           gap = 2 :: Int
           barW = max 3 (120 `div` n - gap)
           w = n * (barW + gap)
-          bars = mconcat $ zipWith (\i v ->
-            let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
-                x = i * (barW + gap)
-                y = h - barH
-                opacity = if v == 0 then "0.2" else "0.7" :: Text
-             in "<rect x='" <> show x <> "' y='" <> show y <> "' width='" <> show barW <> "' height='" <> show barH <> "' rx='1.5' fill='%23377cfb' opacity='" <> opacity <> "'/>"
-            ) [0..] buckets
+          bars =
+            mconcat
+              $ zipWith
+                ( \i v ->
+                    let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
+                        x = i * (barW + gap)
+                        y = h - barH
+                        opacity = if v == 0 then "0.2" else "0.7" :: Text
+                     in "<rect x='" <> show x <> "' y='" <> show y <> "' width='" <> show barW <> "' height='" <> show barH <> "' rx='1.5' fill='%23377cfb' opacity='" <> opacity <> "'/>"
+                )
+                [0 ..]
+                buckets
           svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 " <> show w <> " " <> show h <> "' width='" <> show w <> "' height='" <> show h <> "'>" <> bars <> "</svg>"
           dataUri = "data:image/svg+xml," <> svg
        in img_ [src_ dataUri, alt_ "trend", width_ "120", height_ "32", style_ "display: block;"]
