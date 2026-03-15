@@ -11,7 +11,7 @@ import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (WidgetAxis (..))
 import Pkg.Components.Widget qualified as Widget
@@ -90,8 +90,8 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           , pageTitle = "API Catalog"
           , freeTierExceeded = freeTierExceeded
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Incoming", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Incoming" then "tab-active text-textStrong" else ""] "Incoming"
-              a_ [href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] "Outgoing"
+              a_ ([href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Incoming", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Incoming" then "tab-active text-textStrong" else ""] <> navTabAttrs) "Incoming"
+              a_ ([href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] <> navTabAttrs) "Outgoing"
           }
   case skipM of
     Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}

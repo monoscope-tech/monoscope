@@ -35,7 +35,7 @@ import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
@@ -172,8 +172,8 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , pageTitle = "Metrics"
           , config = appCtx.env
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
-              a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] "Events"
-              a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] "Metrics"
+              a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] <> navTabAttrs) "Events"
+              a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] <> navTabAttrs) "Metrics"
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/metrics/"
           , pageActions = Just $ div_ [class_ "inline-flex gap-2"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
@@ -275,8 +275,8 @@ traceH pid trId timestamp spanIdM nav = do
 overViewTabs :: Projects.ProjectId -> Text -> Html ()
 overViewTabs pid tab = do
   div_ [class_ "tabs tabs-border tabs-md items-center shrink-0"] do
-    a_ [onclick_ "window.setQueryParamAndReload('tab', 'charts')", role_ "tab", class_ $ "tab h-auto! " <> if tab == "charts" then "tab-active" else ""] "Charts"
-    a_ [onclick_ "window.setQueryParamAndReload('tab', 'datapoints')", role_ "tab", class_ $ "tab h-auto! " <> if tab == "datapoints" then "tab-active" else ""] "Table"
+    a_ ([href_ $ "/p/" <> pid.toText <> "/metrics?tab=charts", role_ "tab", class_ $ "tab h-auto! " <> if tab == "charts" then "tab-active" else ""] <> navTabAttrs) "Charts"
+    a_ ([href_ $ "/p/" <> pid.toText <> "/metrics?tab=datapoints", role_ "tab", class_ $ "tab h-auto! " <> if tab == "datapoints" then "tab-active" else ""] <> navTabAttrs) "Table"
 
 
 chartsPage :: Projects.ProjectId -> V.Vector Telemetry.MetricChartListData -> V.Vector Telemetry.MetricChartListData -> V.Vector Text -> Text -> Text -> Maybe Text -> Html ()
@@ -285,8 +285,9 @@ chartsPage pid metricList inactive sources source mFilter nextUrl = do
     div_ [class_ "w-full"] do
       Components.drawer_ "global-data-drawer" Nothing Nothing ""
       template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
-      div_ [class_ "w-full flex gap-3 items-center"] do
+      div_ [class_ "w-full flex gap-3 items-center min-h-10"] do
         overViewTabs pid "charts"
+        div_ [class_ "w-px h-6 bg-strokeWeak"] pass
         select_
           [ class_ "select select-sm bg-bgRaised border border-strokeStrong h-10 w-36 shadow-none"
           , onchange_ "(() => {window.setQueryParamAndReload('metric_source', this.value)})()"
@@ -395,11 +396,12 @@ dataPointsPage pid metrics refCounts = do
   let dataMap = Map.fromList [(m.metricName, m) | m <- V.toList metrics]
       tree = buildMetricTree $ V.toList $ (.metricName) <$> metrics
       rows = flattenMetricTree dataMap tree 0 []
-  div_ [class_ "flex flex-col gap-2 px-4  overflow-y-scroll"] $ do
-    div_ [class_ "w-full flex gap-1 items-center"] do
-      overViewTabs pid "datapoints"
-    Components.drawer_ "global-data-drawer" Nothing Nothing ""
-    template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
+  div_ [class_ "flex flex-col gap-4 px-4 overflow-y-scroll"] $ do
+    div_ [class_ "w-full"] do
+      Components.drawer_ "global-data-drawer" Nothing Nothing ""
+      template_ [id_ "loader-tmp"] $ loadingIndicator_ LdMD LdDots
+      div_ [class_ "w-full flex gap-3 items-center min-h-10"] do
+        overViewTabs pid "datapoints"
     toHtml
       Table
         { config = def{Table.elemID = "dataPointsTable", Table.showHeader = True, Table.renderAsTable = True, Table.noDividers = True}

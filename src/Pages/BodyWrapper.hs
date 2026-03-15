@@ -20,6 +20,18 @@ import System.Config (EnvConfig (..))
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicator_, loadingIndicatorWith_)
 
 
+-- Reusable htmx attrs for tab-style nav links (preload + morph swap)
+navTabAttrs :: [Attribute]
+navTabAttrs =
+  [ hxBoost_ "true"
+  , hxTarget_ "#main-content"
+  , hxSelect_ "#main-content"
+  , term "hx-select-oob" "#main-sidenav:morph,#main-navbar:morph"
+  , hxSwap_ "morph"
+  , [__|on click set my.preloadState to 'DONE'|]
+  ]
+
+
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
 menu pid =
   [ ("Dashboards", "/p/" <> pid.toText <> "/dashboards", "dashboard")

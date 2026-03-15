@@ -40,7 +40,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, pageActions, pageTitle, sessM)
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, navTabAttrs, pageActions, pageTitle, sessM)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_)
 import Pkg.Components.TimePicker qualified as Components
 import Pkg.Components.Widget (WidgetAxis (..), WidgetType (WTTimeseries, WTTimeseriesLine))
@@ -642,9 +642,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   Components.refreshButton_
               , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
                   a_
-                    [href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"]
+                    ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] <> navTabAttrs)
                     "Events"
-                  a_ [href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] "Metrics"
+                  a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] <> navTabAttrs) "Metrics"
               }
 
       case tableAsVecM of
