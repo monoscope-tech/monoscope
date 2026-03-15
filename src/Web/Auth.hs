@@ -10,6 +10,12 @@ module Web.Auth (
   renderError,
   ClientMetadata (..),
   clientMetadataH,
+  DeviceCodeResponse (..),
+  DeviceTokenResponse (..),
+  ProjectInfo (..),
+  deviceCodeH,
+  deviceTokenH,
+  deviceApproveH,
 ) where
 
 import Control.Error (note)
@@ -17,15 +23,18 @@ import Control.Lens qualified as L
 import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
-import Data.Aeson.Types (ToJSON)
+import Data.Aeson.Types (FromJSON, ToJSON)
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
-import Data.UUID.V4 qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
+import Data.Vector qualified as V
+import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Deriving.Aeson qualified as DAE
 import Effectful (
   Eff,
@@ -37,20 +46,12 @@ import Effectful (
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.PostgreSQL (runWithConnectionPool)
+import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
-import Effectful.Time (Time, runTime)
+import Effectful.Time (Time, currentTime, runTime)
 import Log (Logger)
-import Lucid (Html)
-import Lucid.Html5 (
-  a_,
-  body_,
-  content_,
-  head_,
-  href_,
-  html_,
-  httpEquiv_,
-  meta_,
- )
+import Lucid (Html, toHtml)
+import Lucid.Html5
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions (craftSessionCookie, emptySessionCookie)
@@ -67,7 +68,7 @@ import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Logging
-import System.Types (ATBaseCtx, DB)
+import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial)
 import Web.Cookie (Cookies, SetCookie, parseCookies)
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -135,8 +136,15 @@ authHandler logger env =
           proceedWithCookieAuth req env.config.basicAuthEnabled
 
     proceedWithCookieAuth req basicAuthEnabledFlag = do
+      -- Check for Bearer session token (used by CLI device auth flow)
+      let mbBearerSessionId = do
+            authH <- L.lookup hAuthorization $ requestHeaders req
+            token <- T.stripPrefix "Bearer " (decodeUtf8 authH)
+            uuid <- UUID.fromText token
+            pure $ Sessions.PersistentSessionId uuid
       let cookies = getCookies req
-      mbPersistentSessionId <- handlerToEff $ getSessionId cookies
+      mbCookieSessionId <- handlerToEff $ getSessionId cookies
+      let mbPersistentSessionId = mbBearerSessionId <|> mbCookieSessionId
       let isSidebarClosed = sidebarClosedFromCookie cookies
       let theme = themeFromCookie cookies
       requestID <- liftIO $ getRequestID req
@@ -187,7 +195,7 @@ getRequestID :: Request -> IO Text
 getRequestID req = do
   let headers = requestHeaders req
   case L.lookup "X-Request-ID" headers of
-    Nothing -> fmap UUID.toText UUID.nextRandom
+    Nothing -> fmap UUID.toText UUIDV4.nextRandom
     Just requestID -> pure $ decodeUtf8 requestID
 
 
@@ -383,3 +391,121 @@ clientMetadataH (Just authTextB64) = do
               , topicId = fromMaybe "" $ listToMaybe appCtx.config.requestPubsubTopics
               , pubsubPushServiceAccount = serviceAccountJson
               }
+
+
+-- =============================================================================
+-- Device Authorization Flow (CLI login)
+-- =============================================================================
+
+data DeviceCodeResponse = DeviceCodeResponse
+  { deviceCode :: Text
+  , userCode :: Text
+  , verificationUri :: Text
+  , expiresIn :: Int
+  }
+  deriving stock (Generic, Show)
+  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] DeviceCodeResponse
+
+
+data ProjectInfo = ProjectInfo {id :: Text, name :: Text}
+  deriving stock (Generic, Show)
+  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] ProjectInfo
+
+
+data DeviceTokenResponse = DeviceTokenResponse
+  { sessionId :: Maybe Text
+  , projects :: Maybe [ProjectInfo]
+  , err :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving (FromJSON, ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.Rename "err" "error"]] DeviceTokenResponse
+
+
+genUserCode :: IO Text
+genUserCode = do
+  let chars = V.fromList ("ABCDEFGHJKLMNPQRSTUVWXYZ23456789" :: [Char])
+      len = V.length chars
+  (w1, w2, w3, w4) <- UUID.toWords <$> UUIDV4.nextRandom
+  let ws = [w1, w2, w3, w4, w1 `xor` w3, w2 `xor` w4]
+  pure $ toText [chars V.! (fromIntegral w `mod` len) | w <- ws]
+
+
+deviceCodeH :: ATBaseCtx DeviceCodeResponse
+deviceCodeH = do
+  envCfg <- asks env
+  deviceCode <- UUID.toText <$> liftIO UUIDV4.nextRandom
+  userCode <- liftIO genUserCode
+  rowId <- liftIO UUIDV4.nextRandom
+  now <- currentTime
+  let expiresAt = addUTCTime 300 now
+      verificationUri = T.dropWhileEnd (== '/') envCfg.hostUrl <> "/device?code=" <> userCode
+  void
+    $ PG.execute
+      [sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (?, ?, ?, ?) |]
+      (rowId, deviceCode, userCode, expiresAt)
+  pure DeviceCodeResponse{expiresIn = 300, ..}
+
+
+deviceTokenH :: Maybe Text -> ATBaseCtx DeviceTokenResponse
+deviceTokenH mCode = do
+  let errResp = pure . DeviceTokenResponse Nothing Nothing . Just
+  case mCode of
+    Nothing -> errResp "missing device_code"
+    Just dCode -> do
+      rows <-
+        PG.query
+          [sql| SELECT session_id, expires_at FROM users.device_auth_codes WHERE device_code = ? |]
+          (Only dCode)
+      now <- currentTime
+      case rows of
+        [] -> errResp "invalid_device_code"
+        ((mbSessId, expiresAt) : _)
+          | now > expiresAt -> errResp "expired_token"
+          | Nothing <- (mbSessId :: Maybe UUID.UUID) -> errResp "authorization_pending"
+          | Just sessUuid <- mbSessId -> do
+              mbSess <- Sessions.getPersistentSession (Sessions.PersistentSessionId sessUuid)
+              let projectInfos =
+                    mbSess <&> \sess ->
+                      [ProjectInfo p.id.toText p.title | p <- V.toList sess.projects.getProjects]
+              pure $ DeviceTokenResponse (Just $ UUID.toText sessUuid) projectInfos Nothing
+
+
+deviceApproveH :: Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
+deviceApproveH codeM actionM = do
+  sess <- Sessions.getSession
+  result <- runExceptT $ do
+    userCode <- hoistEither $ note "Invalid request: no code provided" codeM
+    case actionM of
+      Just "approve" -> do
+        persistentSessId <- lift Sessions.newPersistentSessionId
+        lift $ Sessions.insertSession persistentSessId sess.user.id (Sessions.SessionData Map.empty)
+        updated <-
+          lift
+            $ PG.execute
+              [sql| UPDATE users.device_auth_codes SET session_id = ?
+                WHERE user_code = ? AND session_id IS NULL AND expires_at > now() |]
+              (persistentSessId.getPersistentSessionId, userCode)
+        when (updated == 0) $ hoistEither $ Left "Invalid, expired, or already used code."
+        pure True
+      _ -> pure False
+  addRespHeaders $ case result of
+    Left err -> approvePageHtml False (Just err)
+    Right approved -> approvePageHtml approved Nothing
+  where
+    approvePageHtml approved errMsg = html_ $ do
+      head_ $ do
+        title_ "Monoscope - Device Authorization"
+        meta_ [charset_ "utf-8"]
+        meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1"]
+      body_ [style_ "font-family:system-ui;max-width:480px;margin:60px auto;padding:0 20px;text-align:center"] $ do
+        h1_ [style_ "font-size:1.5rem"] "Monoscope CLI"
+        case errMsg of
+          Just err -> p_ [style_ "color:red;font-size:1.2rem"] (toHtml err)
+          Nothing | approved -> p_ [style_ "color:green;font-size:1.2rem"] "Device authorized! You can close this tab."
+          Nothing -> do
+            whenJust codeM \code -> do
+              p_ [style_ "font-size:1.2rem"] $ "Confirm CLI login with code: " <> toHtml code
+              form_ [method_ "GET", action_ "/device"] $ do
+                input_ [type_ "hidden", name_ "code", value_ code]
+                input_ [type_ "hidden", name_ "action", value_ "approve"]
+                button_ [type_ "submit", style_ "padding:12px 32px;font-size:1rem;cursor:pointer;background:#2563eb;color:white;border:none;border-radius:6px"] "Approve"

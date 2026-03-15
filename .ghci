@@ -24,7 +24,6 @@
 :set -XTypeApplications -XKindSignatures
 
 :set -fwarn-unused-binds -fwarn-unused-imports
-:set -isrc
 
 -- :set -optl-Wl,-rpath,/Users/tonyalaribe/Projects/apitoolkit/apitoolkit-server/.stack-work/dist/aarch64-osx/ghc-9.8.3/build/
 

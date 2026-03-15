@@ -1,0 +1,192 @@
+name: CLI Release
+
+on:
+  push:
+    tags: ['cli-v*']
+
+env:
+  LANG: C.UTF-8
+
+jobs:
+  build-linux-x64:
+    name: Build Linux x86_64
+    runs-on: blacksmith-4vcpu-ubuntu-2404
+    container:
+      image: ghcr.io/monoscope-tech/monoscope-deps:latest
+      credentials:
+        username: ${{ github.repository_owner }}
+        password: ${{ secrets.GH_TOKEN }}
+      env:
+        CABAL_DIR: /root/.cabal
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Cache dist-newstyle
+        uses: actions/cache@v5
+        with:
+          path: dist-newstyle
+          key: cli-linux-x64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
+          restore-keys: |
+            cli-linux-x64-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
+            cli-linux-x64-
+
+      - name: Build CLI binary
+        run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
+
+      - name: Package binary
+        run: |
+          BIN=$(cabal list-bin exe:monoscope)
+          strip "$BIN"
+          cp "$BIN" monoscope
+          tar czf monoscope-linux-x86_64.tar.gz monoscope
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: monoscope-linux-x86_64
+          path: monoscope-linux-x86_64.tar.gz
+          retention-days: 5
+
+  build-macos-arm64:
+    name: Build macOS ARM64
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install GHC and Cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.12.2'
+          cabal-version: '3.14'
+
+      - name: Cache Cabal
+        uses: actions/cache@v5
+        with:
+          path: ~/.cabal
+          key: cli-macos-arm64-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: cli-macos-arm64-cabal-
+
+      - name: Cache dist-newstyle
+        uses: actions/cache@v5
+        with:
+          path: dist-newstyle
+          key: cli-macos-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
+          restore-keys: |
+            cli-macos-arm64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
+            cli-macos-arm64-dist-
+
+      - name: Install system deps
+        run: brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+
+      - name: Build CLI binary
+        run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
+
+      - name: Package binary
+        run: |
+          BIN=$(cabal list-bin exe:monoscope)
+          strip "$BIN"
+          cp "$BIN" monoscope
+          tar czf monoscope-darwin-arm64.tar.gz monoscope
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: monoscope-darwin-arm64
+          path: monoscope-darwin-arm64.tar.gz
+          retention-days: 5
+
+  build-macos-x64:
+    name: Build macOS x86_64
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install GHC and Cabal
+        uses: haskell-actions/setup@v2
+        with:
+          ghc-version: '9.12.2'
+          cabal-version: '3.14'
+
+      - name: Cache Cabal
+        uses: actions/cache@v5
+        with:
+          path: ~/.cabal
+          key: cli-macos-x64-cabal-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}
+          restore-keys: cli-macos-x64-cabal-
+
+      - name: Cache dist-newstyle
+        uses: actions/cache@v5
+        with:
+          path: dist-newstyle
+          key: cli-macos-x64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-${{ github.sha }}
+          restore-keys: |
+            cli-macos-x64-dist-${{ hashFiles('**/*.cabal', '**/cabal.project*') }}-
+            cli-macos-x64-dist-
+
+      - name: Install system deps
+        run: brew install pkg-config libpq librdkafka snappy lz4 zstd grpc openssl
+
+      - name: Build CLI binary
+        run: cabal build exe:monoscope -j --ghc-options="-O2 +RTS -A64m -n2m -RTS"
+
+      - name: Package binary
+        run: |
+          BIN=$(cabal list-bin exe:monoscope)
+          strip "$BIN"
+          cp "$BIN" monoscope
+          tar czf monoscope-darwin-x86_64.tar.gz monoscope
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: monoscope-darwin-x86_64
+          path: monoscope-darwin-x86_64.tar.gz
+          retention-days: 5
+
+  release:
+    name: Create GitHub Release
+    needs: [build-linux-x64, build-macos-arm64, build-macos-x64]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      - name: Generate checksums
+        run: |
+          cd artifacts
+          find . -name '*.tar.gz' -exec cp {} . \;
+          sha256sum *.tar.gz > checksums.txt
+          cat checksums.txt
+
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cd artifacts
+          VERSION="${GITHUB_REF_NAME#cli-}"
+          gh release create "$GITHUB_REF_NAME" \
+            --title "Monoscope CLI ${VERSION}" \
+            --generate-notes \
+            monoscope-linux-x86_64.tar.gz \
+            monoscope-darwin-arm64.tar.gz \
+            monoscope-darwin-x86_64.tar.gz \
+            checksums.txt
+
+      - name: Publish npm packages
+        if: false  # Enable when npm packages are ready
+        env:
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          echo "//registry.npmjs.org/:_authToken=${NPM_TOKEN}" > ~/.npmrc
+          for pkg in npm/cli-linux-x64 npm/cli-darwin-arm64 npm/cli-darwin-x64; do
+            if [ -d "$pkg" ]; then
+              cd "$pkg" && npm publish --access public && cd ../..
+            fi
+          done
+          cd npm/cli && npm publish --access public

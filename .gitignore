@@ -50,3 +50,4 @@ tests_optimized.log
 .playwright-mcp/
 chart-cli
 web-components/bun.lock
+.ralph/agent/

@@ -36,7 +36,7 @@ COPY *.cabal cabal.project* Setup.hs LICENSE README.md auto-instrument-config.to
 # Build Haskell dependencies (fast - already cached in deps image)
 RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
-    cabal update && cabal build --only-dependencies exe:monoscope -j --semaphore
+    cabal update && cabal build --only-dependencies exe:monoscope-server -j --semaphore
 
 # Copy source code
 COPY src ./src
@@ -55,9 +55,9 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # Build Haskell executable (dist-newstyle persisted via BuildKit cache mount)
 RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
-    cabal build exe:monoscope -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
+    cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
     mkdir -p /build/dist && \
-    find dist-newstyle -name monoscope -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
+    find dist-newstyle -name monoscope-server -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
 
 # Final runtime image
 FROM debian:12-slim
@@ -94,15 +94,15 @@ RUN useradd -m -U -s /bin/false monoscope
 WORKDIR /opt/monoscope
 
 # Copy artifacts
-COPY --from=builder /build/dist/monoscope ./
+COPY --from=builder /build/dist/monoscope-server ./
 COPY --from=builder /build/static ./static
 COPY --from=builder /usr/local/bin/chart-cli ./
 
 # Set ownership and permissions
 RUN chown -R monoscope:monoscope /opt/monoscope && \
-  chmod +x monoscope chart-cli
+  chmod +x monoscope-server chart-cli
 
 USER monoscope
 
 EXPOSE 8080
-ENTRYPOINT ["./monoscope"]
+ENTRYPOINT ["./monoscope-server"]

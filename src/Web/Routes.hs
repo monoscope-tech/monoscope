@@ -192,6 +192,8 @@ data Routes mode = Routes
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
+  , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
+  , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
   }
   deriving stock (Generic)
 
@@ -263,6 +265,8 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , -- Dev routes
     emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (RespHeaders (Html ()))
   , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (RespHeaders (Html ()))
+  , -- Device auth
+    deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Sub-route groups
     projects :: mode :- ProjectsRoutes
   , anomalies :: mode :- "p" :> ProjectId :> "issues" :> AnomaliesRoutes
@@ -437,6 +441,8 @@ server pool =
           & State.evalState @TriggerEvents Map.empty
           & State.evalState @HXRedirectDest Nothing
           & State.evalState @XWidgetJSON Nothing
+    , deviceCode = Auth.deviceCodeH
+    , deviceToken = Auth.deviceTokenH
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -515,6 +521,8 @@ cookieProtectedServer =
     , -- Dev routes
       emailPreviewList = emailPreviewListH
     , emailPreview = emailPreviewH
+    , -- Device auth
+      deviceApprove = Auth.deviceApproveH
     , -- Sub-route handlers
       projects = projectsServer
     , logExplorer = logExplorerServer

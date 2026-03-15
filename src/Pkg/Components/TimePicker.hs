@@ -6,6 +6,7 @@ module Pkg.Components.TimePicker (
 ) where
 
 import Data.Aeson qualified as AE
+import Data.Char qualified as Char
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, secondsToNominalDiffTime)
@@ -46,7 +47,7 @@ data TimePicker = TimePicker
 unitToSeconds :: String -> Maybe (Int, Text)
 unitToSeconds unit =
   L.lookup
-    unit
+    (map Char.toUpper unit)
     [ ("S", (1, "Seconds"))
     , ("M", (60, "Minutes"))
     , ("H", (3600, "Hours"))
@@ -63,6 +64,9 @@ unitToSeconds unit =
 --
 -- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "7D"
 -- (Just 2024-10-24 12:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("7D",""))
+--
+-- >>> parseSince (Unsafe.read "2024-10-31 12:00:00 UTC") "1h"
+-- (Just 2024-10-31 11:00:00 UTC,Just 2024-10-31 12:00:00 UTC,Just ("1H",""))
 --
 parseSince :: UTCTime -> Text -> (Maybe UTCTime, Maybe UTCTime, Maybe (Text, Text))
 parseSince now since =
