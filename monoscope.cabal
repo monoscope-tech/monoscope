@@ -412,6 +412,7 @@ executable monoscope
     , ansi-terminal
     , brick
     , containers
+    , directory
     , effectful
     , effectful-core
     , filepath

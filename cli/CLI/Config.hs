@@ -1,5 +1,9 @@
 module CLI.Config
   ( CLIConfig (..)
+  , ConfigKey (..)
+  , allConfigKeys
+  , configKeyText
+  , parseConfigKey
   , resolveConfig
   , configDir
   , loadToken
@@ -16,7 +20,8 @@ import Data.Yaml qualified as Yaml
 import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
-import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesFileExist, getCurrentDirectory, getHomeDirectory, removeFile)
+import Effectful.FileSystem (FileSystem, createDirectoryIfMissing, doesFileExist, getCurrentDirectory, removeFile)
+import System.Directory (XdgDirectory (..), getXdgDirectory)
 import System.FilePath (takeDirectory, (</>))
 import System.Posix.Files (setFileMode)
 
@@ -27,6 +32,18 @@ data CLIConfig = CLIConfig
   }
   deriving stock (Show)
 
+data ConfigKey = CKApiUrl | CKProject | CKApiKey
+  deriving stock (Show, Eq, Enum, Bounded)
+
+allConfigKeys :: [ConfigKey]
+allConfigKeys = [minBound .. maxBound]
+
+configKeyText :: ConfigKey -> Text
+configKeyText = \case CKApiUrl -> "api_url"; CKProject -> "project"; CKApiKey -> "api_key"
+
+parseConfigKey :: Text -> Maybe ConfigKey
+parseConfigKey = \case "api_url" -> Just CKApiUrl; "project" -> Just CKProject; "api_key" -> Just CKApiKey; _ -> Nothing
+
 data FileConfig = FileConfig
   { api_url :: Maybe Text
   , project :: Maybe Text
@@ -35,14 +52,13 @@ data FileConfig = FileConfig
   deriving stock (Generic, Show)
   deriving anyclass (Yaml.FromJSON, Yaml.ToJSON)
 
-configDir :: (FileSystem :> es) => Eff es FilePath
+configDir :: (FileSystem :> es, IOE :> es) => Eff es FilePath
 configDir = do
-  home <- getHomeDirectory
-  let dir = home </> ".config" </> "monoscope"
+  dir <- liftIO $ getXdgDirectory XdgConfig "monoscope"
   createDirectoryIfMissing True dir
   pure dir
 
-tokensFile :: (FileSystem :> es) => Eff es FilePath
+tokensFile :: (FileSystem :> es, IOE :> es) => Eff es FilePath
 tokensFile = (</> "tokens.json") <$> configDir
 
 resolveConfig :: (FileSystem :> es, Environment :> es, IOE :> es) => Eff es CLIConfig
@@ -115,22 +131,21 @@ saveToken token = do
   liftIO $ Yaml.encodeFile f m
   liftIO $ setFileMode f 0o600
 
-removeToken :: (FileSystem :> es) => Eff es ()
+removeToken :: (FileSystem :> es, IOE :> es) => Eff es ()
 removeToken = do
   f <- tokensFile
   exists <- doesFileExist f
   when exists $ removeFile f
 
-configFilePath :: (FileSystem :> es) => Eff es FilePath
+configFilePath :: (FileSystem :> es, IOE :> es) => Eff es FilePath
 configFilePath = (</> "config.yaml") <$> configDir
 
-setConfigValue :: (FileSystem :> es, IOE :> es) => Text -> Text -> Eff es ()
+setConfigValue :: (FileSystem :> es, IOE :> es) => ConfigKey -> Text -> Eff es ()
 setConfigValue key val = do
   f <- configFilePath
   cfg <- loadYaml f
   let updated = case key of
-        "api_url" -> cfg{api_url = Just val}
-        "project" -> cfg{project = Just val}
-        "api_key" -> cfg{api_key = Just val}
-        _ -> cfg
+        CKApiUrl -> cfg{api_url = Just val}
+        CKProject -> cfg{project = Just val}
+        CKApiKey -> cfg{api_key = Just val}
   liftIO $ Yaml.encodeFile f updated

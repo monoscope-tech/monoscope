@@ -1,5 +1,6 @@
 module Pkg.CLITestUtils (
   runHTTPtoServant,
+  testPid,
 ) where
 
 import Relude hiding (get, put)

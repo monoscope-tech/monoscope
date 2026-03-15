@@ -29,7 +29,7 @@ module CLI.Commands
 
 import Relude
 
-import CLI.Config (CLIConfig (..), configDir, configFilePath, removeToken, resolveConfig, saveToken, setConfigValue)
+import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
 import CLI.Core (OutputMode (..), apiGet, apiPost, isInteractiveTTY, printError, renderJSON, renderTable, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
@@ -45,9 +45,9 @@ import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
 import Effectful.FileSystem (FileSystem)
 import Pkg.CLIFormat (evalCond, extractInt, extractNumericRows, extractRows, extractTextArray, renderSummaryItems, sparklineBar)
-import System.Process (callCommand)
+import System.Process (spawnProcess)
 import UnliftIO.Concurrent (threadDelay)
-import UnliftIO.Exception (tryAny)
+import UnliftIO.Exception (catch, tryAny)
 import Web.Auth (DeviceCodeResponse (..), DeviceTokenResponse (..), ProjectInfo (..))
 
 -- Auth
@@ -117,25 +117,23 @@ runConfigInit = do
       ]
   let field k = fromMaybe "" $ Map.lookup k result
       url = let v = field "api_url" in if T.null v then "https://app.monoscope.tech" else v
-  setConfigValue "api_url" url
+  setConfigValue CKApiUrl url
   let token = field "token"
   unless (T.null token) $ saveToken token
   let proj = field "project"
-  unless (T.null proj) $ setConfigValue "project" proj
+  unless (T.null proj) $ setConfigValue CKProject proj
   f <- configFilePath
   putTextLn $ "Configuration saved to " <> toText f
 
 runConfigSet :: (FileSystem :> es, IOE :> es) => ConfigSetOpts -> Eff es ()
-runConfigSet opts = do
-  let validKeys = ["api_url", "project", "api_key"] :: [Text]
-  if opts.key `elem` validKeys
-    then do
-      setConfigValue opts.key opts.value
-      putTextLn $ opts.key <> " = " <> opts.value
-    else do
-      putTextLn $ "Unknown key: " <> opts.key
-      putTextLn $ "Valid keys: " <> show validKeys
-      liftIO exitFailure
+runConfigSet opts = case parseConfigKey opts.key of
+  Just ck -> do
+    setConfigValue ck opts.value
+    putTextLn $ opts.key <> " = " <> opts.value
+  Nothing -> do
+    putTextLn $ "Unknown key: " <> opts.key
+    putTextLn $ "Valid keys: " <> show (map configKeyText allConfigKeys)
+    liftIO exitFailure
 
 runConfigGet :: (FileSystem :> es, Environment :> es, IOE :> es) => ConfigGetOpts -> Eff es ()
 runConfigGet opts = do
@@ -258,8 +256,8 @@ runEventsTail cfg opts kindOverride = do
           let rows = extractRowsWithId val
               newRows = filter (\(rid, _) -> not $ Set.member rid seen) rows
               newIds = Set.fromList (map fst newRows)
-              -- Cap seen set to prevent unbounded growth
-              updated = let s = seen <> newIds in if Set.size s > 10000 then newIds else s
+              -- Cap seen set: keep most recent half when exceeding limit
+              updated = let s = seen <> newIds in if Set.size s > 10000 then Set.drop (Set.size s `div` 2) s else s
           writeIORef seenRef updated
           forM_ newRows $ \(_, row) -> do
             let filtered = case opts.grep of
@@ -309,7 +307,7 @@ renderEventsTable val mFields = case val of
         colIdxs = mapMaybe (\c -> Map.lookup c idxMap) filteredCols
         summaryCols = Set.fromList [i | (c, i) <- zip filteredCols [0 :: Int ..], c `elem` ["summary", "latency_breakdown"]]
         filteredRows = map (\r ->
-          let raw = map (\i -> fromMaybe "" $ viaNonEmpty head $ drop i r) colIdxs
+          let raw = map (\i -> fromMaybe "" $ listToMaybe (drop i r)) colIdxs
           in  [if Set.member ci summaryCols then renderSummaryCell cell else cell | (ci, cell) <- zip [0..] raw]
           ) rows
     renderTable filteredCols filteredRows
@@ -337,7 +335,7 @@ extractRowsWithId :: AE.Value -> [(Text, [Text])]
 extractRowsWithId val = case val of
   AE.Object obj ->
     let rows = extractRows $ KM.lookup "logsData" obj
-     in map (\r -> (fromMaybe "" $ viaNonEmpty head r, r)) rows
+     in map (\r -> (fromMaybe "" $ listToMaybe r, r)) rows
   _ -> []
 
 -- Metrics
@@ -357,7 +355,6 @@ data MetricsChartOpts = MetricsChartOpts
   , since :: Maybe Text
   , from :: Maybe Text
   , to :: Maybe Text
-  , height :: Int
   , watch :: Maybe Text
   }
   deriving stock (Show)
@@ -375,8 +372,7 @@ runMetricsChart :: (HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> E
 runMetricsChart cfg opts = do
   let run = do
         let params = metricsParams opts.expression opts.since opts.from opts.to Nothing cfg
-        withAPIResult cfg "/chart_data" params $ \val ->
-          renderSparkline val opts.height
+        withAPIResult cfg "/chart_data" params renderSparkline
   case opts.watch of
     Nothing -> run
     Just interval -> forever $ do
@@ -405,8 +401,8 @@ renderMetricsTable val = case val of
       else renderTable headers rows
   _ -> renderJSON val
 
-renderSparkline :: (IOE :> es) => AE.Value -> Int -> Eff es ()
-renderSparkline val _height = case val of
+renderSparkline :: (IOE :> es) => AE.Value -> Eff es ()
+renderSparkline val = case val of
   AE.Object obj -> do
     let headers = extractTextArray $ KM.lookup "headers" obj
         dataset = extractNumericRows $ KM.lookup "dataset" obj
@@ -423,26 +419,29 @@ checkAssertion val cond = case val of
       unless (evalCond v cond) $ do
         printError $ "Assertion failed: " <> show v <> " " <> cond
         liftIO exitFailure
-    _ -> pass
-  _ -> pass
+    _ -> printError "Warning: --assert ignored, no numeric result to evaluate"
+  _ -> printError "Warning: --assert ignored, unexpected response shape"
 
 parseDurationMs :: Text -> Int
-parseDurationMs t = case T.stripSuffix "s" t of
-  Just n -> maybe 5000 (* 1000) (readMaybe $ toString n)
-  Nothing -> 5000
+parseDurationMs t
+  | Just n <- T.stripSuffix "ms" t = fromMaybe 5000 (readMaybe $ toString n)
+  | Just n <- T.stripSuffix "s" t  = maybe 5000 (* 1000) (readMaybe $ toString n)
+  | Just n <- T.stripSuffix "m" t  = maybe 5000 (* 60_000) (readMaybe $ toString n)
+  | Just n <- T.stripSuffix "h" t  = maybe 5000 (* 3_600_000) (readMaybe $ toString n)
+  | otherwise = maybe 5000 (* 1000) (readMaybe $ toString t)
 
 -- Device auth helpers
 
 selectProject :: (FileSystem :> es, Environment :> es, IOE :> es) => Maybe [ProjectInfo] -> Eff es ()
 selectProject = \case
-  Just [p] -> setConfigValue "project" p.id >> putTextLn ("Using project: " <> p.name)
+  Just [p] -> setConfigValue CKProject p.id >> putTextLn ("Using project: " <> p.name)
   Just ps@(_ : _ : _) -> do
     tty <- isInteractiveTTY
     let items = [(p.id, p.name <> " (" <> p.id <> ")") | p <- ps]
     liftIO (selectFromList tty "Select project" items) >>= \case
       Just pid -> do
         let name = maybe pid (.name) $ find (\p -> p.id == pid) ps
-        setConfigValue "project" pid >> putTextLn ("Using project: " <> name)
+        setConfigValue CKProject pid >> putTextLn ("Using project: " <> name)
       Nothing -> putTextLn "No project selected"
   _ -> putTextLn "No projects found. Create one at your Monoscope dashboard."
 
@@ -451,14 +450,15 @@ pollForToken _ _ 0 = pure Nothing
 pollForToken baseUrl deviceCode remaining = do
   threadDelay 5_000_000
   apiPost baseUrl "/api/device/token" [("device_code", deviceCode)] >>= \case
-    Left _ -> pure Nothing
+    Left _ -> pollForToken baseUrl deviceCode (remaining - 1) -- transient error, keep polling
     Right bs -> case AE.eitherDecode @DeviceTokenResponse bs of
-      Left _ -> pure Nothing
+      Left _ -> pollForToken baseUrl deviceCode (remaining - 1)
       Right resp
         | resp.err == Just "authorization_pending" -> pollForToken baseUrl deviceCode (remaining - 1)
         | isJust resp.sessionId -> pure (Just resp)
         | otherwise -> pure Nothing
 
 tryOpenBrowser :: String -> IO ()
-tryOpenBrowser url = void $ tryAny $ callCommand $
-  "open " <> show url <> " 2>/dev/null || xdg-open " <> show url <> " 2>/dev/null || true"
+tryOpenBrowser url = void $ tryAny $
+  void (spawnProcess "open" [url]) `catch` \(_ :: SomeException) ->
+    void $ spawnProcess "xdg-open" [url]

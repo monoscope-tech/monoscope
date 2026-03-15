@@ -14,6 +14,8 @@ module Pkg.CLIFormat (
 import Relude
 
 import Data.Aeson qualified as AE
+import Data.List qualified as L
+import Data.Scientific (formatScientific, FPFormat (Fixed))
 import Data.Text qualified as T
 import Data.Vector qualified as V
 
@@ -71,19 +73,26 @@ renderSummaryItems = T.intercalate " " . mapMaybe renderItem
 -- >>> colWidths []
 -- []
 colWidths :: [[Text]] -> [Int]
-colWidths rows =
-  let ncols = foldl' (\acc r -> max acc (length r)) 0 rows
-      getCol i = map (\r -> maybe 0 T.length (viaNonEmpty head $ drop i r)) rows
-   in [min 60 (foldl' max 0 (getCol i)) | i <- [0 .. ncols - 1]]
+colWidths [] = []
+colWidths rows = map (min 60 . foldl' (\acc t -> max acc (T.length t)) 0) $ L.transpose padded
+  where
+    ncols = foldl' (\acc r -> max acc (length r)) 0 rows
+    padded = map (\r -> r <> replicate (ncols - length r) "") rows
 
 
--- | Format a row with given column widths.
+-- | Format a row with given column widths (cols shorter than widths are padded with empty strings).
 --
 -- >>> formatRow [5, 3] ["hi", "ok"]
 -- "hi     ok "
 formatRow :: [Int] -> [Text] -> Text
 formatRow widths cols =
   T.intercalate "  " $ zipWith padRight widths (cols <> repeat "")
+
+
+-- | Apply a function over JSON array contents, defaulting to empty list.
+withArray :: (V.Vector AE.Value -> [a]) -> Maybe AE.Value -> [a]
+withArray f (Just (AE.Array arr)) = f arr
+withArray _ _ = []
 
 
 -- | Extract text values from a JSON array.
@@ -93,8 +102,7 @@ formatRow widths cols =
 -- >>> extractTextArray Nothing
 -- []
 extractTextArray :: Maybe AE.Value -> [Text]
-extractTextArray (Just (AE.Array arr)) = mapMaybe (\case AE.String s -> Just s; _ -> Nothing) (V.toList arr)
-extractTextArray _ = []
+extractTextArray = withArray $ mapMaybe (\case AE.String s -> Just s; _ -> Nothing) . V.toList
 
 
 -- | Convert a JSON value to text for table display.
@@ -104,27 +112,33 @@ extractTextArray _ = []
 -- >>> valToText AE.Null
 -- ""
 -- >>> valToText (AE.Bool True)
--- "True"
+-- "true"
+-- >>> valToText (AE.Bool False)
+-- "false"
+-- >>> valToText (AE.Number 100)
+-- "100"
+-- >>> valToText (AE.Number 1.5)
+-- "1.5"
 valToText :: AE.Value -> Text
 valToText (AE.String s) = s
 valToText AE.Null = ""
-valToText (AE.Number n) = show n
-valToText (AE.Bool b) = show b
+valToText (AE.Number n) = toText $ formatScientific Fixed Nothing n
+valToText (AE.Bool True) = "true"
+valToText (AE.Bool False) = "false"
 valToText v = decodeUtf8 $ AE.encode v
 
 
 -- | Extract rows of text from a JSON array of arrays.
 --
 -- >>> extractRows (Just (AE.Array (V.fromList [AE.Array (V.fromList [AE.String "a", AE.Number 1])])))
--- [["a","1.0"]]
+-- [["a","1"]]
 -- >>> extractRows Nothing
 -- []
 extractRows :: Maybe AE.Value -> [[Text]]
-extractRows (Just (AE.Array arr)) = map extractRow (V.toList arr)
+extractRows = withArray $ map extractRow . V.toList
   where
     extractRow (AE.Array row) = map valToText (V.toList row)
     extractRow _ = []
-extractRows _ = []
 
 
 -- | Extract numeric rows from a JSON array of arrays.
@@ -134,11 +148,10 @@ extractRows _ = []
 -- >>> extractNumericRows Nothing
 -- []
 extractNumericRows :: Maybe AE.Value -> [[Maybe Double]]
-extractNumericRows (Just (AE.Array arr)) = map extractRow (V.toList arr)
+extractNumericRows = withArray $ map extractRow . V.toList
   where
     extractRow (AE.Array row) = map (\case AE.Number n -> Just (realToFrac n); _ -> Nothing) (V.toList row)
     extractRow _ = []
-extractNumericRows _ = []
 
 
 -- | Extract an integer from a JSON number value.
@@ -152,7 +165,7 @@ extractInt (Just (AE.Number n)) = round n
 extractInt _ = 0
 
 
--- | Evaluate a threshold condition against a value.
+-- | Evaluate a threshold condition against a value. Returns False for unparseable conditions.
 --
 -- >>> evalCond 0.5 "< 1.0"
 -- True
@@ -164,14 +177,19 @@ extractInt _ = 0
 -- True
 -- >>> evalCond 5.0 ">= 6.0"
 -- False
+-- >>> evalCond 5.0 "bogus"
+-- False
 evalCond :: Double -> Text -> Bool
 evalCond v cond
-  | "< " `T.isPrefixOf` cond = maybe False (v <) (readMaybe $ toString $ T.drop 2 cond)
-  | "> " `T.isPrefixOf` cond = maybe False (v >) (readMaybe $ toString $ T.drop 2 cond)
   | "<= " `T.isPrefixOf` cond = maybe False (v <=) (readMaybe $ toString $ T.drop 3 cond)
   | ">= " `T.isPrefixOf` cond = maybe False (v >=) (readMaybe $ toString $ T.drop 3 cond)
-  | otherwise = True
+  | "< " `T.isPrefixOf` cond = maybe False (v <) (readMaybe $ toString $ T.drop 2 cond)
+  | "> " `T.isPrefixOf` cond = maybe False (v >) (readMaybe $ toString $ T.drop 2 cond)
+  | otherwise = False
 
+
+sparklineBlocks :: Text
+sparklineBlocks = "▁▂▃▄▅▆▇█"
 
 -- | Convert a normalized value (0-1) to a sparkline bar character.
 --
@@ -184,6 +202,6 @@ evalCond v cond
 sparklineBar :: Maybe Double -> Text
 sparklineBar Nothing = " "
 sparklineBar (Just v) =
-  let blocks = "▁▂▃▄▅▆▇█" :: Text
-      idx = min 7 $ max 0 $ round (v * fromIntegral (T.length blocks - 1))
-   in one $ T.index blocks idx
+  let maxIdx = T.length sparklineBlocks - 1
+      idx = min maxIdx $ max 0 $ round (v * fromIntegral maxIdx)
+   in one $ T.index sparklineBlocks idx

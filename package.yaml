@@ -306,6 +306,7 @@ executables:
       - monoscope
       - optparse-applicative
       - ansi-terminal
+      - directory
       - http-client
       - wreq
       - yaml

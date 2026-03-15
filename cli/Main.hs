@@ -142,7 +142,6 @@ metricsChartParser =
     <*> optional (strOption (long "since" <> metavar "DURATION"))
     <*> optional (strOption (long "from" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP"))
-    <*> option auto (long "height" <> metavar "ROWS" <> value 15 <> help "Chart height")
     <*> optional (strOption (long "watch" <> short 'w' <> metavar "INTERVAL" <> help "Refresh interval"))
 
 servicesParser :: Parser ServicesCommand
