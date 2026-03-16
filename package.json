@@ -4,7 +4,7 @@
     "autoprefixer": "^10.4.27",
     "daisyui": "^5.5.19",
     "jest": "^29.7.0",
-    "postcss": "^8.5.6",
+    "postcss": "^8.5.8",
     "tailwindcss": "^4.2.1",
     "workbox-cli": "^7.4.0"
   },
