@@ -9,7 +9,6 @@ import Effectful.PostgreSQL qualified as PG
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import Pkg.DeriveUtils (DB)
 import Relude
 import Servant (NoContent (..))
@@ -40,7 +39,7 @@ data RecentForm = RecentForm {label :: Text, url :: Text, itemType :: Text}
 
 commandPaletteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 commandPaletteH pid = do
-  sess <- Sessions.getSession
+  sess <- Projects.getSession
   let userId = sess.user.id
   (recents, issues, monitors, dashboards) <- fetchPaletteData pid userId
   addRespHeaders $ renderPalette pid recents issues monitors dashboards
@@ -48,7 +47,7 @@ commandPaletteH pid = do
 
 commandPaletteRecentPostH :: Projects.ProjectId -> RecentForm -> ATAuthCtx (RespHeaders NoContent)
 commandPaletteRecentPostH pid form = do
-  sess <- Sessions.getSession
+  sess <- Projects.getSession
   let userId = sess.user.id
   recordRecent pid userId form
   addRespHeaders NoContent

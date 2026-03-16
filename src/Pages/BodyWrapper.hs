@@ -10,7 +10,6 @@ import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Components qualified as Components
 import Pkg.DeriveUtils (hashAssetFile)
@@ -109,7 +108,7 @@ instance ToHtml a => ToHtml (PageCtx a) where
 
 -- TODO: Rename to pageCtx
 data BWConfig = BWConfig
-  { sessM :: Maybe Sessions.Session
+  { sessM :: Maybe Projects.Session
   , currProject :: Maybe Projects.Project
   , prePageTitle :: Maybe Text
   , pageTitle :: Text
@@ -684,7 +683,7 @@ projectsDropDown currProject projects = do
           $ actionLink [hxGet_ [text| /p/$pidTxt/manage_subscription |]] "dollar-sign" "Manage billing"
 
 
-sideNav :: Sessions.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
+sideNav :: Projects.Session -> Projects.Project -> Text -> Maybe Text -> Html ()
 sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker max-md:bg-bgBase text-sm max-md:fixed max-md:z-50 max-md:w-60 max-md:h-full max-md:-translate-x-full max-md:transition-transform group-has-[#mobile-nav-toggle:checked]/pg:max-md:translate-x-0 md:min-w-15 md:shrink-0 md:w-15 group-has-[#sidenav-toggle:checked]/pg:md:w-60 h-screen md:transition-[width] duration-200 ease-out flex flex-col justify-between", id_ "side-nav-menu"] do
   -- Right border resize handle (desktop only)
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
@@ -712,7 +711,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           span_ [class_ "w-8 h-8 group-has-[#sidenav-toggle:checked]/pg:w-6 group-has-[#sidenav-toggle:checked]/pg:h-6 rounded-lg group-has-[#sidenav-toggle:checked]/pg:rounded-md bg-fillBrand-weak text-textBrand text-sm group-has-[#sidenav-toggle:checked]/pg:text-xs font-semibold flex items-center justify-center shrink-0"] $ toHtml $ T.take 1 project.title
           span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
-      div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Sessions.getProjects $ Sessions.projects sess.persistentSession)
+      div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
     let mainNavActiveStyles = "[&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand"
     nav_ [id_ "main-sidenav", class_ $ "mt-5 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') if p is h or p.startsWith(h + '/') add .active to link else remove .active from link end end|]] do
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
@@ -805,7 +804,7 @@ paletteTriggerFloating p =
       kbd_ [class_ "kbd kbd-xs"] "\x2318K"
 
 
-navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Sessions.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
+navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Projects.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-strokeWeak items-center"] do
     div_ [class_ "flex-1 flex items-center text-textStrong gap-1 min-w-0 overflow-hidden"] do

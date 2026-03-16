@@ -79,7 +79,6 @@ import Models.Projects.Projects (User (id))
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
@@ -112,7 +111,7 @@ newtype AnomalyBulkForm = AnomalyBulk
 
 acknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> Maybe Text -> ATAuthCtx (RespHeaders AnomalyAction)
 acknowledgeAnomalyGetH pid aid hostM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let issueId = UUIDId aid.unUUIDId
   _ <- Issues.acknowledgeIssue issueId sess.user.id
@@ -125,7 +124,7 @@ acknowledgeAnomalyGetH pid aid hostM = do
 
 unAcknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 unAcknowledgeAnomalyGetH pid aid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let q = [sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=? |]
   let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
   _ <- PG.execute qI (Only aid)
@@ -136,7 +135,7 @@ unAcknowledgeAnomalyGetH pid aid = do
 
 archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 archiveAnomalyGetH pid aid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let q = [sql| update apis.anomalies set archived_at=? where id=? |]
   let qI = [sql| update apis.issues set archived_at=? where id=? |]
@@ -148,7 +147,7 @@ archiveAnomalyGetH pid aid = do
 
 unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 unArchiveAnomalyGetH pid aid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let q = [sql| update apis.anomalies set archived_at=null where id=? |]
   let qI = [sql| update apis.issues set archived_at=null where id=? |]
   _ <- PG.execute qI (Only aid)
@@ -173,7 +172,7 @@ instance ToHtml AnomalyAction where
 -- | Bulk acknowledge/archive anomalies, triggering a notification and list reload
 anomalyBulkActionsPostH :: Projects.ProjectId -> Text -> AnomalyBulkForm -> ATAuthCtx (RespHeaders AnomalyAction)
 anomalyBulkActionsPostH pid action items = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   if null items.anomalyId
     then do
@@ -208,7 +207,7 @@ anomalyDetailHashGetH pid issueId firstM sinceM = anomalyDetailCore pid firstM s
 
 anomalyDetailCore :: Projects.ProjectId -> Maybe Text -> Maybe Text -> (Projects.ProjectId -> ATAuthCtx (Maybe Issues.Issue)) -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 anomalyDetailCore pid firstM sinceM fetchIssue = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   issueM <- fetchIssue pid
   now <- Time.currentTime
@@ -631,7 +630,7 @@ newtype ErrorSubscriptionForm = ErrorSubscriptionForm
 
 assignErrorPostH :: Projects.ProjectId -> UUID.UUID -> AssignErrorForm -> ATAuthCtx (RespHeaders (Html ()))
 assignErrorPostH pid errUuid form = do
-  (sess, _project) <- Sessions.sessionAndProject pid
+  (sess, _project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let errId = ErrorPatterns.ErrorPatternId errUuid
       assigneeIdM = form.assigneeId >>= UUID.fromText <&> Projects.UserId
@@ -661,7 +660,7 @@ assignErrorPostH pid errUuid form = do
 
 resolveErrorPostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 resolveErrorPostH pid errUuid = do
-  (sess, _project) <- Sessions.sessionAndProject pid
+  (sess, _project) <- Projects.sessionAndProject pid
   errM <- ErrorPatterns.getErrorPatternById (ErrorPatterns.ErrorPatternId errUuid)
   userPermission <- ProjectMembers.getUserPermission pid sess.user.id
   let canResolve err = userPermission >= Just ProjectMembers.PEdit || err.assigneeId == Just sess.user.id
@@ -684,7 +683,7 @@ resolveErrorPostH pid errUuid = do
 
 errorSubscriptionPostH :: Projects.ProjectId -> UUID.UUID -> ErrorSubscriptionForm -> ATAuthCtx (RespHeaders (Html ()))
 errorSubscriptionPostH pid errUuid form = do
-  (_sess, _project) <- Sessions.sessionAndProject pid
+  (_sess, _project) <- Projects.sessionAndProject pid
   let errId = ErrorPatterns.ErrorPatternId errUuid
   errM <- ErrorPatterns.getErrorPatternById errId
   case errM of
@@ -784,7 +783,7 @@ aiChatPostH pid issueId form
 -- | Handle AI chat history GET request
 aiChatHistoryGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
 aiChatHistoryGetH pid issueId = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   -- Get issue to build system prompt
   issueM <- Issues.selectIssueById issueId
@@ -1138,7 +1137,7 @@ anomalyListGetH
   -> Maybe Text
   -> ATAuthCtx (RespHeaders AnomalyListGet)
 anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpointM periodM serviceFilters typeFilters hxRequestM hxBoostedM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Inbox" -> (Just False, Just False, "Inbox")
@@ -1635,7 +1634,7 @@ issueTypeMeta issueType critical = case issueType of
 
 issueActivityGetH :: Projects.ProjectId -> Issues.IssueId -> ATAuthCtx (RespHeaders (Html ()))
 issueActivityGetH pid issueId = do
-  (_sess, _project) <- Sessions.sessionAndProject pid
+  (_sess, _project) <- Projects.sessionAndProject pid
   activities <- Issues.selectIssueActivity pid issueId
   now <- Time.currentTime
   let userIds = ordNub $ mapMaybe (.createdBy) activities

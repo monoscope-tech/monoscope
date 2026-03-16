@@ -45,7 +45,7 @@ import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
-import Models.Users.Sessions qualified as Sessions
+import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (DB)
 import Relude

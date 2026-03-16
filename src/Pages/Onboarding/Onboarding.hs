@@ -44,7 +44,6 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (getDiscordDataByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Components
@@ -60,7 +59,7 @@ import Web.FormUrlEncoded
 -- 'Info', 'Survey', 'CreateMonitor','NotifChannel','Integration', 'Pricing', 'Complete'
 onboardingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders OnboardingGet)
 onboardingGetH pid onboardingStepM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let bodyConfig =
         (def :: BWConfig)
@@ -246,7 +245,7 @@ instance ToHtml OnboardingPhoneEmailsPost where
 
 onboardingStepSkipped :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 onboardingStepSkipped pid stepM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   case stepM of
     Just step -> do
       let stepsCompleted = project.onboardingStepsCompleted
@@ -262,7 +261,7 @@ onboardingStepSkipped pid stepM = do
 
 dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 dismissChecklistH pid = do
-  (_, project) <- Sessions.sessionAndProject pid
+  (_, project) <- Projects.sessionAndProject pid
   let newCompleted = insertIfNotExist "checklist_dismissed" project.onboardingStepsCompleted
   void $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed=? WHERE id=? |] (newCompleted, pid)
   addRespHeaders ""
@@ -275,7 +274,7 @@ getNextStep _ = "Info"
 
 phoneEmailPostH :: Projects.ProjectId -> NotifChannelForm -> ATAuthCtx (RespHeaders OnboardingPhoneEmailsPost)
 phoneEmailPostH pid form = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       phone = form.phoneNumber
@@ -294,7 +293,7 @@ phoneEmailPostH pid form = do
 
 checkIntegrationGet :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 checkIntegrationGet pid languageM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Integration" stepsCompleted
   v :: Maybe (Only Text) <- listToMaybe <$> PG.query [sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = ? LIMIT 1|] (Only pid)
@@ -319,7 +318,7 @@ verifiedCheck = div_ [class_ "flex items-center gap-2 text-textSuccess"] do
 
 onboardingInfoPostH :: Projects.ProjectId -> OnboardingInfoForm -> ATAuthCtx (RespHeaders OnboardingInfoPost)
 onboardingInfoPostH pid form = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let firstName = form.firstName
       lastName = form.lastName
   let infoJson =
@@ -342,7 +341,7 @@ onboardingInfoPostH pid form = do
 
 onboardingConfPostH :: Projects.ProjectId -> OnboardingConfForm -> ATAuthCtx (RespHeaders OnboardingConfPost)
 onboardingConfPostH pid form = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let infoJson =
         KM.fromList
           [ ("functionality", AE.toJSON form.functionality)

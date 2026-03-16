@@ -33,7 +33,6 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SpanStatus (SSError))
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Components qualified as Components
@@ -159,7 +158,7 @@ instance ToHtml TraceDetailsGet where
 -- Metrics handlers
 metricsOverViewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders MetricsOverViewGet)
 metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let tab = maybe "charts" (\t -> if t == "charts" then t else "datapoints") tabM
@@ -214,7 +213,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
 
 metricDetailsGetH :: Projects.ProjectId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricDetailsGetH pid metricName source fromM toM sinceM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let (_, _, currentRange) = parseTime fromM toM sinceM now
   metricM <- Telemetry.getMetricData pid metricName
@@ -227,7 +226,7 @@ metricDetailsGetH pid metricName source fromM toM sinceM = do
 
 metricBreakdownGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 metricBreakdownGetH pid metricName labelM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let label = fromMaybe "all" labelM
   if label == "all"
     then do

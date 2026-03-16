@@ -119,7 +119,6 @@ library
       Models.Telemetry.Schema
       Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
-      Models.Users.Sessions
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
       Pages.Anomalies

@@ -54,7 +54,6 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
 import Relude hiding (id)
 import System.Types (DB)
@@ -91,7 +90,7 @@ data LogPattern = LogPattern
   , lastSeenAt :: ZonedTime
   , occurrenceCount :: Int64
   , state :: LogPatternState
-  , acknowledgedBy :: Maybe Users.UserId
+  , acknowledgedBy :: Maybe Projects.UserId
   , acknowledgedAt :: Maybe ZonedTime
   , baselineState :: BaselineState
   , baselineVolumeHourlyMean :: Maybe Double
@@ -157,7 +156,7 @@ getNewLogPatterns pid limit = do
 -- | Acknowledge log patterns. Pass Nothing for system-triggered acknowledgments.
 -- Matches on (project_id, source_field, pattern_hash) — the unique key — to avoid
 -- cross-field collisions (e.g. url_path and exception sharing the same normalized hash).
-acknowledgeLogPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Users.UserId -> V.Vector (Text, Text) -> Eff es Int64
+acknowledgeLogPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Projects.UserId -> V.Vector (Text, Text) -> Eff es Int64
 acknowledgeLogPatterns pid uid fieldHashPairs
   | V.null fieldHashPairs = pure 0
   | otherwise = do

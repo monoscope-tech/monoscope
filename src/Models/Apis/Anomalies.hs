@@ -54,7 +54,6 @@ import Models.Apis.Fields qualified as Fields (
   ShapeId,
  )
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)
 import Servant (FromHttpApiData (..))
@@ -109,7 +108,7 @@ data AnomalyVM = AnomalyVM
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , acknowlegedAt :: Maybe ZonedTime
-  , acknowlegedBy :: Maybe Users.UserId
+  , acknowlegedBy :: Maybe Projects.UserId
   , anomalyType :: AnomalyTypes
   , action :: AnomalyActions
   , targetHash :: Text
@@ -199,7 +198,7 @@ where
       |]
 
 
-acknowledgeAnomalies :: (DB es, Time :> es) => Users.UserId -> V.Vector Text -> Eff es [Text]
+acknowledgeAnomalies :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es [Text]
 acknowledgeAnomalies uid aids
   | V.null aids = pure []
   | otherwise = do
@@ -223,7 +222,7 @@ acknowledgeAnomalies uid aids
     qAnomaliesByHash = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=? where target_hash=ANY(?) |]
 
 
-acknowlegeCascade :: (DB es, Time :> es) => Users.UserId -> V.Vector Text -> Eff es Int64
+acknowlegeCascade :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es Int64
 acknowlegeCascade uid targets
   | V.null targets = pure 0
   | otherwise = do
@@ -335,7 +334,7 @@ data Issue = Issue
   , targetHash :: Text
   , issueData :: IssuesData
   , endpointId :: Maybe Endpoints.EndpointId
-  , acknowlegedBy :: Maybe Users.UserId
+  , acknowlegedBy :: Maybe Projects.UserId
   , archivedAt :: Maybe ZonedTime
   , -- Enhanced UI fields
     title :: Text
@@ -404,7 +403,7 @@ data IssueL = IssueL
   , targetHash :: Text
   , issueData :: IssuesData
   , endpointId :: Maybe Endpoints.EndpointId
-  , acknowlegedBy :: Maybe Users.UserId
+  , acknowlegedBy :: Maybe Projects.UserId
   , archivedAt :: Maybe ZonedTime
   , eventsAgg :: IssueEventAgg
   , -- New fields for enhanced UI

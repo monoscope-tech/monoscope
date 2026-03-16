@@ -54,7 +54,6 @@ import Models.Projects.ProjectMembers (Team (discord_channels, slack_channels))
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
@@ -453,7 +452,7 @@ data UnifiedMonitorDetails = AlertDetails
 
 teamAlertsGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (TableRows UnifiedMonitorItem))
 teamAlertsGetH pid teamId = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   alerts <- Monitors.getAlertsByTeamHandle pid teamId
   currTime <- Time.currentTime
@@ -488,7 +487,7 @@ unifiedMonitorsGetH
   -> Maybe Text -- since
   -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
 unifiedMonitorsGetH pid filterTM sinceM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
 
@@ -797,7 +796,7 @@ statusBadge_ isLarge status = do
 
 unifiedMonitorOverviewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 unifiedMonitorOverviewH pid monitorId = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
   (freeTierExceeded, alertM) <-

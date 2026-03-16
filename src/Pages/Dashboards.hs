@@ -77,7 +77,6 @@ import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
@@ -997,7 +996,7 @@ getDashAndVM dashId fileM = do
 
 dashboardGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
@@ -1657,7 +1656,7 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
 
 dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
 dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
 
   -- Sort and filter configuration
@@ -1740,7 +1739,7 @@ data DashboardForm = DashboardForm
 
 dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardsPostH pid form = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
   if form.title == ""
@@ -1789,7 +1788,7 @@ entrypointRedirectGetH
   -> [(Text, Maybe Text)]
   -> ATAuthCtx (Headers '[Header "Location" Text] NoContent)
 entrypointRedirectGetH baseTemplate title tags pid qparams = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let mkPath p d = "/p/" <> pid.toText <> p <> d <> "?" <> toQueryParams qparams
       shouldBeStarred = baseTemplate `elem` ["_overview.yaml", "endpoint-stats.yaml"]
@@ -1878,7 +1877,7 @@ dashboardDuplicatePostH pid dashId = do
       addErrorToast "Dashboard not found or does not belong to this project" Nothing
       addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
     Just dashVM -> do
-      (sess, _) <- Sessions.sessionAndProject pid
+      (sess, _) <- Projects.sessionAndProject pid
       now <- Time.currentTime
       newDashId <- UUIDId <$> UUID.genUUID
 
@@ -1908,7 +1907,7 @@ dashboardDuplicatePostH pid dashId = do
 
 dashboardStarPostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
 dashboardStarPostH pid dashId = do
-  _ <- Sessions.sessionAndProject pid
+  _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
@@ -2196,7 +2195,7 @@ mkWidgetProcessor pid dashId now timeParams paramsWithConstants =
 -- This renders the full page with the specified tab active
 dashboardTabGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (PageCtx DashboardGet))
 dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   let (_fromD, _toD, currentRange) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)

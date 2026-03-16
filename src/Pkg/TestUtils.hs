@@ -85,7 +85,6 @@ import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
 import Network.GRPC.Common.Protobuf (Proto (..))
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
@@ -377,7 +376,7 @@ ensureTemplateDatabase connInfo templateDbName = do
 
 -- | `testSessionHeader` would log a user in and automatically generate a session header
 -- which can be reused in subsequent tests
-testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session)
+testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
 testSessionHeader pool = do
   pSessId <-
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
@@ -433,7 +432,7 @@ testSessionHeader pool = do
 
 
 -- | Refresh a session to pick up any new projects added to the user
-refreshSession :: MonadIO m => Pool Connection -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session)
+refreshSession :: MonadIO m => Pool Connection -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
 refreshSession pool sessionHeaders = do
   let session = Servant.getResponse sessionHeaders
       pSessId = session.sessionId
@@ -532,7 +531,7 @@ runTestBg t TestResources{..} = runTestBackgroundWithLogger t trLogger trATCtx
 data TestResources = TestResources
   { trPool :: Pool Connection
   , trProjectCache :: Cache Projects.ProjectId Projects.ProjectCache
-  , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
+  , trSessAndHeader :: Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session
   , trATCtx :: AuthContext
   , trLogger :: Log.Logger
   , trTracerProvider :: TracerProvider
@@ -598,7 +597,7 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
 
 toServantResponse
   :: AuthContext
-  -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Sessions.Session
+  -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session
   -> Log.Logger
   -> ATAuthCtx (RespHeaders a)
   -> IO (RespHeaders a, a)

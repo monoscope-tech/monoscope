@@ -29,7 +29,6 @@ import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
 import Pkg.DeriveUtils (unAesonTextMaybe)
@@ -136,7 +135,7 @@ getErrorDetails ae = case ae of
 
 expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ApiItemDetailed)
 expandAPIlogItemH pid rdId timestamp sourceM = do
-  _ <- Sessions.sessionAndProject pid
+  _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   -- sourceM parameter is preserved for future use but not used in current logic
   -- Query the unified table using timestamp and id

@@ -13,7 +13,6 @@ import Models.Apis.LogPatterns (BaselineState (..), LogPatternState (..))
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.PatternMerge qualified as PM
 import Pkg.TestUtils

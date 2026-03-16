@@ -24,7 +24,6 @@ import OddJobs.Job (createJob)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import Network.HTTP.Client (HttpException)
 import Network.Wreq qualified as Wreq
 import Pages.GitSync (GitHubOwner (..), GitHubRepo (..), GitHubWebhookPayload (..), GitSyncForm (..))
@@ -188,7 +187,7 @@ createDash tr title tags = do
         , Dashboards.projectId = testPid
         , Dashboards.createdAt = now
         , Dashboards.updatedAt = now
-        , Dashboards.createdBy = Users.UserId UUID.nil
+        , Dashboards.createdBy = Projects.UserId UUID.nil
         , Dashboards.baseTemplate = Nothing
         , Dashboards.schema = Just $ (def :: Dashboards.Dashboard) & field @"title" .~ Just title & field @"tags" .~ Just tags
         , Dashboards.starredSince = Nothing

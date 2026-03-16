@@ -10,7 +10,6 @@ import Fmt (commaizeF, fmt)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs)
 import Pkg.Components.Widget (WidgetAxis (..))
@@ -24,7 +23,7 @@ import Utils (checkFreeTierExceeded)
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
 apiCatalogH pid sortM timeFilter requestTypeM skipM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
 
   let requestType = fromMaybe "Incoming" requestTypeM
@@ -166,7 +165,7 @@ endpointListGetH
   -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
 endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
         Just "Active" -> (True, False, "Active")

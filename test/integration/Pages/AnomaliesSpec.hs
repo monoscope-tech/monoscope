@@ -25,9 +25,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Anomalies (AnomalyId)
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Issues
+import Models.Projects.Projects (Session (..))
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions (Session (..))
-import Models.Users.Sessions qualified as Users
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))

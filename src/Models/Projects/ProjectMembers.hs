@@ -59,7 +59,6 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
@@ -82,7 +81,7 @@ data ProjectMembers = ProjectMembers
   , deletedAt :: Maybe ZonedTime
   , active :: Bool
   , projectId :: Projects.ProjectId
-  , userId :: Users.UserId
+  , userId :: Projects.UserId
   , permission :: Permissions
   }
   deriving stock (Generic, Show)
@@ -94,7 +93,7 @@ data ProjectMembers = ProjectMembers
 
 data CreateProjectMembers = CreateProjectMembers
   { projectId :: Projects.ProjectId
-  , userId :: Users.UserId
+  , userId :: Projects.UserId
   , permission :: Permissions
   }
   deriving stock (Eq, Generic, Show)
@@ -113,7 +112,7 @@ insertProjectMembers members = PG.executeMany q members
 
 data ProjectMemberVM = ProjectMemberVM
   { id :: UUID.UUID
-  , userId :: Users.UserId
+  , userId :: Projects.UserId
   , permission :: Permissions
   , email :: CI Text
   , first_name :: Text
@@ -134,7 +133,7 @@ selectActiveProjectMembers pid = PG.query q (Only pid)
         |]
 
 
-getUserPermission :: DB es => Projects.ProjectId -> Users.UserId -> Eff es (Maybe Permissions)
+getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
 getUserPermission pid uid = coerce @(Maybe (Only Permissions)) @(Maybe Permissions) . listToMaybe <$> PG.query q (pid, uid)
   where
     q =
@@ -179,7 +178,7 @@ activateAllMembers pid = PG.execute q (Only pid)
 
 data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
   { id :: UUID.UUID
-  , userId :: Users.UserId
+  , userId :: Projects.UserId
   , permission :: Permissions
   , email :: CI Text
   , first_name :: Text
@@ -203,7 +202,7 @@ data TeamDetails = TeamDetails
   { name :: Text
   , description :: Text
   , handle :: Text
-  , members :: V.Vector Users.UserId
+  , members :: V.Vector Projects.UserId
   , notifyEmails :: V.Vector Text
   , slackChannels :: V.Vector Text
   , discordChannels :: V.Vector Text
@@ -213,7 +212,7 @@ data TeamDetails = TeamDetails
   deriving stock (Eq, Generic, Show)
 
 
-createTeam :: DB es => Projects.ProjectId -> Users.UserId -> TeamDetails -> Eff es Int64
+createTeam :: DB es => Projects.ProjectId -> Projects.UserId -> TeamDetails -> Eff es Int64
 createTeam pid uid TeamDetails{..}
   | handle == "everyone" = pure 0 -- Prevent creating team with reserved handle
   | otherwise = PG.execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices)
@@ -225,7 +224,7 @@ createTeam pid uid TeamDetails{..}
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
-createEveryoneTeam :: DB es => Projects.ProjectId -> Users.UserId -> Eff es Int64
+createEveryoneTeam :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es Int64
 createEveryoneTeam pid uid = PG.execute q (pid, uid)
   where
     q =
@@ -261,8 +260,8 @@ data Team = Team
   , name :: Text
   , description :: Text
   , handle :: Text
-  , members :: V.Vector Users.UserId
-  , created_by :: Maybe Users.UserId
+  , members :: V.Vector Projects.UserId
+  , created_by :: Maybe Projects.UserId
   , created_at :: UTCTime
   , updated_at :: UTCTime
   , notify_emails :: V.Vector Text
@@ -331,7 +330,7 @@ data TeamVM = TeamVM
   { id :: UUID.UUID
   , created_at :: UTCTime
   , updated_at :: UTCTime
-  , created_by :: Maybe Users.UserId
+  , created_by :: Maybe Projects.UserId
   , name :: Text
   , handle :: Text
   , description :: Text

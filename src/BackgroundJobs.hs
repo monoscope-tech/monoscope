@@ -66,7 +66,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator (generateSummary)
 import Models.Telemetry.Telemetry (SeverityLevel (..), insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Users
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
@@ -98,9 +97,9 @@ import Utils (replaceAllFormats, toXXHash)
 
 
 data BgJobs
-  = InviteUserToProject Users.UserId Projects.ProjectId Text Text
-  | CreatedProjectSuccessfully Users.UserId Projects.ProjectId Text Text
-  | SendDiscordData Users.UserId Projects.ProjectId Text [Text] Text
+  = InviteUserToProject Projects.UserId Projects.ProjectId Text Text
+  | CreatedProjectSuccessfully Projects.UserId Projects.ProjectId Text Text
+  | SendDiscordData Projects.UserId Projects.ProjectId Text [Text] Text
   | -- NewAnomaly Projects.ProjectId Anomalies.AnomalyTypes Anomalies.AnomalyActions TargetHash
     NewAnomaly
       { projectId :: Projects.ProjectId
@@ -133,7 +132,7 @@ data BgJobs
   | LogPatternHourlyProcessing UTCTime Projects.ProjectId
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
   | ErrorSpikeDetection Projects.ProjectId -- Detect error spikes and create issues
-  | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Users.UserId -- projectId, errorId, assigneeId
+  | ErrorAssigned Projects.ProjectId ErrorPatterns.ErrorPatternId Projects.UserId -- projectId, errorId, assigneeId
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
   | MonoscopeAdminDaily
@@ -197,7 +196,7 @@ processBackgroundJob authCtx bgJob =
     GenerateOtelFacetsBatch pids timestamp -> generateOtelFacetsBatch pids timestamp
     NewAnomaly{projectId, createdAt, anomalyType, anomalyAction, targetHashes} -> newAnomalyJob projectId createdAt anomalyType anomalyAction (V.fromList targetHashes)
     InviteUserToProject userId projectId reciever projectTitle' -> do
-      userM <- Users.userById userId
+      userM <- Projects.userById userId
       whenJust userM \user -> do
         let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
             (subj, html) = ET.projectInviteEmail user.firstName projectTitle' projectUrl
@@ -222,7 +221,7 @@ processBackgroundJob authCtx bgJob =
   |]
         sendMessageToDiscord msg authCtx.config.discordWebhookUrl
     CreatedProjectSuccessfully userId projectId reciever projectTitle -> do
-      userM <- Users.userById userId
+      userM <- Projects.userById userId
       whenJust userM \user -> do
         let projectUrl = authCtx.env.hostUrl <> "p/" <> projectId.toText
             (subj, html) = ET.projectCreatedEmail user.firstName projectTitle projectUrl
@@ -235,7 +234,7 @@ processBackgroundJob authCtx bgJob =
         sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
     ErrorAssigned pid errId assigneeId -> do
       errM <- ErrorPatterns.getErrorPatternById errId
-      userM <- Users.userById assigneeId
+      userM <- Projects.userById assigneeId
       projectM <- Projects.projectById pid
       case (projectM, errM, userM) of
         (Just project, Just err, Just user) | err.projectId == pid -> do
@@ -1204,7 +1203,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
       \email _userM -> sendRenderedEmail (CI.original email) subj renderedBody
 
 
-dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Users.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
+dispatchTeamNotifications :: ProjectMembers.Team -> Pkg.Mail.NotificationAlerts -> Projects.ProjectId -> Text -> Text -> (CI.CI Text -> Maybe Projects.User -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
 dispatchTeamNotifications team alert projectId projectTitle monitorUrl emailAction = do
   emails <- ProjectMembers.resolveTeamEmails projectId team
   for_ emails (`emailAction` Nothing)
@@ -1874,7 +1873,7 @@ processGitSyncAction pid token sync teamMap = \case
               , Dashboards.projectId = pid
               , Dashboards.createdAt = now
               , Dashboards.updatedAt = now
-              , Dashboards.createdBy = Users.UserId UUID.nil
+              , Dashboards.createdBy = Projects.UserId UUID.nil
               , Dashboards.baseTemplate = Just path
               , Dashboards.schema = Just schema
               , Dashboards.starredSince = Nothing

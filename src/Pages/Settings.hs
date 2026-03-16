@@ -58,7 +58,6 @@ import Models.Apis.Integrations (DiscordData (..), PagerdutyData (..), SlackData
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
@@ -112,7 +111,7 @@ brings3PostH pid s3Form = do
 
 brings3RemoveH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 brings3RemoveH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   _ <- Projects.updateProjectS3Bucket pid Nothing
 
@@ -122,7 +121,7 @@ brings3RemoveH pid = do
 
 bringS3GetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 bringS3GetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext -- Get auth context
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
   addRespHeaders $ bodyWrapper bwconf $ bringS3Page pid project.s3Bucket
@@ -169,7 +168,7 @@ data GenerateAPIKeyForm = GenerateAPIKeyForm
 
 apiPostH :: Projects.ProjectId -> GenerateAPIKeyForm -> ATAuthCtx (RespHeaders ApiMut)
 apiPostH pid apiKeyForm = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   authCtx <- ask @AuthContext
   projectKeyUUID <- liftIO UUIDV4.nextRandom
   let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
@@ -187,7 +186,7 @@ apiPostH pid apiKeyForm = do
 
 apiDeleteH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
 apiDeleteH pid keyid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   res <- ProjectApiKeys.revokeApiKey keyid
   apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
@@ -198,7 +197,7 @@ apiDeleteH pid keyid = do
 
 apiActivateH :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATAuthCtx (RespHeaders ApiMut)
 apiActivateH pid keyid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   res <- ProjectApiKeys.activateApiKey keyid
   apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
@@ -221,7 +220,7 @@ instance ToHtml ApiMut where
 -- | apiGetH renders the api keys list page which includes a modal for creating the apikeys.
 apiGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ApiGet)
 apiGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   apiKeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   let bwconf =
@@ -616,7 +615,7 @@ instance ToHtml BillingGet where
 
 manageBillingGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders BillingGet)
 manageBillingGetH pid from = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let dat = fromMaybe project.createdAt project.billingDay
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config

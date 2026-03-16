@@ -66,7 +66,6 @@ import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
-import Models.Users.Sessions qualified as Users
 import UnliftIO.Exception (handle)
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
@@ -190,7 +189,7 @@ data Routes mode = Routes
   , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
-  , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Users.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
@@ -667,9 +666,9 @@ pingH :: ATBaseCtx Text
 pingH = pure "pong"
 
 
-avatarGetH :: Users.UserId -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+avatarGetH :: Projects.UserId -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
 avatarGetH userId =
-  Users.userById userId >>= maybe (fetchGravatar "" "?") \user ->
+  Projects.userById userId >>= maybe (fetchGravatar "" "?") \user ->
     let email = CI.original user.email
         name = user.firstName <> " " <> user.lastName
      in if T.null user.displayImageUrl

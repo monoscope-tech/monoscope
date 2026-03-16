@@ -19,7 +19,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (UUIDId (..))
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
@@ -208,7 +207,7 @@ spec = aroundAll withTestResources do
         UPDATE apis.issues
         SET acknowledged_at = ?, acknowledged_by = ?
         WHERE project_id = ? AND issue_type = 'api_change'
-      |] (frozenTime, Users.UserId UUID.nil, testPid)
+      |] (frozenTime, Projects.UserId UUID.nil, testPid)
       
       -- Test active filter
       activeEndpoints <- getEndpointStats tr (Just "Active") Nothing

@@ -122,7 +122,6 @@ import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText)
 import Relude hiding (id)
@@ -255,7 +254,7 @@ data Issue = Issue
   , targetHash :: Text -- Must stay non-null: used in ON CONFLICT unique index for dedup
   , endpointHash :: Text -- Deprecated: always == targetHash (set by mkIssue). Drop column once selectIssues/selectIssueByHash are migrated.
   , acknowledgedAt :: Maybe ZonedTime
-  , acknowledgedBy :: Maybe Users.UserId
+  , acknowledgedBy :: Maybe Projects.UserId
   , archivedAt :: Maybe ZonedTime
   , title :: Text
   , service :: Maybe Text
@@ -288,7 +287,7 @@ data IssueL = IssueL
   , issueType :: IssueType -- Will be converted from anomaly_type in query
   , endpointHash :: Text
   , acknowledgedAt :: Maybe ZonedTime
-  , acknowledgedBy :: Maybe Users.UserId
+  , acknowledgedBy :: Maybe Projects.UserId
   , archivedAt :: Maybe ZonedTime
   , title :: Text
   , service :: Maybe Text
@@ -531,7 +530,7 @@ updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
 
 
 -- | Acknowledge issue
-acknowledgeIssue :: (DB es, Time :> es) => IssueId -> Users.UserId -> Eff es ()
+acknowledgeIssue :: (DB es, Time :> es) => IssueId -> Projects.UserId -> Eff es ()
 acknowledgeIssue issueId userId = do
   now <- Time.currentTime
   void $ PG.execute q (now, userId, issueId)
@@ -911,7 +910,7 @@ data IssueActivity = IssueActivity
   { id :: Int64
   , issueId :: IssueId
   , event :: IssueEvent
-  , createdBy :: Maybe Users.UserId
+  , createdBy :: Maybe Projects.UserId
   , metadata :: Maybe (Aeson AE.Value)
   , createdAt :: UTCTime
   }
@@ -919,7 +918,7 @@ data IssueActivity = IssueActivity
   deriving anyclass (FromRow, NFData)
 
 
-logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Users.UserId -> Maybe AE.Value -> Eff es ()
+logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
 logIssueActivity issueId event createdBy metadataM = do
   now <- Time.currentTime
   void

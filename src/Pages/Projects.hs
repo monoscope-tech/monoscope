@@ -81,7 +81,6 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Network.Wreq (getWith)
 import OddJobs.Job (createJob)
@@ -114,7 +113,7 @@ import "base64" Data.ByteString.Base64 qualified as B64
 
 listProjectsGetH :: ATAuthCtx (RespHeaders ListProjectsGet)
 listProjectsGetH = do
-  (sess, project) <- Sessions.sessionAndProject (UUIDId RealUUID.nil)
+  (sess, project) <- Projects.sessionAndProject (UUIDId RealUUID.nil)
   appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
@@ -147,7 +146,7 @@ instance ToHtml ListProjectsGet where
   toHtmlRaw = toHtml
 
 
-listProjectsBody :: Maybe Sessions.Session -> V.Vector Projects.Project' -> Projects.Project' -> Bool -> Html ()
+listProjectsBody :: Maybe Projects.Session -> V.Vector Projects.Project' -> Projects.Project' -> Bool -> Html ()
 listProjectsBody sessM projects demoProject showDemoProject = do
   nav_ [class_ "fixed top-0 left-0 right-0 bg-bgBase border-b border-strokeWeak z-50"] do
     div_ [class_ "flex items-center justify-between px-4 py-3"] do
@@ -244,7 +243,7 @@ data CreateProjectForm = CreateProjectForm
 
 integrationsSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 integrationsSettingsGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let createProj =
         CreateProjectForm
@@ -390,7 +389,7 @@ slackDisconnectH pid = do
 
 
 data IntegrationsConfig = IntegrationsConfig
-  { session :: Sessions.PersistentSession
+  { session :: Projects.PersistentSession
   , projectId :: Projects.ProjectId
   , envConfig :: EnvConfig
   , isUpdate :: Bool
@@ -572,7 +571,7 @@ data ManageMembersForm = ManageMembersForm
 
 manageMembersPostH :: Projects.ProjectId -> Maybe Text -> ManageMembersForm -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersPostH pid onboardingM form = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
@@ -595,10 +594,10 @@ manageMembersPostH pid onboardingM form = do
 
   newProjectMembers <- forM uAndPNew \(email, permission) -> do
     userId' <- do
-      userIdM' <- Sessions.userIdByEmail email
+      userIdM' <- Projects.userIdByEmail email
       case userIdM' of
         Nothing -> do
-          idM' <- Sessions.createEmptyUser email
+          idM' <- Projects.createEmptyUser email
           case idM' of
             Nothing -> error "duplicate email in createEmptyUser"
             Just idX -> pure idX
@@ -639,7 +638,7 @@ data TeamForm = TeamForm
   { teamName :: Text
   , teamDescription :: Text
   , teamHandle :: Text
-  , teamMembers :: V.Vector Sessions.UserId
+  , teamMembers :: V.Vector Projects.UserId
   , notifEmails :: V.Vector Text
   , slackChannels :: V.Vector Text
   , discordChannels :: V.Vector Text
@@ -674,7 +673,7 @@ validateTeamDetails name handle notifEmails = validateName name >> validateHandl
 
 manageTeamPostH :: Projects.ProjectId -> TeamForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamPostH pid form tmView = do
-  (sess, _) <- Sessions.sessionAndProject pid
+  (sess, _) <- Projects.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
   userPermission <- ProjectMembers.getUserPermission pid currUserId
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
@@ -712,7 +711,7 @@ newtype TBulkActionForm = TBulkActionForm
 
 manageTeamBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamBulkActionH pid action TBulkActionForm{itemId} listViewM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   case action of
     "delete" -> do
@@ -755,7 +754,7 @@ instance ToHtml ManageTeams where
 
 manageTeamsGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 manageTeamsGetH pid layoutM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
   channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId
@@ -836,7 +835,7 @@ notifsCell team = div_ [class_ "flex items-center gap-2"] do
 
 teamGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders ManageTeams)
 teamGetH pid handle layoutM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
@@ -958,7 +957,7 @@ teamPageNF pid handle = do
 
 manageMembersGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders ManageMembers)
 manageMembersGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   let bwconf =
@@ -1066,7 +1065,7 @@ memberRowWithStatus pid idx prM = do
 
 deleteMemberH :: Projects.ProjectId -> RealUUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 deleteMemberH pid memberId = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   let currUserId = sess.persistentSession.userId
   projMembers <- ProjectMembers.selectActiveProjectMembers pid
   let memberM = find (\m -> m.id == memberId) projMembers
@@ -1087,7 +1086,7 @@ deleteMemberH pid memberId = do
 
 manageSubGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 manageSubGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
@@ -1180,7 +1179,7 @@ projectOnboardingH :: ATAuthCtx (Headers '[Header "Location" Text] (PageCtx (Htm
 projectOnboardingH = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  sess <- Sessions.getSession
+  sess <- Projects.getSession
   projects <- Projects.selectProjectsForUser sess.persistentSession.userId
   let projectM = find (\pr -> pr.paymentPlan == "ONBOARDING") projects
       bwconf = (def :: BWConfig){sessM = Just sess, currProject = Nothing, pageTitle = "New Project", config = appCtx.config}
@@ -1204,7 +1203,7 @@ projectOnboardingH = do
 
 
 data CreateProjectResp = CreateProjectResp
-  { sess :: Sessions.PersistentSession
+  { sess :: Projects.PersistentSession
   , pid :: Projects.ProjectId
   , env :: EnvConfig
   , paymentPlan :: Text
@@ -1216,7 +1215,7 @@ data CreateProjectResp = CreateProjectResp
 
 
 data CreateProject
-  = CreateProject (PageCtx (Sessions.PersistentSession, Projects.ProjectId, EnvConfig, Text, Bool, CreateProjectForm, CreateProjectFormError, Projects.Project))
+  = CreateProject (PageCtx (Projects.PersistentSession, Projects.ProjectId, EnvConfig, Text, Bool, CreateProjectForm, CreateProjectFormError, Projects.Project))
   | PostNoContent Text
   | ProjectPost CreateProjectResp
   deriving stock (Generic, Show)
@@ -1237,7 +1236,7 @@ instance ToHtml CreateProject where
 
 projectSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 projectSettingsGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let createProj =
         CreateProjectForm
@@ -1265,7 +1264,7 @@ projectSettingsGetH pid = do
 
 deleteProjectGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 deleteProjectGetH pid = do
-  sess <- Sessions.getSession
+  sess <- Projects.getSession
   appCtx <- ask @AuthContext
   if isDemoAndNotSudo pid sess.user.isSudo
     then do
@@ -1282,7 +1281,7 @@ deleteProjectGetH pid = do
 
 createProjectPostH :: Projects.ProjectId -> CreateProjectForm -> ATAuthCtx (RespHeaders CreateProject)
 createProjectPostH pid createP = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   validationRes <- validateM createProjectFormV createP
   case validationRes of
@@ -1347,7 +1346,7 @@ data PricingUpdateForm = PricingUpdateForm
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
 pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
       apiKey = envCfg.lemonSqueezyApiKey
@@ -1397,7 +1396,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
 
 pricingUpdateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 pricingUpdateGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)
@@ -1423,7 +1422,7 @@ processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId ->
 processProjectPostForm cpRaw pid = do
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
 
   let cp = Valor.unValid cpRaw
   if isDemoAndNotSudo pid sess.user.isSudo
@@ -1436,7 +1435,7 @@ processProjectPostForm cpRaw pid = do
       addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 
 
-createProjectBody :: Sessions.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
+createProjectBody :: Projects.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
 createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
   div_ [id_ "main-content"] $ settingsSection_ do
     settingsH2_ "Project Settings"
@@ -1502,7 +1501,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
 
 projectDeleteGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 projectDeleteGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let bwconf =
         (def :: BWConfig)

@@ -8,9 +8,8 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Transact qualified as PGT
 import Models.Projects.ProjectMembers (TeamMemberVM (..), TeamVM (..))
 import Models.Projects.ProjectMembers qualified as ProjectMembers
+import Models.Projects.Projects (UserId (..))
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions (UserId (..))
-import Models.Users.Sessions qualified as Users
 import Pages.BodyWrapper
 import Pages.Projects (TBulkActionForm (..), TeamForm (..))
 import Pages.Projects qualified as ManageMembers
@@ -25,8 +24,8 @@ testPid :: Projects.ProjectId
 testPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
-userID :: Users.UserId
-userID = Users.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000001")
+userID :: Projects.UserId
+userID = Projects.UserId (Unsafe.fromJust $ UUID.fromText "00000000-0000-0000-0000-000000000001")
 
 
 spec :: Spec

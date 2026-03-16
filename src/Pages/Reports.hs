@@ -35,7 +35,6 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Models.Users.Sessions qualified as Sessions
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
@@ -277,7 +276,7 @@ buildLiveReportEmailHtml pid project userName = do
 
 reportsPostH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders ReportsPost)
 reportsPostH pid t = do
-  _ <- Sessions.sessionAndProject pid
+  _ <- Projects.sessionAndProject pid
   _ <- Projects.updateProjectReportNotif pid t
   addSuccessToast "Report notifications updated Successfully" Nothing
   addRespHeaders $ ReportsPost "updated"
@@ -291,7 +290,7 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
-wrapSingleResponse :: Sessions.Session -> Projects.Project -> Bool -> EnvConfig -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
+wrapSingleResponse :: Projects.Session -> Projects.Project -> Bool -> EnvConfig -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
 wrapSingleResponse sess project freeTierExceeded config pageTitle hxRequestM content = case hxRequestM of
   Just _ -> addRespHeaders $ ReportsGetSingle' content
   _ -> do
@@ -301,7 +300,7 @@ wrapSingleResponse sess project freeTierExceeded config pageTitle hxRequestM con
 
 singleReportGetH :: Projects.ProjectId -> Issues.ReportId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 singleReportGetH pid rid hxRequestM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   reportM <- Issues.getReportById rid
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
@@ -315,7 +314,7 @@ singleReportGetH pid rid hxRequestM = do
 
 reportsLiveGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsLiveGetH pid hxRequestM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   (dateLabel, emailHtml) <- buildLiveReportEmailHtml pid project sess.user.firstName
   freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
@@ -325,7 +324,7 @@ reportsLiveGetH pid hxRequestM = do
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
 reportsGetH pid page hxRequest hxBoosted = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let p = toString (fromMaybe "0" page)
   let pg = fromMaybe 0 (readMaybe p :: Maybe Int)

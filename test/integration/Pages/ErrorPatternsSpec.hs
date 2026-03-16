@@ -17,7 +17,6 @@ import Models.Apis.Issues qualified as Issues
 import Models.Apis.LogPatterns (BaselineState (..))
 import Models.Apis.PatternMerge qualified as PatternMerge
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import Pages.Anomalies qualified
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.ErrorFingerprint qualified as EF

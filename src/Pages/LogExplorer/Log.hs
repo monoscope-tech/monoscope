@@ -38,7 +38,6 @@ import Models.Apis.Fields (FacetData (..), FacetSummary (..), FacetValue (..))
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, navTabAttrs, pageActions, pageTitle, sessM)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_)
@@ -492,7 +491,7 @@ keepNonEmpty (Just a) = Just a
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   unless (V.elem "explored_logs" project.onboardingStepsCompleted)
     $ void
     $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = ? AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |] (Only pid)

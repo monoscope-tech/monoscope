@@ -56,7 +56,6 @@ import Effectful.PostgreSQL qualified as PG
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
@@ -74,7 +73,7 @@ data DashboardVM = DashboardVM
   , projectId :: Projects.ProjectId
   , createdAt :: UTCTime
   , updatedAt :: UTCTime
-  , createdBy :: Users.UserId
+  , createdBy :: Projects.UserId
   , baseTemplate :: Maybe Text
   , schema :: Maybe Dashboard
   , starredSince :: Maybe UTCTime

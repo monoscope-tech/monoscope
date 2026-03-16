@@ -53,10 +53,8 @@ import Log (Logger)
 import Lucid (Html, toHtml)
 import Lucid.Html5
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
+import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions (craftSessionCookie, emptySessionCookie)
-import Models.Users.Sessions qualified as Sessions
-import Models.Users.Sessions qualified as Users
 import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
@@ -74,7 +72,7 @@ import Web.Cookie (Cookies, SetCookie, parseCookies)
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
-type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+type APItoolkitAuthContext = AuthHandler Request (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
 
 
 validateBasicAuth :: EnvConfig -> ByteString -> Maybe (Text, Text)
@@ -103,7 +101,7 @@ authHandler logger env =
       & runTime
       & effToHandler
   where
-    handler :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+    handler :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Request -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
     handler req = do
       -- Check if basic auth is enabled and try to authenticate
       if env.config.basicAuthEnabled
@@ -123,7 +121,7 @@ authHandler logger env =
               -- If not, we should require basic auth instead of redirecting to Auth0
               let cookies = getCookies req
               mbPersistentSessionId <- handlerToEff $ getSessionId cookies
-              mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
+              mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
               case mbPersistentSession of
                 Just _ -> do
                   -- We have a valid cookie session, proceed normally
@@ -141,7 +139,7 @@ authHandler logger env =
             authH <- L.lookup hAuthorization $ requestHeaders req
             token <- T.stripPrefix "Bearer " (decodeUtf8 authH)
             uuid <- UUID.fromText token
-            pure $ Sessions.PersistentSessionId uuid
+            pure $ Projects.PersistentSessionId uuid
       let cookies = getCookies req
       mbCookieSessionId <- handlerToEff $ getSessionId cookies
       let mbPersistentSessionId = mbBearerSessionId <|> mbCookieSessionId
@@ -151,9 +149,9 @@ authHandler logger env =
       sessionByID mbPersistentSessionId requestID isSidebarClosed theme (Just $ getRequestUrl req) basicAuthEnabledFlag
 
 
-sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Sessions.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
+sessionByID :: (DB es, Error ServerError :> es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Projects.PersistentSessionId -> Text -> Bool -> Text -> Maybe ByteString -> Bool -> Eff es (Headers '[Header "Set-Cookie" SetCookie] Projects.Session)
 sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthEnabled = do
-  mbPersistentSession <- join <$> mapM Sessions.getPersistentSession mbPersistentSessionId
+  mbPersistentSession <- join <$> mapM Projects.getPersistentSession mbPersistentSessionId
   let mUser = mbPersistentSession <&> (.user.getUser)
   (user, sessionId, persistentSession) <- case (mUser, mbPersistentSession) of
     (Just user, Just userSession) -> pure (user, userSession.id, userSession)
@@ -163,7 +161,7 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthE
           if T.isInfixOf "/p/00000000-0000-0000-0000-000000000000" (decodeUtf8 u) || T.isInfixOf "pid=00000000-0000-0000-0000-000000000000" (decodeUtf8 u)
             then do
               sessId <- authorizeUserAndPersist Nothing "Guest" "User" "" "hello@monoscope.tech"
-              mbPess <- join <$> mapM Sessions.getPersistentSession (Just sessId)
+              mbPess <- join <$> mapM Projects.getPersistentSession (Just sessId)
               let mU = mbPess <&> (.user.getUser)
               case (mU, mbPess) of
                 (Just uu, Just uSess) -> pure (uu, uSess.id, uSess)
@@ -179,8 +177,8 @@ sessionByID mbPersistentSessionId requestID isSidebarClosed theme url basicAuthE
           if basicAuthEnabled
             then throwError $ err401{errHeaders = [("WWW-Authenticate", "Basic realm=\"Monoscope\"")]}
             else throwError $ err302{errHeaders = [("Location", "/to_login?redirect_to=" <> fromMaybe "" url)]}
-  let sessionCookie = Sessions.craftSessionCookie sessionId False
-  pure $ Sessions.addCookie sessionCookie (Sessions.Session{persistentSession, ..})
+  let sessionCookie = Projects.craftSessionCookie sessionId False
+  pure $ Projects.addCookie sessionCookie (Projects.Session{persistentSession, ..})
 
 
 getCookies :: Request -> Cookies
@@ -214,8 +212,8 @@ themeFromCookie cookies = case L.lookup "theme" cookies of
   Nothing -> "dark"
 
 
-getSessionId :: Cookies -> Handler (Maybe Sessions.PersistentSessionId)
-getSessionId cookies = pure $ Sessions.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
+getSessionId :: Cookies -> Handler (Maybe Projects.PersistentSessionId)
+getSessionId cookies = pure $ Projects.PersistentSessionId <$> (UUID.fromASCIIBytes =<< L.lookup "monoscope_session" cookies)
 
 
 handlerToEff
@@ -242,7 +240,7 @@ logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetC
 logoutH = do
   envCfg <- asks env
   let redirectTo = envCfg.auth0Domain <> "/v2/logout?client_id=" <> envCfg.auth0ClientId <> "&returnTo=" <> envCfg.auth0LogoutRedirect
-  pure $ addHeader redirectTo $ addHeader Sessions.emptySessionCookie NoContent
+  pure $ addHeader redirectTo $ addHeader Projects.emptySessionCookie NoContent
 
 
 loginRedirectH :: Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -327,23 +325,23 @@ authCallbackH codeM _ redirectToM = do
               a_ [href_ $ fromMaybe "/" redirectToM] "Continue to APIToolkit"
 
 
-authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Sessions.PersistentSessionId
+authorizeUserAndPersist :: (DB es, HTTP :> es, Time :> es, UUIDEff :> es) => Maybe Text -> Text -> Text -> Text -> Text -> Eff es Projects.PersistentSessionId
 authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
-  userM <- Users.userByEmail email
+  userM <- Projects.userByEmail email
   userId <- case userM of
     Nothing -> do
-      user <- Users.createUser firstName lastName picture email
+      user <- Projects.createUser firstName lastName picture email
       -- Make basic auth users sudo for admin access
-      let userWithSudo :: Users.User
+      let userWithSudo :: Projects.User
           userWithSudo =
             if T.isSuffixOf "@basic-auth.local" email
-              then user{Users.isSudo = True}
+              then user{Projects.isSudo = True}
               else user
-      Users.insertUser userWithSudo
+      Projects.insertUser userWithSudo
       pure userWithSudo.id
     Just user -> pure user.id
-  persistentSessId <- Sessions.newPersistentSessionId
-  Sessions.insertSession persistentSessId userId (Sessions.SessionData Map.empty)
+  persistentSessId <- Projects.newPersistentSessionId
+  Projects.insertSession persistentSessId userId (Projects.SessionData Map.empty)
   _ <- whenJust convertkitApiKeyM \ckKey -> addConvertKitUser ckKey email firstName lastName "" "" ""
   pure persistentSessId
 
@@ -463,7 +461,7 @@ deviceTokenH mCode = do
           | now > expiresAt -> errResp "expired_token"
           | Nothing <- (mbSessId :: Maybe UUID.UUID) -> errResp "authorization_pending"
           | Just sessUuid <- mbSessId -> do
-              mbSess <- Sessions.getPersistentSession (Sessions.PersistentSessionId sessUuid)
+              mbSess <- Projects.getPersistentSession (Projects.PersistentSessionId sessUuid)
               let projectInfos =
                     mbSess <&> \sess ->
                       [ProjectInfo p.id.toText p.title | p <- V.toList sess.projects.getProjects]
@@ -472,13 +470,13 @@ deviceTokenH mCode = do
 
 deviceApproveH :: Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 deviceApproveH codeM actionM = do
-  sess <- Sessions.getSession
+  sess <- Projects.getSession
   result <- runExceptT $ do
     userCode <- hoistEither $ note "Invalid request: no code provided" codeM
     case actionM of
       Just "approve" -> do
-        persistentSessId <- lift Sessions.newPersistentSessionId
-        lift $ Sessions.insertSession persistentSessId sess.user.id (Sessions.SessionData Map.empty)
+        persistentSessId <- lift Projects.newPersistentSessionId
+        lift $ Projects.insertSession persistentSessId sess.user.id (Projects.SessionData Map.empty)
         updated <-
           lift
             $ PG.execute

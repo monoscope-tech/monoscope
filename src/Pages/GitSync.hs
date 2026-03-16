@@ -31,7 +31,6 @@ import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
@@ -148,7 +147,7 @@ validateWebhookSignature (Just secret) (Just sig) body =
 
 gitSyncSettingsGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 gitSyncSettingsGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = ctx.config}
@@ -388,7 +387,7 @@ githubAppInstallH pid = do
 githubAppCallbackH :: Maybe Int64 -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 githubAppCallbackH instIdM _setupAction stateM = do
   ctx <- ask @Config.AuthContext
-  sess <- Sessions.getSession
+  sess <- Projects.getSession
   let bwconf = (def :: BWConfig){sessM = Just sess, pageTitle = "GitHub Sync", config = ctx.config}
   case (instIdM, stateM >>= rightToMaybe . parseUrlPiece) of
     (Just instId, Just pid) -> do
@@ -432,7 +431,7 @@ projectSelectorView instId projects = div_ [class_ "min-h-screen bg-bgBase flex 
 -- | List repositories from GitHub App installation (full page with BodyWrapper)
 githubAppReposH :: Projects.ProjectId -> Maybe Int64 -> ATAuthCtx (RespHeaders (Html ()))
 githubAppReposH pid instIdParam = do
-  (sess, project) <- Sessions.sessionAndProject pid
+  (sess, project) <- Projects.sessionAndProject pid
   ctx <- ask @Config.AuthContext
   syncM <- GitSync.getGitHubSync pid
   let instIdM = instIdParam <|> (syncM >>= (.installationId))
