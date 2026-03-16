@@ -454,5 +454,3 @@ renderErrors errs =
 numberOfEvents :: AE.Value -> Int
 numberOfEvents (AE.Array obj) = length obj
 numberOfEvents _ = 0
-
-

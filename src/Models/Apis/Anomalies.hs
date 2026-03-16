@@ -515,5 +515,3 @@ data ATError = ATError
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "error_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ATError)
   deriving (FromField, ToField) via Aeson ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
-
-
