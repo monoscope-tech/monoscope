@@ -59,7 +59,6 @@ import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.LogQueries qualified as LogQueries
-import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator (generateSummary)
 import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..))
@@ -212,7 +211,7 @@ jsonToMap _ = Nothing
 -- The extracted entities are compared against the project cache to avoid
 -- redundant database operations. New entities will trigger database inserts
 -- which fire PostgreSQL triggers to create anomaly records.
-processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Shapes.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text)
+processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Fields.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text)
 processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
   let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
@@ -339,7 +338,7 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
           then Nothing
           else
             Just
-              $ Shapes.Shape
+              $ Fields.Shape
                 { id = UUIDId dumpId
                 , createdAt = otelSpan.timestamp
                 , updatedAt = otelSpan.timestamp

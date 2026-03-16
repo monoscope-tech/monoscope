@@ -80,6 +80,7 @@ extra-source-files:
     static/migrations/0052_compression_and_retention_policies.sql
     static/migrations/0053_device_auth_codes.sql
     static/migrations/0054_command_palette_recents.sql
+    static/migrations/0055_metrics_meta_updated_at_index.sql
 
 source-repository head
   type: git
@@ -110,7 +111,6 @@ library
       Models.Apis.LogQueries
       Models.Apis.Monitors
       Models.Apis.PatternMerge
-      Models.Apis.Shapes
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
@@ -133,12 +133,11 @@ library
       Pages.CommandPalette
       Pages.Components
       Pages.Dashboards
-      Pages.Endpoints.ApiCatalog
+      Pages.Endpoints
       Pages.GitSync
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
-      Pages.Monitors.Testing
       Pages.Onboarding.Onboarding
       Pages.Projects
       Pages.Replay
@@ -157,7 +156,6 @@ library
       Pkg.Drain
       Pkg.EmailTemplates
       Pkg.ErrorFingerprint
-      Pkg.GitHub
       Pkg.Mail
       Pkg.Parser
       Pkg.Parser.Expr

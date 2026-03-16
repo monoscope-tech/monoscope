@@ -37,7 +37,7 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadge_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.GitHub qualified as GitHub
+import Models.Projects.GitSync qualified as GitHub
 import Relude hiding (ask)
 import System.Config qualified as Config
 import System.Logging qualified as Log

@@ -51,8 +51,8 @@ import Models.Apis.Fields qualified as Fields (
   FieldId,
   FieldTypes,
   FormatId,
+  ShapeId,
  )
-import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
@@ -114,7 +114,7 @@ data AnomalyVM = AnomalyVM
   , action :: AnomalyActions
   , targetHash :: Text
   , --
-    shapeId :: Maybe Shapes.ShapeId
+    shapeId :: Maybe Fields.ShapeId
   , shapeNewUniqueFields :: V.Vector Text
   , shapeDeletedFields :: V.Vector Text
   , shapeUpdatedFieldFormats :: V.Vector Text
@@ -241,7 +241,7 @@ acknowlegeCascade uid targets
 --
 
 data NewShapeIssue = NewShapeIssue
-  { id :: Shapes.ShapeId
+  { id :: Fields.ShapeId
   , endpointId :: Endpoints.EndpointId
   , endpointMethod :: Text
   , endpointUrlPath :: Text

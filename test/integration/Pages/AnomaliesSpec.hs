@@ -31,7 +31,7 @@ import Models.Users.Sessions qualified as Users
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
-import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
+import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils

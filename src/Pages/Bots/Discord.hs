@@ -5,7 +5,6 @@ import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as Base16
 import Data.Default (Default (def))
 import Data.Text qualified as T
-import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
@@ -32,22 +31,18 @@ import Effectful (Eff, type (:>))
 import Effectful.Log qualified as Log
 import Effectful.Time qualified as Time
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, formatBotError, formatHistoryAsContext, formatReportForDiscord, formatTextResponse, handleTableResponse, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, dispatchAIResponse, formatBotError, formatHistoryAsContext, formatReportForDiscord, processAIQuery, processReportQuery, widgetPngUrl)
 import Pkg.AI qualified as AI
-import Pkg.Components.TimePicker qualified as TP
-import Pkg.Components.Widget qualified as Widget
+import Pkg.Components.Widget (Widget (..))
 import Pkg.DeriveUtils (idFromText)
-import Pkg.Parser (parseQueryToAST)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400, err401, err404)
 import System.Config (AuthContext (env), EnvConfig (..))
 import System.Types (ATBaseCtx)
-import Utils (toUriStr)
 
 
 linkDiscordGetH :: Maybe Text -> Maybe Text -> Maybe Text -> ATBaseCtx (Headers '[Header "Location" Text] BotResponse)
@@ -359,37 +354,13 @@ discordInteractionsH rawBody signatureM timestampM = do
 
 
 sendDiscordResponse :: Maybe [InteractionOption] -> DiscordInteraction -> EnvConfig -> AuthContext -> DiscordData -> AI.LLMResponse -> Time.UTCTime -> ATBaseCtx ()
-sendDiscordResponse options interaction envCfg authCtx discordData resp now =
-  let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
-      query = fromMaybe "" resp.query
-      hasQuery = isJust resp.query
-      hasExplanation = isJust resp.explanation
-   in case (hasQuery, hasExplanation) of
-        (False, True) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord (fromMaybe "No insights available" resp.explanation)
-        (True, False) -> handleWidgetResponse query fromTimeM toTimeM
-        (True, True) -> do
-          handleWidgetResponse query fromTimeM toTimeM
-          whenJust resp.explanation $ sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken . formatTextResponse Discord
-        (False, False) -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ formatTextResponse Discord "No response available"
-  where
-    handleWidgetResponse query fromTimeM toTimeM = case resp.visualization of
-      Just vizType -> do
-        let widgetType = Widget.mapChatTypeToWidgetType vizType
-            chartType = Widget.mapWidgetTypeToChartType widgetType
-            query_url = authCtx.env.hostUrl <> "p/" <> discordData.projectId.toText <> "/log_explorer?viz_type=" <> chartType <> ("&query=" <> toUriStr query)
-            question = case options of
-              Just (InteractionOption{value = AE.String q} : _) -> q
-              _ -> "[?]"
-            fromISO = toText . iso8601Show <$> fromTimeM
-            toISO = toText . iso8601Show <$> toTimeM
-        imageUrl <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl discordData.projectId def{Widget.wType = widgetType, Widget.query = Just query} Nothing fromISO toISO
-        let content = getBotContentWithUrl question query query_url imageUrl
-        sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken content
-      Nothing -> case parseQueryToAST query of
-        Left _ -> sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken (formatBotError Discord (QueryParseError query))
-        Right query' -> do
-          tableAsVecE <- LogQueries.selectLogTable discordData.projectId query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
-          sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken $ handleTableResponse Discord tableAsVecE envCfg discordData.projectId query
+sendDiscordResponse options interaction envCfg _authCtx discordData resp _now =
+  let question = case options of
+        Just (InteractionOption{value = AE.String q} : _) -> q
+        _ -> "[?]"
+   in dispatchAIResponse Discord envCfg discordData.projectId question resp
+        (sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken)
+        getBotContentWithUrl
 
 
 contentResponse :: Text -> AE.Value

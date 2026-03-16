@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, dispatchAIResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -11,7 +11,8 @@ import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
@@ -25,13 +26,16 @@ import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (navBar)
+import Models.Apis.LogQueries qualified as LogQueries
 import Pkg.AI qualified as AI
+import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
+import Pkg.Parser (parseQueryToAST)
 import Relude
 import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (DB)
-import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey)
+import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -450,3 +454,45 @@ formatTextResponse Slack txt =
     , "response_type" AE..= "in_channel"
     , "replace_original" AE..= True
     ]
+
+
+-- | Generic AI response dispatch — handles the (hasQuery, hasExplanation) 4-way
+-- pattern shared by all bot platforms, plus widget generation and table fallback.
+dispatchAIResponse
+  :: (DB es, Log :> es, Time.Time :> es)
+  => BotType
+  -> EnvConfig
+  -> Projects.ProjectId
+  -> Text -- ^ user question (for chart content builder)
+  -> AI.LLMResponse
+  -> (AE.Value -> Eff es ()) -- ^ send response callback
+  -> (Text -> Text -> Text -> Text -> AE.Value) -- ^ build chart content: question query queryUrl imageUrl
+  -> Eff es ()
+dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartContent = do
+  now <- Time.currentTime
+  let (fromTimeM, toTimeM, _) = maybe (Nothing, Nothing, Nothing) (TP.parseTimeRange now) resp.timeRange
+      query = fromMaybe "" resp.query
+      hasQuery = isJust resp.query
+      hasExplanation = isJust resp.explanation
+  case (hasQuery, hasExplanation) of
+    (False, True) -> sendResponse $ formatTextResponse botType (fromMaybe "No insights available" resp.explanation)
+    (True, False) -> handleWidget now query resp.visualization fromTimeM toTimeM
+    (True, True) -> do
+      handleWidget now query resp.visualization fromTimeM toTimeM
+      whenJust resp.explanation $ sendResponse . formatTextResponse botType
+    (False, False) -> sendResponse $ formatTextResponse botType "No response available"
+  where
+    handleWidget _now query visualization fromTimeM toTimeM = case visualization of
+      Just vizType -> do
+        let wType = Widget.mapChatTypeToWidgetType vizType
+            chartType = Widget.mapWidgetTypeToChartType wType
+            queryUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
+            fromISO = toText . iso8601Show <$> fromTimeM
+            toISO = toText . iso8601Show <$> toTimeM
+        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing fromISO toISO
+        sendResponse $ buildChartContent userQuestion query queryUrl imageUrl
+      Nothing -> case parseQueryToAST query of
+        Left _ -> sendResponse $ formatBotError botType (QueryParseError query)
+        Right query' -> do
+          tableAsVecE <- LogQueries.selectLogTable pid query' query Nothing (fromTimeM, toTimeM) [] Nothing Nothing
+          sendResponse $ handleTableResponse botType tableAsVecE envCfg pid query

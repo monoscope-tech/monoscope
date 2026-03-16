@@ -59,7 +59,6 @@ import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
-import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -73,6 +72,7 @@ import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
+import Pages.Bots.Utils (ReportType (..))
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
@@ -80,7 +80,7 @@ import Pages.Reports qualified as RP
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
-import Pkg.GitHub qualified as GitHub
+import Models.Projects.GitSync qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -1118,7 +1118,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   -- Insert extracted entities
   result <- try $ Ki.scoped \scope -> do
     unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
-    unless (null shapesFinal) $ void $ Ki.fork scope $ Shapes.bulkInsertShapes shapesFinal
+    unless (null shapesFinal) $ void $ Ki.fork scope $ Fields.bulkInsertShapes shapesFinal
     unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
     unless (null formatsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFormat formatsFinal
     Ki.atomically $ Ki.awaitAll scope
@@ -1248,8 +1248,6 @@ ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
   Relude.when (inserted > 0) $ putTextLn "Scheduled DailyJob for today"
 
 
-data ReportType = DailyReport | WeeklyReport
-  deriving (Show)
 
 
 sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()

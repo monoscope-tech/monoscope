@@ -87,13 +87,13 @@ import Pages.Bots.Utils qualified as BotUtils
 import Pages.Bots.Whatsapp qualified as Whatsapp
 import Pages.Charts.Charts qualified as Charts
 import Pages.Dashboards qualified as Dashboards
-import Pages.Endpoints.ApiCatalog qualified as ApiCatalog
+import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
 import Pages.LogExplorer.Log qualified as Log
 import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
-import Pages.Monitors.Testing qualified as Testing
+import Pages.Monitors qualified as Testing
 import Pages.Onboarding.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as Integrations

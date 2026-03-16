@@ -49,6 +49,21 @@ module Models.Projects.Projects (
   addDailyUsageReport,
   upgradeToPaid,
   downgradeToFree,
+  -- Sessions
+  PersistentSessionId (..),
+  PersistentSession (..),
+  Session (..),
+  sessionAndProject,
+  craftSessionCookie,
+  SessionData (..),
+  PSUser (..),
+  PSProjects (..),
+  addCookie,
+  emptySessionCookie,
+  getSession,
+  insertSession,
+  getPersistentSession,
+  newPersistentSessionId,
 )
 where
 
@@ -56,6 +71,8 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Effectful.UUID (UUIDEff, genUUID)
+import Data.Effectful.UUID qualified as UUID
+import Data.Text.Display
 import Data.Pool (Pool)
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -69,14 +86,20 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful
+import Effectful.Error.Static (throwError)
+import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL qualified as PG
+import Effectful.Reader.Static (Reader, asks)
+import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
-import Servant (FromHttpApiData)
+import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
+import Web.Cookie (SetCookie (setCookieHttpOnly, setCookieMaxAge, setCookieName, setCookiePath, setCookieSameSite, setCookieSecure, setCookieValue), defaultSetCookie, sameSiteLax)
 import Web.FormUrlEncoded (FromForm)
+import Web.HttpApiData (ToHttpApiData)
 
 
 instance AE.FromJSON (CI.CI Text) where
@@ -631,3 +654,147 @@ upgradeToPaid :: DB es => Int -> Int -> Int -> Eff es Int64
 upgradeToPaid orderId' subId subItemId = PG.execute q (show orderId', show subId, show subItemId)
   where
     q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]
+
+
+-- Sessions
+
+
+newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID.UUID}
+  deriving newtype (NFData)
+  deriving (Display) via ShowInstance UUID.UUID
+  deriving
+    (Default, Eq, FromField, FromHttpApiData, Show, ToField, ToHttpApiData)
+    via UUID.UUID
+
+
+newtype SessionData = SessionData {getSessionData :: Map Text Text}
+  deriving stock (Eq, Generic, Show)
+  deriving newtype (NFData)
+  deriving anyclass (Default)
+  deriving
+    (FromField, ToField)
+    via Aeson (Map Text Text)
+
+
+newtype PSUser = PSUser {getUser :: User}
+  deriving stock (Generic, Show)
+  deriving newtype (NFData)
+  deriving anyclass (Default)
+  deriving
+    (FromField, ToField)
+    via Aeson User
+
+
+newtype PSProjects = PSProjects {getProjects :: V.Vector Project}
+  deriving stock (Generic, Show)
+  deriving newtype (NFData)
+  deriving anyclass (Default)
+  deriving
+    (FromField, ToField)
+    via Aeson (V.Vector Project)
+
+
+data PersistentSession = PersistentSession
+  { id :: PersistentSessionId
+  , createdAt :: ZonedTime
+  , updatedAt :: ZonedTime
+  , userId :: UserId
+  , sessionData :: SessionData
+  , user :: PSUser
+  , isSudo :: Bool
+  , projects :: PSProjects
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (Default, FromRow, NFData, ToRow)
+  deriving
+    (Entity)
+    via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
+
+
+newPersistentSessionId :: UUIDEff :> es => Eff es PersistentSessionId
+newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
+
+
+insertSession :: DB es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
+insertSession pid userId sessionData = void $ PG.execute q (pid, userId, sessionData)
+  where
+    q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
+
+
+getPersistentSession :: DB es => PersistentSessionId -> Eff es (Maybe PersistentSession)
+getPersistentSession sessionId = listToMaybe <$> PG.query q value
+  where
+    q =
+      [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,
+        COALESCE(json_agg(pp.* ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
+        from users.persistent_sessions as ps
+        left join users.users u on (u.id=ps.user_id)
+        left join projects.project_members ppm on (ps.user_id=ppm.user_id AND ppm.active = TRUE)
+        left join projects.projects pp on (pp.id=ppm.project_id)
+        where ps.id=?
+        GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
+    value = Only sessionId
+
+
+getSession
+  :: EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es
+  => Eff es Session
+getSession = EffReader.asks (getResponse @'[Header "Set-Cookie" SetCookie])
+
+
+craftSessionCookie :: PersistentSessionId -> Bool -> SetCookie
+craftSessionCookie (PersistentSessionId content) rememberSession =
+  defaultSetCookie
+    { setCookieValue = UUID.toASCIIBytes content
+    , setCookieName = "monoscope_session"
+    , setCookiePath = Just "/"
+    , setCookieHttpOnly = True
+    , setCookieSameSite = Just sameSiteLax
+    , setCookieMaxAge = if rememberSession then Just 604800 else Nothing
+    , setCookieSecure = True
+    }
+
+
+emptySessionCookie :: SetCookie
+emptySessionCookie =
+  defaultSetCookie
+    { setCookieName = "monoscope_session"
+    , setCookieValue = ""
+    , setCookieMaxAge = Just 0
+    }
+
+
+addCookie :: SetCookie -> a -> Headers '[Header "Set-Cookie" SetCookie] a
+addCookie = addHeader
+
+
+data Session = Session
+  { sessionId :: PersistentSessionId
+  , persistentSession :: PersistentSession
+  , user :: User
+  , requestID :: Text
+  , isSidebarClosed :: Bool
+  , theme :: Text
+  }
+  deriving stock (Generic, Show)
+
+
+sessionAndProject
+  :: (DB es, EffError.Error ServerError :> es, EffReader.Reader (Headers '[Header "Set-Cookie" SetCookie] Session) :> es)
+  => ProjectId
+  -> Eff es (Session, Project)
+sessionAndProject pid = do
+  sess <- getSession
+  let projects = sess.persistentSession.projects.getProjects
+  case V.find (\v -> v.id == pid) projects of
+    Just p | p.paymentPlan /= "ONBOARDING" -> pure (sess, p)
+    Just _ ->
+      projectById pid >>= \case
+        Just p -> pure (sess, p)
+        Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+    _
+      | pid == UUIDId UUID.nil || sess.user.isSudo ->
+          projectById pid >>= \case
+            Just p -> pure (sess, p)
+            Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+    _ -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
