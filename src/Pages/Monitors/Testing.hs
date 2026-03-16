@@ -463,12 +463,16 @@ unifiedMonitorOverviewH pid monitorId = do
         concurrently
           (ManageMembers.getTeamsById pid alert.teams)
           (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
-      channels <- case slackDataM of
-        Just slackData -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
-        Nothing -> return []
-      discordChannels <- case discordDataM of
-        Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
-        Nothing -> return []
+      (channels, discordChannels) <-
+        concurrently
+          ( case slackDataM of
+              Just slackData -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+              Nothing -> return []
+          )
+          ( case discordDataM of
+              Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
+              Nothing -> return []
+          )
       let muteBase = "/p/" <> pid.toText <> "/monitors/alerts/" <> alert.id.toText
           isInactive = isJust alert.deactivatedAt
           deactLabel = bool "Deactivate" "Activate" isInactive
