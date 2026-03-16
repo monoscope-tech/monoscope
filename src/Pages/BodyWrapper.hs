@@ -719,11 +719,13 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " active" else ""
         a_
-          ([ href_ mUrl
-          , term "data-tippy-placement" "right"
-          , term "data-tippy-content" mTitle
-          , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden border-l-2 border-transparent hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
-          ] <> navTabAttrs)
+          ( [ href_ mUrl
+            , term "data-tippy-placement" "right"
+            , term "data-tippy-content" mTitle
+            , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden border-l-2 border-transparent hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
+            ]
+              <> navTabAttrs
+          )
           do
             faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle

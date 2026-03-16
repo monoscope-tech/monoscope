@@ -130,7 +130,6 @@ data QueryMonitor = QueryMonitor
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
 
 
-
 queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm =
   PG.execute
@@ -193,8 +192,6 @@ queryMonitorUpsert qm =
 
 queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)
 queryMonitorById id' = listToMaybe <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| id |]]) (Only id')
-
-
 
 
 monitorToggleActiveById :: (DB es, Time :> es) => QueryMonitorId -> Eff es Int64

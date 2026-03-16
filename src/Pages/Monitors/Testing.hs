@@ -437,11 +437,13 @@ unifiedMonitorOverviewH pid monitorId = do
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
   -- Run freeTierExceeded check and monitor query in parallel
-  (freeTierExceeded, alertM) <- concurrently
-    (checkFreeTierExceeded pid project.paymentPlan)
-    (case UUID.fromText monitorId of
-      Just uuid -> Monitors.queryMonitorById (Monitors.QueryMonitorId uuid)
-      Nothing -> pure Nothing)
+  (freeTierExceeded, alertM) <-
+    concurrently
+      (checkFreeTierExceeded pid project.paymentPlan)
+      ( case UUID.fromText monitorId of
+          Just uuid -> Monitors.queryMonitorById (Monitors.QueryMonitorId uuid)
+          Nothing -> pure Nothing
+      )
 
   let baseBwconf =
         (def :: BWConfig)
@@ -457,9 +459,10 @@ unifiedMonitorOverviewH pid monitorId = do
 
   case alertM of
     Just alert -> do
-      (teams, (slackDataM, discordDataM)) <- concurrently
-        (ManageMembers.getTeamsById pid alert.teams)
-        (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
+      (teams, (slackDataM, discordDataM)) <-
+        concurrently
+          (ManageMembers.getTeamsById pid alert.teams)
+          (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
       channels <- case slackDataM of
         Just slackData -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
         Nothing -> return []

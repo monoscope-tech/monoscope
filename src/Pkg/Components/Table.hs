@@ -336,10 +336,12 @@ instance ToHtml TabFilter where
         let uri = deleteParam "filter" tf.currentURL
         forM_ tf.options \opt ->
           a_
-            ([ href_ $ uri <> "&filter=" <> toUriStr opt.name
-            , role_ "tab"
-            , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
-            ] <> navTabAttrs)
+            ( [ href_ $ uri <> "&filter=" <> toUriStr opt.name
+              , role_ "tab"
+              , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
+              ]
+                <> navTabAttrs
+            )
             do
               span_ $ toHtml opt.name
               whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
