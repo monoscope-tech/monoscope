@@ -208,7 +208,8 @@ withExternalDBSetup f = do
         case result of
           Right _ -> pass
           Left e
-            | attempt < (3 :: Int), "being accessed by other users" `T.isInfixOf` show e -> do
+            | attempt < (3 :: Int)
+            , "being accessed by other users" `T.isInfixOf` show e -> do
                 -- Terminate connections to template and retry
                 void $ execute masterConn (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" <> templateDbName <> "' AND pid <> pg_backend_pid()") ()
                 threadDelay (100000 * (attempt + 1))
