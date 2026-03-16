@@ -19,6 +19,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -30,7 +31,7 @@ import Models.Projects.ProjectMembers qualified as ManageMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as Slack
 import Pages.Bots.Slack qualified as SlackP
@@ -220,7 +221,7 @@ renderNameCol item = do
   div_ [class_ "flex flex-col gap-1 py-0.5"] do
     div_ [class_ "flex items-center gap-2"] do
       span_ [class_ $ "inline-block w-2 h-2 rounded-full shrink-0 " <> dotColor <> bool "" " alert-dot" (item.currentStatus == Monitors.MSAlerting), term "data-tippy-content" $ bool "Inactive" "Active" isActive] ""
-      a_ [href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] $ toHtml $ if T.null item.title then "(Untitled)" else item.title
+      a_ ([href_ $ base <> "/" <> item.monitorId <> "/overview", class_ "text-sm font-medium text-textStrong hover:text-textBrand transition-colors truncate"] <> navTabAttrs) $ toHtml $ if T.null item.title then "(Untitled)" else item.title
       when (item.currentStatus /= Monitors.MSNormal) $ statusBadge_ False displayName
       whenJust item.mutedUntil \until' ->
         let muteLabel = mutedLabel item.now until'
@@ -435,14 +436,12 @@ unifiedMonitorOverviewH pid monitorId = do
   (sess, project) <- Sessions.sessionAndProject pid
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
-
-  -- Try to find as alert first
-  alertM <- case UUID.fromText monitorId of
-    Just uuid -> do
-      alerts <- Monitors.queryMonitorsById (V.singleton $ Monitors.QueryMonitorId uuid)
-      pure $ listToMaybe alerts
-    Nothing -> pure Nothing
+  -- Run freeTierExceeded check and monitor query in parallel
+  (freeTierExceeded, alertM) <- concurrently
+    (checkFreeTierExceeded pid project.paymentPlan)
+    (case UUID.fromText monitorId of
+      Just uuid -> Monitors.queryMonitorById (Monitors.QueryMonitorId uuid)
+      Nothing -> pure Nothing)
 
   let baseBwconf =
         (def :: BWConfig)
@@ -458,16 +457,12 @@ unifiedMonitorOverviewH pid monitorId = do
 
   case alertM of
     Just alert -> do
-      teams <- ManageMembers.getTeamsById pid alert.teams
-      slackDataM <- Slack.getProjectSlackData pid
+      (teams, (slackDataM, discordDataM)) <- concurrently
+        (ManageMembers.getTeamsById pid alert.teams)
+        (concurrently (Slack.getProjectSlackData pid) (Slack.getDiscordDataByProjectId pid))
       channels <- case slackDataM of
-        Just slackData -> do
-          channels' <- SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
-          case channels' of
-            Just chs -> return chs.channels
-            Nothing -> return []
+        Just slackData -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
         Nothing -> return []
-      discordDataM <- Slack.getDiscordDataByProjectId pid
       discordChannels <- case discordDataM of
         Just discordData -> Discord.getDiscordChannels appCtx.env.discordBotToken discordData.guildId
         Nothing -> return []
@@ -526,7 +521,7 @@ unifiedMonitorOverviewH pid monitorId = do
 
 
 -- | Unified overview page that handles both monitor types
-unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitorEvaled -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
+unifiedOverviewPage :: Projects.ProjectId -> Monitors.QueryMonitor -> UTCTime -> V.Vector ManageMembers.Team -> Maybe Slack.SlackData -> Maybe Slack.DiscordData -> Html ()
 unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
   section_ [class_ "pt-2 mx-auto max-md:px-2 px-4 w-full flex flex-col gap-4 pb-4"] do
     -- Title + status badge
@@ -617,14 +612,14 @@ monitorHistoryTab_ pid alertId = do
 
 
 -- | Alert sidebar with key details in a bordered card
-alertSidebar_ :: Text -> Monitors.QueryMonitorEvaled -> UTCTime -> Html ()
+alertSidebar_ :: Text -> Monitors.QueryMonitor -> UTCTime -> Html ()
 alertSidebar_ displayName alert currTime = do
   div_ [class_ "w-full border border-strokeWeak rounded-lg divide-y divide-strokeWeak"] do
     -- Mobile: compact inline rows
     div_ [class_ "md:hidden divide-y divide-strokeWeak text-sm"] do
       div_ [class_ "px-3 py-2 flex items-center justify-between"] do
         statusBadge_ True displayName
-        span_ [class_ $ statusColor <> " tabular-nums text-xl font-bold"] $ toHtml $ formatWithCommas alert.evalResult
+        span_ [class_ $ statusColor <> " tabular-nums text-xl font-bold"] $ toHtml $ formatWithCommas alert.currentValue
       mobileRow_ "Trigger" $ span_ [class_ "tabular-nums"] $ toHtml $ direction <> " " <> formatWithCommas alert.alertThreshold
       whenJust alert.warningThreshold \w -> mobileRow_ "Warning" $ span_ [class_ "tabular-nums text-textWarning"] $ toHtml $ direction <> " " <> formatWithCommas w
       div_ [class_ "px-3 py-1.5 flex flex-col gap-1 cursor-pointer", onclick_ "this.querySelector('pre').classList.toggle('line-clamp-1')"] do
@@ -635,7 +630,7 @@ alertSidebar_ displayName alert currTime = do
     -- Desktop: full sidebar with all sections
     div_ [class_ "max-md:hidden divide-y divide-strokeWeak"] do
       sidebarItem_ "Status" $ statusBadge_ True displayName
-      sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.evalResult
+      sidebarItem_ "Current Value" $ span_ [class_ $ statusColor <> " tabular-nums text-lg font-semibold"] $ toHtml $ formatWithCommas alert.currentValue
       sidebarItem_ "Query" $ pre_ [class_ "text-xs font-mono text-textStrong/70 overflow-x-auto whitespace-pre-wrap max-h-24"] $ toHtml alert.logQuery
       sidebarItem_ "Thresholds" $ div_ [class_ "flex flex-col gap-1 text-sm"] do
         span_ [class_ "text-textStrong tabular-nums"] $ toHtml $ "Trigger: " <> direction <> " " <> formatWithCommas alert.alertThreshold
@@ -663,7 +658,7 @@ alertSidebar_ displayName alert currTime = do
 
 
 -- | Alert notifications tab content (copied from Alerts module)
-alertNotificationsTab_ :: Monitors.QueryMonitorEvaled -> V.Vector ManageMembers.Team -> Html ()
+alertNotificationsTab_ :: Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
 alertNotificationsTab_ alert teams = do
   div_ [class_ "pt-6 pb-3"] do
     -- Email recipients

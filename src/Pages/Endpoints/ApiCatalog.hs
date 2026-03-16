@@ -138,8 +138,8 @@ renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
 renderCatalogMainCol pid requestType (HostEventsVM _ he _ _) =
   div_ [class_ "space-x-3"] do
     a_ [class_ "inline-block font-bold space-x-2"] $ do
-      a_ [href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> requestType, class_ " hover:text-textWeak"] $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
-      a_ [href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> he.host <> "\"", class_ "text-textBrand hover:text-textWeak text-xs"] "View logs"
+      a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> requestType, class_ " hover:text-textWeak"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
+      a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> he.host <> "\"", class_ "text-textBrand hover:text-textWeak text-xs"] <> navTabAttrs) "View logs"
 
 
 data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
@@ -306,10 +306,10 @@ renderEndpointChartCol (EnpReqStatsVM _ _ enp) =
 renderEndpointMainCol :: Projects.ProjectId -> EnpReqStatsVM -> Html ()
 renderEndpointMainCol pid (EnpReqStatsVM _ _ enp) =
   div_ [class_ "space-x-3"] do
-    a_ [class_ "inline-block font-bold text-textError space-x-2", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] $ do
+    a_ ([class_ "inline-block font-bold text-textError space-x-2", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
       span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
       span_ [class_ " inconsolata text-base text-textStrong", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-    a_ [class_ "text-textBrand  hover:text-textStrong", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] "View logs"
+    a_ ([class_ "text-textBrand  hover:text-textStrong", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] <> navTabAttrs) "View logs"
 
 
 data EndpointRequestStatsVM

@@ -80,7 +80,7 @@ import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
 import OddJobs.Job (createJob)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (colorChip_, emptyState_, metadataChip_, resizer_)
 import Pages.LogExplorer.Log (virtualTable)
@@ -1489,7 +1489,7 @@ renderIssueMainCol pid (IssueVM _ _ currTime period issue) = do
       div_ [class_ "text-sm line-clamp-2 min-w-0"] do
         span_ [class_ $ "inline-flex align-middle mr-1 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
         span_ [class_ "text-xs tabular-nums mr-1 text-textWeak max-md:text-textStrong max-md:font-medium"] $ toHtml $ "#" <> show issue.seqNum <> " "
-        a_ [href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] $ renderIssueTitle_ issue
+        a_ ([href_ issueUrl, class_ "font-medium text-textStrong hover:text-textBrand transition-colors"] <> navTabAttrs) $ renderIssueTitle_ issue
       span_ [class_ "shrink-0 flex items-center gap-1.5 max-md:hidden"] do
         severityBadge_ issue.severity
         issueStateBadge_ issue.latestStateEvent
@@ -1519,7 +1519,7 @@ issueCardCompact_ :: Projects.ProjectId -> UTCTime -> Issues.IssueL -> Html ()
 issueCardCompact_ pid now issue = do
   let (icon, iconStyle, iconColor, tooltip) = anomalyStatusIndicator (isJust issue.acknowledgedAt) (isJust issue.archivedAt) issue.severity
       issueUrl = "/p/" <> pid.toText <> "/issues/" <> Issues.issueIdText issue.id
-  a_ [href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] do
+  a_ ([href_ issueUrl, class_ "block border border-strokeWeak rounded-xl p-3 hover:bg-bgRaised transition-colors"] <> navTabAttrs) do
     div_ [class_ "flex items-center gap-2 min-w-0"] do
       span_ [class_ $ "shrink-0 " <> iconColor, title_ tooltip, Aria.label_ tooltip] $ faSprite_ icon iconStyle "w-3.5 h-3.5"
       span_ [class_ "text-xs text-textWeak shrink-0 tabular-nums"] $ toHtml $ "#" <> show issue.seqNum

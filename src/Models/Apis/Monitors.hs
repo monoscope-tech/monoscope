@@ -1,7 +1,6 @@
 module Models.Apis.Monitors (
   queryMonitorsAll,
   queryMonitorById,
-  queryMonitorsById,
   queryMonitorUpsert,
   monitorToggleActiveById,
   monitorDeactivateByIds,
@@ -11,7 +10,6 @@ module Models.Apis.Monitors (
   monitorResolveByIds,
   monitorSoftDeleteByIds,
   QueryMonitor (..),
-  QueryMonitorEvaled (..),
   MonitorAlertConfig (..),
   QueryMonitorId (..),
   MonitorStatus (..),
@@ -132,42 +130,6 @@ data QueryMonitor = QueryMonitor
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
 
 
-data QueryMonitorEvaled = QueryMonitorEvaled
-  { id :: QueryMonitorId
-  , createdAt :: UTCTime
-  , updatedAt :: UTCTime
-  , projectId :: Projects.ProjectId
-  , checkIntervalMins :: Int
-  , alertThreshold :: Double
-  , warningThreshold :: Maybe Double
-  , logQuery :: Text
-  , logQueryAsSql :: Text
-  , lastEvaluated :: UTCTime
-  , warningLastTriggered :: Maybe UTCTime
-  , alertLastTriggered :: Maybe UTCTime
-  , triggerLessThan :: Bool
-  , thresholdSustainedForMins :: Int
-  , alertConfig :: MonitorAlertConfig
-  , deactivatedAt :: Maybe UTCTime
-  , deletedAt :: Maybe UTCTime
-  , mutedUntil :: Maybe UTCTime
-  , visualizationType :: Text
-  , teams :: V.Vector UUID.UUID
-  , -- Widget alert fields
-    widgetId :: Maybe Text
-  , dashboardId :: Maybe UUID.UUID
-  , alertRecoveryThreshold :: Maybe Double
-  , warningRecoveryThreshold :: Maybe Double
-  , currentStatus :: MonitorStatus
-  , evalResult :: Double
-  , renotifyIntervalMins :: Maybe Int
-  , stopAfterCount :: Maybe Int
-  , notificationCount :: Int
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitorEvaled
-
 
 queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64
 queryMonitorUpsert qm =
@@ -233,20 +195,6 @@ queryMonitorById :: DB es => QueryMonitorId -> Eff es (Maybe QueryMonitor)
 queryMonitorById id' = listToMaybe <$> PG.query (_selectWhere @QueryMonitor [[DAT.field| id |]]) (Only id')
 
 
-queryMonitorsById :: DB es => V.Vector QueryMonitorId -> Eff es [QueryMonitorEvaled]
-queryMonitorsById ids
-  | V.null ids = pure []
-  | otherwise = PG.query q (Only ids)
-  where
-    q =
-      [sql|
-    SELECT id, created_at, updated_at, project_id, check_interval_mins, alert_threshold, warning_threshold,
-        log_query, log_query_as_sql, last_evaluated, warning_last_triggered, alert_last_triggered, trigger_less_than,
-        threshold_sustained_for_mins, alert_config, deactivated_at, deleted_at, muted_until, visualization_type, teams,
-        widget_id, dashboard_id, alert_recovery_threshold, warning_recovery_threshold, current_status,
-        eval(log_query_as_sql), renotify_interval_mins, stop_after_count, notification_count
-      FROM monitors.query_monitors where id=ANY(?::UUID[])
-    |]
 
 
 monitorToggleActiveById :: (DB es, Time :> es) => QueryMonitorId -> Eff es Int64

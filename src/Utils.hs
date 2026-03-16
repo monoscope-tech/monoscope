@@ -56,6 +56,7 @@ module Utils (
   replaceAllFormats,
   truncateHour,
   prettyTimeShort,
+  navTabAttrs,
 )
 where
 
@@ -90,6 +91,7 @@ import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
 import Lucid
 import Lucid.Aria qualified as Aria
+import Lucid.Htmx (hxBoost_, hxSelect_, hxSwap_, hxTarget_)
 import Lucid.Hyperscript (__)
 import Lucid.Svg qualified as Svg
 import Models.Projects.Projects qualified as Projects
@@ -1371,3 +1373,15 @@ prettyTimeShort now t =
         | s < 86400 -> let h = s `div` 3600 in T.show h <> bool " hrs" " hr" (h == 1) <> " ago"
         | s < 604800 -> let d = s `div` 86400 in T.show d <> bool " days" " day" (d == 1) <> " ago"
         | otherwise -> let w = s `div` 604800 in T.show w <> bool " wks" " wk" (w == 1) <> " ago"
+
+
+-- Reusable htmx attrs for tab-style nav links (preload + morph swap)
+navTabAttrs :: [Attribute]
+navTabAttrs =
+  [ hxBoost_ "true"
+  , hxTarget_ "#main-content"
+  , hxSelect_ "#main-content"
+  , term "hx-select-oob" "#main-sidenav:morph,#main-navbar:morph"
+  , hxSwap_ "morph"
+  , [__|on click set my.preloadState to 'DONE'|]
+  ]

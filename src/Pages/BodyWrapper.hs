@@ -7,7 +7,7 @@ import Data.Tuple.Extra (fst3)
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxBoost_, hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Sessions
@@ -17,19 +17,7 @@ import Pkg.DeriveUtils (hashAssetFile)
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicatorWith_, loadingIndicator_)
-
-
--- Reusable htmx attrs for tab-style nav links (preload + morph swap)
-navTabAttrs :: [Attribute]
-navTabAttrs =
-  [ hxBoost_ "true"
-  , hxTarget_ "#main-content"
-  , hxSelect_ "#main-content"
-  , term "hx-select-oob" "#main-sidenav:morph,#main-navbar:morph"
-  , hxSwap_ "morph"
-  , [__|on click set my.preloadState to 'DONE'|]
-  ]
+import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -731,17 +719,11 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " active" else ""
         a_
-          [ href_ mUrl
-          , hxBoost_ "true"
-          , hxTarget_ "#main-content"
-          , hxSelect_ "#main-content"
-          , term "hx-select-oob" "#main-sidenav:morph,#main-navbar:morph"
-          , hxSwap_ "morph"
-          , [__|on click set my.preloadState to 'DONE'|]
+          ([ href_ mUrl
           , term "data-tippy-placement" "right"
           , term "data-tippy-content" mTitle
           , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden border-l-2 border-transparent hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
-          ]
+          ] <> navTabAttrs)
           do
             faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
@@ -829,14 +811,14 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
         div_ [class_ "md:!hidden max-md:flex group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden cursor-pointer text-strokeStrong p-2 -m-2 items-center justify-center", Aria.label_ "Open menu", [__|on click set #mobile-nav-toggle.checked to true|]] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 pointer-events-none"
         div_ [class_ "md:!hidden max-md:block group-has-[#mobile-nav-toggle:checked]/pg:max-md:!hidden w-px h-5 bg-strokeWeak ml-2"] ""
       whenJust prePageTitle \pt -> whenJust (find (\a -> fst3 a == pt) menuL) \(_, url, icon) -> do
-        a_ [class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] do
+        a_ ([class_ "max-md:hidden p-1 hover:bg-fillWeak inline-flex items-center justify-center gap-1 rounded-md text-sm", href_ url] <> navTabAttrs) do
           faSprite_ icon "regular" "w-4 h-4 text-strokeStrong"
           toHtml pt
         faSprite_ "chevron-right" "regular" "w-3 h-3 max-md:hidden"
       let targetPage = Components.getTargetPage pageTitle
           titleBase = "font-normal text-xl max-md:text-base p-1 rounded-md leading-none truncate"
       if targetPage /= "" && isJust pageTitleSuffix
-        then whenJust projectM \p -> a_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] $ toHtml pageTitle
+        then whenJust projectM \p -> a_ ([class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", href_ $ "/p/" <> p.id.toText <> targetPage, id_ "pageTitleText"] <> navTabAttrs) $ toHtml pageTitle
         else label_ [class_ $ titleBase <> " cursor-pointer hover:bg-fillWeak", Lucid.for_ $ maybeToMonoid pageTitleMonadId, id_ "pageTitleText"] $ toHtml pageTitle
       -- Show tab/suffix in breadcrumbs if present (with ID for htmx out-of-band updates)
       span_ [id_ "pageTitleSuffix", class_ "max-md:hidden flex items-center gap-1"] $ whenJust pageTitleSuffix \suffix -> do

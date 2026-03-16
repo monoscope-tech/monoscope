@@ -47,7 +47,7 @@ import Lucid.Hyperscript (__)
 import Pages.Components (emptyState_)
 import PyF (fmt)
 import Relude
-import Utils (deleteParam, faSprite_, toUriStr)
+import Utils (deleteParam, faSprite_, navTabAttrs, toUriStr)
 
 
 -- Core Types
@@ -336,16 +336,10 @@ instance ToHtml TabFilter where
         let uri = deleteParam "filter" tf.currentURL
         forM_ tf.options \opt ->
           a_
-            [ href_ $ uri <> "&filter=" <> toUriStr opt.name
+            ([ href_ $ uri <> "&filter=" <> toUriStr opt.name
             , role_ "tab"
             , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
-            , hxBoost_ "true"
-            , hxTarget_ "#main-content"
-            , hxSelect_ "#main-content"
-            , term "hx-select-oob" "#main-sidenav:morph,#main-navbar:morph"
-            , hxSwap_ "morph"
-            , [__|on click set my.preloadState to 'DONE'|]
-            ]
+            ] <> navTabAttrs)
             do
               span_ $ toHtml opt.name
               whenJust opt.count \c -> when (c > 0) $ span_ [class_ "absolute top-[1px] -right-[5px] text-textInverse-strong text-xs font-medium rounded-full px-1 bg-fillError-strong"] $ show c
@@ -471,7 +465,7 @@ renderTableRow tbl row =
   where
     rowAttrs = maybe [] ($ row) tbl.features.rowAttrs
     treeAttrs = maybe [] (treeRowAttrs row) tbl.features.treeConfig
-    linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"]) tbl.features.rowLink
+    linkHandler = maybe [] (\getLink -> [class_ "cursor-pointer", hxGet_ (getLink row), hxPushUrl_ "true"] <> navTabAttrs) tbl.features.rowLink
     isSelected = maybe False (\f -> f row) tbl.features.selectRow
     colAttrs c = foldMap (\a -> [class_ a]) c.align
 
