@@ -34,7 +34,7 @@ import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (forConcurrently)
+import Effectful.Concurrent.Async (concurrently, forConcurrently)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log, object)
@@ -1263,46 +1263,59 @@ sendReportForProject pid rType = do
         _ -> (86400, "daily")
 
   let startTime = addUTCTime (negate prv) currentTime
+      prevStart = addUTCTime (negate (prv * 2)) currentTime
+      prevEnd = addUTCTime (negate prv) currentTime
+      parseQ q =
+        let qAST = Unsafe.fromRight [] (parseQueryToAST q)
+            sqlQueryComponents = (defSqlQueryCfg pid currentTime Nothing Nothing){dateRange = (Just startTime, Just currentTime)}
+            (_, qc) = queryASTToComponents sqlQueryComponents qAST
+         in maybeToMonoid qc.finalSummarizeQuery
   projectM <- Projects.projectById pid
   forM_ projectM \pr -> do
-    stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
-    statsPrev <- Telemetry.getProjectStatsForReport pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
-    statsBySpanType <- V.fromList <$> Telemetry.getProjectStatsBySpanType pid startTime currentTime
-    statsBySpanTypePrev <- V.fromList <$> Telemetry.getProjectStatsBySpanType pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
-    let totalErrors = sum $ map (\(_, x, _) -> x) stats
+    ( (stats, statsPrev)
+      , ( (statsBySpanType, statsBySpanTypePrev)
+          , ((slowDbQueriesL, (endpointStats, endpointStatsPrev)), ((chartDataEvents, chartDataErrors), (anomalies, _)))
+          )
+      ) <-
+      concurrently
+        ( concurrently
+            (Telemetry.getProjectStatsForReport pid startTime currentTime)
+            (Telemetry.getProjectStatsForReport pid prevStart prevEnd)
+        )
+        ( concurrently
+            ( concurrently
+                (V.fromList <$> Telemetry.getProjectStatsBySpanType pid startTime currentTime)
+                (V.fromList <$> Telemetry.getProjectStatsBySpanType pid prevStart prevEnd)
+            )
+            ( concurrently
+                ( concurrently
+                    (Telemetry.getDBQueryStats pid startTime currentTime)
+                    ( concurrently
+                        (V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime)
+                        (V.fromList <$> Telemetry.getEndpointStats pid prevStart prevEnd)
+                    )
+                )
+                ( concurrently
+                    ( concurrently
+                        (liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx)
+                        (liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx)
+                    )
+                    (Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
+                )
+            )
+        )
+    let slowDbQueries = V.fromList slowDbQueriesL
+        anomalies' = V.fromList $ Issues.toIssueSummary <$> anomalies
+        totalErrors = sum $ map (\(_, x, _) -> x) stats
         totalEvents = sum $ map (\(_, _, x) -> x) stats
         totalErrorsPrev = sum $ map (\(_, x, _) -> x) statsPrev
         totalEventsPrev = sum $ map (\(_, _, x) -> x) statsPrev
-        -- roundto two decimal places
         errorsChange' = if totalErrorsPrev == 0 then 0.00 else fromIntegral (totalErrors - totalErrorsPrev) / fromIntegral totalErrorsPrev * 100
         eventsChange' = if totalEventsPrev == 0 then 0.00 else fromIntegral (totalEvents - totalEventsPrev) / fromIntegral totalEventsPrev * 100
         errorsChange = fromIntegral (round (errorsChange' * 100)) / 100
         eventsChange = fromIntegral (round (eventsChange' * 100)) / 100
         spanStatsDiff = RP.getSpanTypeStats statsBySpanType statsBySpanTypePrev
-
-    slowDbQueries <- V.fromList <$> Telemetry.getDBQueryStats pid startTime currentTime
-
-    let parseQ q =
-          let qAST = Unsafe.fromRight [] (parseQueryToAST q)
-              sqlQueryComponents =
-                (defSqlQueryCfg pid currentTime Nothing Nothing)
-                  { dateRange = (Just startTime, Just currentTime)
-                  }
-              (_, qc) = queryASTToComponents sqlQueryComponents qAST
-           in maybeToMonoid qc.finalSummarizeQuery
-
-    chartDataEvents <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "| summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
-    chartDataErrors <- liftIO $ Charts.fetchMetricsData Charts.DTMetric (parseQ "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource___service___name") currentTime (Just startTime) (Just currentTime) ctx
-
-    (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] []
-
-    let anomalies' = V.fromList $ (\x -> Issues.IssueSummary x.id x.title x.critical x.severity x.issueType (Just $ fromPGArray x.activityBuckets)) <$> anomalies
-
-    endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
-    endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
-    endpoint_rp <- LogQueries.getEndpointReportData pid typTxt
-    let endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
-    previous_week <- LogQueries.getPreviousPeriodEndpointPerf pid typTxt
+        endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
     reportId <- UUIDId <$> liftIO UUIDV4.nextRandom

@@ -82,6 +82,7 @@ module Models.Apis.Issues (
 
   -- * Issue Summary (for reports/emails)
   IssueSummary (..),
+  toIssueSummary,
 
   -- * Reports
   Report (..),
@@ -111,7 +112,7 @@ import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.Types (PGArray (..), Query (Query))
+import Database.PostgreSQL.Simple.Types (PGArray (..), Query (Query), fromPGArray)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -182,6 +183,10 @@ data IssueSummary = IssueSummary
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] IssueSummary
+
+
+toIssueSummary :: IssueL -> IssueSummary
+toIssueSummary x = IssueSummary x.id x.title x.critical x.severity x.issueType (Just $ fromPGArray x.activityBuckets)
 
 
 showRate :: Double -> Text
@@ -401,11 +406,22 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
   countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
   pure (issues, fromMaybe 0 countResult)
   where
-    timefilter = maybe "" (\(st, end) -> " AND i.created_at >= '" <> formatUTC st <> "' AND i.created_at <= '" <> formatUTC end <> "'") timeRangeM
-    ackF = maybe "" (bool " AND i.acknowledged_at IS NULL" " AND i.acknowledged_at IS NOT NULL") isAcknowledged
-    archF = maybe "" (bool " AND i.archived_at IS NULL" " AND i.archived_at IS NOT NULL") isArchived
-    svcF = if null serviceFilters then "" else " AND i.service = ANY(ARRAY[" <> T.intercalate "," (map (\s -> "'" <> T.replace "'" "''" s <> "'") serviceFilters) <> "]::text[])"
-    typF = if null typeFilters then "" else " AND i.issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" t <> "'") typeFilters) <> "]::text[])"
+    mkFilters pfx =
+      let timeF = maybe "" (\(st, end) -> " AND " <> pfx <> "created_at >= '" <> formatUTC st <> "' AND " <> pfx <> "created_at <= '" <> formatUTC end <> "'") timeRangeM
+          ackF' = maybe "" (bool (" AND " <> pfx <> "acknowledged_at IS NULL") (" AND " <> pfx <> "acknowledged_at IS NOT NULL")) isAcknowledged
+          archF' = maybe "" (bool (" AND " <> pfx <> "archived_at IS NULL") (" AND " <> pfx <> "archived_at IS NOT NULL")) isArchived
+          sqlArr col vals = if null vals then "" else " AND " <> pfx <> col <> " = ANY(ARRAY[" <> T.intercalate "," (map (\v -> "'" <> T.replace "'" "''" v <> "'") vals) <> "]::text[])"
+       in timeF <> ackF' <> archF' <> sqlArr "service" serviceFilters <> sqlArr "issue_type::text" typeFilters
+    timefilter = mkFilters "i."
+    ackF = ""
+    archF = ""
+    svcF = ""
+    typF = ""
+    cTimefilter = mkFilters ""
+    cAckF = ""
+    cArchF = ""
+    cSvcF = ""
+    cTypF = ""
     orderBy = case sortM of
       Just "-created_at" -> "ORDER BY i.created_at DESC"
       Just "+created_at" -> "ORDER BY i.created_at ASC"
@@ -414,12 +430,6 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       Just "-title" -> "ORDER BY i.title DESC"
       Just "+title" -> "ORDER BY i.title ASC"
       _ -> "ORDER BY i.critical DESC, i.created_at DESC"
-    -- Count query uses bare table without alias
-    cTimefilter = maybe "" (\(st, end) -> " AND created_at >= '" <> formatUTC st <> "' AND created_at <= '" <> formatUTC end <> "'") timeRangeM
-    cAckF = maybe "" (bool " AND acknowledged_at IS NULL" " AND acknowledged_at IS NOT NULL") isAcknowledged
-    cArchF = maybe "" (bool " AND archived_at IS NULL" " AND archived_at IS NOT NULL") isArchived
-    cSvcF = if null serviceFilters then "" else " AND service = ANY(ARRAY[" <> T.intercalate "," (map (\s -> "'" <> T.replace "'" "''" s <> "'") serviceFilters) <> "]::text[])"
-    cTypF = if null typeFilters then "" else " AND issue_type::text = ANY(ARRAY[" <> T.intercalate "," (map (\t -> "'" <> T.replace "'" "''" t <> "'") typeFilters) <> "]::text[])"
     -- period controls bucket granularity: "24h" = hourly, "7d" = daily
     (seriesStart, seriesStep, bucketSize) = case period of
       "24h" -> ("NOW() - INTERVAL '23 hours'" :: Text, "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)

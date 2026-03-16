@@ -27,7 +27,6 @@ import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime))
 import Data.Time.Zones (loadTZFromDB, utcToLocalTimeTZ)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple.Types (fromPGArray)
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
@@ -275,7 +274,7 @@ buildLiveReportEmailHtml pid project userName = do
       errorsChangePct = pctChange totalErrors totalErrorsPrev :: Double
       slowQueries = V.fromList slowQueriesL
       performance = computeDurationChanges endpointStats endpointStatsPrev
-      anomalies' = V.fromList $ (\x -> Issues.IssueSummary x.id x.title x.critical x.severity x.issueType (Just $ fromPGArray x.activityBuckets)) <$> anomalies
+      anomalies' = V.fromList $ Issues.toIssueSummary <$> anomalies
       topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
   let reportUrl = "/p/" <> pid.toText <> "/reports"
       freeTierExceeded = project.paymentPlan == "FREE" && totalRequest > 5000

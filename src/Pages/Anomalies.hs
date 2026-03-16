@@ -54,6 +54,7 @@ import Database.PostgreSQL.Simple (Only (Only))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
+import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
@@ -98,7 +99,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, deleteParam, escapedQueryPartial, faSprite_, formatUTC, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, deleteParam, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -1154,11 +1155,13 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
   currTime <- liftIO getCurrentTime
 
   let period = fromMaybe "24h" periodM
-  (issues, totalCount) <- Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters
-
-  -- Lightweight query for filter dropdown options
-  availableServices <- map (\(Only s) -> s) <$> PG.query [sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = ? AND service IS NOT NULL |] (Only pid)
-  availableTypes <- map (\(Only t) -> t) <$> PG.query [sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = ? |] (Only pid)
+  ((issues, totalCount), (availableServices, availableTypes)) <-
+    concurrently
+      (Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters)
+      ( concurrently
+          (map (\(Only s) -> s) <$> PG.query [sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = ? AND service IS NOT NULL |] (Only pid))
+          (map (\(Only t) -> t) <$> PG.query [sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = ? |] (Only pid))
+      )
 
   let filterParams = foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) typeFilters
       baseUrl = "/p/" <> pid.toText <> "/issues?filter=" <> currentFilterTab <> "&sort=" <> currentSort <> "&period=" <> period <> filterParams
@@ -1316,15 +1319,12 @@ renderIssueEventsCol (IssueVM _ isWidget _ _ issue) =
   unless isWidget
     $ span_ [class_ $ "tabular-nums font-medium " <> countStyle issue.eventCount]
     $ toHtml
-    $ formatWithCommas issue.eventCount
+    $ formatWithCommas (fromIntegral issue.eventCount)
   where
     countStyle n
       | n >= 100 = "text-sm text-fillError-strong"
       | n >= 10 = "text-sm text-fillWarning-strong"
       | otherwise = "text-sm text-textStrong"
-    formatWithCommas n = reverse $ go $ reverse (show n)
-    go [] = []
-    go xs = case splitAt 3 xs of (chunk, []) -> chunk; (chunk, rest) -> chunk ++ "," ++ go rest
 
 
 renderIssueDateCol :: IssueVM -> Html ()
