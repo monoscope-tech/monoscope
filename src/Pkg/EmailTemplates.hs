@@ -503,7 +503,7 @@ data WeeklyReportData = WeeklyReportData
   , alertsCount :: Int
   , logPatternCount :: Int
   , rateChangeCount :: Int
-  , anomalies :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int])
+  , anomalies :: V.Vector Issues.IssueSummary
   , performance :: V.Vector (Text, Text, Text, Int, Double, Int, Double)
   , slowQueries :: V.Vector (Text, Int, Int)
   , topPatterns :: V.Vector (Text, Int64, Text)
@@ -568,12 +568,12 @@ weeklyReportEmail d =
             issueUrl iid = d.projectUrl <> "/issues/" <> iid.toText
         reportTable ("Issues (" <> show totalIssues <> ")") ["Trend"]
           $ V.toList
-            ( shown <&> \(iid, title, critical, _severity, iType, buckets) -> tr_ do
+            ( shown <&> \iss -> tr_ do
                 td_ [style_ "vertical-align: middle;"] do
-                  issueTypeBadge iType critical
-                  a_ [href_ (issueUrl iid), style_ "color: inherit; text-decoration: none;"] $ toHtml $ stripSummaryBadges title
+                  issueTypeBadge iss.issueType iss.critical
+                  a_ [href_ (issueUrl iss.id), style_ "color: inherit; text-decoration: none;"] $ toHtml $ stripSummaryBadges iss.title
                 td_ [width_ "120", style_ "vertical-align: middle; text-align: right;"]
-                  $ sparklineImg buckets
+                  $ sparklineImg (fromMaybe [] iss.activityBuckets)
             )
           <> [ tr_
                  $ td_ [colspan_ "2", style_ "text-align: center; color: #57606a; font-size: 14px;"]
@@ -800,7 +800,13 @@ sampleWeeklyReport eventsChart errorsChart =
       , alertsCount = 1
       , logPatternCount = 1
       , rateChangeCount = 1
-      , anomalies = V.fromList [(UUIDId UUID.nil, "TypeError: Cannot read property 'map'", True, "critical", Issues.RuntimeException, [0, 2, 5, 12, 8, 3, 1]), (UUIDId UUID.nil, "New endpoint detected: POST /api/orders", False, "medium", Issues.ApiChange, [0, 0, 0, 1, 0, 0, 0]), (UUIDId UUID.nil, "Connection timeout pattern detected", False, "medium", Issues.LogPattern, [1, 3, 2, 0, 1, 4, 2]), (UUIDId UUID.nil, "Request rate spike on /api/users", False, "high", Issues.LogPatternRateChange, [0, 1, 1, 5, 12, 3, 0])]
+      , anomalies =
+          V.fromList
+            [ Issues.IssueSummary (UUIDId UUID.nil) "TypeError: Cannot read property 'map'" True "critical" Issues.RuntimeException (Just [0, 2, 5, 12, 8, 3, 1])
+            , Issues.IssueSummary (UUIDId UUID.nil) "New endpoint detected: POST /api/orders" False "medium" Issues.ApiChange (Just [0, 0, 0, 1, 0, 0, 0])
+            , Issues.IssueSummary (UUIDId UUID.nil) "Connection timeout pattern detected" False "medium" Issues.LogPattern (Just [1, 3, 2, 0, 1, 4, 2])
+            , Issues.IssueSummary (UUIDId UUID.nil) "Request rate spike on /api/users" False "high" Issues.LogPatternRateChange (Just [0, 1, 1, 5, 12, 3, 0])
+            ]
       , performance = V.fromList [("api.example.com", "GET", "/api/v1/users", 245, -12.5, 5000, 8.3), ("api.example.com", "POST", "/api/v1/orders", 890, 45.2, 1200, -3.1)]
       , slowQueries = V.fromList [("SELECT * FROM users WHERE email = $1", 3400, 1250 :: Int)]
       , topPatterns = V.fromList [("GET /api/v1/users/<*>", 4500, "URL path"), ("severity_text;badge-error⇒ERROR Failed to connect to database: connection refused at <*>", 1230, "Event summary"), ("Request timeout after <*> ms for endpoint <*>", 890, "Log body")]

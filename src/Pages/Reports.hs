@@ -13,10 +13,12 @@ module Pages.Reports (
   computeDurationChanges,
   EndpointStatsTuple,
   anomalyTypeCounts,
+  eventsWidget,
+  errorsWidget,
 )
 where
 
-import Control.Lens (view, _2, _3, _5)
+import Control.Lens (view, _2, _3)
 import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Map.Lazy qualified as Map
@@ -26,7 +28,7 @@ import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTim
 import Data.Time.Zones (loadTZFromDB, utcToLocalTimeTZ)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple.Types (fromPGArray)
-import Deriving.Aeson qualified as DAE
+import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -90,18 +92,6 @@ data DBQueryStat = DBQueryStat
   deriving anyclass (AE.FromJSON)
 
 
-data IssueStat = IssueStat
-  { id :: Issues.IssueId
-  , title :: Text
-  , critical :: Bool
-  , severity :: Text
-  , issueType :: Issues.IssueType
-  , activityBuckets :: Maybe [Int]
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] IssueStat
-
-
 data ReportData = ReportData
   { endpoints :: [PerformanceReport]
   , errors :: StatData
@@ -110,7 +100,7 @@ data ReportData = ReportData
   , slowDbQueries :: [DBQueryStat]
   , errorDataset :: Widget.WidgetDataset
   , eventsDataset :: Widget.WidgetDataset
-  , issues :: [IssueStat]
+  , issues :: [Issues.IssueSummary]
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -135,7 +125,7 @@ anomalyTypeCounts getType =
     (0, 0, 0, 0, 0)
 
 
-buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int]) -> AE.Value
+buildReportJson' :: Int -> Int -> Double -> Double -> V.Vector (Text, Int, Double, Int, Double) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> Charts.MetricsData -> Charts.MetricsData -> V.Vector Issues.IssueSummary -> AE.Value
 buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStatsDiff' endpointsPerformance slowDbQueries chartEv chartErr issues =
   let spanStatsDiff = (\(t, e, chang, dur, durChange) -> AE.object ["spanType" AE..= t, "eventCount" AE..= e, "eventChange" AE..= chang, "averageDuration" AE..= dur, "durationChange" AE..= durChange]) <$> spanTypeStatsDiff'
       perf = (\(u, m, p, d, dc, req, cc) -> AE.object ["host" AE..= u, "urlPath" AE..= p, "method" AE..= m, "averageDuration" AE..= d, "durationDiffPct" AE..= dc, "requestCount" AE..= req, "requestDiffPct" AE..= cc]) <$> V.take 10 endpointsPerformance
@@ -148,12 +138,12 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
         , "slowDbQueries" AE..= slowDbQueries'
         , "errorDataset" AE..= Widget.toWidgetDataset chartErr
         , "eventsDataset" AE..= Widget.toWidgetDataset chartEv
-        , "issues" AE..= ((\(i, t, c, s, tp, b) -> IssueStat i t c s tp (Just b)) <$> issues)
+        , "issues" AE..= issues
         ]
 
 
-getAnomaliesEmailTemplate :: V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int]) -> V.Vector AE.Value
-getAnomaliesEmailTemplate = V.map (\(i, t, c, s, tp, _) -> AE.object ["id" AE..= i, "title" AE..= t, "critical" AE..= c, "severity" AE..= s, "issueType" AE..= tp])
+getAnomaliesEmailTemplate :: V.Vector Issues.IssueSummary -> V.Vector AE.Value
+getAnomaliesEmailTemplate = V.map (\iss -> AE.object ["id" AE..= iss.id, "title" AE..= iss.title, "critical" AE..= iss.critical, "severity" AE..= iss.severity, "issueType" AE..= iss.issueType])
 
 
 -- | Moved from BackgroundJobs
@@ -195,7 +185,7 @@ computeDurationChanges current prev =
 
 -- | Shared email rendering: builds WeeklyReportData from inputs, generates chart URLs, renders email
 -- Returns (dateLabel based on endTime, rendered email HTML)
-renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector (Issues.IssueId, Text, Bool, Text, Issues.IssueType, [Int]) -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
+renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
 renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
   tz <- liftIO $ loadTZFromDB (toString project.timeZone)
@@ -204,7 +194,7 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
       dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)
       stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
       endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" endTime
-      (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (view _5) anomalies
+      (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (.issueType) anomalies
   eventsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
   errorsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
   let projectUrl = ctx.env.hostUrl <> "p/" <> pid.toText
@@ -242,7 +232,7 @@ reportToEmailHtml :: Issues.Report -> Projects.Project -> Text -> ATAuthCtx (Tex
 reportToEmailHtml report project userName = case AE.fromJSON @ReportData report.reportJson of
   AE.Error _ -> pure ("", "Error: Could not parse report data")
   AE.Success rd -> do
-    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType, fromMaybe [] x.activityBuckets)) <$> rd.issues
+    let anomalies' = V.fromList rd.issues
         performance = V.fromList $ (\ep -> (ep.host, ep.method, ep.urlPath, fromIntegral ep.averageDuration :: Int, ep.durationDiffPct, ep.requestCount, ep.requestDiffPct)) <$> rd.endpoints
         slowQueries = V.fromList $ (\q -> (q.query, round q.averageDuration :: Int, fromIntegral q.totalEvents :: Int)) <$> rd.slowDbQueries
         reportUrl = "/p/" <> project.id.toText <> "/reports/" <> report.id.toText
@@ -255,8 +245,27 @@ buildLiveReportEmailHtml pid project userName = do
   currentTime <- Time.currentTime
   let startTime = addUTCTime (negate $ 6 * 86400) currentTime
       prevStart = addUTCTime (negate $ 12 * 86400) currentTime
-  stats <- Telemetry.getProjectStatsForReport pid startTime currentTime
-  statsPrev <- Telemetry.getProjectStatsForReport pid prevStart startTime
+  ( (stats, statsPrev)
+    , ((slowQueriesL, (endpointStats, endpointStatsPrev)), ((anomalies, _), (patterns, totalRequest)))
+    ) <-
+    concurrently
+      ( concurrently
+          (Telemetry.getProjectStatsForReport pid startTime currentTime)
+          (Telemetry.getProjectStatsForReport pid prevStart startTime)
+      )
+      ( concurrently
+          ( concurrently
+              (Telemetry.getDBQueryStats pid startTime currentTime)
+              ( concurrently
+                  (V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime)
+                  (V.fromList <$> Telemetry.getEndpointStats pid prevStart startTime)
+              )
+          )
+          ( concurrently
+              (Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] [])
+              (concurrently (LogPatterns.getLogPatterns pid 10 0) (LogQueries.getLastSevenDaysTotalRequest pid))
+          )
+      )
   let totalErrors = sum $ map (view _2) stats
       totalEvents = sum $ map (view _3) stats
       totalErrorsPrev = sum $ map (view _2) statsPrev
@@ -264,15 +273,10 @@ buildLiveReportEmailHtml pid project userName = do
       pctChange cur prev = if prev == 0 then 0.0 else fromIntegral (round ((fromIntegral (cur - prev) / fromIntegral prev * 100 :: Double) * 100)) / 100
       eventsChangePct = pctChange totalEvents totalEventsPrev :: Double
       errorsChangePct = pctChange totalErrors totalErrorsPrev :: Double
-  slowQueries <- V.fromList <$> Telemetry.getDBQueryStats pid startTime currentTime
-  endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
-  endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid prevStart startTime
-  let performance = computeDurationChanges endpointStats endpointStatsPrev
-  (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] []
-  let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType, fromPGArray x.activityBuckets)) <$> anomalies
-  patterns <- LogPatterns.getLogPatterns pid 10 0
-  let topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
-  totalRequest <- LogQueries.getLastSevenDaysTotalRequest pid
+      slowQueries = V.fromList slowQueriesL
+      performance = computeDurationChanges endpointStats endpointStatsPrev
+      anomalies' = V.fromList $ (\x -> Issues.IssueSummary x.id x.title x.critical x.severity x.issueType (Just $ fromPGArray x.activityBuckets)) <$> anomalies
+      topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
   let reportUrl = "/p/" <> pid.toText <> "/reports"
       freeTierExceeded = project.paymentPlan == "FREE" && totalRequest > 5000
   renderWeeklyEmail reportUrl project pid userName startTime currentTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies' performance slowQueries topPatterns freeTierExceeded

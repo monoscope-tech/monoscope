@@ -9,7 +9,6 @@ import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
-import Data.Default (def)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
@@ -78,7 +77,6 @@ import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
-import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
@@ -1298,13 +1296,12 @@ sendReportForProject pid rType = do
 
     (anomalies, _) <- Issues.selectIssues pid Nothing (Just False) Nothing 100 0 (Just (startTime, currentTime)) Nothing "7d" [] []
 
-    let anomalies' = V.fromList $ (\x -> (x.id, x.title, x.critical, x.severity, x.issueType, fromPGArray x.activityBuckets)) <$> anomalies
+    let anomalies' = V.fromList $ (\x -> Issues.IssueSummary x.id x.title x.critical x.severity x.issueType (Just $ fromPGArray x.activityBuckets)) <$> anomalies
 
     endpointStats <- V.fromList <$> Telemetry.getEndpointStats pid startTime currentTime
     endpointStatsPrev <- V.fromList <$> Telemetry.getEndpointStats pid (addUTCTime (negate (prv * 2)) currentTime) (addUTCTime (negate prv) currentTime)
     endpoint_rp <- LogQueries.getEndpointReportData pid typTxt
     let endpointPerformance = RP.computeDurationChanges endpointStats endpointStatsPrev
-    _total_anomalies <- Anomalies.countAnomalies pid typTxt
     previous_week <- LogQueries.getPreviousPeriodEndpointPerf pid typTxt
     let rp_json = RP.buildReportJson' totalEvents totalErrors eventsChange errorsChange spanStatsDiff endpointPerformance slowDbQueries chartDataEvents chartDataErrors anomalies'
     timeZone <- liftIO getCurrentTimeZone
@@ -1327,8 +1324,8 @@ sendReportForProject pid rType = do
       let stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
           currentTimeTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" currentTime
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
-          eventsWidget = def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"}
-          errorsWidget = eventsWidget{Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"}
+          eventsWidget = RP.eventsWidget
+          errorsWidget = RP.errorsWidget
       allQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
       errQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
@@ -1345,7 +1342,7 @@ sendReportForProject pid rType = do
             let dayEnd = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone currentTime))
                 sevenDaysAgoUTCTime = addUTCTime (negate $ 6 * 86400) currentTime
                 dayStart = show $ localDay (zonedTimeToLocalTime (utcToZonedTime timeZone sevenDaysAgoUTCTime))
-                (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = RP.anomalyTypeCounts (\(_, _, _, _, t, _) -> t) anomalies'
+                (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = RP.anomalyTypeCounts (.issueType) anomalies'
                 topPatterns = V.fromList $ patterns <&> \p -> (p.logPattern, p.occurrenceCount, LogPatterns.sourceFieldLabel p.sourceField)
             forM_ users \user -> do
               let reportData =

@@ -80,6 +80,9 @@ module Models.Apis.Issues (
   logIssueActivity,
   selectIssueActivity,
 
+  -- * Issue Summary (for reports/emails)
+  IssueSummary (..),
+
   -- * Reports
   Report (..),
   ReportId,
@@ -167,6 +170,18 @@ defaultRecommendedAction = "Review the changes and update your integration accor
 
 parseIssueType :: Text -> Maybe IssueType
 parseIssueType = rightToMaybe . parseUrlPiece
+
+
+data IssueSummary = IssueSummary
+  { id :: IssueId
+  , title :: Text
+  , critical :: Bool
+  , severity :: Text
+  , issueType :: IssueType
+  , activityBuckets :: Maybe [Int]
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] IssueSummary
 
 
 showRate :: Double -> Text
