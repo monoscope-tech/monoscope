@@ -33,7 +33,7 @@ import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (Only))
+import Database.PostgreSQL.Simple (Only (Only), SomePostgreSqlException)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField)
 import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -408,14 +408,16 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         ]
     )
 
-  logItemsV <- checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
-  -- Extract count from last column (_total_count via count(*) OVER()), strip it from rows
-  let dropLast v = V.take (V.length v - 1) v
-      count = fromMaybe 0 $ do
-        firstRow <- logItemsV V.!? 0
-        AE.Number n <- firstRow V.!? (V.length firstRow - 1)
-        pure $ round n
-  pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count)
+  result <- try @SomePostgreSqlException $ checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
+  case result of
+    Left e -> pure $ Left $ show e
+    Right logItemsV -> do
+      let dropLast v = V.take (V.length v - 1) v
+          count = fromMaybe 0 $ do
+            firstRow <- logItemsV V.!? 0
+            AE.Number n <- firstRow V.!? (V.length firstRow - 1)
+            pure $ round n
+      pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count)
 
 
 selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]

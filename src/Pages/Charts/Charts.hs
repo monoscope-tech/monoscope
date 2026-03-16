@@ -2,7 +2,7 @@
 
 module Pages.Charts.Charts (queryMetrics, MetricsData (..), fetchMetricsData, MetricsStats (..), DataType (..), convertTimestampsToMs) where
 
-import Control.Exception.Annotated (checkpoint)
+import Control.Exception.Annotated (checkpoint, try)
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.List qualified as L (maximum)
@@ -13,7 +13,7 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Tuple.Extra (fst3, snd3, thd3)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple (query_)
+import Database.PostgreSQL.Simple (SomePostgreSqlException, query_)
 import Database.PostgreSQL.Simple.Types (Only (..), Query (Query), fromOnly)
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
@@ -211,7 +211,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           , to = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe now toD
           }
 
-  checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
+  result <- try @SomePostgreSqlException $ checkpoint (toAnnotation (respDataType, sqlQuery)) $ case respDataType of
     DTFloat -> do
       chartData <- withResource pool \conn -> query_ conn (Query $ encodeUtf8 sqlQuery) :: IO [Only Double]
       pure
@@ -245,6 +245,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
           { dataJSON = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
+  pure $ either (const baseMetricsData) id result
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts

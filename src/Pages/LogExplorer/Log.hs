@@ -589,9 +589,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         tableAsVecE <- fetchOrSkip
         case hush tableAsVecE of
           Just tableResult -> buildLogResult tableResult >>= addRespHeaders . LogsGetJson
-          Nothing -> do
-            addErrorToast "Something went wrong" Nothing
-            addRespHeaders $ LogsGetErrorSimple "Failed to fetch logs data"
+          Nothing -> buildLogResult (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
     else do
       -- Full HTML path: parallelize independent DB queries
       (tableAsVecE, queryLib, facetSummary, freeTierExceeded, teams, patterns) <- Ki.scoped \scope -> do
