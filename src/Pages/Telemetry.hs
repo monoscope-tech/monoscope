@@ -170,6 +170,7 @@ metricsOverViewGetH pid tabM fromM toM sinceM sourceM prefixM cursorM = do
           , currProject = Just project
           , prePageTitle = Just "Explorer"
           , pageTitle = "Metrics"
+          , menuItem = Just "Explorer"
           , config = appCtx.env
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! "] <> navTabAttrs) "Events"

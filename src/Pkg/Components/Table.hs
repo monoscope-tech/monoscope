@@ -339,6 +339,12 @@ instance ToHtml TabFilter where
             [ href_ $ uri <> "&filter=" <> toUriStr opt.name
             , role_ "tab"
             , class_ $ "tab h-auto! " <> if opt.name == tf.current then "tab-active text-textStrong" else ""
+            , hxBoost_ "true"
+            , hxTarget_ "#main-content"
+            , hxSelect_ "#main-content"
+            , term "hx-select-oob" "#main-sidenav:morph,#main-navbar:morph"
+            , hxSwap_ "morph"
+            , [__|on click set my.preloadState to 'DONE'|]
             ]
             do
               span_ $ toHtml opt.name
