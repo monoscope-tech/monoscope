@@ -45,7 +45,7 @@ where
 import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
-import Control.Exception (finally, throwIO)
+import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
@@ -201,9 +201,20 @@ withExternalDBSetup f = do
   uuid <- nextRandom
   let testDbName = "monoscope_test_" <> T.replace "-" "_" (show uuid)
 
-  -- Create test database from template
+  -- Create test database from template (retry on contention)
   masterConn <- connect $ connInfo "postgres"
-  void $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> testDbName <> " TEMPLATE " <> templateDbName) ()
+  let createFromTemplate attempt = do
+        result <- try @SomeException $ execute masterConn (Query $ encodeUtf8 $ "CREATE DATABASE " <> testDbName <> " TEMPLATE " <> templateDbName) ()
+        case result of
+          Right _ -> pass
+          Left e
+            | attempt < (3 :: Int), "being accessed by other users" `T.isInfixOf` show e -> do
+                -- Terminate connections to template and retry
+                void $ execute masterConn (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" <> templateDbName <> "' AND pid <> pg_backend_pid()") ()
+                threadDelay (100000 * (attempt + 1))
+                createFromTemplate (attempt + 1)
+            | otherwise -> throwIO e
+  createFromTemplate 0
   close masterConn
 
   -- Connect to the new test database
