@@ -1,49 +1,16 @@
-module Pages.Components (statBox, drawer_, statBox_, emptyState_, emptyStateWithSteps_, emptyStateFiltered_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, tableSkeleton_, chartSkeleton_, cardSkeleton_, statBoxSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeSq_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_) where
+module Pages.Components (drawer_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
-import Fmt (commaizeF, fmt, (+|))
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
-import Models.Projects.Projects (ProjectId)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Relude
 import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, onpointerdown_)
-
-
-statBox :: Maybe ProjectId -> Text -> Text -> Int -> Maybe Int -> Html ()
-statBox pid title helpInfo val bckupValM = wrapper do
-  div_ do
-    div_ [class_ "inline-block flex flex-row content-between"] do
-      span_ [class_ "font-bold text-textStrong text-2xl tabular-nums stat-value", term "data-value" (show val)] $ toHtml @Text $ fmt (commaizeF val)
-      maybe "" (\bVal -> small_ [class_ "tabular-nums"] $ toHtml @Text $ fmt ("/" +| commaizeF bVal)) bckupValM
-    span_ [class_ "text-textWeak"] $ toHtml title
-  span_ [class_ "inline-block tooltip tap-target", Aria.label_ "More info", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 h-4"
-  where
-    tl = getTargetPage title
-    pidT = maybe "" (.toText) pid
-    wrapper =
-      if T.null tl
-        then div_ [class_ "col-span-1 p-5 surface-raised rounded-2xl col-span-1 flex flex-row content-between justify-between"]
-        else a_ [href_ $ "/p/" <> pidT <> tl, class_ "col-span-1 p-5 surface-raised rounded-2xl flex flex-row content-between justify-between"]
-
-
-statBox_ :: Maybe ProjectId -> Maybe (Text, Text, Text) -> Text -> Text -> Text -> Maybe Int -> Maybe Text -> Html ()
-statBox_ pid iconM title helpInfo val bckupValM valClsM = do
-  div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
-    whenJust iconM $ \(icon, kind, color) -> do
-      div_ [class_ "flex items-center justify-center h-10 w-10 bg-fillWeaker rounded-xl"] do
-        faSprite_ icon kind $ "w-4 h-4 " <> color
-    div_ [class_ "flex flex-col gap-1"] do
-      let fsiz = if isJust iconM then "text-2xl " else "text-4xl "
-      span_ [class_ $ "font-bold tabular-nums stat-value " <> fsiz <> fromMaybe "text-textStrong" valClsM, term "data-value" val] $ toHtml val
-      div_ [class_ "flex gap-2 items-center text-sm text-textWeak"] do
-        p_ [] $ toHtml title
-        span_ [class_ "tap-target", Aria.label_ "More info", term "data-tippy-content" helpInfo] $ faSprite_ "circle-info" "regular" "w-4 mt-[-2px]"
 
 
 -- | Empty state component with optional contextual icon
@@ -62,38 +29,6 @@ emptyState_ iconM title subTxt urlM btnText =
                   [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"]
                     ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
              in a_ attrs $ toHtml btnText
-
-
--- | Empty state with numbered quick-start steps
-emptyStateWithSteps_ :: Maybe Text -> Text -> Text -> Maybe Text -> Text -> [(Text, Text)] -> Html ()
-emptyStateWithSteps_ iconM title subTxt urlM btnText steps =
-  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-8 sm:px-12 flex flex-col gap-4 empty-state"] do
-    div_ [] $ faSprite_ (fromMaybe "empty" iconM) "regular" "h-12 w-12 stroke-strokeBrand-strong fill-fillBrand-strong"
-    div_ [class_ "flex flex-col gap-1.5"] do
-      h2_ [class_ "text-base text-textStrong font-semibold"] $ toHtml title
-      p_ [class_ "text-sm text-textWeak"] $ toHtml subTxt
-    div_ [class_ "flex flex-col gap-2 text-left text-sm"] do
-      forM_ (zip [(1 :: Int) ..] steps) \(n, (icon, label)) ->
-        div_ [class_ "flex items-center gap-3"] do
-          span_ [class_ "flex items-center justify-center h-6 w-6 rounded-full bg-fillBrand-weak text-textBrand text-xs font-bold shrink-0"] $ toHtml (show n)
-          faSprite_ icon "regular" "w-4 h-4 text-textWeak shrink-0"
-          span_ [class_ "text-textStrong"] $ toHtml label
-    whenJust urlM \u ->
-      unless (T.null btnText)
-        $ let attrs = [href_ u, class_ "btn text-sm w-max mx-auto btn-primary"] ++ if "https://" `T.isPrefixOf` u then [target_ "_blank", rel_ "noopener noreferrer"] else []
-           in a_ attrs $ toHtml btnText
-
-
--- | Filtered empty state - for when search/filters return no results
--- Shows a different visual treatment to indicate filters are active
-emptyStateFiltered_ :: Text -> Text -> Html () -> Html ()
-emptyStateFiltered_ title subTxt actionHtml =
-  section_ [class_ "w-max mx-auto my-8 text-center p-5 sm:py-6 sm:px-12 flex flex-col gap-3 rounded-xl empty-state-filtered"] do
-    div_ [] $ faSprite_ "filter-slash" "regular" "h-10 w-10 stroke-strokeBrand-strong fill-fillBrand-weak"
-    div_ [class_ "flex flex-col gap-1.5"] do
-      h2_ [class_ "text-base text-textStrong font-semibold"] $ toHtml title
-      p_ [class_ "text-sm text-textWeak max-w-sm"] $ toHtml subTxt
-      actionHtml
 
 
 getTargetPage :: Text -> Text
@@ -566,12 +501,6 @@ resizer_ targetId urlParam increasingDirection =
     $ faSprite_ "grip-dots-vertical" "regular" "w-4 h-5"
 
 
--- Skeleton loaders for lazy-loaded content (dimensions match actual components to prevent layout shift)
--- Uses CSS grid with single shimmer overlay instead of rows*cols DOM elements
-tableSkeleton_ :: Int -> Int -> Html ()
-tableSkeleton_ rows cols = div_ [class_ "skeleton-table w-full", style_ $ "--skeleton-rows:" <> show rows <> ";--skeleton-cols:" <> show cols] ""
-
-
 chartSkeleton_ :: Html ()
 chartSkeleton_ = div_ [class_ "h-64 rounded-lg relative overflow-hidden bg-fillWeaker"] do
   -- Y-axis hint
@@ -593,23 +522,6 @@ chartSkeleton_ = div_ [class_ "h-64 rounded-lg relative overflow-hidden bg-fillW
   div_ [class_ "absolute left-8 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute left-1/2 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
   div_ [class_ "absolute right-4 bottom-3 w-6 h-2 skeleton-shimmer rounded"] ""
-
-
-cardSkeleton_ :: Html ()
-cardSkeleton_ = div_ [class_ "p-4 rounded-lg skeleton-shimmer"] do
-  div_ [class_ "h-4 w-3/4 bg-fillWeak rounded mb-3"] ""
-  div_ [class_ "h-3 w-1/2 bg-fillWeak rounded"] ""
-
-
--- Matches statBox_ dimensions (with icon: ~140px, without: ~120px)
-statBoxSkeleton_ :: Bool -> Html ()
-statBoxSkeleton_ withIcon = div_ [class_ "bg-fillWeaker rounded-3xl flex flex-col gap-3 p-5 border border-strokeWeak"] do
-  when withIcon $ div_ [class_ "h-10 w-10 skeleton-shimmer rounded-xl"] ""
-  div_ [class_ "flex flex-col gap-1"] do
-    div_ [class_ $ "skeleton-shimmer rounded " <> if withIcon then "h-8 w-24" else "h-12 w-32"] ""
-    div_ [class_ "flex gap-2 items-center"] do
-      div_ [class_ "h-4 w-20 skeleton-shimmer rounded"] ""
-      div_ [class_ "h-4 w-4 skeleton-shimmer rounded-full"] ""
 
 
 data FieldSize = FieldSm | FieldMd
@@ -737,10 +649,6 @@ data BadgeColor = BrandBadge | SuccessBadge | ErrorBadge | NeutralBadge
 
 iconBadge_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
 iconBadge_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-full"
-
-
-iconBadgeSq_ :: Monad m => BadgeColor -> Text -> HtmlT m ()
-iconBadgeSq_ = iconBadgeWith_ "p-2" "h-4 w-4" "rounded-lg"
 
 
 iconBadgeLg_ :: Monad m => BadgeColor -> Text -> HtmlT m ()

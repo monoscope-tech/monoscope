@@ -2,8 +2,6 @@ module Pages.Reports (
   reportsGetH,
   singleReportGetH,
   reportsLiveGetH,
-  renderEndpointsTable,
-  getAnomaliesEmailTemplate,
   reportsPostH,
   buildReportJson',
   PerformanceReport (..),
@@ -47,7 +45,7 @@ import Pkg.EmailTemplates qualified as ET
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, getDurationNSMS, loadingIndicatorWith_, prettyPrintCount)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, loadingIndicatorWith_)
 
 
 data PerformanceReport = PerformanceReport
@@ -139,10 +137,6 @@ buildReportJson' totalEvents totalErrors eventsChange errorsChange spanTypeStats
         , "eventsDataset" AE..= Widget.toWidgetDataset chartEv
         , "issues" AE..= issues
         ]
-
-
-getAnomaliesEmailTemplate :: V.Vector Issues.IssueSummary -> V.Vector AE.Value
-getAnomaliesEmailTemplate = V.map (\iss -> AE.object ["id" AE..= iss.id, "title" AE..= iss.title, "critical" AE..= iss.critical, "severity" AE..= iss.severity, "issueType" AE..= iss.issueType])
 
 
 -- | Moved from BackgroundJobs
@@ -455,23 +449,3 @@ reportListItems pid reports nextUrl =
       a_ [class_ "w-full cursor-pointer block p-1 text-textBrand bg-fillBrand-weak hover:bg-fillBrand-weak text-center mb-4", hxTrigger_ "click", hxSwap_ "outerHTML", hxGet_ url] "LOAD MORE"
 
 
-renderEndpointRow :: PerformanceReport -> Html ()
-renderEndpointRow endpoint = tr_ [class_ ""] do
-  td_ [class_ "p-2 text-textWeak w-96 flex gap-4 items-center "] do
-    span_ [class_ $ "cbadge-sm badge-" <> endpoint.method] $ toHtml endpoint.method
-    span_ [class_ "flex-shrink-0 text-textStrong"] $ toHtml endpoint.urlPath
-  td_ [class_ "p-2 tabular-nums"] $ toHtml $ prettyPrintCount endpoint.requestCount
-  td_ [class_ $ "p-2 tabular-nums " <> if endpoint.requestDiffPct < 0 then "text-textError" else "text-textSuccess"] $ toHtml $ show endpoint.requestDiffPct <> "%"
-  td_ [class_ "p-2 tabular-nums"] $ toHtml $ getDurationNSMS endpoint.averageDuration
-  td_ [class_ $ "p-2 tabular-nums " <> if endpoint.durationDiffPct <= 0 then "text-textSuccess" else "text-textError"] $ toHtml $ show (durationDiffPct endpoint) <> "%"
-
-
-renderEndpointsTable :: [PerformanceReport] -> Html ()
-renderEndpointsTable endpoints = div_ [class_ "w-full border rounded-lg overflow-hidden"] $ table_ [class_ "table-auto w-full"] do
-  thead_ [class_ "text-xs text-left text-textStrong font-medium capitalize border-b"] $ tr_ do
-    th_ [class_ "p-2"] "Endpoint"
-    th_ [class_ "p-2"] "Requests"
-    th_ [class_ "p-2"] "Request change %"
-    th_ [class_ "p-2"] "Avg. latency"
-    th_ [class_ "p-2"] "Latency change %"
-  tbody_ [class_ "text-sm"] $ mapM_ renderEndpointRow endpoints

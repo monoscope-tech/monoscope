@@ -11,14 +11,12 @@ module Models.Apis.ErrorPatterns (
   updateOccurrenceCounts,
   propagateMergedCounts,
   updateErrorPatternState,
-  updateErrorPatternStateByProjectAndHash,
   getErrorPatternLByHash,
   bulkCalculateAndUpdateBaselines,
   resolveErrorPattern,
   batchUpsertErrorPatterns,
   upsertErrorPatternHourlyStats,
   updateErrorPatternSubscription,
-  updateErrorPatternThreadIds,
   updateErrorPatternThreadIdsAndNotifiedAt,
   setErrorPatternAssignee,
   updateErrorPatternAnalysis,
@@ -264,13 +262,6 @@ updateErrorPatternState eid newState now = PG.execute q (newState, now, eid)
       [sql| UPDATE apis.error_patterns SET state = ?, updated_at = ? WHERE id = ? |]
 
 
-updateErrorPatternStateByProjectAndHash :: DB es => Projects.ProjectId -> Text -> ErrorState -> UTCTime -> Eff es Int64
-updateErrorPatternStateByProjectAndHash pid hash newState now = PG.execute q (newState, now, pid, hash)
-  where
-    q =
-      [sql| UPDATE apis.error_patterns SET state = ?, updated_at = ? WHERE project_id = ? AND hash = ? |]
-
-
 resolveErrorPattern :: DB es => ErrorPatternId -> UTCTime -> Eff es Int64
 resolveErrorPattern eid now = PG.execute q (now, now, eid)
   where
@@ -309,10 +300,6 @@ updateErrorPatternSubscription eid subscribed notifyEveryMinutes now =
           updated_at = ?
         WHERE id = ?
       |]
-
-
-updateErrorPatternThreadIds :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
-updateErrorPatternThreadIds = updateErrorPatternThreadIds' False
 
 
 updateErrorPatternThreadIdsAndNotifiedAt :: DB es => ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64

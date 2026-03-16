@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTableWithData, renderTraceDataTable, renderTableWithDataAndParams) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -1088,11 +1088,6 @@ mapChatTypeToWidgetType :: Text -> WidgetType
 mapChatTypeToWidgetType "line" = WTTimeseriesLine
 mapChatTypeToWidgetType "timeseries_line" = WTTimeseriesLine
 mapChatTypeToWidgetType _ = WTTimeseries
-
-
--- Server-side table data rendering
-renderTableWithData :: Widget -> V.Vector (V.Vector Text) -> Html ()
-renderTableWithData widget dataRows = renderTableWithDataAndParams widget dataRows []
 
 
 renderTableWithDataAndParams :: Widget -> V.Vector (V.Vector Text) -> [(Text, Maybe Text)] -> Html ()

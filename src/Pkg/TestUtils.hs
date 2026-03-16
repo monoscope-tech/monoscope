@@ -18,7 +18,6 @@ module Pkg.TestUtils (
   getPendingBackgroundJobs,
   logBackgroundJobsInfo,
   runBackgroundJobsWhere,
-  refreshMaterializedView,
   setBjRunAtInThePast,
   toServantResponse,
   toBaseServantResponse,
@@ -29,7 +28,6 @@ module Pkg.TestUtils (
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
   createTestSpans,
-  processAllBackgroundJobsMultipleTimes,
   -- OTLP/Telemetry helpers
   createTestAPIKey,
   ingestLog,
@@ -88,7 +86,6 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Models.Users.Sessions qualified as Sessions
-import NeatInterpolation (text)
 import Network.GRPC.Common.Protobuf (Proto (..))
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
@@ -814,12 +811,6 @@ setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
     q = [sql|UPDATE background_jobs SET run_at = ?::timestamptz - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
-refreshMaterializedView :: Text -> Connection -> IO Int64
-refreshMaterializedView name conn = PGS.execute conn (Query $ encodeUtf8 q) ()
-  where
-    q = [text|REFRESH MATERIALIZED VIEW $name|]
-
-
 -- Helper function to process messages and run background jobs
 processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO ()
 processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
@@ -931,17 +922,6 @@ createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
           , currentTime
           , summary
           )
-
-
--- Helper function to process all background jobs until none remain
--- Some background jobs spawn other jobs, so we run iteratively
-processAllBackgroundJobsMultipleTimes :: TestResources -> IO ()
-processAllBackgroundJobsMultipleTimes TestResources{..} = go 10 -- max 10 iterations to prevent infinite loops
-  where
-    go 0 = pass -- Safety limit reached
-    go n = do
-      jobs <- runAllBackgroundJobs frozenTime trATCtx
-      unless (V.null jobs) $ go (n - 1)
 
 
 -- OTLP/Telemetry helper functions for ingesting test data

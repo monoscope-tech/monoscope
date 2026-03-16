@@ -43,7 +43,6 @@ module Models.Apis.Issues (
 
   -- * Conversion Functions
   createAPIChangeIssue,
-  createRuntimeExceptionIssue,
   createQueryAlertIssue,
   createLogPatternIssue,
   createLogPatternRateChangeIssue,
@@ -54,7 +53,6 @@ module Models.Apis.Issues (
   -- * Utilities
   issueIdText,
   parseIssueType,
-  issueTypeToText,
   hashPrefix,
   defaultRecommendedAction,
   serviceLabel,
@@ -123,7 +121,6 @@ import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
-import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
 import NeatInterpolation (text)
@@ -151,10 +148,6 @@ data IssueType
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "" IssueType
-
-
-issueTypeToText :: IssueType -> Text
-issueTypeToText = display
 
 
 -- | Hash prefix used in otel_logs_and_spans hashes column
@@ -585,35 +578,6 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       , migrationComplexity = if breakingChanges > 5 then "high" else if breakingChanges > 0 then "medium" else "low"
       , issueData = apiChangeData
       , timestamp = Just firstAnomaly.createdAt
-      }
-
-
--- | Create Runtime Exception issue
-createRuntimeExceptionIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogQueries.ATError -> Eff es Issue
-createRuntimeExceptionIssue projectId atError =
-  mkIssue
-    MkIssueOpts
-      { projectId
-      , issueType = RuntimeException
-      , targetHash = fromMaybe "" atError.hash
-      , service = atError.serviceName
-      , critical = True
-      , severity = "critical"
-      , title = atError.rootErrorType <> ": " <> T.take 100 atError.message
-      , recommendedAction = "Investigate the error and implement a fix."
-      , migrationComplexity = "n/a"
-      , issueData =
-          RuntimeExceptionData
-            { errorType = atError.errorType
-            , errorMessage = atError.message
-            , stackTrace = atError.stackTrace
-            , requestPath = atError.requestPath
-            , requestMethod = atError.requestMethod
-            , occurrenceCount = 1
-            , firstSeen = atError.when
-            , lastSeen = atError.when
-            }
-      , timestamp = Just (utcToZonedTime utc atError.when)
       }
 
 

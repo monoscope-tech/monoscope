@@ -5,7 +5,6 @@ module Pages.Monitors (
   alertListGetH,
   alertUpsertPostH,
   alertOverviewGetH,
-  monitorsPageGetH,
   alertTeamDeleteH,
   AlertUpsertForm (..),
   Alert (..),
@@ -28,7 +27,6 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL qualified as PG
-import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -37,15 +35,13 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Monitors qualified as Monitors
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Users.Sessions qualified as Sessions
 import NeatInterpolation (text)
-import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (FieldCfg (..), FieldSize (..), PanelCfg (..), formCheckbox_, formField_, formSelectField_, panel_, tagInput_)
 import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
-import Relude hiding (ask)
-import System.Config (AuthContext (..))
+import Relude
 import System.Types
-import Utils (checkFreeTierExceeded, faSprite_)
+import Utils (faSprite_)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -301,49 +297,6 @@ alertOverviewGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx 
 alertOverviewGetH pid alertId = do
   -- Redirect to the unified monitor overview page
   addRespHeaders $ AlertRedirect $ "/p/" <> pid.toText <> "/monitors/" <> alertId.toText <> "/overview"
-
-
--- | Full page handler for /p/<pid>/monitors
-monitorsPageGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
-monitorsPageGetH pid = do
-  (sess, project) <- Sessions.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "Monitors"
-          , menuItem = Just "Monitors"
-          , docsLink = Just "https://monoscope.tech/docs/monitors/"
-          , freeTierExceeded = freeTierExceeded
-          , config = appCtx.env
-          , pageActions = Just $ div_ [class_ "flex gap-2"] do
-              a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
-                faSprite_ "bell" "regular" "h-4 w-4"
-                "Create monitor"
-          }
-  addRespHeaders $ AlertPage $ PageCtx bwconf (monitorsPageContent_ pid monitors)
-
-
-monitorsPageContent_ :: Projects.ProjectId -> V.Vector Monitors.QueryMonitor -> Html ()
-monitorsPageContent_ pid monitors = do
-  let activeMonitors = V.filter (isNothing . (.deactivatedAt)) monitors
-      inactiveMonitors = V.filter (isJust . (.deactivatedAt)) monitors
-  section_ [class_ "pt-2 mx-auto max-md:px-2 px-14 w-full flex flex-col gap-4"] do
-    when (V.null monitors)
-      $ div_ [class_ "flex flex-col items-center justify-center py-16 text-center"] do
-        faSprite_ "bell-slash" "regular" "h-12 w-12 text-iconNeutral mb-4"
-        h3_ [class_ "text-lg font-medium text-textStrong mb-2"] "No monitors configured yet"
-        p_ [class_ "text-textWeak mb-4"] "Create a monitor to get notified when your queries match certain conditions."
-        a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] "Create monitor"
-    unless (V.null monitors) do
-      div_ [class_ "flex gap-4 mb-4"] do
-        div_ [class_ "badge badge-lg badge-ghost tabular-nums"] $ toHtml $ "Active: " <> show (V.length activeMonitors)
-        div_ [class_ "badge badge-lg badge-ghost tabular-nums"] $ toHtml $ "Inactive: " <> show (V.length inactiveMonitors)
-      div_ [id_ "alertsListContainer"] do
-        queryMonitors_ monitors
 
 
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)

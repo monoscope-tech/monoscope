@@ -3,12 +3,9 @@ module Models.Projects.GitSync (
   GitHubSyncId,
   TreeEntry (..),
   SyncAction (..),
-  isAppInstallation,
   getGitHubSync,
   getGitHubSyncDecrypted,
   getGitHubSyncByRepo,
-  getGitHubSyncByRepoDecrypted,
-  getGitHubSyncByInstallation,
   insertGitHubSync,
   insertGitHubAppSync,
   updateGitHubSync,
@@ -101,11 +98,6 @@ instance Default GitHubSync where
       epoch = UTCTime (fromGregorian 1970 1 1) (secondsToDiffTime 0)
 
 
--- | Check if sync uses GitHub App (has installation_id)
-isAppInstallation :: GitHubSync -> Bool
-isAppInstallation sync = isJust sync.installationId
-
-
 data TreeEntry = TreeEntry
   { path :: Text
   , _teType :: Text
@@ -167,10 +159,6 @@ getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
 getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| owner |], [field| repo |]]) (owner, repo)
 
 
-getGitHubSyncByRepoDecrypted :: (DB es, Log :> es) => ByteString -> Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepoDecrypted encKey ownerVal repoVal = withDecryption encKey (ownerVal, repoVal) $ getGitHubSyncByRepo ownerVal repoVal
-
-
 -- | Insert a new GitHub sync config using PAT authentication
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
 insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecretVal prefix =
@@ -189,13 +177,6 @@ insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix =
     q =
       [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, installation_id, path_prefix)
               VALUES (?, ?, ?, ?, ?, ?) RETURNING * |]
-
-
--- | Get GitHub sync by installation ID (for webhook handling)
-getGitHubSyncByInstallation :: DB es => Int64 -> Eff es (Maybe GitHubSync)
-getGitHubSyncByInstallation instId = listToMaybe <$> PG.query q (Only instId)
-  where
-    q = [sql| SELECT * FROM projects.github_sync WHERE installation_id = ? |]
 
 
 updateGitHubSync :: (DB es, Time :> es) => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)

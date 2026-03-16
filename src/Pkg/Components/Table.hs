@@ -24,15 +24,11 @@ module Pkg.Components.Table (
   SortField (..),
   parseSortParam,
   sortFieldsToSQL,
-  mkFilter,
   -- Column builders
   col,
   withSort,
   withAttrs,
-  withAlign,
   withColHeaderExtra,
-  renderRowWithColumns,
-  simpleZeroState,
 ) where
 
 import Data.Default (Default (..))
@@ -45,7 +41,6 @@ import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Pages.Components (emptyState_)
-import PyF (fmt)
 import Relude
 import Utils (deleteParam, faSprite_, navTabAttrs, toUriStr)
 
@@ -791,10 +786,6 @@ treeScript =
     """
 
 
-simpleZeroState :: Text -> Text -> SimpleZeroState
-simpleZeroState icon message = SimpleZeroState{icon, message}
-
-
 -- Column Builders
 
 col :: Text -> (a -> Html ()) -> Column a
@@ -817,20 +808,8 @@ withAttrs :: [Attribute] -> Column a -> Column a
 withAttrs as column = column{attrs = as}
 
 
-withAlign :: Text -> Column a -> Column a
-withAlign a column = column{align = Just a}
-
-
 withColHeaderExtra :: Html () -> Column a -> Column a
 withColHeaderExtra h column = column{headerExtra = Just h}
-
-
--- Helper to render a row using columns
-renderRowWithColumns :: [Attribute] -> [Column a] -> a -> Html ()
-renderRowWithColumns attrs columns row =
-  div_ attrs do
-    forM_ columns \c ->
-      div_ c.attrs $ c.render row
 
 
 -- Sorting Utilities
@@ -855,16 +834,6 @@ sortFieldsToSQL :: [SortField] -> Text
 sortFieldsToSQL sortFields
   | null sortFields = ""
   | otherwise = "ORDER BY " <> T.intercalate ", " (map (.toSql) sortFields)
-
-
--- Generate SQL filter clause for a list of values
--- e.g. mkFilter "status" "text" id ["active", "pending"] => "status = ANY(ARRAY['active','pending']::text[])"
-mkFilter :: Text -> Text -> (a -> Text) -> [a] -> Maybe Text
-mkFilter colName sqlType txtF values =
-  guard (not $ null values) $> [fmt|{colName} = ANY(ARRAY[{T.intercalate "," (map (quote . txtF) values)}]::{sqlType}[])|]
-  where
-    quote txt = [fmt|'{escapeSql txt}'|]
-    escapeSql = T.replace "'" "''" -- SQL standard: escape single quotes by doubling
 
 
 -- Toggle sort direction for a column, returning the new sort param

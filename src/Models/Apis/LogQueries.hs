@@ -1,8 +1,6 @@
 module Models.Apis.LogQueries (
   SDKTypes (..),
-  EndpointPerf (..),
   RequestTypes (..),
-  RequestForReport (..),
   ATError (..),
   PatternRow (..),
   normalizeUrlPath,
@@ -10,9 +8,6 @@ module Models.Apis.LogQueries (
   executeArbitraryQuery,
   executeSecuredQuery,
   logExplorerUrlPath,
-  getEndpointReportData,
-  getPreviousPeriodEndpointPerf,
-  getLast24hTotalRequest,
   getLastSevenDaysTotalRequest,
   fetchLogPatterns,
   selectChildSpansAndLogs,
@@ -27,7 +22,7 @@ import Data.Default
 import Data.HashMap.Strict qualified as HM
 import Data.Set qualified as S
 import Data.Text qualified as T
-import Data.Time (UTCTime, ZonedTime, addUTCTime, diffUTCTime)
+import Data.Time (UTCTime, addUTCTime, diffUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
@@ -35,7 +30,6 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (Only), SomePostgreSqlException)
 import Database.PostgreSQL.Simple.FromField (FromField, fromField)
-import Database.PostgreSQL.Simple.FromRow (FromRow (..))
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -168,29 +162,6 @@ data ATError = ATError
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
-data RequestForReport = RequestForReport
-  { id :: UUID.UUID
-  , createdAt :: ZonedTime
-  , projectId :: UUID.UUID
-  , host :: Text
-  , urlPath :: Text
-  , rawUrl :: Text
-  , method :: Text
-  , endpointHash :: Text
-  , averageDuration :: Integer
-  }
-  deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
-
-
-data EndpointPerf = EndpointPerf
-  { endpointHash :: Text
-  , averageDuration :: Integer
-  }
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, NFData)
-
-
 incrementByOneMillisecond :: String -> String
 incrementByOneMillisecond dateStr =
   case maybeTime of
@@ -218,51 +189,6 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
         , fmap ("layout=" <>) (toQueryParam <$> layout)
         , fmap ("source=" <>) (toQueryParam <$> source)
         ]
-
-
-getEndpointReportData :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es [RequestForReport]
-getEndpointReportData pid report_type = do
-  now <- Time.currentTime
-  let nowStr = formatUTC now
-      report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
-      q =
-        [text|
-        SELECT DISTINCT ON (hashes[1]) id, timestamp AS created_at, project_id,
-          COALESCE(attributes___server___address, attributes___network___peer___address,'') AS host,
-          COALESCE(attributes___url___path,'') AS url_path,
-          COALESCE(attributes___url___full,'') AS raw_url,
-          COALESCE(attributes___http___request___method, 'GET') AS method,
-          hashes[1] AS endpoint_hash,
-          CAST (ROUND( AVG(COALESCE(duration, 0)) OVER (PARTITION BY hashes[1]) ) AS BIGINT) AS average_duration
-        FROM otel_logs_and_spans
-        WHERE
-            project_id = ?::text
-            AND timestamp > '${nowStr}'::timestamptz - INTERVAL $report_interval
-            AND name = 'monoscope.http'
-            AND kind = 'SERVER'
-            AND status_code IS NOT NULL
-            AND cardinality(hashes) > 0
-        ORDER BY hashes[1], timestamp DESC;
-      |]
-  PG.query (Query $ encodeUtf8 q) (Only pid)
-
-
-getPreviousPeriodEndpointPerf :: (DB es, Time.Time :> es) => Projects.ProjectId -> Text -> Eff es [EndpointPerf]
-getPreviousPeriodEndpointPerf pid report_type = do
-  now <- Time.currentTime
-  let nowStr = formatUTC now
-      (start, end) = if report_type == "daily" then ("'48 hours'" :: Text, "'24 hours'") else ("'14 days'", "'7 days'")
-      q =
-        [text|
-       SELECT  hashes[1] as endpoint_hash,
-          CAST (ROUND (AVG (COALESCE(duration, 0))) AS BIGINT) AS average_duration
-       FROM otel_logs_and_spans
-       WHERE project_id = ?::text AND timestamp > '${nowStr}'::timestamptz - interval $start AND timestamp < '${nowStr}'::timestamptz - interval $end
-         AND kind = 'SERVER' AND status_code IS NOT NULL
-         AND cardinality(hashes) > 0
-       GROUP BY hashes[1];
-      |]
-  PG.query (Query $ encodeUtf8 q) (Only pid)
 
 
 -- | Custom field parser that tries multiple types
@@ -541,10 +467,6 @@ buildHourlyBuckets now pairs = [fromMaybe 0 $ HM.lookup i bucketMap | i <- [0 ..
     bucketMap = HM.fromListWith (+) [(hourIndex t, c) | (t, c) <- pairs, let idx = hourIndex t, idx >= 0 && idx < 24]
     hourIndex t = floor (diffUTCTime (truncateToHour t) startHour / 3600) :: Int
     truncateToHour t = let s = utcTimeToPOSIXSeconds t in posixSecondsToUTCTime $ fromIntegral (floor s `div` 3600 * 3600 :: Int)
-
-
-getLast24hTotalRequest :: (DB es, Time.Time :> es) => Projects.ProjectId -> Eff es Int
-getLast24hTotalRequest = getRequestCountForInterval "1 day"
 
 
 getLastSevenDaysTotalRequest :: (DB es, Time.Time :> es) => Projects.ProjectId -> Eff es Int

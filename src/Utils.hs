@@ -28,7 +28,6 @@ module Utils (
   unwrapJsonPrimValue,
   listToIndexHashMap,
   b64ToJson,
-  getOtelLangVersion,
   freeTierLimitExceededBanner,
   checkFreeTierExceeded,
   isDemoAndNotSudo,
@@ -48,11 +47,9 @@ module Utils (
   formatWithCommas,
   extractMessageFromLog,
   -- Fill color helpers
-  statusFillColor,
   statusFillColorText,
   methodFillColor,
   levelFillColor,
-  changeTypeFillColor,
   replaceAllFormats,
   truncateHour,
   prettyTimeShort,
@@ -461,18 +458,6 @@ getDurationNSMS duration
   | otherwise = printf "%.1f ns" (fromIntegral @_ @Double duration)
 
 
-getOtelLangVersion :: Text -> Maybe Text
-getOtelLangVersion "Golang" = Just "go"
-getOtelLangVersion "Python" = Just "python"
-getOtelLangVersion "Java" = Just "java"
-getOtelLangVersion "Ruby" = Just "ruby"
-getOtelLangVersion "Rust" = Just "rust"
-getOtelLangVersion "Csharp" = Just "csharp"
-getOtelLangVersion "PHP" = Just "php"
-getOtelLangVersion "Javascript" = Just "nodejs"
-getOtelLangVersion _ = Nothing
-
-
 displayTimestamp :: Text -> Text
 displayTimestamp inputDateString =
   maybe
@@ -829,16 +814,6 @@ extractMessageFromLog (AE.Object obj) =
 extractMessageFromLog _ = Nothing
 
 
--- | Get fill color class for HTTP status codes
-statusFillColor :: Int -> Text
-statusFillColor code
-  | code >= 500 = "bg-fillError-strong"
-  | code >= 400 = "bg-fillWarning-strong"
-  | code >= 300 = "bg-fillBrand-strong"
-  | code >= 200 = "bg-fillSuccess-strong"
-  | otherwise = "bg-fillStrong"
-
-
 -- | Get fill color from status code text (first char: "2xx", "3xx", etc.)
 statusFillColorText :: Text -> Text
 statusFillColorText val = case T.take 1 val of
@@ -868,15 +843,6 @@ levelFillColor level = case T.toLower level of
   v | "info" `T.isInfixOf` v -> "bg-fillBrand-strong"
   v | "debug" `T.isInfixOf` v || "trace" `T.isInfixOf` v -> "bg-fillStrong"
   _ -> "bg-fillWeak"
-
-
--- | Get outline color classes for change types (added/modified/removed)
-changeTypeFillColor :: Text -> Text
-changeTypeFillColor changeType = case T.toLower changeType of
-  "added" -> "text-fillSuccess-strong border-strokeSuccess-strong bg-fillSuccess-weak"
-  "modified" -> "text-fillInformation-strong border-strokeInformation-strong bg-fillInformation-weak"
-  "removed" -> "text-fillError-strong border-strokeError-strong bg-fillError-weak"
-  _ -> "text-textWeak border-strokeWeak bg-fillWeak"
 
 
 getAlertStatusColor :: Text -> Text

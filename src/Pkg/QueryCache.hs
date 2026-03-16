@@ -9,7 +9,6 @@ module Pkg.QueryCache (
   trimToRange,
   trimOldData,
   hasSummarizeWithBin,
-  hasCategoricalGroupBy,
   rewriteBinAutoToFixed,
   cleanupExpiredCache,
   slidingWindowSeconds,
@@ -71,18 +70,6 @@ hasSummarizeWithBin = any \case
   SummarizeCommand _ (Just (SummarizeByClause items)) -> any isBinFunc items
   _ -> False
   where
-    isBinFunc (ByBinFunc _) = True
-    isBinFunc _ = False
-
-
--- | Check if query has a summarize command with GROUP BY but NO time binning (categorical data)
-hasCategoricalGroupBy :: [Section] -> Bool
-hasCategoricalGroupBy = any \case
-  SummarizeCommand _ (Just (SummarizeByClause items)) -> any isNonBinField items && not (any isBinFunc items)
-  _ -> False
-  where
-    isNonBinField (ByBinFunc _) = False
-    isNonBinField _ = True
     isBinFunc (ByBinFunc _) = True
     isBinFunc _ = False
 

@@ -1,4 +1,4 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatThreadsWithMemory, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
@@ -10,7 +10,6 @@ import Data.Default (def)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
 import Data.HashMap.Strict qualified as HM
-import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
 import Data.Vector qualified as V
@@ -19,8 +18,6 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
-import Langchain.Memory.Core (BaseMemory (..))
-import Langchain.Memory.TokenBufferMemory (TokenBufferMemory (..))
 import Lucid
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Reports
@@ -294,17 +291,6 @@ processAIQuery pid userQuery threadCtx model apiKey = do
       Log.logAttention "processAIQuery failed" $ AE.object ["error" AE..= err, "userQuery" AE..= userQuery, "projectId" AE..= pid.toText]
       pure $ Left err
     Right resp -> pure $ Right resp
-
-
-formatThreadsWithMemory :: Int -> Text -> [LLM.Message] -> IO Text
-formatThreadsWithMemory maxTokens platform msgs = case nonEmpty msgs of
-  Nothing -> pure ""
-  Just history -> do
-    let memory = TokenBufferMemory{maxTokens, tokenBufferMessages = history}
-    result <- messages memory
-    pure $ case result of
-      Left _ -> ""
-      Right trimmedHistory -> formatHistoryAsContext platform (NE.toList trimmedHistory)
 
 
 formatHistoryAsContext :: Text -> [LLM.Message] -> Text

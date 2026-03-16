@@ -16,15 +16,11 @@ module Models.Apis.Anomalies (
   ChangeType (..),
   FieldChange (..),
   FieldChangeKind (..),
-  insertErrorQueryAndParams,
   parseAnomalyTypes,
   detectService,
   getAnomaliesVM,
-  errorsByHashes,
-  countAnomalies,
   acknowlegeCascade,
   acknowledgeAnomalies,
-  errorByHash,
 )
 where
 
@@ -36,15 +32,13 @@ import Data.Text.Display (Display)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_select, _selectWhere)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.Types (Query (Query))
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.PostgreSQL qualified as PG
@@ -61,7 +55,6 @@ import Models.Apis.Fields qualified as Fields (
 import Models.Apis.Shapes qualified as Shapes
 import Models.Projects.Projects qualified as Projects
 import Models.Users.Sessions qualified as Users
-import NeatInterpolation (text)
 import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
 import Relude hiding (id, many, some)
 import Servant (FromHttpApiData (..))
@@ -69,7 +62,6 @@ import System.Types (DB)
 import Text.Megaparsec
 import Text.Megaparsec.Char
 import Text.Megaparsec.Char.Lexer qualified as L
-import Utils
 
 
 type AnomalyId = UUIDId "anomaly"
@@ -205,22 +197,6 @@ where
     OR NOT (an.anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
   ) AND an.project_id=? AND an.target_hash=ANY(?)
       |]
-
-
-countAnomalies :: (DB es, Time :> es) => Projects.ProjectId -> Text -> Eff es Int
-countAnomalies pid report_type = do
-  now <- Time.currentTime
-  result <- PG.query (Query $ encodeUtf8 q) (pid, now)
-  case result of
-    [Only countt] -> pure countt
-    v -> pure $ length v
-  where
-    report_interval = if report_type == "daily" then ("'24 hours'" :: Text) else "'7 days'"
-    q =
-      [text|
-      SELECT COUNT(*) as anomaly_count
-      FROM apis.issues iss WHERE project_id = ?  and created_at > ?::timestamptz - interval $report_interval
-     |]
 
 
 acknowledgeAnomalies :: (DB es, Time :> es) => Users.UserId -> V.Vector Text -> Eff es [Text]
@@ -541,29 +517,3 @@ data ATError = ATError
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
 
 
-errorsByHashes :: DB es => Projects.ProjectId -> V.Vector Text -> Eff es [ATError]
-errorsByHashes pid hashes
-  | V.null hashes = pure []
-  | otherwise = PG.query (_select @ATError <> " WHERE project_id=? AND hash=ANY(?)") (pid, hashes)
-
-
-errorByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ATError)
-errorByHash pid hash = listToMaybe <$> PG.query (_selectWhere @ATError [[field| project_id |], [field| hash |]]) (pid, hash)
-
-
-insertErrorQueryAndParams :: Projects.ProjectId -> ErrorPatterns.ATError -> (Query, [DBField])
-insertErrorQueryAndParams pid err = (q, params)
-  where
-    q =
-      [sql| insert into apis.error_patterns (project_id, created_at, hash, error_type, message, error_data, first_trace_id, recent_trace_id) VALUES (?,?,?,?,?,?,?,?)
-            ON CONFLICT (project_id, hash) DO UPDATE SET updated_at = EXCLUDED.created_at, recent_trace_id = EXCLUDED.recent_trace_id; |]
-    params =
-      [ MkDBField pid
-      , MkDBField err.when
-      , MkDBField err.hash
-      , MkDBField err.errorType
-      , MkDBField err.message
-      , MkDBField err
-      , MkDBField err.traceId
-      , MkDBField err.traceId
-      ]

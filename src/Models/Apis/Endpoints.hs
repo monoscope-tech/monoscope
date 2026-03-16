@@ -20,7 +20,6 @@ module Models.Apis.Endpoints (
   getCanonicalEndpoints,
   assignEndpointsToCanonical,
   setEndpointCanonicalTemplate,
-  unmergeEndpoint,
   getMergedEndpointPairs,
   migrateAndDeleteMergedEndpoints,
 )
@@ -344,13 +343,6 @@ assignEndpointsToCanonical pairs =
 setEndpointCanonicalTemplate :: DB es => EndpointId -> Text -> Eff es Int64
 setEndpointCanonicalTemplate eid path =
   PG.execute [sql| UPDATE apis.endpoints SET url_path = ?, canonical_path = ? WHERE id = ? |] (path, path, eid)
-
-
-unmergeEndpoint :: DB es => EndpointId -> Eff es Int64
-unmergeEndpoint eid =
-  PG.execute
-    [sql| UPDATE apis.endpoints SET merge_override = TRUE, canonical_hash = NULL, canonical_path = NULL WHERE id = ? |]
-    (Only eid)
 
 
 getMergedEndpointPairs :: DB es => Projects.ProjectId -> Eff es [(Text, Text)]

@@ -19,7 +19,6 @@ module Models.Apis.Monitors (
   updateLastEvaluatedAt,
   -- Widget alert functions
   queryMonitorByWidgetId,
-  queryMonitorsByDashboardId,
   deleteMonitorsByWidgetIds,
   WidgetAlertStatus (..),
   getWidgetAlertStatuses,
@@ -274,10 +273,6 @@ updateLastEvaluatedAt qmId time = PG.execute q (time, qmId)
 
 queryMonitorByWidgetId :: DB es => Text -> Eff es (Maybe QueryMonitor)
 queryMonitorByWidgetId wId = listToMaybe <$> PG.query (_select @QueryMonitor <> " WHERE widget_id = ? AND deleted_at IS NULL") (Only wId)
-
-
-queryMonitorsByDashboardId :: DB es => UUID.UUID -> Eff es [QueryMonitor]
-queryMonitorsByDashboardId dId = PG.query (_select @QueryMonitor <> " WHERE dashboard_id = ? AND deleted_at IS NULL") (Only dId)
 
 
 deleteMonitorsByWidgetIds :: DB es => [Text] -> Eff es Int64

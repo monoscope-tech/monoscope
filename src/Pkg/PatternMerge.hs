@@ -1,15 +1,12 @@
 module Pkg.PatternMerge (
   embeddingTextForError,
-  cosineSimilarity,
   assignToCentroids,
   autoMergeThreshold,
   ambiguousThreshold,
-  buildJudgePrompt,
   buildLogClusterJudgePrompt,
   buildEndpointJudgePrompt,
   buildErrorJudgePrompt,
   parseJudgeResponse,
-  jaccardSimilarity,
   isPlaceholderToken,
   jaccardMergeThreshold,
   mergeByJaccard,
@@ -49,36 +46,6 @@ embeddingTextForError :: Text -> Text -> Text
 embeddingTextForError errType msg
   | T.null errType = msg
   | otherwise = errType <> ": " <> msg
-
-
--- | Cosine similarity between two embedding vectors.
--- Returns 0.0 for zero-length or mismatched vectors.
---
--- >>> cosineSimilarity [1,0,0] [1,0,0]
--- 1.0
---
--- >>> cosineSimilarity [1,0] [0,1]
--- 0.0
---
--- >>> cosineSimilarity [3,4] [4,3]
--- 0.96
---
--- >>> cosineSimilarity [] []
--- 0.0
-cosineSimilarity :: [Float] -> [Float] -> Float
-cosineSimilarity xs ys = cosineSimU (VU.fromList xs) (VU.fromList ys)
-
-
--- | Fast cosine similarity on unboxed vectors with pre-rounded output.
-cosineSimU :: VU.Vector Float -> VU.Vector Float -> Float
-cosineSimU xs ys
-  | VU.null xs || VU.length xs /= VU.length ys = 0.0
-  | normA == 0 || normB == 0 = 0.0
-  | otherwise = fromIntegral (round (dotP / (normA * normB) * 100 :: Float) :: Int) / 100
-  where
-    dotP = VU.sum $ VU.zipWith (*) xs ys
-    normA = sqrt $ VU.sum $ VU.map (^ (2 :: Int)) xs
-    normB = sqrt $ VU.sum $ VU.map (^ (2 :: Int)) ys
 
 
 -- | Cosine similarity using pre-computed norms for both vectors.
@@ -128,26 +95,6 @@ assignToCentroids centroids = foldl' classify ([], [])
     bestMatch newNormed cs = case mapMaybe (\(cid, cemb, cnorm) -> let s = cosineSimWithNorms newNormed (cemb, cnorm) in bool Nothing (Just (cid, s)) (s >= ambiguousThreshold)) cs of
       [] -> Nothing
       matches -> Just $ maximumBy (comparing snd) matches
-
-
--- | Build an LLM judge prompt for ambiguous pattern pairs.
--- Takes pairs of (pattern text A, pattern text B).
-buildJudgePrompt :: [(Text, Text)] -> Text
-buildJudgePrompt pairs = systemPart <> "\n\n" <> pairsPart
-  where
-    systemPart =
-      unlines
-        [ "You are a pattern deduplication judge. For each pair of error/log patterns below,"
-        , "decide if they represent the same underlying issue (MERGE) or distinct issues (KEEP_SEPARATE)."
-        , ""
-        , "Respond with a JSON array of objects, one per pair, with fields:"
-        , "  - \"index\": the pair index (0-based)"
-        , "  - \"decision\": \"MERGE\" or \"KEEP_SEPARATE\""
-        , ""
-        , "Example: [{\"index\": 0, \"decision\": \"MERGE\"}, {\"index\": 1, \"decision\": \"KEEP_SEPARATE\"}]"
-        ]
-    pairsPart = unlines $ zipWith formatPair [0 :: Int ..] pairs
-    formatPair i (a, b) = "Pair " <> show i <> ":\n  A: " <> a <> "\n  B: " <> b
 
 
 -- | Parse the LLM judge response. Returns (index, shouldMerge, maybeCanonicalPath).
@@ -257,30 +204,6 @@ jaccardOnSets tokA tokB =
   let inter = S.size $ S.intersection tokA tokB
       union_ = S.size $ S.union tokA tokB
    in if union_ == 0 then 1.0 else fromIntegral inter / fromIntegral union_
-
-
--- | Jaccard similarity on non-placeholder token sets.
--- Returns 1.0 when both inputs have no content tokens.
---
--- >>> jaccardSimilarity "INFO user logged in" "INFO user logged in"
--- 1.0
---
--- >>> jaccardSimilarity "INFO <*> logged in" "INFO <*> <*> logged in"
--- 1.0
---
--- >>> jaccardSimilarity "INFO <*> <*> <*> done" "INFO <*> done"
--- 1.0
---
--- >>> jaccardSimilarity "<*> <*> <*>" "<*>"
--- 1.0
---
--- >>> jaccardSimilarity "INFO <*> <*> {uuid} done" "INFO <*> {integer} done"
--- 1.0
---
--- >>> jaccardSimilarity "INFO started" "ERROR crashed"
--- 0.0
-jaccardSimilarity :: Text -> Text -> Double
-jaccardSimilarity a b = jaccardOnSets (contentTokens a) (contentTokens b)
 
 
 jaccardMergeThreshold :: Double

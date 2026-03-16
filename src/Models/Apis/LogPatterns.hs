@@ -21,7 +21,6 @@ module Models.Apis.LogPatterns (
   -- Pattern with current rate for spike detection
   LogPatternWithRate (..),
   getPatternsWithCurrentRates,
-  getLogPatternById,
   getLogPatternsByIds,
   -- Field labels
   knownPatternFields,
@@ -359,11 +358,6 @@ getPatternsWithCurrentRates pid now =
           AND lp.baseline_state = ?
           AND lp.canonical_id IS NULL
       |]
-
-
--- | Get a pattern by ID
-getLogPatternById :: DB es => LogPatternId -> Eff es (Maybe LogPattern)
-getLogPatternById lpid = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| id |]]) (Only lpid)
 
 
 -- | Get multiple patterns by IDs in a single query (avoids N+1)

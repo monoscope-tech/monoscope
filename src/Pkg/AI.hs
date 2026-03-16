@@ -30,7 +30,6 @@ module Pkg.AI (
 
   -- * Agentic Query Execution
   runAgenticQuery,
-  runAgenticQueryWithHistory,
   runAgenticChatWithHistory,
   defaultAgenticConfig,
   defaultLimits,
@@ -652,35 +651,6 @@ dbMessageToLLMMessage msg =
     , LLM.content = msg.content
     , LLM.messageData = LLM.defaultMessageData
     }
-
-
--- | Run agentic query with DB-persisted chat history
-runAgenticQueryWithHistory
-  :: (DB es, ELLM.LLM :> es, Log :> es, Time.Time :> es)
-  => AgenticConfig
-  -> Text
-  -> Text
-  -> Text
-  -> Eff es (Either Text LLMResponse)
-runAgenticQueryWithHistory config userQuery model apiKey = do
-  now <- Time.currentTime
-  let systemMsg = LLM.Message LLM.System (buildSystemPrompt config now) LLM.defaultMessageData
-      userMsg = LLM.Message LLM.User userQuery LLM.defaultMessageData
-      params =
-        OpenAIV1._CreateChatCompletion
-          { OpenAIV1.model = Models.Model model
-          , OpenAIV1.tools = Just $ V.fromList allToolDefs
-          , OpenAIV1.messages = V.empty
-          }
-  case config.conversationId of
-    Nothing -> runAgenticLoop config apiKey (systemMsg :| [userMsg]) params 0
-    Just convId -> do
-      historyMsgs <- map dbMessageToLLMMessage <$> Issues.selectChatHistory convId
-      let chatHistory = systemMsg :| (historyMsgs <> [userMsg])
-      Issues.insertChatMessage config.projectId convId "user" userQuery Nothing Nothing
-      result <- runAgenticLoop config apiKey chatHistory params 0
-      result <$ for_ result \resp -> for_ resp.query \q ->
-        Issues.insertChatMessage config.projectId convId "assistant" q Nothing Nothing
 
 
 -- | Run agentic chat with DB-persisted history, returns response with tool call info

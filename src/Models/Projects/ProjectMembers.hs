@@ -22,14 +22,12 @@ module Models.Projects.ProjectMembers (
   getTeamsVM,
   getEveryoneTeam,
   TeamVM (..),
-  deleteTeamByHandle,
   deleteTeams,
   getTeamsById,
   Team (..),
   TeamMemberVM (..),
   teamToDetails,
   addSlackChannelToEveryoneTeam,
-  addDiscordChannelToEveryoneTeam,
   removeSlackChannelsFromEveryoneTeam,
   resolveTeamEmails,
 ) where
@@ -364,15 +362,6 @@ getTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
 getTeamByHandle pid handle = listToMaybe <$> getTeamsByHandles pid [handle]
 
 
-deleteTeamByHandle :: (DB es, Time :> es) => Projects.ProjectId -> Text -> Eff es ()
-deleteTeamByHandle pid handle = do
-  now <- Time.currentTime
-  void $ PG.execute q (now, pid, handle)
-  where
-    q =
-      [sql| UPDATE projects.teams SET deleted_at = ? WHERE project_id = ? AND handle = ? AND is_everyone = FALSE |]
-
-
 deleteTeams :: (DB es, Time :> es) => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es ()
 deleteTeams pid tids
   | V.null tids = pass
@@ -479,12 +468,6 @@ addChannelToEveryoneTeam getChannels updateChannels pid channelId = do
 -- Returns True if channel was added, False if it already existed
 addSlackChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
 addSlackChannelToEveryoneTeam = addChannelToEveryoneTeam (.slack_channels) \d cs -> d{slackChannels = cs}
-
-
--- | Add unique Discord channel to @everyone team's channel list
--- Returns True if channel was added, False if it already existed
-addDiscordChannelToEveryoneTeam :: DB es => Projects.ProjectId -> Text -> Eff es Bool
-addDiscordChannelToEveryoneTeam = addChannelToEveryoneTeam (.discord_channels) \d cs -> d{discordChannels = cs}
 
 
 resolveTeamEmails :: DB es => Projects.ProjectId -> Team -> Eff es [CI Text]

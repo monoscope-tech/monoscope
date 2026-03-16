@@ -16,8 +16,6 @@ module Pkg.EmailTemplates (
   issueAssignedEmail,
   weeklyReportEmail,
   WeeklyReportData (..),
-  logPatternEmail,
-  logPatternRateChangeEmail,
   monitorAlertEmail,
   monitorRecoveryEmail,
 
@@ -29,8 +27,6 @@ module Pkg.EmailTemplates (
   sampleAnomalyEndpoint,
   sampleIssueAssigned,
   sampleWeeklyReport,
-  sampleLogPattern,
-  sampleLogPatternRateChange,
 ) where
 
 import Data.Default (def)
@@ -812,120 +808,6 @@ sampleWeeklyReport eventsChart errorsChart =
       , topPatterns = V.fromList [("GET /api/v1/users/<*>", 4500, "URL path"), ("severity_text;badge-error⇒ERROR Failed to connect to database: connection refused at <*>", 1230, "Event summary"), ("Request timeout after <*> ms for endpoint <*>", 890, "Log body")]
       , freeTierExceeded = False
       }
-
-
-sampleLogPattern :: (Text, Html ())
-sampleLogPattern =
-  logPatternEmail
-    "My API Project"
-    "https://app.monoscope.tech/p/sample-id/issues/sample-issue"
-    "Failed to connect to database: connection refused at <*>"
-    (Just "Failed to connect to database: connection refused at 10.0.0.1:5432")
-    (Just "error")
-    (Just "api-server")
-    "body"
-    42
-
-
-sampleLogPatternRateChange :: (Text, Html ())
-sampleLogPatternRateChange =
-  logPatternRateChangeEmail
-    "My API Project"
-    "https://app.monoscope.tech/p/sample-id/issues/sample-issue"
-    "Request timeout after <*> ms for endpoint <*>"
-    (Just "Request timeout after 30000 ms for endpoint /api/users")
-    (Just "warning")
-    (Just "api-gateway")
-    "spike"
-    150.0
-    12.0
-    1150.0
-
-
--- =============================================================================
--- Log Pattern Template
--- =============================================================================
-
-logPatternEmail :: Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Int -> (Text, Html ())
-logPatternEmail projectName issueUrl patternText sampleMessageM logLevelM serviceNameM sourceField occurrenceCount =
-  ( "[···] New Log Pattern Detected - " <> projectName
-  , emailBody do
-      h1_ "New Log Pattern Detected"
-      p_ do
-        "A new log pattern has been detected in your "
-        b_ $ toHtml projectName
-        " project."
-      emailDivider
-      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-        tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
-          p_ [class_ "error-card-header", style_ "color: #377cfb;"] "Pattern"
-          div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 patternText
-        whenJust sampleMessageM \msg ->
-          tr_ $ td_ [style_ "padding: 10px 20px;"] do
-            p_ [style_ "margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #57606a;"] "Sample Message"
-            div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 msg
-        tr_
-          $ td_ [style_ "padding: 10px 20px 15px 20px;"]
-          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-            tr_ do
-              metaCell "Level:" $ fromMaybe "—" logLevelM
-              metaCell "Service:" $ fromMaybe "—" serviceNameM
-            tr_ do
-              metaCell "Source:" sourceField
-              metaCell "Occurrences:" $ show occurrenceCount
-      emailButton issueUrl "View Log Pattern"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl issueUrl
-  )
-
-
--- =============================================================================
--- Log Pattern Rate Change Template
--- =============================================================================
-
-logPatternRateChangeEmail :: Text -> Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> (Text, Html ())
-logPatternRateChangeEmail projectName issueUrl patternText sampleMessageM logLevelM serviceNameM direction currentRate baselineMean changePercent =
-  ( "[···] Log Pattern Volume " <> T.toTitle direction <> " - " <> projectName
-  , emailBody do
-      h1_ $ toHtml $ "Log Pattern Volume " <> T.toTitle direction
-      p_ do
-        "A log pattern volume "
-        b_ $ toHtml direction
-        " has been detected in your "
-        b_ $ toHtml projectName
-        " project."
-      emailDivider
-      -- Rate change stats
-      emailStatRow
-        [ ("Current Rate", show (round currentRate :: Int) <> "/hr", Nothing)
-        , ("Baseline", show (round baselineMean :: Int) <> "/hr", Nothing)
-        , ("Change", show (round changePercent :: Int) <> "%", Just $ if direction == "spike" then "#cf222e" else "#1a7f37")
-        ]
-      -- Pattern card
-      table_ [class_ "error-card", width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
-        tr_ $ td_ [style_ "padding: 15px 20px 10px 20px;"] do
-          p_ [class_ "error-card-header", style_ $ "color: " <> if direction == "spike" then "#cf222e" else "#bf8700"] "Pattern"
-          div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 patternText
-        whenJust sampleMessageM \msg ->
-          tr_ $ td_ [style_ "padding: 10px 20px;"] do
-            p_ [style_ "margin: 0 0 4px; font-size: 13px; font-weight: 600; color: #57606a;"] "Sample Message"
-            div_ [class_ "error-card-stack"] $ toHtml $ T.take 300 msg
-        tr_
-          $ td_ [style_ "padding: 10px 20px 15px 20px;"]
-          $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"]
-          $ tr_ do
-            metaCell "Level:" $ fromMaybe "—" logLevelM
-            metaCell "Service:" $ fromMaybe "—" serviceNameM
-      emailButton issueUrl "View Log Pattern"
-      emailDivider
-      emailHelpLinks
-      br_ []
-      emailSignoff
-      emailFallbackUrl issueUrl
-  )
 
 
 -- =============================================================================

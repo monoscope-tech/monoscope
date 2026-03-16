@@ -6,7 +6,6 @@ module Models.Apis.PatternMerge (
   assignErrorsToCanonical,
   unmergeErrorPattern,
   getErrorPatternGroupMembers,
-  getErrorPatternMemberCount,
   fetchErrorTexts,
   setCanonicalId,
   -- Log pattern operations
@@ -16,7 +15,6 @@ module Models.Apis.PatternMerge (
   assignLogsToCanonical,
   unmergeLogPattern,
   getLogPatternGroupMembers,
-  getLogPatternMemberCount,
   fetchLogTexts,
   fetchLogSamples,
 )
@@ -160,24 +158,6 @@ getErrorPatternGroupMembers eid =
 getLogPatternGroupMembers :: DB es => LogPatternId -> Eff es [LogPattern]
 getLogPatternGroupMembers lid =
   PG.query (_selectWhere @LogPattern [[field| canonical_id |]] <> " ORDER BY last_seen_at DESC") (Only lid)
-
-
-getErrorPatternMemberCount :: DB es => ErrorPatternId -> Eff es Int
-getErrorPatternMemberCount eid =
-  maybe 0 fromOnly
-    . listToMaybe
-    <$> PG.query
-      [sql| SELECT COUNT(*)::int FROM apis.error_patterns WHERE canonical_id = ? |]
-      (Only eid)
-
-
-getLogPatternMemberCount :: DB es => LogPatternId -> Eff es Int
-getLogPatternMemberCount lid =
-  maybe 0 fromOnly
-    . listToMaybe
-    <$> PG.query
-      [sql| SELECT COUNT(*)::int FROM apis.log_patterns WHERE canonical_id = ? |]
-      (Only lid)
 
 
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)

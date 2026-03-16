@@ -315,13 +315,18 @@ spec = aroundAll withTestResources do
         Nothing -> expectationFailure "No established pattern found for full-cycle test"
 
     it "5e. Concurrent spikes: two patterns spiking simultaneously both get issues" \tr -> do
-      -- Reset all established patterns to ESOngoing so prior tests don't reduce our pool
-      allRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
-      forM_ (filter (\r -> r.baselineState == BSEstablished && isJust r.baselineMean) allRates) \r ->
-        void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState r.errorId ESOngoing frozenTime
-      -- Now find at least 2 established, non-resolved patterns
+      -- Ensure both patterns have established baselines (prior tests may have altered stats)
+      allPatterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
+      forM_ allPatterns \pat -> do
+        forM_ ([-50 .. -1] :: [Int]) \h ->
+          void $ runTestBg frozenTime tr $ ErrorPatterns.upsertErrorPatternHourlyStats pid
+            (addUTCTime (fromIntegral h * 3600) frozenTime)
+            (V.singleton (pat.hash, 500 + (h `mod` 5) * 10, 10))
+        void $ runTestBg frozenTime tr $ ErrorPatterns.updateErrorPatternState pat.id ESOngoing frozenTime
+      runTestBg frozenTime tr $ BackgroundJobs.calculateErrorBaselines pid
+      -- Now find at least 2 established patterns
       errRates <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternsWithCurrentRates pid frozenTime
-      let established = filter (\r -> r.baselineState == BSEstablished && isJust r.baselineMean && r.state /= ESResolved) errRates
+      let established = filter (\r -> r.baselineState == BSEstablished && isJust r.baselineMean) errRates
       case established of
         (r1 : r2 : _) -> do
           -- Set both to ESOngoing so spike detection can transition them

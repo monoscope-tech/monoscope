@@ -2,7 +2,6 @@ module Pages.LogExplorer.LogItem (
   expandAPIlogItemH,
   ApiItemDetailed (..),
   expandedItemView,
-  spanLatencyBreakdown,
   getServiceName,
   getServiceColor,
   getRequestDetails,
@@ -457,22 +456,3 @@ numberOfEvents (AE.Array obj) = length obj
 numberOfEvents _ = 0
 
 
--- Span latency breakdown visualization
-spanLatencyBreakdown :: V.Vector Telemetry.SpanRecord -> Html ()
-spanLatencyBreakdown spans = do
-  let colors = getServiceColors $ (.spanName) <$> spans
-  let totalDuration = sum $ (.spanDurationNs) <$> spans
-  div_ [class_ "flex h-6 w-[150px] "] $ do
-    forM_ (zip [0 ..] (V.toList spans)) \(i, sp) -> do
-      let wdth = (fromIntegral sp.spanDurationNs / fromIntegral totalDuration) * 150
-      let color = fromMaybe "bg-black" $ HM.lookup sp.spanName colors
-      let roundr = if i == length spans - 1 then "rounded-r " else ""
-          roundl = if i == 0 then "rounded-l " else ""
-      div_
-        [ class_ $ "h-full overflow-hidden  " <> roundl <> roundr <> color
-        , style_ $ "width:" <> show wdth <> "px;"
-        , term "data-tippy-content" $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
-        , title_ $ "Span name: " <> sp.spanName <> " Duration: " <> toText (getDurationNSMS sp.spanDurationNs)
-        ]
-        do
-          div_ [class_ "h-full w-full"] ""
