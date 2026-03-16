@@ -72,8 +72,8 @@ import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.UUID qualified as UUID
-import Data.Text.Display
 import Data.Pool (Pool)
+import Data.Text.Display
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -657,7 +657,6 @@ upgradeToPaid orderId' subId subItemId = PG.execute q (show orderId', show subId
 
 
 -- Sessions
-
 
 newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUID.UUID}
   deriving newtype (NFData)

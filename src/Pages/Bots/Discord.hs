@@ -358,7 +358,12 @@ sendDiscordResponse options interaction envCfg _authCtx discordData resp _now =
   let question = case options of
         Just (InteractionOption{value = AE.String q} : _) -> q
         _ -> "[?]"
-   in dispatchAIResponse Discord envCfg discordData.projectId question resp
+   in dispatchAIResponse
+        Discord
+        envCfg
+        discordData.projectId
+        question
+        resp
         (sendJsonFollowupResponse envCfg.discordClientId interaction.token envCfg.discordBotToken)
         getBotContentWithUrl
 

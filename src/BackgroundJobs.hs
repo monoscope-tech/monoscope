@@ -60,6 +60,7 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
 import Models.Apis.PatternMerge qualified as PatternMergeDB
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
@@ -79,7 +80,6 @@ import Pages.Reports qualified as RP
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
-import Models.Projects.GitSync qualified as GitHub
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -1245,8 +1245,6 @@ ensureDailyJobScheduled appCtx = withResource appCtx.jobsPool \conn -> do
              RETURNING 1
            ) SELECT COUNT(*)::int FROM ins|]
   Relude.when (inserted > 0) $ putTextLn "Scheduled DailyJob for today"
-
-
 
 
 sendReportForProject :: Projects.ProjectId -> ReportType -> ATBackgroundCtx ()

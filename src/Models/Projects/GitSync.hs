@@ -40,7 +40,6 @@ import Data.Aeson.Lens (key, _Array, _Bool, _String)
 import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
-import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..), def)
 import Data.Effectful.Wreq qualified as W
@@ -48,6 +47,7 @@ import Data.Generics.Labels ()
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
+import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yaml
@@ -61,15 +61,15 @@ import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Jose.Jwa (JwsAlg (RS256))
+import Jose.Jws qualified as Jws
+import Jose.Jwt (Jwt (..))
 import Models.Projects.Dashboards (Dashboard, DashboardId)
 import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
 import Network.HTTP.Types.Status (statusCode)
 import Pkg.DeriveUtils (DB, UUIDId (..))
-import Jose.Jwa (JwsAlg (RS256))
-import Jose.Jws qualified as Jws
-import Jose.Jwt (Jwt (..))
 import Relude
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
@@ -463,7 +463,7 @@ generateAppJWT appId privateKeyB64 = do
           _ -> pure $ Left "Unsupported key type (expected RSA)"
 
 
-getInstallationToken :: (W.HTTP :> es, IOE :> es) => Text -> Text -> Int64 -> Eff es (Either Text InstallationToken)
+getInstallationToken :: (IOE :> es, W.HTTP :> es) => Text -> Text -> Int64 -> Eff es (Either Text InstallationToken)
 getInstallationToken appId privateKeyB64 installationId = do
   jwtResult <- liftIO $ generateAppJWT appId privateKeyB64
   case jwtResult of

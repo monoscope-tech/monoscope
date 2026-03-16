@@ -222,7 +222,12 @@ slackInteractionsH interaction = do
               Log.logTrace ("Slack followup response (AI error)" :: Text) resp
               sendSlackFollowupResponse inter.response_url resp
             Right resp ->
-              dispatchAIResponse Slack envCfg slackData.projectId inter.text resp
+              dispatchAIResponse
+                Slack
+                envCfg
+                slackData.projectId
+                inter.text
+                resp
                 (sendSlackFollowupResponse inter.response_url)
                 getBotContentWithUrl
 
@@ -658,7 +663,12 @@ slackEventsPostH payload = do
           whenJust resp.query \q -> Issues.insertChatMessage slackData.projectId convId "assistant" q Nothing Nothing
 
           let addThread c = mergeSlackContent c (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs])
-          dispatchAIResponse Slack envCfg slackData.projectId event.text resp
+          dispatchAIResponse
+            Slack
+            envCfg
+            slackData.projectId
+            event.text
+            resp
             (sendSlackChatMessage envCfg.slackBotToken . addThread)
             getBotContentWithUrl
 

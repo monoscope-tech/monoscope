@@ -22,11 +22,11 @@ import Langchain.LLM.Core qualified as LLM
 import Lucid
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Issues qualified as Reports
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Components (navBar)
-import Models.Apis.LogQueries qualified as LogQueries
 import Pkg.AI qualified as AI
 import Pkg.Components.TimePicker qualified as TP
 import Pkg.Components.Widget qualified as Widget
@@ -463,10 +463,13 @@ dispatchAIResponse
   => BotType
   -> EnvConfig
   -> Projects.ProjectId
-  -> Text -- ^ user question (for chart content builder)
+  -> Text
+  -- ^ user question (for chart content builder)
   -> AI.LLMResponse
-  -> (AE.Value -> Eff es ()) -- ^ send response callback
-  -> (Text -> Text -> Text -> Text -> AE.Value) -- ^ build chart content: question query queryUrl imageUrl
+  -> (AE.Value -> Eff es ())
+  -- ^ send response callback
+  -> (Text -> Text -> Text -> Text -> AE.Value)
+  -- ^ build chart content: question query queryUrl imageUrl
   -> Eff es ()
 dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartContent = do
   now <- Time.currentTime

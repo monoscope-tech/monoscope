@@ -29,6 +29,7 @@ import Effectful.Reader.Static (ask)
 import Lucid
 import Lucid.Htmx (hxDelete_, hxIndicator_, hxPost_, hxSwap_, hxTarget_)
 import Models.Projects.Dashboards qualified as Dashboards
+import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -36,7 +37,6 @@ import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, iconBadge_, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.DeriveUtils (UUIDId (..))
-import Models.Projects.GitSync qualified as GitHub
 import Relude hiding (ask)
 import System.Config qualified as Config
 import System.Logging qualified as Log
