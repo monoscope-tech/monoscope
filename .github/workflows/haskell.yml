@@ -116,6 +116,8 @@ jobs:
     permissions:
       contents: 'read'
       id-token: 'write'
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
       - uses: actions/checkout@v6
 
@@ -123,7 +125,7 @@ jobs:
         uses: useblacksmith/setup-docker-builder@v1
 
       - name: Login to Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
