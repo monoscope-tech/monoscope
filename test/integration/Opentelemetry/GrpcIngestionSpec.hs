@@ -3,25 +3,20 @@
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
 import BackgroundJobs qualified
-import Data.ProtoLens.Encoding (decodeMessage, encodeMessage)
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
-import Network.GRPC.Common (CustomMetadata (..),  HeaderName (..), GrpcError (..), GrpcException (..))
-import Pkg.DeriveUtils (UUIDId (..))
+import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
-import Pages.Settings qualified as Api
-import Pages.BodyWrapper (PageCtx (..))
-import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
+import Pages.Settings qualified as Api
+import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
-import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
-import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
-import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Relude
 import Data.Aeson qualified as AE
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
@@ -68,9 +63,7 @@ spec = aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 3)
 
     it "Test 2.2: should reject log ingestion with invalid API key" $ \tr -> do
-      logBytes <- OtlpMock.createOtelLogAtTime "invalid-key-that-does-not-exist" "Should not be stored" frozenTime
-      let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
-      OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto logReq)
+      OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime "invalid-key-that-does-not-exist" "Should not be stored" frozenTime)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 3.1: should ingest traces via all 3 keys using traceServiceExport" $ \tr -> do
@@ -82,9 +75,7 @@ spec = aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 3)
 
     it "Test 3.2: should reject trace ingestion with missing API key" $ \tr -> do
-      -- Trace with no API key in resource attributes (tested in OtlpServer directly)
-      traceBytes <- OtlpMock.createOtelTraceAtTime "" "Test Span" frozenTime
-      let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
+      traceReq <- createOtelTraceAtTime "" "Test Span" frozenTime
       OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
@@ -97,9 +88,7 @@ spec = aroundAll withTestResources do
       V.length result.dataset `shouldSatisfy` (> 0)
 
     it "Test 4.2: should reject metrics with invalid API key" $ \tr -> do
-      metricBytes <- OtlpMock.createGaugeMetricAtTime "definitely-not-a-valid-key" "rejected.metric" 99.9 frozenTime
-      let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
-      OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto metricReq)
+      OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime "definitely-not-a-valid-key" "rejected.metric" 99.9 frozenTime)
         `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
     it "Test 5.1: should query ingested logs via apiLogH handler" $ \tr -> do
@@ -175,11 +164,8 @@ spec = aroundAll withTestResources do
         resourceKey <- createTestAPIKey tr pid "resource-key"
         headerKey <- createTestAPIKey tr pid "header-key"
 
-        -- Create log with resource key but simulate header auth too
-        logBytes <- OtlpMock.createOtelLogAtTime resourceKey "Dual auth log" frozenTime
-        let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
         -- Process with both keys - resource should take precedence
-        void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just headerKey) logReq
+        void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just headerKey) (createOtelLogAtTime resourceKey "Dual auth log" frozenTime)
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
         result <- queryLogs tr (Just "kind == \"log\"")
@@ -187,10 +173,7 @@ spec = aroundAll withTestResources do
         V.length dataset `shouldSatisfy` (>= 1)
 
       it "Test 9.5: should reject logs with invalid Authorization header" $ \tr -> do
-        logBytes <- OtlpMock.createOtelLogAtTime "" "Should not be stored" frozenTime
-        let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
-        -- Try with invalid key in header
-        runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") logReq)
+        runTestBg frozenTime tr (OtlpServer.processLogsRequest (Just "invalid-header-key") (createOtelLogAtTime "" "Should not be stored" frozenTime))
           `shouldThrow` \case GrpcException{grpcError = GrpcUnauthenticated} -> True; _ -> False
 
       it "Test 9.6: should handle mixed authentication methods in bulk" $ \tr -> do

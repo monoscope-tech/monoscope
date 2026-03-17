@@ -105,8 +105,8 @@ library
       Models.Apis.ErrorPatterns
       Models.Apis.Fields
       Models.Apis.Integrations
+      Models.Apis.IssueEnhancement
       Models.Apis.Issues
-      Models.Apis.Issues.Enhancement
       Models.Apis.LogPatterns
       Models.Apis.LogQueries
       Models.Apis.Monitors
@@ -118,7 +118,6 @@ library
       Models.Projects.Projects
       Models.Telemetry.Schema
       Models.Telemetry.Telemetry
-      Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
       Pages.Anomalies
       Pages.BodyWrapper
@@ -136,7 +135,7 @@ library
       Pages.LogExplorer.Log
       Pages.LogExplorer.LogItem
       Pages.Monitors
-      Pages.Onboarding.Onboarding
+      Pages.Onboarding
       Pages.Projects
       Pages.Replay
       Pages.Reports

@@ -40,6 +40,12 @@ module Pkg.TestUtils (
   -- CLI test helpers
   runHTTPtoServant,
   testPid,
+  -- OTLP mock data constructors
+  createOtelLogAtTime,
+  createOtelSpanAtTime,
+  createOtelTraceAtTime,
+  createOtelTraceWithExceptionAtTime,
+  createGaugeMetricAtTime,
 )
 where
 
@@ -48,11 +54,12 @@ import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
-import Control.Lens ((^.))
+import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
+import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
 import Data.Effectful.LLM qualified as ELLM
@@ -62,9 +69,10 @@ import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
-import Data.ProtoLens.Encoding (decodeMessage)
+import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -99,7 +107,6 @@ import Network.HTTP.Types.Version (http11)
 import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
-import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
@@ -107,8 +114,20 @@ import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
+import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
+import Proto.Opentelemetry.Proto.Common.V1.Common_Fields qualified as PCF
+import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
+import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
+import Proto.Opentelemetry.Proto.Resource.V1.Resource qualified as PR
+import Proto.Opentelemetry.Proto.Resource.V1.Resource_Fields qualified as PRF
+import Proto.Opentelemetry.Proto.Trace.V1.Trace (Span'Event, Status)
+import Proto.Opentelemetry.Proto.Trace.V1.Trace qualified as PT
+import Proto.Opentelemetry.Proto.Trace.V1.Trace_Fields qualified as PTF
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant qualified
@@ -948,62 +967,34 @@ createTestAPIKey tr projectId keyName = do
     _ -> error "Failed to create API key via handler"
 
 
--- | Helper to ingest a log via resource attributes (original method)
-ingestLog :: TestResources -> Text -> Text -> UTCTime -> IO ()
-ingestLog tr apiKey bodyText timestamp = do
-  logBytes <- OtlpMock.createOtelLogAtTime apiKey bodyText timestamp
-  let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
-  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto logReq)
+-- | Ingest via resource attribute (key embedded in payload) or via header (key in Authorization header)
+ingestLog, ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestLog tr apiKey bodyText timestamp =
+  void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey bodyText timestamp)
+ingestLogWithHeader tr apiKey bodyText timestamp =
+  void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" bodyText timestamp)
 
 
--- | Helper to ingest a trace via resource attributes
-ingestTrace :: TestResources -> Text -> Text -> UTCTime -> IO ()
+ingestTrace, ingestTraceWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
 ingestTrace tr apiKey spanName timestamp = do
-  traceBytes <- OtlpMock.createOtelTraceAtTime apiKey spanName timestamp
-  let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
-  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
+  req <- createOtelTraceAtTime apiKey spanName timestamp
+  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+ingestTraceWithHeader tr apiKey spanName timestamp = do
+  req <- createOtelTraceAtTime "" spanName timestamp
+  void $ runTestBg frozenTime tr $ OtlpServer.processTraceRequest (Just apiKey) req
 
 
--- | Helper to ingest a trace with an exception event
 ingestTraceWithException :: TestResources -> Text -> Text -> Text -> Text -> Text -> UTCTime -> IO ()
 ingestTraceWithException tr apiKey spanName excType excMessage excStacktrace timestamp = do
-  traceBytes <- OtlpMock.createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktrace timestamp
-  let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
-  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto traceReq)
+  req <- createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktrace timestamp
+  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
 
 
--- | Helper to ingest a metric via resource attributes
-ingestMetric :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
-ingestMetric tr apiKey metricName value timestamp = do
-  metricBytes <- OtlpMock.createGaugeMetricAtTime apiKey metricName value timestamp
-  let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
-  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto metricReq)
-
-
--- | Helper to ingest a log using gRPC Authorization header (via process function directly)
--- Note: This simulates what the RpcHandler would do with metadata
-ingestLogWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
-ingestLogWithHeader tr apiKey bodyText timestamp = do
-  logBytes <- OtlpMock.createOtelLogAtTime "" bodyText timestamp -- Empty API key in resource
-  let logReq = either (error . toText) id (decodeMessage logBytes :: Either String LS.ExportLogsServiceRequest)
-  -- Call processLogsRequest directly with the API key from "Authorization header"
-  void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) logReq
-
-
--- | Helper to ingest a trace using gRPC Authorization header
-ingestTraceWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()
-ingestTraceWithHeader tr apiKey spanName timestamp = do
-  traceBytes <- OtlpMock.createOtelTraceAtTime "" spanName timestamp -- Empty API key in resource
-  let traceReq = either (error . toText) id (decodeMessage traceBytes :: Either String TS.ExportTraceServiceRequest)
-  void $ runTestBg frozenTime tr $ OtlpServer.processTraceRequest (Just apiKey) traceReq
-
-
--- | Helper to ingest a metric using gRPC Authorization header
-ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
-ingestMetricWithHeader tr apiKey metricName value timestamp = do
-  metricBytes <- OtlpMock.createGaugeMetricAtTime "" metricName value timestamp -- Empty API key in resource
-  let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
-  void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) metricReq
+ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
+ingestMetric tr apiKey metricName value timestamp =
+  void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime apiKey metricName value timestamp)
+ingestMetricWithHeader tr apiKey metricName value timestamp =
+  void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) (createGaugeMetricAtTime "" metricName value timestamp)
 
 
 testPid :: Projects.ProjectId
@@ -1055,26 +1046,110 @@ routeRequest tr path params
   | "/log_explorer/schema" `T.isPrefixOf` path =
       pure $ mockResponse $ AE.encode Schema.telemetrySchemaJson
   | "/log_explorer" `T.isPrefixOf` path = do
-      let p = lookupParam
-          jsonParam = p "json" params
-          query = p "query" params
-          since = p "since" params
-          from = p "from" params
-          to = p "to" params
-          source = p "source" params
       (_, pg) <-
         testServant tr
           $ Log.apiLogH testPid query Nothing Nothing since from to Nothing source Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing jsonParam Nothing Nothing Nothing Nothing
       pure $ mockResponse $ AE.encode pg
   | "/chart_data" `T.isPrefixOf` path = do
-      let p = lookupParam
-          query = p "query" params
-          since = p "since" params
-          from = p "from" params
-          to = p "to" params
-          source = p "source" params
       result <-
         runQueryEffect tr
           $ Charts.queryMetrics Nothing (Just testPid) query Nothing since from to source []
       pure $ mockResponse $ AE.encode result
   | otherwise = error $ "runHTTPtoServant: unhandled path: " <> path
+  where
+    p = lookupParam
+    query = p "query" params
+    since = p "since" params
+    from = p "from" params
+    to = p "to" params
+    source = p "source" params
+    jsonParam = p "json" params
+
+
+----------------------------------------------------------------------
+-- OTLP Mock Data Constructors
+----------------------------------------------------------------------
+
+mkAttr :: Text -> Text -> PC.KeyValue
+mkAttr k v = defMessage & PCF.key .~ k & PCF.value .~ (defMessage & PCF.stringValue .~ v)
+
+
+hexPad :: Int -> Text -> ByteString
+hexPad len t = fromRight "" $ B16.decode $ encodeUtf8 $ T.replicate (len - T.length t) "0" <> t
+
+
+toNanos :: UTCTime -> Word64
+toNanos = round . (* 1e9) . utcTimeToPOSIXSeconds
+
+
+mkResource :: Text -> [PC.KeyValue] -> PR.Resource
+mkResource apiKey extras = defMessage & PRF.attributes .~ ([mkAttr "service.name" "test-service", mkAttr "at-project-key" apiKey] <> extras)
+
+
+createOtelLogAtTime :: Text -> Text -> UTCTime -> LS.ExportLogsServiceRequest
+createOtelLogAtTime apiKey bodyText timestamp =
+  let logRecord = defMessage & PLF.timeUnixNano .~ toNanos timestamp & PLF.body .~ (defMessage & PCF.stringValue .~ bodyText) & PLF.severityText .~ "INFO"
+      scopeLog = defMessage & PLF.logRecords .~ [logRecord]
+   in defMessage & LSF.resourceLogs .~ [defMessage & PLF.resource .~ mkResource apiKey [] & PLF.scopeLogs .~ [scopeLog]]
+
+
+mkSpanRequest :: Text -> Text -> Maybe Text -> Text -> [Span'Event] -> Maybe Status -> [PC.KeyValue] -> PR.Resource -> UTCTime -> TS.ExportTraceServiceRequest
+mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource timestamp =
+  let startTime = toNanos timestamp
+      endTime = startTime + 100000000
+      otelSpan =
+        defMessage
+          & PTF.traceId
+          .~ hexPad 32 trId & PTF.spanId
+          .~ hexPad 16 spanId
+            & PTF.parentSpanId
+          .~ maybe "" (hexPad 16) parentSpanIdM
+            & PTF.name
+          .~ spanName & PTF.kind
+          .~ PT.Span'SPAN_KIND_SERVER
+            & PTF.startTimeUnixNano
+          .~ startTime & PTF.endTimeUnixNano
+          .~ endTime
+            & PTF.attributes
+          .~ attrs & PTF.events
+          .~ events
+            & maybe id (\s -> PTF.status .~ s) statusM
+      scopeSpan = defMessage & PTF.spans .~ [otelSpan]
+   in defMessage & TSF.resourceSpans .~ [defMessage & PTF.resource .~ resource & PTF.scopeSpans .~ [scopeSpan]]
+
+
+createOtelSpanAtTime :: Text -> Text -> Text -> Maybe Text -> Text -> UTCTime -> TS.ExportTraceServiceRequest
+createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName timestamp =
+  mkSpanRequest trId spanId parentSpanIdM spanName [] Nothing [mkAttr "http.method" "GET"] (mkResource apiKey []) timestamp
+
+
+createOtelTraceAtTime :: Text -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest
+createOtelTraceAtTime apiKey spanName timestamp = do
+  trIdText <- UUID.toText <$> nextRandom
+  spanIdText <- UUID.toText <$> nextRandom
+  pure $ createOtelSpanAtTime apiKey trIdText spanIdText Nothing spanName timestamp
+
+
+createGaugeMetricAtTime :: Text -> Text -> Double -> UTCTime -> MS.ExportMetricsServiceRequest
+createGaugeMetricAtTime apiKey metricName value timestamp =
+  let dataPoint = defMessage & PMF.timeUnixNano .~ toNanos timestamp & PMF.asDouble .~ value
+      gauge = defMessage & PMF.dataPoints .~ [dataPoint]
+      metric = defMessage & PMF.name .~ metricName & PMF.description .~ ("Test gauge metric: " <> metricName) & PMF.unit .~ "1" & PMF.gauge .~ gauge
+      scopeMetric = defMessage & PMF.metrics .~ [metric]
+   in defMessage & MSF.resourceMetrics .~ [defMessage & PMF.resource .~ mkResource apiKey [] & PMF.scopeMetrics .~ [scopeMetric]]
+
+
+createOtelTraceWithExceptionAtTime :: Text -> Text -> Text -> Text -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest
+createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktrace timestamp = do
+  trIdText <- UUID.toText <$> nextRandom
+  spanIdText <- UUID.toText <$> nextRandom
+  let exceptionEvent =
+        defMessage & PTF.name
+          .~ "exception" & PTF.timeUnixNano
+          .~ toNanos timestamp
+            & PTF.attributes
+          .~ [mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace]
+      spanStatus = defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ excMessage
+      resource = mkResource apiKey [mkAttr "telemetry.sdk.name" "opentelemetry", mkAttr "telemetry.sdk.language" "nodejs"]
+      attrs = [mkAttr "http.request.method" "GET", mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
+  pure $ mkSpanRequest trIdText spanIdText Nothing spanName [exceptionEvent] (Just spanStatus) attrs resource timestamp

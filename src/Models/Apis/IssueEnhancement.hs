@@ -1,4 +1,4 @@
-module Models.Apis.Issues.Enhancement (
+module Models.Apis.IssueEnhancement (
   enhanceIssueWithLLM,
   generateEnhancedTitle,
   generateEnhancedDescription,
@@ -60,7 +60,7 @@ generateEnhancedDescription authCtx issue = runExceptT do
   pure (fromMaybe "" $ viaNonEmpty head lines', fromMaybe Issues.defaultRecommendedAction $ lines' !!? 1, fromMaybe "medium" $ lines' !!? 2)
 
 
-withIssueData :: AE.FromJSON a => Issues.Issue -> (a -> Text) -> Text -> Text
+withIssueData :: AE.FromJSON a => Issues.Issue -> (a -> b) -> b -> b
 withIssueData issue f fallback = case AE.fromJSON (getAeson issue.issueData) of
   AE.Success d -> f d
   _ -> fallback
@@ -333,7 +333,14 @@ analyzeErrorPattern authCtx issue
 
 buildAnalysisPrompt :: Issues.Issue -> Text
 buildAnalysisPrompt issue =
-  [text|Analyze this runtime error and respond with exactly 2 lines:
+  withIssueData @Issues.RuntimeExceptionData
+    issue
+    ( \d ->
+        let errType = d.errorType
+            msg = T.take 300 d.errorMessage
+            stack = T.take 500 d.stackTrace
+            req = fromMaybe "Unknown" d.requestMethod <> " " <> fromMaybe "Unknown" d.requestPath
+         in [text|Analyze this runtime error and respond with exactly 2 lines:
 Line 1: Root cause - a 1-2 sentence explanation of WHY this error occurs
 Line 2: Category - exactly one of: network, auth, validation, resource, config, dependency, runtime, data, timeout, permissions
 
@@ -345,8 +352,5 @@ Request: $req
 Example response:
 The database connection pool is exhausted because queries are not being released back to the pool after completion.
 resource|]
-  where
-    errType = withIssueData @Issues.RuntimeExceptionData issue (.errorType) ""
-    msg = withIssueData @Issues.RuntimeExceptionData issue (T.take 300 . (.errorMessage)) ""
-    stack = withIssueData @Issues.RuntimeExceptionData issue (T.take 500 . (.stackTrace)) ""
-    req = withIssueData @Issues.RuntimeExceptionData issue (\d -> fromMaybe "Unknown" d.requestMethod <> " " <> fromMaybe "Unknown" d.requestPath) "Unknown"
+    )
+    ""

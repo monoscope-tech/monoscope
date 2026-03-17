@@ -93,7 +93,7 @@ import Pages.LogExplorer.LogItem (getServiceName)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pages.Monitors qualified as Testing
-import Pages.Onboarding.Onboarding qualified as Onboarding
+import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as Integrations
 import Pages.Projects qualified as ListProjects

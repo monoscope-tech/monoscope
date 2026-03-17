@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Onboarding.Onboarding (
+module Pages.Onboarding (
   onboardingGetH,
   onboardingInfoPostH,
   onboardingConfPostH,

@@ -1,2 +1,20 @@
-roots = [ "^Main.main$", "^Paths_" ]
+roots = [ "^Main.main$", "^Paths_", "^Spec\\.main$", "^Spec\\.spec$" ]
 type-class-roots = true
+
+root-modules = [
+  "^CLI\\.",                           # CLI executable (separate entry point)
+  "^Proto\\.",                         # Auto-generated proto-lens bindings
+  "^Data\\.ProtoLens",                 # proto-lens library (source-repository-package)
+  "^Devel$",                           # Dev-mode REPL helpers
+  "^System\\.Logging$",               # Logging helpers
+  "^System\\.Tracing$",               # Tracing helpers
+  "^Data\\.Effectful\\.",             # Custom effect wrappers
+  "^Pkg\\.CLITestUtils$",            # CLI test utilities
+  "^Pkg\\.GitHub$",                   # GitHub integration (used from BackgroundJobs)
+  # Re-exported modules weeder can't trace through parent re-exports
+  "^Pages\\.Monitors\\.Testing$",
+  "^Pages\\.Endpoints\\.ApiCatalog$",
+  "^Pages\\.Onboarding",
+  "^Models\\.Apis\\.Issues\\.Enhancement$",
+  "^Models\\.Telemetry\\.SummaryGenerator$",
+]

@@ -89,6 +89,7 @@ import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Settings qualified as Settings
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
@@ -1289,31 +1290,23 @@ createProjectPostH pid createP = do
     Left cp -> processProjectPostForm cp pid
 
 
-data FirstSubItem = FirstSubItem
-  { id :: Int
-  , subscriptionId :: Int
-  }
-  deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] FirstSubItem
-
-
-data Attributes = Attributes
-  { firstSubscriptionItem :: FirstSubItem
+data SubAttributes = SubAttributes
+  { firstSubscriptionItem :: Settings.FirstSubItem
   , productName :: Text
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] Attributes
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubAttributes
 
 
-data DataVals = DataVals
+data SubDataVals = SubDataVals
   { id :: Text
-  , attributes :: Attributes
+  , attributes :: SubAttributes
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] DataVals
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] SubDataVals
 
 
-newtype SubResponse = SubResponse {dataVal :: [DataVals]}
+newtype SubResponse = SubResponse {dataVal :: [SubDataVals]}
   deriving stock (Generic, Show)
 
 

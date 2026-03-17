@@ -53,8 +53,8 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.Integrations (PagerdutyData (..), getPagerdutyByProjectId)
+import Models.Apis.IssueEnhancement qualified as Enhancement
 import Models.Apis.Issues qualified as Issues
-import Models.Apis.Issues.Enhancement qualified as Enhancement
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Apis.Monitors qualified as Monitors
