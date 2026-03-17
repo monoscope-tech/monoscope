@@ -672,7 +672,12 @@ function buildWidgetOrder(container: HTMLElement) {
   return order;
 }
 
+function getActiveGrid(): HTMLElement | null {
+  return document.querySelector('.grid-stack:not(.hidden)') || document.querySelector('.grid-stack');
+}
+
 (window as any).buildWidgetOrder = buildWidgetOrder;
+(window as any).getActiveGrid = getActiveGrid;
 
 function debounce(func: any, wait: number) {
   let timeout: NodeJS.Timeout;

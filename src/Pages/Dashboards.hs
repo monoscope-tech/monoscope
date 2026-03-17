@@ -334,16 +334,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
     div_ [id_ "dashboard-refresh-handler", class_ "hidden"] ""
 
     -- Hidden form for widget order PATCH via HTMX (tab slug hardcoded in URL)
-    form_
-      [ id_ "widget-order-trigger"
-      , class_ "hidden"
-      , hxPatch_ widgetOrderUrl
-      , hxVals_ "js:{...buildWidgetOrder(document.querySelector('.grid-stack'))}"
-      , hxExt_ "json-enc"
-      , hxSwap_ "none"
-      , hxTrigger_ "widget-order-changed from:body"
-      ]
-      ""
+    widgetOrderTriggerForm_ widgetOrderUrl False
 
     script_
       [text|
@@ -397,6 +388,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
 
                 grid.on('removed change', debounce(() => {
                   if (grid.getColumn() === 1) return;
+                  if (gridEl.offsetParent === null) return;
                   const collapsingWidget = gridEl.querySelector('[data-collapse-action]');
                   if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
                   htmx.trigger(document.body, 'widget-order-changed');
@@ -467,6 +459,7 @@ dashboardPage_ pid dashId dash dashVM allParams = do
               requestAnimationFrame(autoFitGroupToChildren);
               nestedInstance.on('removed change', debounce(() => {
                 if (window.innerWidth < 768) return;
+                if (nestedEl.offsetParent === null) return;
                 const collapsingWidget = nestedEl.closest('[data-collapse-action]');
                 if (collapsingWidget) { delete collapsingWidget.dataset.collapseAction; return; }
                 htmx.trigger(document.body, 'widget-order-changed');
@@ -568,6 +561,22 @@ dashboardPage_ pid dashId dash dashVM allParams = do
         });
       });
       |]
+
+
+widgetOrderTriggerForm_ :: Text -> Bool -> Html ()
+widgetOrderTriggerForm_ url isOob =
+  form_
+    ( [ id_ "widget-order-trigger"
+      , class_ "hidden"
+      , hxPatch_ url
+      , hxVals_ "js:{...buildWidgetOrder(getActiveGrid())}"
+      , hxExt_ "json-enc"
+      , hxSwap_ "none"
+      , hxTrigger_ "widget-order-changed from:body"
+      ]
+        <> [hxSwapOob_ "true" | isOob]
+    )
+    ""
 
 
 loadDashboardFromVM :: Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
@@ -923,7 +932,6 @@ dashboardWidgetReorderPatchH
   -> Map Text WidgetReorderItem
   -- ^ The ordered list of widget IDs
   -> ATAuthCtx (RespHeaders NoContent)
-dashboardWidgetReorderPatchH _ _ _ widgetOrder | Map.null widgetOrder = addRespHeaders NoContent
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
   (_, dash) <- getDashAndVM dashId Nothing
 
@@ -932,18 +940,23 @@ dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
         _ -> dash.widgets
       oldWidgetIds = mapMaybe (.id) oldWidgets
       newWidgetIds = Map.keys widgetOrder
+      reorderedWidgets = reorderWidgets widgetOrder oldWidgets
       deletedWidgetIds = filter (`notElem` newWidgetIds) oldWidgetIds
 
-  -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
-  unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
+  -- Safety: if patch has IDs but none match existing widgets, it's a stale/race request — skip
+  if not (null oldWidgets) && not (Map.null widgetOrder) && null reorderedWidgets
+    then addRespHeaders NoContent
+    else do
+      -- Delete alerts for removed widgets first (before updating dashboard to avoid orphaned monitors)
+      unless (null deletedWidgetIds) $ void $ Monitors.deleteMonitorsByWidgetIds deletedWidgetIds
 
-  let newDash = case (tabSlugM, dash.tabs) of
-        (Just slug, Just _) -> updateTabBySlug slug (\tab -> tab & #widgets .~ reorderWidgets widgetOrder tab.widgets) dash
-        _ -> dash & #widgets .~ reorderWidgets widgetOrder dash.widgets
+      let newDash = case (tabSlugM, dash.tabs) of
+            (Just slug, Just _) -> updateTabBySlug slug (\tab -> tab & #widgets .~ reorderedWidgets) dash
+            _ -> dash & #widgets .~ reorderedWidgets
 
-  _ <- Dashboards.updateSchema dashId newDash
-  syncDashboardAndQueuePush pid dashId
-  addRespHeaders NoContent
+      _ <- Dashboards.updateSchema dashId newDash
+      syncDashboardAndQueuePush pid dashId
+      addRespHeaders NoContent
 
 
 -- | Rebuild the widget tree based solely on the reorder patch.
@@ -2297,17 +2310,7 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
           tabContentPanel_ pid dashId.toText idx tab.name widgetsWithPngUrls True True
           whenJust varToPrompt \v -> variablePickerModal_ pid dashId (Just tabSlug) allParamsWithConstants v True
           -- OOB swap to update widget-order-trigger form's hx-patch URL for the current tab
-          form_
-            [ id_ "widget-order-trigger"
-            , class_ "hidden"
-            , hxPatch_ widgetOrderUrl
-            , hxVals_ "js:{...buildWidgetOrder(document.querySelector('.grid-stack'))}"
-            , hxExt_ "json-enc"
-            , hxSwap_ "none"
-            , hxTrigger_ "widget-order-changed from:body"
-            , hxSwapOob_ "true"
-            ]
-            ""
+          widgetOrderTriggerForm_ widgetOrderUrl True
 
 
 -- | Skeleton loader shown while GridStack initializes
