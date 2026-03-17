@@ -46,9 +46,11 @@ updateEmbeddings :: (DB es, ToRow params) => Query -> ([(id, [Float])] -> params
 updateEmbeddings _ _ [] = pure 0
 updateEmbeddings q mkParams pairs = PG.execute q (mkParams pairs)
 
+
 assignToCanonical :: (DB es, ToField id) => Query -> [(id, id)] -> Eff es Int64
 assignToCanonical _ [] = pure 0
 assignToCanonical q pairs = PG.execute q (V.fromList pids, V.fromList cids) where (pids, cids) = unzip pairs
+
 
 unmergePattern :: (DB es, ToField id) => Query -> id -> Eff es Int64
 unmergePattern q pid = PG.execute q (Only pid)
@@ -64,12 +66,15 @@ getUnembeddedErrorPatterns pid =
         LIMIT 500 |]
     (Only pid)
 
+
 updateErrorEmbeddings :: DB es => [(ErrorPatternId, [Float])] -> Eff es Int64
-updateErrorEmbeddings = updateEmbeddings
-  [sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
+updateErrorEmbeddings =
+  updateEmbeddings
+    [sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
         FROM ROWS FROM (unnest(?::uuid[]), unnest(?::text[])) AS u(id, emb)
         WHERE apis.error_patterns.id = u.id |]
-  (\pairs -> let (ids, embs) = unzip $ map (second showPGFloatArray) pairs in (V.fromList ids, V.fromList embs))
+    (\pairs -> let (ids, embs) = unzip $ map (second showPGFloatArray) pairs in (V.fromList ids, V.fromList embs))
+
 
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
 getCanonicalErrorPatterns pid =
@@ -81,23 +86,30 @@ getCanonicalErrorPatterns pid =
         LIMIT 10000 |]
       (Only pid)
 
+
 assignErrorsToCanonical :: DB es => [(ErrorPatternId, ErrorPatternId)] -> Eff es Int64
-assignErrorsToCanonical = assignToCanonical
-  [sql| UPDATE apis.error_patterns SET canonical_id = u.canonical
+assignErrorsToCanonical =
+  assignToCanonical
+    [sql| UPDATE apis.error_patterns SET canonical_id = u.canonical
         FROM (SELECT unnest(?::uuid[]) AS id, unnest(?::uuid[]) AS canonical) u
         WHERE apis.error_patterns.id = u.id |]
+
 
 setCanonicalId :: DB es => ErrorPatternId -> ErrorPatternId -> Eff es Int64
 setCanonicalId patternId canonicalId =
   PG.execute [sql| UPDATE apis.error_patterns SET canonical_id = ? WHERE id = ? AND merge_override = FALSE |] (canonicalId, patternId)
 
+
 unmergeErrorPattern :: DB es => ErrorPatternId -> Eff es Int64
-unmergeErrorPattern = unmergePattern
-  [sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = ? |]
+unmergeErrorPattern =
+  unmergePattern
+    [sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = ? |]
+
 
 getErrorPatternGroupMembers :: DB es => ErrorPatternId -> Eff es [ErrorPattern]
 getErrorPatternGroupMembers eid =
   PG.query (_selectWhere @ErrorPattern [[field| canonical_id |]] <> " ORDER BY updated_at DESC") (Only eid)
+
 
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
 fetchErrorTexts [] = pure mempty
@@ -117,12 +129,15 @@ getUnembeddedLogPatterns pid =
         LIMIT 500 |]
     (Only pid)
 
+
 updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
-updateLogEmbeddings = updateEmbeddings
-  [sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
+updateLogEmbeddings =
+  updateEmbeddings
+    [sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
         FROM ROWS FROM (unnest(?::bigint[]), unnest(?::text[])) AS u(id, emb)
         WHERE apis.log_patterns.id = u.id |]
-  (\pairs -> let (ids, embs) = unzip $ map (second showPGFloatArray) pairs in (V.fromList ids, V.fromList embs))
+    (\pairs -> let (ids, embs) = unzip $ map (second showPGFloatArray) pairs in (V.fromList ids, V.fromList embs))
+
 
 getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, [Float])]
 getCanonicalLogPatterns pid =
@@ -134,25 +149,32 @@ getCanonicalLogPatterns pid =
         LIMIT 10000 |]
       (Only pid)
 
+
 assignLogsToCanonical :: DB es => [(LogPatternId, LogPatternId)] -> Eff es Int64
-assignLogsToCanonical = assignToCanonical
-  [sql| UPDATE apis.log_patterns SET canonical_id = u.canonical
+assignLogsToCanonical =
+  assignToCanonical
+    [sql| UPDATE apis.log_patterns SET canonical_id = u.canonical
         FROM (SELECT unnest(?::bigint[]) AS id, unnest(?::bigint[]) AS canonical) u
         WHERE apis.log_patterns.id = u.id |]
 
+
 unmergeLogPattern :: DB es => LogPatternId -> Eff es Int64
-unmergeLogPattern = unmergePattern
-  [sql| UPDATE apis.log_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = ? |]
+unmergeLogPattern =
+  unmergePattern
+    [sql| UPDATE apis.log_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = ? |]
+
 
 getLogPatternGroupMembers :: DB es => LogPatternId -> Eff es [LogPattern]
 getLogPatternGroupMembers lid =
   PG.query (_selectWhere @LogPattern [[field| canonical_id |]] <> " ORDER BY last_seen_at DESC") (Only lid)
+
 
 fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogTexts [] = pure mempty
 fetchLogTexts ids =
   Map.fromList
     <$> PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
+
 
 fetchLogSamples :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogSamples [] = pure mempty

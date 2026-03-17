@@ -73,9 +73,9 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils (ReportType (..))
 import Pages.Charts.Charts qualified as Charts
-import Pkg.Components.Widget qualified as Widget
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
+import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET

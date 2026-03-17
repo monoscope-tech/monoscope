@@ -101,9 +101,9 @@ import Numeric (showHex)
 import Pkg.DeriveUtils (hashFile)
 import Relude hiding (notElem, show)
 import Servant hiding ((:>))
+import Text.MMark qualified as MMark
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
-import Text.MMark qualified as MMark
 import Text.Show
 import "base64" Data.ByteString.Base64 qualified as B64
 

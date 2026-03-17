@@ -53,8 +53,8 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
-import Data.Cache (Cache (..), newCache)
 import Data.ByteString.Lazy qualified as LBS
+import Data.Cache (Cache (..), newCache)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)

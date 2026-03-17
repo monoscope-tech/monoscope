@@ -1476,124 +1476,114 @@ generateSpanSummary otel =
 
     normalElements =
       catMaybes
-        $
-        [ case (otel.kind, hasHttp, atMapText "component" (unAesonTextMaybe otel.attributes)) of
-            (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
-            (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
-            (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "request_type;neutral⇒incoming"
-            (_, True, Just "frontend") -> Just "request_type;neutral⇒outgoing"
-            (_, True, _) -> Just "request_type;neutral⇒outgoing"
-            (Just "server", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒incoming"
-            (Just "client", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒outgoing"
-            (_, _, _) | isJust (atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)) -> Just "kind;neutral⇒database"
-            (Just "internal", _, _) -> Just "kind;neutral⇒internal"
-            _ -> Nothing
-        ]
-        ++
-        [ case atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes) of
-            Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> toText (show code)
-            _ -> Nothing
-        ]
-        ++
-        [ case atMapText "http.request.method" (unAesonTextMaybe otel.attributes) of
-            Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
-            _ -> Nothing
-        ]
-        ++
-        [ case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
-            (Just route, _) -> Just $ "route;neutral⇒" <> route
-            (_, Just url) -> Just $ "url;neutral⇒" <> url
-            _ -> Nothing
-        ]
-        ++
-        [ case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
-            (Just system, _) -> Just $ "db.system;neutral⇒" <> system
-            (_, Just system) -> Just $ "db.system;neutral⇒" <> system
-            _ -> Nothing
-        , case ( atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)
-               , atMapText "db.query.text" (unAesonTextMaybe otel.attributes)
-               ) of
-            (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
-            _ -> Nothing
-        , case atMapText "db.statement" (unAesonTextMaybe otel.attributes) of
-            Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
-            _ -> Nothing
-        ]
-        ++
-        [ case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
-            Just method -> Just $ "rpc.method;neutral⇒" <> method
-            _ -> Nothing
-        , case atMapText "rpc.service" (unAesonTextMaybe otel.attributes) of
-            Just service -> Just $ "rpc.service;neutral⇒" <> service
-            _ -> Nothing
-        ]
-        ++
-        [ case otel.name of
-            Just n ->
-              case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
-                (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
-                _ -> Nothing
-            _ -> Nothing
-        ]
-        ++
-        [ case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
-            (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
-            (Just "ERROR", _) -> Just "status;badge-error⇒ERROR"
-            _ -> Nothing
-        ]
-        ++
-        [ case unAesonTextMaybe otel.attributes of
-            Just attrs
-              | not (Map.null attrs) ->
-                  let attrText = decodeUtf8 (AE.encode attrs)
-                      truncated =
-                        if T.length attrText > 500
-                          then T.take 497 attrText <> "..."
-                          else attrText
-                   in Just $ "attributes;text-textWeak⇒" <> truncated
-            _ -> Nothing
-        ]
-        ++
-        [ case atMapText "session.id" (unAesonTextMaybe otel.attributes) of
-            Just v -> Just $ "session;right-badge-neutral⇒" <> v
-            _ -> Nothing
-        , case atMapText "user.email" (unAesonTextMaybe otel.attributes) of
-            Just eml -> Just $ "user email;right-badge-neutral⇒" <> eml
-            _ -> case atMapText "user.id" (unAesonTextMaybe otel.attributes) of
-              Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+        $ [ case (otel.kind, hasHttp, atMapText "component" (unAesonTextMaybe otel.attributes)) of
+              (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
+              (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
+              (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "request_type;neutral⇒incoming"
+              (_, True, Just "frontend") -> Just "request_type;neutral⇒outgoing"
+              (_, True, _) -> Just "request_type;neutral⇒outgoing"
+              (Just "server", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒incoming"
+              (Just "client", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒outgoing"
+              (_, _, _) | isJust (atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)) -> Just "kind;neutral⇒database"
+              (Just "internal", _, _) -> Just "kind;neutral⇒internal"
               _ -> Nothing
-        , case atMapText "user.full_name" (unAesonTextMaybe otel.attributes) of
-            Just s -> Just $ "user name;right-badge-neutral⇒" <> s
-            _ -> case atMapText "user.name" (unAesonTextMaybe otel.attributes) of
-              Just s -> Just $ "user name;right-badge-neutral⇒" <> s
-              _ -> Nothing
-        , case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
-            (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
-            (Just "ERROR", _) -> Just "status;right-badge-error⇒ERROR"
-            _ -> Nothing
-        , case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
-            (Just "postgresql", _) -> Just "db.system;right-badge-postgres⇒postgres"
-            (_, Just "postgresql") -> Just "db.system;right-badge-postgres⇒postgres"
-            (Just "mysql", _) -> Just "db.system;right-badge-mysql⇒mysql"
-            (_, Just "mysql") -> Just "db.system;right-badge-mysql⇒mysql"
-            (Just "redis", _) -> Just "db.system;right-badge-redis⇒redis"
-            (_, Just "redis") -> Just "db.system;right-badge-redis⇒redis"
-            (Just "mongodb", _) -> Just "db.system;right-badge-mongo⇒mongodb"
-            (_, Just "mongodb") -> Just "db.system;right-badge-mongo⇒mongodb"
-            (Just "elasticsearch", _) -> Just "db.system;right-badge-elastic⇒elastic"
-            (_, Just "elasticsearch") -> Just "db.system;right-badge-elastic⇒elastic"
-            (Just system, _) -> Just $ "db.system;right-badge-neutral⇒" <> system
-            (_, Just system) -> Just $ "db.system;right-badge-neutral⇒" <> system
-            _ -> Nothing
-        , if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
-        , case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
-            Just _ -> Just "protocol;right-badge-neutral⇒rpc"
-            _ -> Nothing
-        , case otel.duration of
-            Just dur -> Just $ "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
-            _ ->
-              Nothing
-        ]
+          ]
+        ++ [ case atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes) of
+               Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> toText (show code)
+               _ -> Nothing
+           ]
+        ++ [ case atMapText "http.request.method" (unAesonTextMaybe otel.attributes) of
+               Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
+               _ -> Nothing
+           ]
+        ++ [ case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
+               (Just route, _) -> Just $ "route;neutral⇒" <> route
+               (_, Just url) -> Just $ "url;neutral⇒" <> url
+               _ -> Nothing
+           ]
+        ++ [ case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+               (Just system, _) -> Just $ "db.system;neutral⇒" <> system
+               (_, Just system) -> Just $ "db.system;neutral⇒" <> system
+               _ -> Nothing
+           , case ( atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)
+                  , atMapText "db.query.text" (unAesonTextMaybe otel.attributes)
+                  ) of
+               (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
+               _ -> Nothing
+           , case atMapText "db.statement" (unAesonTextMaybe otel.attributes) of
+               Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
+               _ -> Nothing
+           ]
+        ++ [ case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
+               Just method -> Just $ "rpc.method;neutral⇒" <> method
+               _ -> Nothing
+           , case atMapText "rpc.service" (unAesonTextMaybe otel.attributes) of
+               Just service -> Just $ "rpc.service;neutral⇒" <> service
+               _ -> Nothing
+           ]
+        ++ [ case otel.name of
+               Just n ->
+                 case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
+                   (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
+                   _ -> Nothing
+               _ -> Nothing
+           ]
+        ++ [ case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+               (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
+               (Just "ERROR", _) -> Just "status;badge-error⇒ERROR"
+               _ -> Nothing
+           ]
+        ++ [ case unAesonTextMaybe otel.attributes of
+               Just attrs
+                 | not (Map.null attrs) ->
+                     let attrText = decodeUtf8 (AE.encode attrs)
+                         truncated =
+                           if T.length attrText > 500
+                             then T.take 497 attrText <> "..."
+                             else attrText
+                      in Just $ "attributes;text-textWeak⇒" <> truncated
+               _ -> Nothing
+           ]
+        ++ [ case atMapText "session.id" (unAesonTextMaybe otel.attributes) of
+               Just v -> Just $ "session;right-badge-neutral⇒" <> v
+               _ -> Nothing
+           , case atMapText "user.email" (unAesonTextMaybe otel.attributes) of
+               Just eml -> Just $ "user email;right-badge-neutral⇒" <> eml
+               _ -> case atMapText "user.id" (unAesonTextMaybe otel.attributes) of
+                 Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+                 _ -> Nothing
+           , case atMapText "user.full_name" (unAesonTextMaybe otel.attributes) of
+               Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+               _ -> case atMapText "user.name" (unAesonTextMaybe otel.attributes) of
+                 Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+                 _ -> Nothing
+           , case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+               (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
+               (Just "ERROR", _) -> Just "status;right-badge-error⇒ERROR"
+               _ -> Nothing
+           , case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+               (Just "postgresql", _) -> Just "db.system;right-badge-postgres⇒postgres"
+               (_, Just "postgresql") -> Just "db.system;right-badge-postgres⇒postgres"
+               (Just "mysql", _) -> Just "db.system;right-badge-mysql⇒mysql"
+               (_, Just "mysql") -> Just "db.system;right-badge-mysql⇒mysql"
+               (Just "redis", _) -> Just "db.system;right-badge-redis⇒redis"
+               (_, Just "redis") -> Just "db.system;right-badge-redis⇒redis"
+               (Just "mongodb", _) -> Just "db.system;right-badge-mongo⇒mongodb"
+               (_, Just "mongodb") -> Just "db.system;right-badge-mongo⇒mongodb"
+               (Just "elasticsearch", _) -> Just "db.system;right-badge-elastic⇒elastic"
+               (_, Just "elasticsearch") -> Just "db.system;right-badge-elastic⇒elastic"
+               (Just system, _) -> Just $ "db.system;right-badge-neutral⇒" <> system
+               (_, Just system) -> Just $ "db.system;right-badge-neutral⇒" <> system
+               _ -> Nothing
+           , if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
+           , case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
+               Just _ -> Just "protocol;right-badge-neutral⇒rpc"
+               _ -> Nothing
+           , case otel.duration of
+               Just dur -> Just $ "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
+               _ ->
+                 Nothing
+           ]
    in
     V.fromList elements
 

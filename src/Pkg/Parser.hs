@@ -15,8 +15,8 @@ import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
 import Safe qualified
-import Utils (formatUTC)
 import Text.Megaparsec (errorBundlePretty, parse)
+import Utils (formatUTC)
 
 
 data QueryComponents = QueryComponents
