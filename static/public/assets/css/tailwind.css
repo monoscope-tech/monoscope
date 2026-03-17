@@ -2496,7 +2496,7 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
     @apply w-full h-36 right-[-20px] top-[-45px] absolute bg-gradient-to-bl from-slate-500/10 to-slate-500/0;
   }
   .pricing-gradient-slate-wide {
-    @apply w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] absolute bg-gradient-to-bl from-slate-500/10 to-slate-transparent;
+    @apply w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] absolute bg-gradient-to-bl from-slate-500/10 to-transparent;
   }
   .pricing-gradient-brand-wide {
     @apply w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] rounded-t-2xl absolute bg-gradient-to-b from-fillBrand-weak to-transparent;
