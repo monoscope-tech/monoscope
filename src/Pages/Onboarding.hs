@@ -805,8 +805,8 @@ integrationCard serviceName iconPath isConnected connectUrl = do
 
 onboardingStepWrapper_ :: Text -> Int -> Text -> Text -> Html () -> Html ()
 onboardingStepWrapper_ extraCls step title prevUrl content =
-  div_ [class_ $ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0 " <> extraCls] $
-    div_ [class_ "flex-col gap-4 flex w-full"] do
+  div_ [class_ $ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0 " <> extraCls]
+    $ div_ [class_ "flex-col gap-4 flex w-full"] do
       stepIndicator step title prevUrl
       content
 
@@ -857,39 +857,41 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
-  onboardingStepWrapper_ "" 1 "Tell us a little bit about you" "" $
-    form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
-        div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
-          forM_ ([("First Name", "firstName", firstName), ("Last Name", "lastName", lastName), ("Company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
-            formField_ FieldMd def{value = val} label name True Nothing
-          let createSelectField selected label name (opts :: [(Text, Text)]) = formSelectField_ FieldMd label name True do
-                option_ [value_ ""] ""
-                forM_ opts \(k, v) -> option_ (value_ k : [selected_ selected | selected == k]) $ toHtml v
-          createSelectField cSize "Company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
-          createSelectField fUsFrm "How Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
-        div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
+  onboardingStepWrapper_ "" 1 "Tell us a little bit about you" ""
+    $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"]
+    $ do
+      div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
+        forM_ ([("First Name", "firstName", firstName), ("Last Name", "lastName", lastName), ("Company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
+          formField_ FieldMd def{value = val} label name True Nothing
+        let createSelectField selected label name (opts :: [(Text, Text)]) = formSelectField_ FieldMd label name True do
+              option_ [value_ ""] ""
+              forM_ opts \(k, v) -> option_ (value_ k : [selected_ selected | selected == k]) $ toHtml v
+        createSelectField cSize "Company Size" "companySize" [("1 - 4", "1 to 4"), ("5 - 10", "5 to 10"), ("11 - 25", "11 to 25"), ("26+", "26 and above")]
+        createSelectField fUsFrm "How Did You Hear About Us" "whereDidYouHearAboutUs" [("google", "Google"), ("twitter", "Twitter"), ("linkedin", "LinkedIn"), ("friend", "Friend"), ("other", "Other")]
+      div_ [class_ "items-center gap-1 flex"] $ do
+        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func = do
-  onboardingStepWrapper_ "" 2 "Let's configure your project" ("/p/" <> pid.toText <> "/onboarding?step=Info") $
-    form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"] $ do
-        div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
-          div_ [class_ "flex-col gap-2 flex"] $ do
-            div_ [class_ "items-center gap-[2px] flex"] $ do
-              span_ [class_ " text-textStrong"] "Where should your project be hosted?"
-              span_ [class_ " text-textWeak"] "*"
-            div_ [class_ "pt-2 flex-col gap-4 flex text-sm  text-textStrong"] $ do
-              forM_ locations $ createBinaryField "radio" "location" [loca]
-          div_ [class_ "flex-col gap-2 flex"] $ do
-            div_ [class_ "items-center flex gap-[2px]"] $ do
-              span_ [class_ " text-textStrong"] "Which Monoscope features will you be using?"
-              span_ [class_ " text-textWeak"] "*"
-            div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
-              forM_ functionalities $ createBinaryField "checkbox" "functionality" func
-        div_ [class_ "items-center gap-1 flex"] $ do
-          button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
+  onboardingStepWrapper_ "" 2 "Let's configure your project" ("/p/" <> pid.toText <> "/onboarding?step=Info")
+    $ form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"]
+    $ do
+      div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
+        div_ [class_ "flex-col gap-2 flex"] $ do
+          div_ [class_ "items-center gap-[2px] flex"] $ do
+            span_ [class_ " text-textStrong"] "Where should your project be hosted?"
+            span_ [class_ " text-textWeak"] "*"
+          div_ [class_ "pt-2 flex-col gap-4 flex text-sm  text-textStrong"] $ do
+            forM_ locations $ createBinaryField "radio" "location" [loca]
+        div_ [class_ "flex-col gap-2 flex"] $ do
+          div_ [class_ "items-center flex gap-[2px]"] $ do
+            span_ [class_ " text-textStrong"] "Which Monoscope features will you be using?"
+            span_ [class_ " text-textWeak"] "*"
+          div_ [class_ "pt-2 flex-col gap-4 flex"] $ do
+            forM_ functionalities $ createBinaryField "checkbox" "functionality" func
+      div_ [class_ "items-center gap-1 flex"] $ do
+        button_ [class_ "btn-primary px-6 py-4 text-xl rounded-lg cursor-pointer flex items-center"] "Proceed"
 
 
 inviteTeamMemberModal :: Projects.ProjectId -> V.Vector Text -> Bool -> Html ()

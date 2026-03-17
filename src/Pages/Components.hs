@@ -189,16 +189,19 @@ pricingBtnCls isCurrent normalCls = "pricing-btn " <> if isCurrent then "pricing
 pricingBadge_ :: Html () -> Html () -> Html ()
 pricingBadge_ badge content = div_ [class_ "relative"] do
   content
-  div_ [class_ "px-3 py-1.5 bg-fillBrand-strong absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg inline-flex justify-center items-center gap-2"] $
-    div_ [class_ "justify-start text-white"] badge
+  div_ [class_ "px-3 py-1.5 bg-fillBrand-strong absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 rounded-lg inline-flex justify-center items-center gap-2"]
+    $ div_ [class_ "justify-start text-white"] badge
 
 
 freePricing :: Projects.ProjectId -> Bool -> Html ()
 freePricing pid isCurrent =
-  div_ (pricingPostAttrs pid "freePricing" "outline-strokeWeak" []) $
-    div_ [class_ "flex flex-col gap-2 h-full relative", onpointerdown_ "handlePaymentPlanSelect(event, 'freePlan')", id_ "popularPlan"] do
+  div_ (pricingPostAttrs pid "freePricing" "outline-strokeWeak" [])
+    $ div_ [class_ "flex flex-col gap-2 h-full relative", onpointerdown_ "handlePaymentPlanSelect(event, 'freePlan')", id_ "popularPlan"] do
       div_ [class_ "pricing-gradient-slate"] pass
-      pricingContent_ "Free tier" "Free forever" (priceDisplay_ [] "0" "/per month")
+      pricingContent_
+        "Free tier"
+        "Free forever"
+        (priceDisplay_ [] "0" "/per month")
         (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "bg-fillStrong text-white ", [__| on click htmx.trigger("#freePricing", "click")|], type_ "button"] $ if isCurrent then "Current plan" else "Start free")
         ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 3 days data retention"]
         "What's included:"
@@ -206,12 +209,15 @@ freePricing pid isCurrent =
 
 popularPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Html ()
 popularPricing pid lemonUrl isCurrent freeTierEnabled =
-  div_ [class_ "relative"] $
-    div_ (pricingPostAttrs pid "GraduatedPricing" "outline-strokeWeak shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]" [hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"]) do
+  div_ [class_ "relative"]
+    $ div_ (pricingPostAttrs pid "GraduatedPricing" "outline-strokeWeak shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]" [hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"]) do
       div_ [class_ "pricing-gradient-slate-wide"] pass
       div_ [class_ "relative flex flex-col gap-2 overflow-hidden", onpointerdown_ "handlePaymentPlanSelect(event, 'popularPlan')", id_ "popularPlan"] do
         input_ [type_ "hidden", class_ "orderId", id_ "popularPricing", name_ "ord", value_ ""]
-        pricingContent_ "Bring nothing" "This plan can be adjusted" (priceDisplay_ [id_ "price"] "29" "/per month")
+        pricingContent_
+          "Bring nothing"
+          "This plan can be adjusted"
+          (priceDisplay_ [id_ "price"] "29" "/per month")
           (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "btn-primary", term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |], type_ "button"] $ if isCurrent then "Current plan" else "Start 30 day free trial")
           ["Fully managed cloud service", "Predictable usage-based pricing", "Intelligent incident alerts", "Query your data in english", "30 days data retention included"]
           (span_ [] $ when freeTierEnabled $ "Everything in " >> span_ [class_ "text-textBrand"] "free" >> " plus...")
@@ -219,23 +225,29 @@ popularPricing pid lemonUrl isCurrent freeTierEnabled =
 
 systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
 systemsPricing pid critical isCurrent =
-  pricingBadge_ (span_ [class_ "text-sm font-medium leading-tight"] "🌟" >> span_ [class_ "leading-tight text-sm"] "MOST POPULAR") $
-    div_ (pricingPostAttrs pid "SystemsPricing" "outline-strokeBrand-strong" [hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"]) $
-      div_ [class_ "flex flex-col gap-2", onpointerdown_ "handlePaymentPlanSelect(event, 'systemsPlan')", id_ "systemsPlan"] do
-        input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "ord", value_ ""]
-        div_ [class_ "pricing-gradient-brand-wide"] pass
-        pricingContent_ "Bring your own storage" "Business plan" (priceDisplay_ [id_ "critical_price"] "199" "/per month")
-          (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "bg-fillStrong text-textInverse-strong", term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |], type_ "button"] $ if isCurrent then "Current plan" else "Start 30 day free trial")
-          ["Own and control all your data", "Save all your data to any S3-compatible bucket", "Unlimited data retention period", "Query years of data via monoscope", "No extra cost for data retention"]
-          (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "bring nothing" >> " plus...")
+  pricingBadge_ (span_ [class_ "text-sm font-medium leading-tight"] "🌟" >> span_ [class_ "leading-tight text-sm"] "MOST POPULAR")
+    $ div_ (pricingPostAttrs pid "SystemsPricing" "outline-strokeBrand-strong" [hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"])
+    $ div_ [class_ "flex flex-col gap-2", onpointerdown_ "handlePaymentPlanSelect(event, 'systemsPlan')", id_ "systemsPlan"] do
+      input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "ord", value_ ""]
+      div_ [class_ "pricing-gradient-brand-wide"] pass
+      pricingContent_
+        "Bring your own storage"
+        "Business plan"
+        (priceDisplay_ [id_ "critical_price"] "199" "/per month")
+        (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "bg-fillStrong text-textInverse-strong", term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |], type_ "button"] $ if isCurrent then "Current plan" else "Start 30 day free trial")
+        ["Own and control all your data", "Save all your data to any S3-compatible bucket", "Unlimited data retention period", "Query years of data via monoscope", "No extra cost for data retention"]
+        (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "bring nothing" >> " plus...")
 
 
 openSourcePricing :: Projects.ProjectId -> Bool -> Html ()
 openSourcePricing pid isCurrent =
-  div_ (pricingPostAttrs pid "openSourcePricing" "outline-strokeWeak" [hxVals_ "{\"plan\": \"Open Source\"}"]) $
-    div_ [class_ "flex flex-col gap-2 h-full relative"] do
+  div_ (pricingPostAttrs pid "openSourcePricing" "outline-strokeWeak" [hxVals_ "{\"plan\": \"Open Source\"}"])
+    $ div_ [class_ "flex flex-col gap-2 h-full relative"] do
       div_ [class_ "w-full h-36 right-[-20px] top-[-45px] absolute bg-gradient-to-bl from-green-500/10 to-green-500/0"] pass
-      pricingContent_ "Open Source Community Edition" "Self-hosted deployment" (priceDisplay_ [] "0" "Free forever")
+      pricingContent_
+        "Open Source Community Edition"
+        "Self-hosted deployment"
+        (priceDisplay_ [] "0" "Free forever")
         (div_ $ button_ ([class_ $ pricingBtnCls isCurrent "bg-green-700 hover:bg-green-600 text-white", type_ "submit"] <> [disabled_ "disabled" | isCurrent]) $ if isCurrent then "Current plan" else "Continue with Open Source")
         ["Unlimited events", "Unlimited team members", "Self-hosted deployment", "Full control over your data", "Community support", "All APItoolkit features"]
         "What's included:"
@@ -243,15 +255,17 @@ openSourcePricing pid isCurrent =
 
 enterprisePricing :: Html ()
 enterprisePricing =
-  pricingBadge_ (span_ [class_ "leading-tight text-sm"] "RECOMMENDED FOR TEAMS") $
-    div_ [class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeBrand-strong overflow-hidden"] $
-      div_ [class_ "flex flex-col gap-2"] do
-        div_ [class_ "pricing-gradient-brand-wide"] pass
-        pricingContent_ "Enterprise" "Custom plan for your team"
-          (div_ [class_ "flex items-end"] (span_ [class_ "text-4xl text-textStrong"] "Custom") >> div_ [class_ "flex flex-col text-textWeak text-sm"] (span_ [] "pricing"))
-          (div_ $ a_ [class_ "pricing-btn btn-primary flex items-center justify-center", href_ "https://monoscope.tech/pricing", target_ "_blank"] "Contact us")
-          ["Premium features & integrations", "SSO & advanced auth", "Priority support & SLA", "Advanced security & compliance"]
-          (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "open source" >> " plus...")
+  pricingBadge_ (span_ [class_ "leading-tight text-sm"] "RECOMMENDED FOR TEAMS")
+    $ div_ [class_ "relative bg-bgRaised rounded-2xl py-11 px-4 outline outline-strokeBrand-strong overflow-hidden"]
+    $ div_ [class_ "flex flex-col gap-2"] do
+      div_ [class_ "pricing-gradient-brand-wide"] pass
+      pricingContent_
+        "Enterprise"
+        "Custom plan for your team"
+        (div_ [class_ "flex items-end"] (span_ [class_ "text-4xl text-textStrong"] "Custom") >> div_ [class_ "flex flex-col text-textWeak text-sm"] (span_ [] "pricing"))
+        (div_ $ a_ [class_ "pricing-btn btn-primary flex items-center justify-center", href_ "https://monoscope.tech/pricing", target_ "_blank"] "Contact us")
+        ["Premium features & integrations", "SSO & advanced auth", "Priority support & SLA", "Advanced security & compliance"]
+        (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "open source" >> " plus...")
 
 
 included :: [Text] -> Html () -> Html ()

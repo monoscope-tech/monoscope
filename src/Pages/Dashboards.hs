@@ -707,8 +707,8 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
           div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
       -- Keyboard hints
-      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"] $
-        forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"]), ("Close", ["esc"])] :: [(Text, [Text])]) \(label, keys) ->
+      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"]
+        $ forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"]), ("Close", ["esc"])] :: [(Text, [Text])]) \(label, keys) ->
           div_ [class_ "flex items-center gap-1.5"] do
             toHtml label
             forM_ keys $ kbd_ [class_ "kbd kbd-xs"] . toHtml
@@ -1198,51 +1198,51 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
   div_ [class_ $ if isNewWidget then "block mt-6" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block mt-6"] do
     div_ [class_ "space-y-8"] do
       numberedStep_ 1 "Configure Query" $ div_ [class_ "flex flex-col gap-3"] do
-          logQueryBox_
-            LogQueryBoxConfig
-              { pid = pid
-              , currentRange = Nothing
-              , source = Nothing
-              , targetSpan = Nothing
-              , query = widgetToUse.rawQuery <|> widgetToUse.query
-              , vizType = Just $ case widgetToUse.wType of
-                  Widget.WTTimeseries -> "timeseries"
-                  Widget.WTTimeseriesLine -> "timeseries_line"
-                  Widget.WTLogs -> "logs"
-                  _ -> "timeseries"
-              , queryLibRecent = V.empty
-              , queryLibSaved = V.empty
-              , updateUrl = False
-              , targetWidgetPreview = Just widgetPreviewId
-              , alert = False
-              , patternSelected = Nothing
-              , mobileExtra = Nothing
-              }
-          details_ [class_ "text-xs text-textWeak"] do
-            summary_ [class_ "cursor-pointer hover:text-textStrong select-none transition-colors"] "Show generated SQL"
-            div_
-              [ id_ $ widPrefix <> "-sql-preview"
-              , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview"
-              , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
-              , hxTrigger_ "toggle from:closest details"
-              , hxSwap_ "innerHTML"
-              ]
-              $ loadingIndicator_ LdXS LdSpinner
+        logQueryBox_
+          LogQueryBoxConfig
+            { pid = pid
+            , currentRange = Nothing
+            , source = Nothing
+            , targetSpan = Nothing
+            , query = widgetToUse.rawQuery <|> widgetToUse.query
+            , vizType = Just $ case widgetToUse.wType of
+                Widget.WTTimeseries -> "timeseries"
+                Widget.WTTimeseriesLine -> "timeseries_line"
+                Widget.WTLogs -> "logs"
+                _ -> "timeseries"
+            , queryLibRecent = V.empty
+            , queryLibSaved = V.empty
+            , updateUrl = False
+            , targetWidgetPreview = Just widgetPreviewId
+            , alert = False
+            , patternSelected = Nothing
+            , mobileExtra = Nothing
+            }
+        details_ [class_ "text-xs text-textWeak"] do
+          summary_ [class_ "cursor-pointer hover:text-textStrong select-none transition-colors"] "Show generated SQL"
+          div_
+            [ id_ $ widPrefix <> "-sql-preview"
+            , hxGet_ $ "/p/" <> pid.toText <> "/widget/sql-preview"
+            , hxVals_ "js:{query: widgetJSON.raw_query || widgetJSON.query}"
+            , hxTrigger_ "toggle from:closest details"
+            , hxSwap_ "innerHTML"
+            ]
+            $ loadingIndicator_ LdXS LdSpinner
 
       numberedStep_ 2 "Give your graph a title"
-          $ input_
-            [ class_ "input input-bordered w-full"
-            , id_ widgetTitleInputId
-            , placeholder_ "Throughput"
-            , required_ "required"
-            , value_ $ fromMaybe "" widgetToUse.title
-            , term
-                "_"
-                [text| on change
+        $ input_
+          [ class_ "input input-bordered w-full"
+          , id_ widgetTitleInputId
+          , placeholder_ "Throughput"
+          , required_ "required"
+          , value_ $ fromMaybe "" widgetToUse.title
+          , term
+              "_"
+              [text| on change
                  set widgetJSON.title to my value then
                  trigger 'update-widget' on #{'${widgetPreviewId}'}
                |]
-            ]
+          ]
 
   -- Alerts tab content
   unless isNewWidget do

@@ -345,7 +345,9 @@ apiKeyColumns pid =
             , id_ $ "key" <> show i
             , term "data-tippy-content" tip
             ]
-            $ faSprite_ icon "regular" $ "h-3.5 w-3.5 " <> iconCls
+            $ faSprite_ icon "regular"
+            $ "h-3.5 w-3.5 "
+            <> iconCls
   ]
 
 
