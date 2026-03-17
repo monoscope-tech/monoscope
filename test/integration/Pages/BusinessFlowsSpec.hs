@@ -17,7 +17,7 @@ import Models.Projects.Projects qualified as Projects
 import OddJobs.Job (Job (..))
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Settings qualified as LemonSqueezy
-import Pages.Onboarding.Onboarding qualified as Onboarding
+import Pages.Onboarding qualified as Onboarding
 import Pages.Projects qualified as CreateProject
 import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
