@@ -614,56 +614,28 @@ renderNameCol item = do
 
 
 muteButtonDropdown_ :: Text -> Text -> Text -> Html ()
-muteButtonDropdown_ btnClass monitorId muteUrl = do
-  let popId = "mute-btn-pop-" <> monitorId
-  div_ [class_ "inline-block"] do
-    button_
-      [ type_ "button"
-      , class_ btnClass
-      , term "aria-label" "Mute"
-      , term "data-tippy-content" "Silence notifications for a period"
-      , term "popovertarget" popId
-      , style_ $ "anchor-name: --anchor-" <> popId
-      ]
-      do
-        faSprite_ "bell-slash" "regular" "h-4 w-4"
-        span_ [class_ "max-md:hidden"] "Mute"
-    div_
-      [ id_ popId
-      , term "popover" "auto"
-      , class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1"
-      , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
-      ]
-      do
-        span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak"] "Mute for..."
-        forM_ muteDurations \(mins, label) ->
-          button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full", hxPost_ $ muteUrl <> "?duration=" <> show mins, hxSwap_ "none"] $ toHtml label
-        button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak", hxPost_ muteUrl, hxSwap_ "none"] "Indefinitely"
+muteButtonDropdown_ btnClass monitorId muteUrl =
+  muteDropdownWith_ ("mute-btn-pop-" <> monitorId) muteUrl \popId ->
+    button_ [type_ "button", class_ btnClass, term "aria-label" "Mute", term "data-tippy-content" "Silence notifications for a period", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId] do
+      faSprite_ "bell-slash" "regular" "h-4 w-4"
+      span_ [class_ "max-md:hidden"] "Mute"
 
 
 muteDropdown_ :: Text -> Text -> Html ()
-muteDropdown_ monitorId muteUrl = do
-  let popId = "mute-pop-" <> monitorId
-  div_ [class_ "inline-block"] do
-    button_
-      [ type_ "button"
-      , term "data-tippy-content" "Mute"
-      , class_ "cursor-pointer hover:text-textBrand transition-colors tap-target"
-      , term "popovertarget" popId
-      , style_ $ "anchor-name: --anchor-" <> popId
-      ]
+muteDropdown_ monitorId muteUrl =
+  muteDropdownWith_ ("mute-pop-" <> monitorId) muteUrl \popId ->
+    button_ [type_ "button", term "data-tippy-content" "Mute", class_ "cursor-pointer hover:text-textBrand transition-colors tap-target", term "popovertarget" popId, style_ $ "anchor-name: --anchor-" <> popId]
       $ faSprite_ "bell-slash" "regular" "h-3.5 w-3.5"
-    div_
-      [ id_ popId
-      , term "popover" "auto"
-      , class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1"
-      , style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId
-      ]
-      do
-        span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak"] "Mute for..."
-        forM_ muteDurations \(mins, label) ->
-          button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full", hxPost_ $ muteUrl <> "?duration=" <> show mins, hxSwap_ "none"] $ toHtml label
-        button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak", hxPost_ muteUrl, hxSwap_ "none"] "Indefinitely"
+
+
+muteDropdownWith_ :: Text -> Text -> (Text -> Html ()) -> Html ()
+muteDropdownWith_ popId muteUrl triggerBtn = div_ [class_ "inline-block"] do
+  triggerBtn popId
+  div_ [id_ popId, term "popover" "auto", class_ "dropdown dropdown-start menu bg-bgRaised p-1 text-sm border border-strokeWeak z-50 min-w-36 rounded-md shadow-lg mt-1", style_ $ "position-try: flip-block; position-anchor: --anchor-" <> popId] do
+    span_ [class_ "px-3 py-1 text-xs font-medium text-textWeak"] "Mute for..."
+    forM_ muteDurations \(mins, label) ->
+      button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full", hxPost_ $ muteUrl <> "?duration=" <> show mins, hxSwap_ "none"] $ toHtml label
+    button_ [type_ "button", class_ "px-3 py-1.5 text-sm text-left hover:bg-fillWeaker rounded cursor-pointer w-full border-t border-strokeWeak", hxPost_ muteUrl, hxSwap_ "none"] "Indefinitely"
 
 
 muteDurations :: [(Int, Text)]

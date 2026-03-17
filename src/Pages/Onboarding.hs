@@ -803,6 +803,14 @@ integrationCard serviceName iconPath isConnected connectUrl = do
     connectionStatusButton isConnected connectUrl
 
 
+onboardingStepWrapper_ :: Text -> Int -> Text -> Text -> Html () -> Html ()
+onboardingStepWrapper_ extraCls step title prevUrl content =
+  div_ [class_ $ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0 " <> extraCls] $
+    div_ [class_ "flex-col gap-4 flex w-full"] do
+      stepIndicator step title prevUrl
+      content
+
+
 notifChannelsWithUrls :: Text -> Text -> Projects.ProjectId -> Text -> V.Vector Text -> Bool -> Bool -> Html ()
 notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack = do
   div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] mb-10 px-4 md:px-0"] $ do
@@ -849,10 +857,8 @@ notifChannelsWithUrls slackUrl discordUrl pid phone emails hasDiscord hasSlack =
 
 onboardingInfoBody :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Html ()
 onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
-  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0"] $ do
-    div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      stepIndicator 1 "Tell us a little bit about you" ""
-      form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
+  onboardingStepWrapper_ "" 1 "Tell us a little bit about you" "" $
+    form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/info", hxIndicator_ "#loadingIndicator"] $ do
         div_ [class_ "flex-col w-full gap-4 mt-4 flex"] $ do
           forM_ ([("First Name", "firstName", firstName), ("Last Name", "lastName", lastName), ("Company Name", "companyName", cName)] :: [(Text, Text, Text)]) \(label, name, val) ->
             formField_ FieldMd def{value = val} label name True Nothing
@@ -867,10 +873,8 @@ onboardingInfoBody pid firstName lastName cName cSize fUsFrm = do
 
 onboardingConfigBody :: Projects.ProjectId -> Text -> [Text] -> Html ()
 onboardingConfigBody pid loca func = do
-  div_ [class_ "w-full max-w-xl mx-auto mt-20 md:mt-[156px] px-4 md:px-0"] $ do
-    div_ [class_ "flex-col gap-4 flex w-full"] $ do
-      stepIndicator 2 "Let's configure your project" $ "/p/" <> pid.toText <> "/onboarding?step=Info"
-      form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"] $ do
+  onboardingStepWrapper_ "" 2 "Let's configure your project" ("/p/" <> pid.toText <> "/onboarding?step=Info") $
+    form_ [class_ "flex-col w-full gap-8 flex", hxPost_ $ "/p/" <> pid.toText <> "/onboarding/survey", hxIndicator_ "#loadingIndicator"] $ do
         div_ [class_ "flex-col w-full gap-14 mt-4 flex"] $ do
           div_ [class_ "flex-col gap-2 flex"] $ do
             div_ [class_ "items-center gap-[2px] flex"] $ do

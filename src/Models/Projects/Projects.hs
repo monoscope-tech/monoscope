@@ -89,7 +89,6 @@ import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
 import Effectful.PostgreSQL qualified as PG
-import Effectful.Reader.Static (Reader, asks)
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))

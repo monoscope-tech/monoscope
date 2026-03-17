@@ -2484,4 +2484,21 @@ table td a[href]:not(.btn):not([data-no-preview]) { --tooltip-z: 100; --tooltip-
   .nested-grid.grid-stack {
     min-height: auto !important;
   }
+
+  /* Pricing card components */
+  .pricing-btn {
+    @apply btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg;
+  }
+  .pricing-btn-disabled {
+    @apply bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong;
+  }
+  .pricing-gradient-slate {
+    @apply w-full h-36 right-[-20px] top-[-45px] absolute bg-gradient-to-bl from-slate-500/10 to-slate-500/0;
+  }
+  .pricing-gradient-slate-wide {
+    @apply w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] absolute bg-gradient-to-bl from-slate-500/10 to-slate-transparent;
+  }
+  .pricing-gradient-brand-wide {
+    @apply w-[500px] h-36 right-0 top-0 rotate-y-15 rotate-z-15 top-[-55px] right-[-40px] rounded-t-2xl absolute bg-gradient-to-b from-fillBrand-weak to-transparent;
+  }
 }

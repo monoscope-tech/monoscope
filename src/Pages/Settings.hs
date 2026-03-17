@@ -332,27 +332,20 @@ apiKeyColumns pid =
             , term "data-tippy-content" "Copy key"
             ]
             $ faSprite_ "clipboard-copy" "regular" "h-3.5 w-3.5 text-iconNeutral"
-          if apiKey.active
-            then
-              button_
-                [ class_ "p-1 rounded hover:bg-fillError-weak cursor-pointer"
-                , hxDelete_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-                , hxConfirm_ $ "Are you sure you want to revoke " <> apiKey.title <> " API Key?"
-                , hxTarget_ settingsContentTarget
-                , id_ $ "key" <> show i
-                , term "data-tippy-content" "Revoke key"
-                ]
-                $ faSprite_ "circle-xmark" "regular" "h-3.5 w-3.5 text-iconError"
-            else
-              button_
-                [ class_ "p-1 rounded hover:bg-fillSuccess-weak cursor-pointer"
-                , hxPatch_ $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
-                , hxConfirm_ $ "Are you sure you want to activate " <> apiKey.title <> " API Key?"
-                , hxTarget_ settingsContentTarget
-                , id_ $ "key" <> show i
-                , term "data-tippy-content" "Activate key"
-                ]
-                $ faSprite_ "circle-check" "regular" "h-3.5 w-3.5 text-iconSuccess"
+          let (hoverCls, hxMethod, tip, icon, iconCls) =
+                if apiKey.active
+                  then ("hover:bg-fillError-weak", hxDelete_, "Revoke key", "circle-xmark", "text-iconError")
+                  else ("hover:bg-fillSuccess-weak", hxPatch_, "Activate key", "circle-check", "text-iconSuccess")
+              confirmMsg = "Are you sure you want to " <> (if apiKey.active then "revoke " else "activate ") <> apiKey.title <> " API Key?"
+          button_
+            [ class_ $ "p-1 rounded cursor-pointer " <> hoverCls
+            , hxMethod $ "/p/" <> pid.toText <> "/apis/" <> apiKey.id.toText
+            , hxConfirm_ confirmMsg
+            , hxTarget_ settingsContentTarget
+            , id_ $ "key" <> show i
+            , term "data-tippy-content" tip
+            ]
+            $ faSprite_ icon "regular" $ "h-3.5 w-3.5 " <> iconCls
   ]
 
 

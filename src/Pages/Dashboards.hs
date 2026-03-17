@@ -707,17 +707,11 @@ variablePickerModal_ pid dashId activeTabSlug allParams var useOob = do
                 when isCurrent $ faSprite_ "check" "regular" "w-3 h-3 text-primary shrink-0"
           div_ [class_ "var-picker-empty px-3 py-8 text-center text-sm text-base-content/40", style_ "display:none"] "No matching results"
       -- Keyboard hints
-      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"] do
-        div_ [class_ "flex items-center gap-1.5"] do
-          "Navigate"
-          kbd_ [class_ "kbd kbd-xs"] "\x2191"
-          kbd_ [class_ "kbd kbd-xs"] "\x2193"
-        div_ [class_ "flex items-center gap-1.5"] do
-          "Select"
-          kbd_ [class_ "kbd kbd-xs"] "\x21B5"
-        div_ [class_ "flex items-center gap-1.5"] do
-          "Close"
-          kbd_ [class_ "kbd kbd-xs"] "esc"
+      div_ [class_ "var-picker-hints flex items-center gap-6 mt-3 text-xs text-white dark:text-white/80 drop-shadow"] $
+        forM_ ([("Navigate", ["\x2191", "\x2193"]), ("Select", ["\x21B5"]), ("Close", ["esc"])] :: [(Text, [Text])]) \(label, keys) ->
+          div_ [class_ "flex items-center gap-1.5"] do
+            toHtml label
+            forM_ keys $ kbd_ [class_ "kbd kbd-xs"] . toHtml
 
 
 -- | Process a single dashboard constant by executing its SQL or KQL query and populating the result.
@@ -1059,13 +1053,14 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
 
 
--- | A unified widget viewer/editor component that uses DaisyUI tabs without JavaScript
--- @param pid Project ID
--- @param dashboardIdM Optional dashboard ID
--- @param tabSlugM Optional tab slug for tabbed dashboards
--- @param currentRange Time range for the widget
--- @param existingWidgetM Optional existing widget (for edit mode)
--- @param activeTab Which tab should be active initially ("edit" or "overview")
+numberedStep_ :: Int -> Text -> Html () -> Html ()
+numberedStep_ n title content = div_ [class_ "space-y-4"] do
+  div_ [class_ "flex items-start gap-3"] do
+    span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] $ toHtml (show n)
+    strong_ [class_ "text-base font-semibold text-textStrong"] $ toHtml title
+  div_ [class_ "pl-10"] content
+
+
 widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
 widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
   let isNewWidget = isNothing existingWidgetM
@@ -1202,11 +1197,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
 
   div_ [class_ $ if isNewWidget then "block mt-6" else "hidden group-has-[.page-drawer-tab-edit:checked]/wgtexp:block mt-6"] do
     div_ [class_ "space-y-8"] do
-      div_ [class_ "space-y-4"] do
-        div_ [class_ "flex items-start gap-3"] do
-          span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] "1"
-          strong_ [class_ "text-base font-semibold text-textStrong"] "Configure Query"
-        div_ [class_ "pl-10 flex flex-col gap-3"] do
+      numberedStep_ 1 "Configure Query" $ div_ [class_ "flex flex-col gap-3"] do
           logQueryBox_
             LogQueryBoxConfig
               { pid = pid
@@ -1238,11 +1229,7 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
               ]
               $ loadingIndicator_ LdXS LdSpinner
 
-      div_ [class_ "space-y-4"] do
-        div_ [class_ "flex items-start gap-3"] do
-          span_ [class_ "flex-shrink-0 inline-flex items-center justify-center w-7 h-7 rounded-full bg-fillWeak text-sm font-medium tabular-nums"] "2"
-          strong_ [class_ "text-base font-semibold text-textStrong"] "Give your graph a title"
-        div_ [class_ "pl-10"]
+      numberedStep_ 2 "Give your graph a title"
           $ input_
             [ class_ "input input-bordered w-full"
             , id_ widgetTitleInputId
