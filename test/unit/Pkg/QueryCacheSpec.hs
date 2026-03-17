@@ -3,7 +3,7 @@ module Pkg.QueryCacheSpec (spec) where
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.Vector qualified as V
-import Pages.Charts.Types (MetricsData (..))
+import Pages.Charts.Charts (MetricsData (..))
 import Pkg.Parser (defPid, defSqlQueryCfg, fixedUTCTime)
 import Pkg.Parser.Expr (Subject (..))
 import Pkg.Parser.Stats (BinFunction (..), ByClauseItem (..), Section (..), SummarizeByClause (..))

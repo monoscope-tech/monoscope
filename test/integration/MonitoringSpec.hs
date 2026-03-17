@@ -416,9 +416,6 @@ spec = aroundAll withTestResources do
         length notifs `shouldBe` 0
 
 
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
-
 
 -- | Insert a pipeline test monitor with deterministic SQL query
 insertPipelineMonitor :: TestResources -> Monitors.QueryMonitorId -> Text -> Double -> Maybe Double -> Text -> Maybe Double -> Maybe Double -> IO ()

@@ -54,6 +54,8 @@ module Utils (
   truncateHour,
   prettyTimeShort,
   navTabAttrs,
+  renderMarkdown,
+  jsonToMap,
 )
 where
 
@@ -101,6 +103,7 @@ import Relude hiding (notElem, show)
 import Servant hiding ((:>))
 import Text.Printf (printf)
 import Text.Regex.TDFA ((=~))
+import Text.MMark qualified as MMark
 import Text.Show
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -1351,3 +1354,14 @@ navTabAttrs =
   , hxSwap_ "morph"
   , [__|on click set my.preloadState to 'DONE'|]
   ]
+
+
+renderMarkdown :: Text -> Html ()
+renderMarkdown md = case MMark.parse "" md of
+  Left _ -> toHtml md
+  Right doc -> toHtmlRaw $ MMark.render doc
+
+
+jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
+jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
+jsonToMap _ = Nothing

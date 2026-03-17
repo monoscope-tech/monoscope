@@ -53,8 +53,7 @@ import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.SummaryGenerator (generateSummary)
-import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..))
+import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
@@ -82,7 +81,7 @@ import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
 import System.Types (DB, runBackground)
-import Utils (b64ToJson, freeTierDailyMaxEvents, nestedJsonFromDotNotation)
+import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
 
 
@@ -706,12 +705,6 @@ resourceToJSON (Just resource) =
       $ KEM.union
         (case flatObj of AE.Object km -> km; _ -> KEM.empty)
         (case nestedObj of AE.Object km -> km; _ -> KEM.empty)
-
-
--- Convert JSON to Map
-jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
-jsonToMap (AE.Object o) = Just $ KEM.toMapText o
-jsonToMap _ = Nothing
 
 
 -- Remove project metadata from JSON

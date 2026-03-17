@@ -6,16 +6,12 @@ import Test.Hspec
 
 import Data.UUID qualified as UUID
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 
 import Pages.Monitors qualified as Alerts
 import Relude
 import Relude.Unsafe qualified as Unsafe
 
-
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
 
 
 alertId :: UUID.UUID

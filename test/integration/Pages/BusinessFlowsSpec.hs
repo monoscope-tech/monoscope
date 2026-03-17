@@ -23,7 +23,7 @@ import Pages.Projects qualified as ManageMembers
 import Pages.Replay qualified as Replay
 import Pages.Settings qualified as S3
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.TestUtils
+import Pkg.TestUtils hiding (testPid)
 import Relude
 import Servant.API (ResponseHeader (..), lookupResponseHeader)
 import Servant.Htmx

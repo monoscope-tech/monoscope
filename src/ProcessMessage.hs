@@ -60,8 +60,7 @@ import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.SummaryGenerator (generateSummary)
-import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..))
+import Models.Telemetry.Telemetry (Context (trace_state), OtelLogsAndSpans (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Relude hiding (ask)
@@ -71,7 +70,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
 import Text.RE.TDFA (RE, re, (?=~))
-import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
+import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation, replaceAllFormats, toXXHash)
 
 
 {--
@@ -193,12 +192,6 @@ processMessages msgs attrs = do
 -- Strip literal NUL bytes from Text
 stripNulBytes :: Text -> Text
 stripNulBytes = T.replace "\NUL" ""
-
-
--- Convert JSON value to Map
-jsonToMap :: AE.Value -> Maybe (Map Text AE.Value)
-jsonToMap (AE.Object o) = Just $ AEKM.toMapText o
-jsonToMap _ = Nothing
 
 
 -- | Process a single span to extract entities for anomaly detection

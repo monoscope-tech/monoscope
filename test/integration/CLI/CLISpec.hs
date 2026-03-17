@@ -14,9 +14,7 @@ import Effectful
 import Models.Telemetry.Schema qualified as Schema
 import Network.Wreq qualified as Wreq
 import Pages.Charts.Charts qualified as Charts
-import Pages.Charts.Types qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
-import Pkg.CLITestUtils (runHTTPtoServant, testPid)
 import Pkg.TestUtils
 import Test.Hspec
 

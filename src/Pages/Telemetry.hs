@@ -702,7 +702,7 @@ tracePage pid traceItem spanRecords = do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors spanRecords
 
-  let spanJson = decodeUtf8 $ AE.encode $ spanRecords <&> getSpanJson
+  let spanJson = decodeUtf8 $ AE.encode $ spanRecords <&> Widget.getSpanJson Nothing
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
   script_
@@ -734,21 +734,6 @@ tracePage pid traceItem spanRecords = do
     document.addEventListener("DOMContentLoaded", initTraceCharts);
     initTraceCharts();
   |]
-
-
-getSpanJson :: Telemetry.SpanRecord -> AE.Value
-getSpanJson sp =
-  AE.object
-    [ "spanId" AE..= sp.spanId
-    , "name" AE..= sp.spanName
-    , "value" AE..= sp.spanDurationNs
-    , "start" AE..= start
-    , "parentId" AE..= sp.parentSpanId
-    , "serviceName" AE..= getServiceName sp.resource
-    , "hasErrors" AE..= spanHasErrors sp
-    ]
-  where
-    start = utcTimeToNanoseconds sp.startTime
 
 
 renderSpanRecordRow :: V.Vector Telemetry.SpanRecord -> HashMap Text Text -> Text -> Html ()

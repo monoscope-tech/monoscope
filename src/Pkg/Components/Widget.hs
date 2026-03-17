@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -297,9 +297,9 @@ widgetPostH pid sinceM fromM toM widget = do
 widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since fromM toM =
   let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
-      encodedJson = decodeUtf8 @Text $ urlEncode True $ encodeUtf8 widgetJson
+      encodedJson = toUriStr widgetJson
       sig = signWidgetUrl secret pid widgetJson
-      timeParams = foldMap (\(k, mv) -> maybe "" (\v -> "&" <> k <> "=" <> v) mv) ([("since", since), ("from", fromM), ("to", toM)] :: [(Text, Maybe Text)])
+      timeParams = mconcat $ catMaybes [("&since=" <>) . toUriStr <$> since, ("&from=" <>) . toUriStr <$> fromM, ("&to=" <>) . toUriStr <$> toM]
       url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> "" else pure url
 
@@ -1174,7 +1174,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
         let spansJson =
               ( \x ->
                   let targ = find (\(n, _, _) -> n == x.spanName) cdrn
-                   in getSpanJson targ x
+                   in getSpanJson (targ <&> \(_, d, c) -> (d, c)) x
               )
                 <$> fromMaybe [] (HM.lookup val spansGrouped)
         let spjson = decodeUtf8 $ fromLazy $ AE.encode spansJson
@@ -1197,17 +1197,17 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
                 $ renderFlameGraph val
 
 
-getSpanJson :: Maybe (Text, Int, Int) -> Telemetry.SpanRecord -> AE.Value
+getSpanJson :: Maybe (Int, Int) -> Telemetry.SpanRecord -> AE.Value
 getSpanJson tgtM sp =
   AE.object
     [ "spanId" AE..= sp.spanId
     , "name" AE..= sp.spanName
-    , "value" AE..= maybe sp.spanDurationNs (\(_, d, _) -> fromIntegral d) tgtM
+    , "value" AE..= maybe sp.spanDurationNs (\(d, _) -> fromIntegral d) tgtM
     , "start" AE..= start
     , "parentId" AE..= sp.parentSpanId
     , "serviceName" AE..= getServiceName sp.resource
     , "hasErrors" AE..= spanHasErrors sp
-    , "totalSpans" AE..= maybe 1 (\(_, _, c) -> c) tgtM
+    , "totalSpans" AE..= maybe 1 snd tgtM
     ]
   where
     start = utcTimeToNanoseconds sp.startTime

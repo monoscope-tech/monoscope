@@ -36,7 +36,6 @@ import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
-import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
 import Pkg.Components.Widget (WidgetType (..))
 import Pkg.Components.Widget qualified as Widget
@@ -187,8 +186,8 @@ renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents t
       stmTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" startTime
       endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%6QZ" endTime
       (errTotal, apiTotal, qTotal, lpTotal, rcTotal) = anomalyTypeCounts (.issueType) anomalies
-  eventsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
-  errorsUrl <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
+  eventsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just endTxt)
+  errorsUrl <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just endTxt)
   let projectUrl = ctx.env.hostUrl <> "p/" <> pid.toText
       reportData =
         ET.WeeklyReportData

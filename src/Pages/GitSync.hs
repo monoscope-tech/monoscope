@@ -41,18 +41,11 @@ import Relude hiding (ask)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addRespHeaders)
-import Text.MMark qualified as MMark
-import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
+import Utils (LoadingSize (..), faSprite_, htmxIndicator_, renderMarkdown)
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (parseUrlPiece)
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
-
-
-renderMarkdown :: Text -> Html ()
-renderMarkdown md = case MMark.parse "" md of
-  Left _ -> toHtml md
-  Right doc -> toHtmlRaw $ MMark.render doc
 
 
 data GitHubWebhookPayload = GitHubWebhookPayload

@@ -34,9 +34,9 @@ import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, dispatchAIResponse, formatBotError, formatHistoryAsContext, formatReportForDiscord, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), authHeader, botEmoji, contentTypeHeader, detectReportIntent, dispatchAIResponse, formatBotError, formatHistoryAsContext, formatReportForDiscord, processAIQuery, processReportQuery)
 import Pkg.AI qualified as AI
-import Pkg.Components.Widget (Widget (..))
+import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
 import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)

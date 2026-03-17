@@ -7,11 +7,9 @@ import Data.Map.Strict qualified as Map
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.Time.Clock (addUTCTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
-import Pkg.DeriveUtils (UUIDId (..))
 import Pages.LogExplorer.Log qualified as Log
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
@@ -19,9 +17,6 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
-
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
 
 
 spec :: Spec

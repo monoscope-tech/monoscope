@@ -117,7 +117,6 @@ library
       Models.Projects.ProjectMembers
       Models.Projects.Projects
       Models.Telemetry.Schema
-      Models.Telemetry.SummaryGenerator
       Models.Telemetry.Telemetry
       Opentelemetry.OtlpMockValues
       Opentelemetry.OtlpServer
@@ -146,7 +145,6 @@ library
       Pages.Telemetry
       Pkg.AI
       Pkg.CLIFormat
-      Pkg.CLITestUtils
       Pkg.Components.LogQueryBox
       Pkg.Components.Table
       Pkg.Components.TimePicker

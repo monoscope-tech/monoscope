@@ -7,7 +7,6 @@ import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
 import Data.Time.Calendar (fromGregorian)
 import Data.Time.Clock (UTCTime (..), addUTCTime, diffUTCTime, secondsToDiffTime)
-import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
@@ -16,6 +15,7 @@ import Pkg.Parser.Stats
 import PyF (fmt)
 import Relude
 import Safe qualified
+import Utils (formatUTC)
 import Text.Megaparsec (errorBundlePretty, parse)
 
 
@@ -507,10 +507,6 @@ colsNoAsClause = mapMaybe (\x -> Safe.headMay $ T.strip <$> T.splitOn "as" x)
 
 instance HasField "toColNames" QueryComponents [Text] where
   getField qc = qc.finalColumns
-
-
-formatUTC :: UTCTime -> Text
-formatUTC = toText . formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ"
 
 
 -- | Replace all occurrences of {{key}} in the input text using the provided mapping.

@@ -68,7 +68,6 @@ import Data.Scientific (toBoundedInteger)
 import Deriving.Aeson qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
-import Pages.Bots.Utils qualified as BotUtils
 
 
 data TraceTreeEntry = TraceTreeEntry
@@ -652,8 +651,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           -- Build widgets with PNG URLs
           let baseChartWidget = logChartWidget pid
               baseLatencyWidget = logLatencyWidget pid
-          chartPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
-          latencyPngUrl <- BotUtils.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
+          chartPngUrl <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseChartWidget sinceM fromM toM
+          latencyPngUrl <- Widget.widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl pid baseLatencyWidget sinceM fromM toM
           let chartWidget = if T.null chartPngUrl then baseChartWidget else baseChartWidget{Widget.pngUrl = Just chartPngUrl}
               latencyWidget = if T.null latencyPngUrl then baseLatencyWidget else baseLatencyWidget{Widget.pngUrl = Just latencyPngUrl}
 

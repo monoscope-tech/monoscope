@@ -49,12 +49,14 @@ module Models.Telemetry.Telemetry (
   getDBQueryStats,
   mkSystemLog,
   insertSystemLog,
+  generateSummary,
 )
 where
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((.~))
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
 import Data.Effectful.UUID (UUIDEff, genUUID)
@@ -97,7 +99,7 @@ import System.Logging qualified as Log
 import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (formatUTC, lookupValueText)
+import Utils (extractMessageFromLog, formatUTC, getDurationNSMS, lookupValueText)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -1309,3 +1311,307 @@ insertSystemLog
   => OtelLogsAndSpans
   -> Eff es ()
 insertSystemLog otelLog = bulkInsertOtelLogsAndSpansTF (V.singleton otelLog)
+
+
+-- | Generate summary array for an OtelLogsAndSpans record
+-- Format: "field;style⇒value" where:
+--   - field is optional (can be empty for plain text)
+--   - style can be: info-strong, info-weak, error-strong, error-weak,
+--                   warning-strong, warning-weak, success-strong, success-weak, neutral
+--   - special styles: "right" for right-aligned items
+--   - plain text has no semicolon separator
+generateSummary :: OtelLogsAndSpans -> V.Vector T.Text
+generateSummary otel =
+  case otel.kind of
+    Just "log" -> generateLogSummary otel
+    _ -> generateSpanSummary otel
+
+
+generateLogSummary :: OtelLogsAndSpans -> V.Vector T.Text
+generateLogSummary otel =
+  let
+    isRawDataLog =
+      isNothing otel.body
+        && isNothing otel.severity
+        && maybe True Map.null (unAesonTextMaybe otel.attributes)
+
+    elements = if isRawDataLog then rawDataLogElements else normalLogElements
+    resourceFallback = case unAesonTextMaybe otel.resource of
+      Just res
+        | not (Map.null res) ->
+            let resText = decodeUtf8 (AE.encode res)
+                truncated =
+                  if T.length resText > 500
+                    then T.take 497 resText <> "..."
+                    else resText
+             in "resource;text-textWeak⇒" <> truncated
+      _ -> "resource;text-textWeak⇒{}"
+    rawDataLogElements =
+      catMaybes
+        [ case otel.context of
+            Just ctx -> case ctx.trace_state of
+              Just ts | ts /= "" -> Just $ "trace_state;neutral⇒" <> ts
+              _ -> Nothing
+            _ -> Nothing
+        , otel.context >>= \ctx ->
+            ctx.trace_id >>= \tid ->
+              if tid /= ""
+                then Just $ "trace_id;right-badge-neutral⇒" <> T.take 16 tid
+                else Nothing
+        , Just resourceFallback
+        ]
+
+    normalLogElements =
+      catMaybes
+        [ case otel.severity of
+            Just Severity{severity_text = Just sev} ->
+              Just $ "severity_text;" <> severityStyle sev <> "⇒" <> severityText sev
+            _ -> Nothing
+        , case unAesonTextMaybe otel.body of
+            Just (AE.String txt) -> Just txt
+            Just (AE.Object obj) -> case extractMessageFromLog (AE.Object obj) of
+              Just v -> Just v
+              _ -> Just $ decodeUtf8 (AE.encode obj)
+            Just val -> case val of
+              AE.Null -> Nothing
+              _ -> Just $ T.take 200 $ toText $ show val
+            Nothing -> Nothing
+        , case unAesonTextMaybe otel.attributes of
+            Just attrs
+              | not (Map.null attrs) ->
+                  let attrText = decodeUtf8 (AE.encode attrs)
+                      truncated =
+                        if T.length attrText > 500
+                          then T.take 497 attrText <> "..."
+                          else attrText
+                   in Just $ "attributes;text-textWeak⇒" <> truncated
+            _ -> Nothing
+        ]
+   in
+    V.fromList $ if null elements then rawDataLogElements else elements
+  where
+    severityStyle sev = case sev of
+      SLTrace -> "badge-neutral"
+      SLDebug -> "badge-neutral"
+      SLInfo -> "badge-info"
+      SLWarn -> "badge-warning"
+      SLError -> "badge-error"
+      SLFatal -> "badge-fatal"
+
+    severityText sev = case sev of
+      SLTrace -> "TRACE"
+      SLDebug -> "DEBUG"
+      SLInfo -> "INFO"
+      SLWarn -> "WARN"
+      SLError -> "ERROR"
+      SLFatal -> "FATAL"
+
+
+generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
+generateSpanSummary otel =
+  let
+    hasHttp = case unAesonTextMaybe otel.attributes of
+      Just attrs ->
+        isJust (atMapText "http.request.method" (Just attrs))
+          || isJust (atMapInt "http.response.status_code" (Just attrs))
+      _ -> False
+
+    isEmptySpan =
+      (isNothing otel.name || otel.name == Just "")
+        && maybe True Map.null (unAesonTextMaybe otel.attributes)
+
+    elements = if isEmptySpan then resourceFallbackElements else normalElements
+
+    resourceFallbackElements =
+      catMaybes
+        [ case unAesonTextMaybe otel.resource of
+            Just res ->
+              case Map.lookup "process" res of
+                Just (AE.Object procObj) ->
+                  let procMap = Map.fromList [(AEK.toText k, v) | (k, v) <- KEM.toList procObj]
+                   in case Map.lookup "executable" procMap of
+                        Just (AE.Object execObj) ->
+                          let execMap = Map.fromList [(AEK.toText k, v) | (k, v) <- KEM.toList execObj]
+                           in case Map.lookup "name" execMap of
+                                Just (AE.String name)
+                                  | name /= "" ->
+                                      Just $ "process;neutral⇒" <> name
+                                _ ->
+                                  case Map.lookup "pid" procMap of
+                                    Just (AE.Number n) ->
+                                      Just $ "process;neutral⇒PID " <> toText (show (round n :: Int))
+                                    _ -> Nothing
+                        _ ->
+                          case Map.lookup "pid" procMap of
+                            Just (AE.Number n) ->
+                              Just $ "process;neutral⇒PID " <> toText (show (round n :: Int))
+                            _ -> Nothing
+                _ -> Nothing
+            _ -> Nothing
+        , unAesonTextMaybe otel.resource
+            >>= atMapText "service.name"
+            . Just
+            <&> ("service;neutral⇒" <>)
+        , case unAesonTextMaybe otel.resource of
+            Just attrs
+              | not (Map.null attrs) ->
+                  let filtered = Map.filterWithKey (\k _ -> k /= "process") attrs
+                      attrText = decodeUtf8 (AE.encode filtered)
+                      truncated =
+                        if T.length attrText > 300
+                          then T.take 297 attrText <> "..."
+                          else attrText
+                   in if Map.null filtered
+                        then Nothing
+                        else Just $ "resource;text-textWeak⇒" <> truncated
+            _ -> Nothing
+        , otel.context >>= \ctx ->
+            ctx.trace_id >>= \tid ->
+              if tid /= ""
+                then Just $ "trace_id;right-badge-neutral⇒" <> T.take 16 tid
+                else Nothing
+        , otel.duration <&> \dur ->
+            "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
+        ]
+
+    normalElements =
+      catMaybes
+        $
+        [ case (otel.kind, hasHttp, atMapText "component" (unAesonTextMaybe otel.attributes)) of
+            (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
+            (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
+            (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "request_type;neutral⇒incoming"
+            (_, True, Just "frontend") -> Just "request_type;neutral⇒outgoing"
+            (_, True, _) -> Just "request_type;neutral⇒outgoing"
+            (Just "server", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒incoming"
+            (Just "client", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒outgoing"
+            (_, _, _) | isJust (atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)) -> Just "kind;neutral⇒database"
+            (Just "internal", _, _) -> Just "kind;neutral⇒internal"
+            _ -> Nothing
+        ]
+        ++
+        [ case atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes) of
+            Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> toText (show code)
+            _ -> Nothing
+        ]
+        ++
+        [ case atMapText "http.request.method" (unAesonTextMaybe otel.attributes) of
+            Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
+            _ -> Nothing
+        ]
+        ++
+        [ case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
+            (Just route, _) -> Just $ "route;neutral⇒" <> route
+            (_, Just url) -> Just $ "url;neutral⇒" <> url
+            _ -> Nothing
+        ]
+        ++
+        [ case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+            (Just system, _) -> Just $ "db.system;neutral⇒" <> system
+            (_, Just system) -> Just $ "db.system;neutral⇒" <> system
+            _ -> Nothing
+        , case ( atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)
+               , atMapText "db.query.text" (unAesonTextMaybe otel.attributes)
+               ) of
+            (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
+            _ -> Nothing
+        , case atMapText "db.statement" (unAesonTextMaybe otel.attributes) of
+            Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
+            _ -> Nothing
+        ]
+        ++
+        [ case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
+            Just method -> Just $ "rpc.method;neutral⇒" <> method
+            _ -> Nothing
+        , case atMapText "rpc.service" (unAesonTextMaybe otel.attributes) of
+            Just service -> Just $ "rpc.service;neutral⇒" <> service
+            _ -> Nothing
+        ]
+        ++
+        [ case otel.name of
+            Just n ->
+              case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
+                (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
+                _ -> Nothing
+            _ -> Nothing
+        ]
+        ++
+        [ case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+            (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
+            (Just "ERROR", _) -> Just "status;badge-error⇒ERROR"
+            _ -> Nothing
+        ]
+        ++
+        [ case unAesonTextMaybe otel.attributes of
+            Just attrs
+              | not (Map.null attrs) ->
+                  let attrText = decodeUtf8 (AE.encode attrs)
+                      truncated =
+                        if T.length attrText > 500
+                          then T.take 497 attrText <> "..."
+                          else attrText
+                   in Just $ "attributes;text-textWeak⇒" <> truncated
+            _ -> Nothing
+        ]
+        ++
+        [ case atMapText "session.id" (unAesonTextMaybe otel.attributes) of
+            Just v -> Just $ "session;right-badge-neutral⇒" <> v
+            _ -> Nothing
+        , case atMapText "user.email" (unAesonTextMaybe otel.attributes) of
+            Just eml -> Just $ "user email;right-badge-neutral⇒" <> eml
+            _ -> case atMapText "user.id" (unAesonTextMaybe otel.attributes) of
+              Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+              _ -> Nothing
+        , case atMapText "user.full_name" (unAesonTextMaybe otel.attributes) of
+            Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+            _ -> case atMapText "user.name" (unAesonTextMaybe otel.attributes) of
+              Just s -> Just $ "user name;right-badge-neutral⇒" <> s
+              _ -> Nothing
+        , case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+            (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
+            (Just "ERROR", _) -> Just "status;right-badge-error⇒ERROR"
+            _ -> Nothing
+        , case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+            (Just "postgresql", _) -> Just "db.system;right-badge-postgres⇒postgres"
+            (_, Just "postgresql") -> Just "db.system;right-badge-postgres⇒postgres"
+            (Just "mysql", _) -> Just "db.system;right-badge-mysql⇒mysql"
+            (_, Just "mysql") -> Just "db.system;right-badge-mysql⇒mysql"
+            (Just "redis", _) -> Just "db.system;right-badge-redis⇒redis"
+            (_, Just "redis") -> Just "db.system;right-badge-redis⇒redis"
+            (Just "mongodb", _) -> Just "db.system;right-badge-mongo⇒mongodb"
+            (_, Just "mongodb") -> Just "db.system;right-badge-mongo⇒mongodb"
+            (Just "elasticsearch", _) -> Just "db.system;right-badge-elastic⇒elastic"
+            (_, Just "elasticsearch") -> Just "db.system;right-badge-elastic⇒elastic"
+            (Just system, _) -> Just $ "db.system;right-badge-neutral⇒" <> system
+            (_, Just system) -> Just $ "db.system;right-badge-neutral⇒" <> system
+            _ -> Nothing
+        , if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
+        , case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
+            Just _ -> Just "protocol;right-badge-neutral⇒rpc"
+            _ -> Nothing
+        , case otel.duration of
+            Just dur -> Just $ "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
+            _ ->
+              Nothing
+        ]
+   in
+    V.fromList elements
+
+
+statusCodeStyle :: Int -> T.Text
+statusCodeStyle code
+  | code < 200 = "badge-neutral"
+  | code < 300 = "badge-2xx"
+  | code < 400 = "badge-3xx"
+  | code < 500 = "badge-4xx"
+  | otherwise = "badge-5xx"
+
+
+methodStyle :: T.Text -> T.Text
+methodStyle method = case method of
+  "GET" -> "badge-GET"
+  "POST" -> "badge-POST"
+  "PUT" -> "badge-PUT"
+  "DELETE" -> "badge-DELETE"
+  "PATCH" -> "badge-PATCH"
+  _ -> "badge-neutral"

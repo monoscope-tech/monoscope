@@ -12,7 +12,7 @@ import Database.PostgreSQL.Simple qualified as PGS
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful.PostgreSQL qualified as DB
 import Models.Projects.Projects qualified as Projects
-import Pages.Bots.BotTestHelpers (setupSlackData, testPid)
+import Pages.Bots.BotTestHelpers (setupSlackData)
 import Pages.Settings (TestForm (..))
 import Pages.Settings qualified as Integrations
 import Pkg.TestUtils

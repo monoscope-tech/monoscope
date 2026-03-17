@@ -6,12 +6,10 @@ import OddJobs.Job (createJob)
 
 import Data.Pool (withResource)
 import Data.Time (addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
-import Data.UUID qualified as UUID
 import Models.Apis.Issues qualified as Reports
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Reports qualified as PageReports
-import Pkg.DeriveUtils (UUIDId (..))
 
 import BackgroundJobs (processFiveMinuteSpans)
 import BackgroundJobs qualified
@@ -28,10 +26,6 @@ import Pkg.TestUtils
 import ProcessMessage (processMessages)
 import Relude
 import Relude.Unsafe qualified as Unsafe
-
-
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
 
 
 spec :: Spec

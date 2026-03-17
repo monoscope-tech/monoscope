@@ -96,9 +96,8 @@ import Relude.Unsafe qualified as Unsafe
 import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
-import Text.MMark qualified as MMark
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, deleteParam, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, deleteParam, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -998,12 +997,6 @@ toolCallView_ tc =
       span_ [class_ "font-mono text-xs px-2 py-0.5 bg-fillWeak rounded"] $ toHtml tc.name
       whenJust (Map.lookup "query" tc.args) $ span_ [class_ "text-xs text-textWeak break-all"] . toHtml . show
     unless (T.null tc.resultPreview) $ div_ [class_ "text-xs text-textWeak font-mono pl-4 whitespace-pre-wrap break-all"] $ toHtml $ "→ " <> tc.resultPreview
-
-
-renderMarkdown :: Text -> Html ()
-renderMarkdown md = case MMark.parse "" md of
-  Left _ -> toHtml md
-  Right doc -> toHtmlRaw $ MMark.render doc
 
 
 parseStoredJSON :: AE.FromJSON a => Maybe (Aeson AE.Value) -> Maybe a

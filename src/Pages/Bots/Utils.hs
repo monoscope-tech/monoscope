@@ -1,21 +1,20 @@
-module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), widgetPngUrl, authHeader, contentTypeHeader, processAIQuery, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, dispatchAIResponse) where
+module Pages.Bots.Utils (handleTableResponse, BotType (..), BotResponse (..), Channel (..), authHeader, contentTypeHeader, processAIQuery, formatHistoryAsContext, verifyWidgetSignature, QueryIntent (..), ReportType (..), detectReportIntent, processReportQuery, formatReportForSlack, formatReportForDiscord, formatReportForWhatsApp, BotErrorType (..), formatBotError, botEmoji, getLoadingMessage, formatTextResponse, dispatchAIResponse) where
 
 import Control.Lens ((.~), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _Number)
 import Data.ByteArray qualified as BA
-import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Default (def)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Wreq (Options, header)
 import Data.HashMap.Strict qualified as HM
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime)
+import Data.Time (addUTCTime, defaultTimeLocale, formatTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Log (Log)
 import Effectful.Time qualified as Time
 import Langchain.LLM.Core qualified as LLM
@@ -36,8 +35,6 @@ import System.Config (EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (DB)
 import Utils (faSprite_, getDurationNSMS, listToIndexHashMap, lookupVecBoolByKey, lookupVecIntByKey, lookupVecTextByKey, toUriStr)
-import "cryptonite" Crypto.Hash (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 data BotType = Discord | Slack | WhatsApp
@@ -181,20 +178,6 @@ formatSpans spans =
    in "```\n" <> unlines (hd : rows) <> "```"
 
 
--- | Construct signed URL for widget PNG endpoint. Logs error and returns empty string if URL exceeds 8000 chars.
-widgetPngUrl :: (IOE :> es, Log :> es) => Text -> Text -> Projects.ProjectId -> Widget.Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
-widgetPngUrl secret hostUrl pid widget since from to =
-  let widgetJsonBS = toStrict $ AE.encode widget
-      encodedJson = decodeUtf8 @Text $ urlEncode True widgetJsonBS
-      sig = signWidgetUrl secret pid (decodeUtf8 @Text widgetJsonBS)
-      encodeParam = decodeUtf8 @Text . urlEncode True . encodeUtf8
-      timeParams = mconcat $ catMaybes [("&since=" <>) . encodeParam <$> since, ("&from=" <>) . encodeParam <$> from, ("&to=" <>) . encodeParam <$> to]
-      url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
-   in if T.length url > 8000
-        then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> ""
-        else pure url
-
-
 data TableData = TableData
   { timestamp :: Text
   , servicename :: Text
@@ -310,16 +293,10 @@ formatHistoryAsContext platform msgs =
     formatMessage m = "[" <> show (LLM.role m) <> "] " <> LLM.content m
 
 
-signWidgetUrl :: Text -> Projects.ProjectId -> Text -> Text
-signWidgetUrl secret pid widgetJson =
-  let payload = pid.toText <> ":" <> widgetJson
-   in decodeUtf8 @Text $ B16.encode $ BA.convert (HMAC.hmac (encodeUtf8 secret :: ByteString) (encodeUtf8 payload :: ByteString) :: HMAC.HMAC SHA256)
-
-
 verifyWidgetSignature :: Text -> Projects.ProjectId -> Text -> Maybe Text -> Either LBS.ByteString ()
 verifyWidgetSignature secret pid widgetJson = \case
   Nothing -> Left "Missing signature"
-  Just sig -> let expected = signWidgetUrl secret pid widgetJson in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expected :: ByteString) then Right () else Left "Invalid signature"
+  Just sig -> let expected = Widget.signWidgetUrl secret pid widgetJson in if BA.constEq (encodeUtf8 sig :: ByteString) (encodeUtf8 expected :: ByteString) then Right () else Left "Invalid signature"
 
 
 -- | Report query intent detection
@@ -366,8 +343,8 @@ processReportQuery pid reportType envCfg = do
     Just report -> do
       let startTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" report.startTime
           endTxt = toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%SZ" report.endTime
-      eventsUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"} Nothing (Just startTxt) (Just endTxt)
-      errorsUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"} Nothing (Just startTxt) (Just endTxt)
+      eventsUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "summarize count(*) by bin_auto(timestamp), status_code"} Nothing (Just startTxt) (Just endTxt)
+      errorsUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just "status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), status_code", Widget.theme = Just "roma"} Nothing (Just startTxt) (Just endTxt)
       pure $ Right (report, eventsUrl, errorsUrl)
 
 
@@ -492,7 +469,7 @@ dispatchAIResponse botType envCfg pid userQuestion resp sendResponse buildChartC
             queryUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/log_explorer?viz_type=" <> chartType <> "&query=" <> toUriStr query
             fromISO = toText . iso8601Show <$> fromTimeM
             toISO = toText . iso8601Show <$> toTimeM
-        imageUrl <- widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing fromISO toISO
+        imageUrl <- Widget.widgetPngUrl envCfg.apiKeyEncryptionSecretKey envCfg.hostUrl pid def{Widget.wType = wType, Widget.query = Just query} Nothing fromISO toISO
         sendResponse $ buildChartContent userQuestion query queryUrl imageUrl
       Nothing -> case parseQueryToAST query of
         Left _ -> sendResponse $ formatBotError botType (QueryParseError query)

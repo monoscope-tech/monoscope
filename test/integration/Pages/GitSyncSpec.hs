@@ -37,9 +37,6 @@ import Test.Hspec
 import UnliftIO.Exception (try)
 
 
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
-
 
 isGitSyncPush, isGitSyncFromRepo, isGitSyncPushAll :: (a, BackgroundJobs.BgJobs) -> Bool
 isGitSyncPush (_, BackgroundJobs.GitSyncPushDashboard{}) = True

@@ -101,9 +101,6 @@ import System.Types (ATBackgroundCtx)
 import Test.Hspec (Expectation, expectationFailure, pendingWith, shouldBe, shouldSatisfy)
 
 
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
-
 
 -- * Config Helpers
 

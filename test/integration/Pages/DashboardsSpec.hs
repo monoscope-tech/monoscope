@@ -1,7 +1,6 @@
 module Pages.DashboardsSpec (spec) where
 
 import Data.Aeson qualified as AE
-import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Models.Projects.Dashboards (Dashboard (tags), DashboardVM (..))
 import Models.Projects.ProjectMembers (TeamVM (..))
@@ -11,15 +10,11 @@ import Pages.Dashboards (DashboardFilters (..), DashboardForm)
 import Pages.Dashboards qualified as Dashboards
 import Pages.Projects (TeamForm (..))
 import Pages.Projects qualified as ManageMembers
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
-
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
 
 
 filters :: Dashboards.DashboardFilters

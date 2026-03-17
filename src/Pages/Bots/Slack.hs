@@ -39,9 +39,9 @@ import Network.Wreq qualified as Wreq
 import Network.Wreq.Types (FormParam)
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig, PageCtx (..), currProject, pageTitle, sessM)
-import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), botEmoji, contentTypeHeader, detectReportIntent, dispatchAIResponse, formatBotError, formatHistoryAsContext, formatReportForSlack, getLoadingMessage, processAIQuery, processReportQuery, widgetPngUrl)
+import Pages.Bots.Utils (BotErrorType (..), BotResponse (..), BotType (..), Channel, QueryIntent (..), botEmoji, contentTypeHeader, detectReportIntent, dispatchAIResponse, formatBotError, formatHistoryAsContext, formatReportForSlack, getLoadingMessage, processAIQuery, processReportQuery)
 import Pkg.AI qualified as AI
-import Pkg.Components.Widget (Widget (..))
+import Pkg.Components.Widget (Widget (..), widgetPngUrl)
 import Pkg.DeriveUtils (idFromText)
 import PyF
 import Relude hiding (ask, asks)

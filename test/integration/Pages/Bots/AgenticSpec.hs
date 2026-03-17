@@ -4,9 +4,9 @@ import Data.Aeson qualified as AE
 import Data.Default (def)
 import Data.Text qualified as T
 import Effectful qualified as Eff
-import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel, testPid)
+import Pages.Bots.BotTestHelpers (assertJsonGolden, getOpenAIKey, getOpenAIModel)
 import Pages.Bots.SeedTestData (cleanupTelemetryData, seedTelemetryData)
-import Pages.Bots.Utils (processAIQuery, widgetPngUrl)
+import Pages.Bots.Utils (processAIQuery)
 import Pkg.AI qualified as AI
 import Pkg.Components.Widget qualified as Widget
 import Pkg.TestUtils
@@ -119,7 +119,7 @@ spec = aroundAll withTestResources do
             secret = tr.trATCtx.env.apiKeyEncryptionSecretKey
             baseUrl = tr.trATCtx.env.hostUrl
 
-        url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ widgetPngUrl secret baseUrl testPid widget Nothing Nothing Nothing
+        url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ Widget.widgetPngUrl secret baseUrl testPid widget Nothing Nothing Nothing
 
         url `shouldSatisfy` (not . T.null)
         url `shouldSatisfy` T.isInfixOf "widgetJSON="
@@ -130,6 +130,6 @@ spec = aroundAll withTestResources do
             secret = tr.trATCtx.env.apiKeyEncryptionSecretKey
             baseUrl = tr.trATCtx.env.hostUrl
 
-        url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ widgetPngUrl secret baseUrl testPid hugeWidget Nothing Nothing Nothing
+        url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ Widget.widgetPngUrl secret baseUrl testPid hugeWidget Nothing Nothing Nothing
 
         url `shouldBe` ""

@@ -59,7 +59,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff, IOE, (:>))
+import Effectful (Eff, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Log (Log)
@@ -81,7 +81,6 @@ import NeatInterpolation
 import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
-import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
 import Pages.Components (FieldCfg (..), FieldSize (..), formField_, tagInput_)
 import Pages.Components qualified as Components
@@ -836,9 +835,9 @@ populateWidgetAlertStatuses widgets = do
           }
 
 
-populateWidgetPngUrls :: (IOE :> es, Log :> es) => Text -> Text -> Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [Widget.Widget] -> Eff es [Widget.Widget]
+populateWidgetPngUrls :: Log :> es => Text -> Text -> Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [Widget.Widget] -> Eff es [Widget.Widget]
 populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w -> do
-  url <- BotUtils.widgetPngUrl secret hostUrl pid w sinceStr fromDStr toDStr
+  url <- Widget.widgetPngUrl secret hostUrl pid w sinceStr fromDStr toDStr
   pure $ if T.null url then w else w{Widget.pngUrl = Just url}
 
 

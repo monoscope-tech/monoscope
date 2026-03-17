@@ -89,7 +89,7 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
 import Pages.LogExplorer.Log qualified as Log
-import Pages.LogExplorer.LogItem (getServiceName, spanHasErrors)
+import Pages.LogExplorer.LogItem (getServiceName)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pages.Monitors qualified as Testing
@@ -753,8 +753,8 @@ flamegraphGetH pid trId shapeViewM = do
 
   sp <-
     maybe
-      (pure $ getSpanJson Nothing <$> spanRecords)
-      (\_ -> Telemetry.getTraceShapes pid (V.singleton trId) <&> \shapesAvgs -> (\x -> getSpanJson (find (\(_, n, _, _) -> n == x.spanName) shapesAvgs) x) <$> spanRecords)
+      (pure $ Widget.getSpanJson Nothing <$> spanRecords)
+      (\_ -> Telemetry.getTraceShapes pid (V.singleton trId) <&> \shapesAvgs -> (\x -> Widget.getSpanJson (find (\(_, n, _, _) -> n == x.spanName) shapesAvgs <&> \(_, _, d, c) -> (d, c)) x) <$> spanRecords)
       shapeViewM
 
   let spjson = decodeUtf8 $ AE.encode sp
@@ -765,22 +765,6 @@ flamegraphGetH pid trId shapeViewM = do
       div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
       div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
     script_ [text|flameGraphChart($spjson, "a$trId", $colorsJson);|]
-
-
-getSpanJson :: Maybe (Text, Text, Int, Int) -> Telemetry.SpanRecord -> AE.Value
-getSpanJson tgtM sp =
-  AE.object
-    [ "spanId" AE..= sp.spanId
-    , "name" AE..= sp.spanName
-    , "value" AE..= maybe sp.spanDurationNs (\(_, _, d, _) -> fromIntegral d) tgtM
-    , "start" AE..= start
-    , "parentId" AE..= sp.parentSpanId
-    , "serviceName" AE..= getServiceName sp.resource
-    , "hasErrors" AE..= spanHasErrors sp
-    , "totalSpans" AE..= maybe 1 (\(_, _, _, c) -> c) tgtM
-    ]
-  where
-    start = utcTimeToNanoseconds sp.startTime
 
 
 -- =============================================================================

@@ -13,15 +13,11 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper
 import Pages.Projects (TBulkActionForm (..), TeamForm (..))
 import Pages.Projects qualified as ManageMembers
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Test.Hspec
 
-
-testPid :: Projects.ProjectId
-testPid = Unsafe.fromJust $ UUIDId <$> UUID.fromText "00000000-0000-0000-0000-000000000000"
 
 
 userID :: Projects.UserId

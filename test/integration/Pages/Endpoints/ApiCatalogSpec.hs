@@ -19,7 +19,6 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Apis.Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..))
 import OddJobs.Job (Job (..))
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
@@ -34,8 +33,6 @@ import Relude.Unsafe qualified as Unsafe
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, pendingWith, shouldBe, shouldSatisfy)
 import Utils (toXXHash)
 
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
 
 -- These helper functions are now in Pkg.TestUtils
 

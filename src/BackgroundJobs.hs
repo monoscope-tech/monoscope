@@ -64,8 +64,7 @@ import Models.Projects.GitSync qualified as GitHub
 import Models.Projects.GitSync qualified as GitSync
 import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.SummaryGenerator (generateSummary)
-import Models.Telemetry.Telemetry (SeverityLevel (..), insertSystemLog, mkSystemLog)
+import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.Wreq (defaults, header, postWith)
 import OddJobs.ConfigBuilder (mkConfig)
@@ -73,8 +72,8 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils (ReportType (..))
-import Pages.Bots.Utils qualified as BotUtils
 import Pages.Charts.Charts qualified as Charts
+import Pkg.Components.Widget qualified as Widget
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
@@ -1334,8 +1333,8 @@ sendReportForProject pid rType = do
           reportUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/reports/" <> report.id.toText
           eventsWidget = RP.eventsWidget
           errorsWidget = RP.errorsWidget
-      allQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
-      errQ <- BotUtils.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
+      allQ <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid eventsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
+      errQ <- Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid errorsWidget Nothing (Just stmTxt) (Just currentTimeTxt)
       let alert = ReportAlert typTxt stmTxt currentTimeTxt totalErrors totalEvents (V.fromList stats) reportUrl allQ errQ
 
       Relude.when pr.weeklyNotif $ forM_ pr.notificationsChannel \case

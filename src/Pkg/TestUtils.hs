@@ -37,6 +37,9 @@ module Pkg.TestUtils (
   ingestTraceWithHeader,
   ingestMetricWithHeader,
   ingestTraceWithException,
+  -- CLI test helpers
+  runHTTPtoServant,
+  testPid,
 )
 where
 
@@ -45,15 +48,17 @@ import Configuration.Dotenv qualified as Dotenv
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
+import Control.Lens ((^.))
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.Aeson.QQ (aesonQQ)
 import Data.Aeson.Types (KeyValue (..))
 import Data.Cache (Cache (..), newCache)
+import Data.ByteString.Lazy qualified as LBS
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
-import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
+import Data.Effectful.Wreq (HTTP (..), runHTTPGolden, runHTTPWreq)
 import Data.Either.Extra
 import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
@@ -73,6 +78,7 @@ import Database.Postgres.Temp (cacheAction, cacheConfig, toConnectionString, wit
 import Database.Postgres.Temp qualified as TmpPostgres
 import Effectful
 import Effectful.Concurrent (runConcurrent)
+import Effectful.Dispatch.Dynamic
 import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
@@ -83,13 +89,20 @@ import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
-import Models.Telemetry.SummaryGenerator qualified as SummaryGenerator
+import Models.Telemetry.Schema qualified as Schema
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Network.GRPC.Common.Protobuf (Proto (..))
+import Network.HTTP.Client (createCookieJar, defaultRequest)
+import Network.HTTP.Client.Internal (Response (..), ResponseClose (..))
+import Network.HTTP.Types.Status (ok200)
+import Network.HTTP.Types.Version (http11)
+import Network.Wreq qualified as W
 import OddJobs.Job (Job (..))
 import OpenTelemetry.Trace (TracerProvider, getGlobalTracerProvider)
 import Opentelemetry.OtlpMockValues qualified as OtlpMock
 import Opentelemetry.OtlpServer qualified as OtlpServer
+import Pages.Charts.Charts qualified as Charts
+import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
 import ProcessMessage qualified
@@ -895,7 +908,7 @@ createTestSpans TestResources{..} projectId numRequestsPerEndpoint = do
               , summary = V.empty -- Will be generated
               , errors = Nothing
               }
-      let summary = SummaryGenerator.generateSummary otelRecord
+      let summary = Telemetry.generateSummary otelRecord
       void $ withResource trPool \conn ->
         PGS.execute
           conn
@@ -991,3 +1004,77 @@ ingestMetricWithHeader tr apiKey metricName value timestamp = do
   metricBytes <- OtlpMock.createGaugeMetricAtTime "" metricName value timestamp -- Empty API key in resource
   let metricReq = either (error . toText) id (decodeMessage metricBytes :: Either String MS.ExportMetricsServiceRequest)
   void $ runTestBg frozenTime tr $ OtlpServer.processMetricsRequest (Just apiKey) metricReq
+
+
+testPid :: Projects.ProjectId
+testPid = UUIDId UUID.nil
+
+
+mockResponse :: LBS.ByteString -> Response LBS.ByteString
+mockResponse body =
+  Response
+    { responseStatus = ok200
+    , responseVersion = http11
+    , responseHeaders = [("Content-Type", "application/json")]
+    , responseBody = body
+    , responseCookieJar = createCookieJar []
+    , responseClose' = ResponseClose pass
+    , responseOriginalRequest = defaultRequest
+    , responseEarlyHints = []
+    }
+
+
+extractParams :: W.Options -> [(Text, Text)]
+extractParams opts = opts ^. W.params
+
+
+-- | Test HTTP interpreter that routes CLI requests to server handlers.
+-- Intercepts GetWith and routes based on URL path to the real handlers.
+runHTTPtoServant :: IOE :> es => TestResources -> Eff (HTTP ': es) a -> Eff es a
+runHTTPtoServant tr = interpret $ \_ -> \case
+  GetWith opts url -> liftIO $ routeRequest tr (extractPath url) (extractParams opts)
+  Get url -> liftIO $ routeRequest tr (extractPath url) []
+  _ -> error "runHTTPtoServant: only GET is supported for CLI tests"
+
+
+extractPath :: String -> Text
+extractPath url =
+  let t = toText url
+      -- Strip scheme + host to get path
+      afterScheme = fromMaybe t $ T.stripPrefix "https://" t <|> T.stripPrefix "http://" t
+      path = T.dropWhile (/= '/') afterScheme
+   in if T.null path then "/" else T.takeWhile (/= '?') path
+
+
+lookupParam :: Text -> [(Text, Text)] -> Maybe Text
+lookupParam key = fmap snd . find ((== key) . fst)
+
+
+routeRequest :: TestResources -> Text -> [(Text, Text)] -> IO (Response LBS.ByteString)
+routeRequest tr path params
+  | "/log_explorer/schema" `T.isPrefixOf` path =
+      pure $ mockResponse $ AE.encode Schema.telemetrySchemaJson
+  | "/log_explorer" `T.isPrefixOf` path = do
+      let p = lookupParam
+          jsonParam = p "json" params
+          query = p "query" params
+          since = p "since" params
+          from = p "from" params
+          to = p "to" params
+          source = p "source" params
+      (_, pg) <-
+        testServant tr
+          $ Log.apiLogH testPid query Nothing Nothing since from to Nothing source Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing jsonParam Nothing Nothing Nothing Nothing
+      pure $ mockResponse $ AE.encode pg
+  | "/chart_data" `T.isPrefixOf` path = do
+      let p = lookupParam
+          query = p "query" params
+          since = p "since" params
+          from = p "from" params
+          to = p "to" params
+          source = p "source" params
+      result <-
+        runQueryEffect tr
+          $ Charts.queryMetrics Nothing (Just testPid) query Nothing since from to source []
+      pure $ mockResponse $ AE.encode result
+  | otherwise = error $ "runHTTPtoServant: unhandled path: " <> path

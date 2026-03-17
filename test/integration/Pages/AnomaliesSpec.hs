@@ -15,7 +15,6 @@ import Data.HashMap.Strict qualified as HashMap
 import Data.Int (Int64)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
-import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Data.Pool (withResource)
@@ -32,7 +31,6 @@ import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
-import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import ProcessMessage (RequestMessage (..), processMessages, replaceNullChars, valueToFields)
 import Relude
@@ -42,9 +40,6 @@ import Test.Hspec (Spec, aroundAll, describe, it, pendingWith, shouldBe, shouldS
 import Utils (toXXHash)
 import "base64" Data.ByteString.Base64 qualified as B64
 
-
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
 
 
 -- Helper function to get anomalies from API

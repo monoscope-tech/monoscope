@@ -14,9 +14,6 @@ import Test.Hspec
 import Pages.Settings qualified as Api
 
 
-testPid :: Projects.ProjectId
-testPid = UUIDId UUID.nil
-
 
 spec :: Spec
 spec = aroundAll withTestResources do
