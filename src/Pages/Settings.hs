@@ -680,7 +680,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
-    paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled
+    paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled False
 
 
 calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime

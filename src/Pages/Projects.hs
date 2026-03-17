@@ -1332,13 +1332,14 @@ getSubscriptionId orderId apiKey = do
 data PricingUpdateForm = PricingUpdateForm
   { orderIdM :: Maybe Text
   , plan :: Maybe Text
+  , isOnboarding :: Maybe Bool
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromForm)
 
 
 pricingUpdateH :: Projects.ProjectId -> PricingUpdateForm -> ATAuthCtx (RespHeaders (Html ()))
-pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
+pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
@@ -1377,7 +1378,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan} = do
         _ <- updatePricing "Free" "" "" ""
         handleOnboarding "Free"
         void $ ProjectMembers.deactivateNonOwnerMembers pid
-  if project.paymentPlan == "ONBOARDING"
+  if project.paymentPlan == "ONBOARDING" || isOnboarding == Just True
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"
       addRespHeaders ""
@@ -1408,7 +1409,7 @@ pricingPage_ pid lemon critical paymentPlan enableFreeTier basicAuthEnabled = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
     div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 max-md:px-2 px-4"] do
       h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled
+      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled False
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)

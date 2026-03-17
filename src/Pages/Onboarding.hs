@@ -377,7 +377,7 @@ pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       div_ [class_ "w-full md:w-1/2"] $ do
         stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled
+      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled True
       div_ [class_ "flex flex-col gap-2 w-full pb-20"] do
         span_ [class_ "text-textStrong text-2xl mt-20"] "FAQ"
         div_ [class_ "join join-vertical w-full mt-4"] do

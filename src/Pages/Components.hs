@@ -79,13 +79,13 @@ dateTime t endTM = do
       toHtml $ " - " <> formatTime defaultTimeLocale "%b. %d, %I:%M:%S %p" endT
 
 
-paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled = do
+paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Html ()
+paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled isOnboarding = do
   let gridCols
         | basicAuthEnabled = "grid-cols-1 md:grid-cols-2"
         | freePricingEnabled = "grid-cols-1 md:grid-cols-3"
         | otherwise = "grid-cols-1 md:grid-cols-2"
-  div_ [class_ "flex flex-col gap-8 w-full"] do
+  div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
         p_ [class_ " text-textStrong"] "Total events"
@@ -93,11 +93,12 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
       input_ [type_ "range", min_ "20000000", max_ "500000000", step_ "10000000", value_ "20000000", class_ "range range-primary range-sm w-full", id_ "price_range"]
     div_ [class_ "flex flex-col gap-8 mt-6 w-full"] do
       div_ [class_ $ "grid gap-8 w-full " <> gridCols] do
-        when basicAuthEnabled $ openSourcePricing pid (currentPlan == "Open Source")
+        let isCurrent p = not isOnboarding && currentPlan == p
+        when basicAuthEnabled $ openSourcePricing pid (isCurrent "Open Source")
         when basicAuthEnabled enterprisePricing
-        when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (currentPlan == "Free")
-        unless basicAuthEnabled $ popularPricing pid lemonUrl (currentPlan == "Bring nothing") freePricingEnabled
-        unless basicAuthEnabled $ systemsPricing pid criticalUrl (currentPlan == "Bring your own storage")
+        when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (isCurrent "Free")
+        unless basicAuthEnabled $ popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled
+        unless basicAuthEnabled $ systemsPricing pid criticalUrl (isCurrent "Bring your own storage")
     script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
       [text|
@@ -183,7 +184,7 @@ pricingPostAttrs pid cardId outlineCls extras =
 
 
 pricingBtnCls :: Bool -> Text -> Text
-pricingBtnCls isCurrent normalCls = "pricing-btn " <> if isCurrent then "pricing-btn-disabled" else normalCls
+pricingBtnCls isCurrent normalCls = "btn mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg " <> if isCurrent then "bg-fillDisabled cursor-not-allowed border-0 text-textInverse-strong" else normalCls
 
 
 pricingBadge_ :: Html () -> Html () -> Html ()
@@ -263,7 +264,7 @@ enterprisePricing =
         "Enterprise"
         "Custom plan for your team"
         (div_ [class_ "flex items-end"] (span_ [class_ "text-4xl text-textStrong"] "Custom") >> div_ [class_ "flex flex-col text-textWeak text-sm"] (span_ [] "pricing"))
-        (div_ $ a_ [class_ "pricing-btn btn-primary flex items-center justify-center", href_ "https://monoscope.tech/pricing", target_ "_blank"] "Contact us")
+        (div_ $ a_ [class_ "btn btn-primary mb-6 mt-4 h-8 px-3 py-1 w-full text-sm font-semibold rounded-lg", href_ "https://monoscope.tech/pricing", target_ "_blank"] "Contact us")
         ["Premium features & integrations", "SSO & advanced auth", "Priority support & SLA", "Advanced security & compliance"]
         (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "open source" >> " plus...")
 
