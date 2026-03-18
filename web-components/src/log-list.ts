@@ -32,6 +32,7 @@ import {
   generateId,
   renderSparkline,
 } from './log-list-utils';
+import { expandSince, expandFromToRange, parseChartZoom } from './time-range-utils';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
 
 // TypeScript declarations for global functions
@@ -364,24 +365,12 @@ export class LogList extends LitElement {
     let target = '1H';
 
     if (since) {
-      const nextMap: Record<string, string> = {
-        '5M': '15M',
-        '15M': '30M',
-        '30M': '1H',
-        '1H': '3H',
-        '3H': '6H',
-        '6H': '12H',
-        '12H': '24H',
-        '24H': '3D',
-        '3D': '7D',
-        '7D': '14D',
-      };
-      target = nextMap[since] ?? '14D';
+      target = expandSince(since);
       url.searchParams.set('since', target);
     } else if (to) {
-      const newTo = new Date(new Date(to).getTime() - 3 * 60 * 60 * 1000).toISOString();
-      url.searchParams.set('to', newTo);
-      target = `${url.searchParams.get('from')} - ${newTo}`;
+      const newFrom = expandFromToRange(url.searchParams.get('from'), to);
+      url.searchParams.set('from', newFrom);
+      target = window.updateTimePicker({ from: newFrom, to }, { skipSetParams: true });
     } else {
       target = '3H';
       url.searchParams.set('since', target);
@@ -442,31 +431,23 @@ export class LogList extends LitElement {
   };
 
   handleChartZoom = (params: { batch?: { startValue: string; endValue: string }[] }) => {
-    const zoom = params.batch ? params.batch[0] : undefined;
-    if (!zoom) return;
-    let startValue = zoom.startValue;
-    let endValue = zoom.endValue;
-    if (startValue === undefined || endValue === undefined) return;
-    startValue = new Date(startValue).toISOString();
-    endValue = new Date(endValue).toISOString();
+    const range = parseChartZoom(params.batch);
+    if (!range) return;
+
+    const label = window.updateTimePicker({ from: range.from, to: range.to }, { skipSetParams: true });
+
     const p = new URLSearchParams(window.location.search);
-    p.set('from', startValue);
-    p.set('to', endValue);
+    p.set('from', range.from);
+    p.set('to', range.to);
     p.delete('since');
-
     const newUrl = `${window.location.pathname}?${p.toString()}${window.location.hash}`;
-    this.updateUrlStateAndQuery(newUrl, p.get('queryAST') || '', `${startValue} - ${endValue}`, 'chart-zoom');
+    this.updateUrlStateAndQuery(newUrl, p.get('queryAST') || '', label, 'chart-zoom');
 
-    // Refetch logs with the new time range
     this.debouncedRefetchLogs();
   };
 
   private updateUrlStateAndQuery(newUrl: string, q: string, timeRange: string, source: string = 'default') {
     window.history.replaceState({}, '', newUrl);
-    const rangeBox = document.getElementById('currentRange');
-    if (rangeBox) {
-      rangeBox.innerText = timeRange;
-    }
 
     this.dispatchEvent(
       new CustomEvent('update-query', {

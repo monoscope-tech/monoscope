@@ -18,6 +18,7 @@ module Pkg.EmailTemplates (
   WeeklyReportData (..),
   monitorAlertEmail,
   monitorRecoveryEmail,
+  freeTierUsageEmail,
 
   -- * Sample data for previews
   sampleProjectInvite,
@@ -858,3 +859,29 @@ monitorRecoveryEmail projectName monitorTitle monitorUrl =
       emailSignoff
       emailFallbackUrl monitorUrl
   )
+
+
+freeTierUsageEmail :: Text -> Text -> Int -> Int -> Bool -> (Text, Html ())
+freeTierUsageEmail projectName billingUrl used limit exceeded =
+  let pct = (used * 100) `div` max 1 limit
+   in ( "[···] " <> (if exceeded then "Daily event limit reached" else "Approaching daily event limit") <> " - " <> projectName
+      , emailBody do
+          h1_ $ if exceeded then "Daily Event Limit Reached" else "Approaching Daily Event Limit"
+          p_ do
+            "Your "
+            b_ $ toHtml projectName
+            if exceeded
+              then " project has hit its daily free tier limit. New events are being dropped."
+              else " project is approaching its daily free tier limit."
+          emailStatRow
+            [ ("Events Today", formatWithCommas (fromIntegral used), if exceeded then Just "#cf222e" else Just "#bf8700")
+            , ("Daily Limit", formatWithCommas (fromIntegral limit), Nothing)
+            , ("Usage", show pct <> "%", if exceeded then Just "#cf222e" else Just "#bf8700")
+            ]
+          emailButton billingUrl "Upgrade Plan"
+          emailDivider
+          emailHelpLinks
+          br_ []
+          emailSignoff
+          emailFallbackUrl billingUrl
+      )

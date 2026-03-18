@@ -197,14 +197,14 @@ pricingBadge_ badge content = div_ [class_ "relative"] do
 freePricing :: Projects.ProjectId -> Bool -> Html ()
 freePricing pid isCurrent =
   div_ (pricingPostAttrs pid "freePricing" "outline-strokeWeak" [])
-    $ div_ [class_ "flex flex-col gap-2 h-full relative", onpointerdown_ "handlePaymentPlanSelect(event, 'freePlan')", id_ "popularPlan"] do
+    $ div_ [class_ "flex flex-col gap-2 h-full relative", onpointerdown_ "handlePaymentPlanSelect(event, 'freePlan')", id_ "freePlan"] do
       div_ [class_ "pricing-gradient-slate"] pass
       pricingContent_
         "Free tier"
         "Free forever"
         (priceDisplay_ [] "0" "/per month")
-        (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "bg-fillStrong text-white ", [__| on click htmx.trigger("#freePricing", "click")|], type_ "button"] $ if isCurrent then "Current plan" else "Start free")
-        ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 3 days data retention"]
+        (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "bg-fillStrong text-textInverse-strong", [__| on click htmx.trigger("#freePricing", "click")|], type_ "button"] $ if isCurrent then "Current plan" else "Start free")
+        ["10K events per day", "1 team member", "Opentelemetry Logs, Traces and Metrics", "Last 30 days data retention"]
         "What's included:"
 
 

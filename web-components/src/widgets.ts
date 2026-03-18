@@ -523,7 +523,8 @@ const chartWidget = (widgetData: WidGetData) => {
   window.addEventListener('update-query', (e: any) => {
     updateQuery();
     if (e.detail?.ast) widgetData.queryAST = e.detail.ast;
-    if (window.logListTable && e.detail?.source !== 'expand-timerange') (window.logListTable as any).refetchLogs();
+    if (window.logListTable && e.detail?.source !== 'expand-timerange' && e.detail?.source !== 'chart-zoom')
+      (window.logListTable as any).refetchLogs();
     updateChartData(chart, opt, true, widgetData);
   });
 

@@ -92,7 +92,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (replaceAllFormats, toXXHash)
+import Utils (freeTierDailyMaxEvents, replaceAllFormats, toXXHash)
 
 
 data BgJobs
@@ -622,7 +622,38 @@ runHourlyJob scheduledTime hour = do
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
 
+  -- Check free tier usage and notify projects approaching/exceeding limits
+  checkFreeTierUsageNotifications activeProjects scheduledTime
+
   Log.logTrace "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
+
+
+-- | For each active free-tier project, check usage and send system log + email at 80% and 100% thresholds.
+-- Deduplication: only notifies if no system log with the same event name exists for this project in the last 24h.
+checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgroundCtx ()
+checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-check" do
+  projectM <- Projects.projectById pid
+  forM_ projectM \project -> Relude.when (project.paymentPlan == "Free") do
+    count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day' |] (pid, now)
+    let limit = fromInteger freeTierDailyMaxEvents
+        exceeded = count >= limit
+        warning = count >= (limit * 80) `div` 100
+        eventName :: Text = if exceeded then "system.free_tier.exceeded" else "system.free_tier.warning"
+    Relude.when (warning || exceeded) do
+      -- Dedup: skip if we already logged this event for this project today
+      alreadyNotified <- maybe False fromOnly . listToMaybe <$> PG.query
+        [sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=? AND name=? AND timestamp > ?::timestamptz - interval '1 day') |] (pid, eventName, now)
+      Relude.unless alreadyNotified do
+        ctx <- ask @Config.AuthContext
+        let sev = if exceeded then SLError else SLWarn
+            bodyMsg = if exceeded then "Daily event limit reached — new events are being dropped." else "Approaching daily event limit (" <> show count <> " of " <> show limit <> " events used)."
+            attrs = Map.fromList [("used", AE.toJSON count), ("limit", AE.toJSON limit), ("payment_plan", AE.String "Free")]
+        insertSystemLog $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
+        -- Send email to all project members
+        users <- Projects.usersByProjectId pid
+        let billingUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
+            (subj, html) = ET.freeTierUsageEmail project.title billingUrl count limit exceeded
+        forM_ users \user -> sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
 
 
 -- | Batch process facets generation for multiple projects using 24-hour window

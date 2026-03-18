@@ -28,7 +28,9 @@ module Utils (
   unwrapJsonPrimValue,
   listToIndexHashMap,
   b64ToJson,
-  freeTierLimitExceededBanner,
+  FreeTierStatus (..),
+  freeTierUsageBanner,
+  checkFreeTierStatus,
   checkFreeTierExceeded,
   isDemoAndNotSudo,
   escapedQueryPartial,
@@ -60,6 +62,7 @@ module Utils (
 where
 
 import Data.Aeson as AE
+import Data.Default (Default (..))
 import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key (fromText)
 import Data.Aeson.Key qualified as AEK
@@ -474,22 +477,38 @@ formatUTC utcTime =
   toText $ formatTime defaultTimeLocale "%Y-%m-%dT%H:%M:%S%QZ" utcTime
 
 
-freeTierLimitExceededBanner :: Text -> Html ()
-freeTierLimitExceededBanner pid =
-  div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-weak text-textError rounded-lg justify-center"] do
-    strong_ "Daily cap reached."
-    " Your free-tier events have run out; unlock more capacity. "
-    a_ [class_ "underline underline-offset-2 link", href_ $ "/p/" <> pid <> "/manage_billing"] "See pricing"
+data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierWarning Int Int | FreeTierExceeded Int Int
+  deriving stock (Eq, Show, Generic)
 
+instance Default FreeTierStatus where def = NotFreeTier
 
-checkFreeTierExceeded :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es Bool
-checkFreeTierExceeded pid paymentPlan =
+freeTierUsageBanner :: Text -> FreeTierStatus -> Html ()
+freeTierUsageBanner pid = \case
+  FreeTierWarning used limit ->
+    div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillWarning-weak text-textWarning rounded-lg justify-center"] do
+      strong_ $ "You\x2019ve used " <> toHtml (formatWithCommas $ fromIntegral used) <> " of " <> toHtml (formatWithCommas $ fromIntegral limit) <> " daily events."
+      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Compare plans \x2192"
+  FreeTierExceeded _ _ ->
+    div_ [class_ "flex w-full text-center items-center px-4 gap-4 py-1 bg-fillError-weak text-textError rounded-lg justify-center"] do
+      strong_ "Daily cap reached \x2014 new events are being dropped."
+      a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Upgrade to keep sending events \x2192"
+  _ -> pass
+
+checkFreeTierStatus :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
+checkFreeTierStatus pid paymentPlan =
   if paymentPlan == "Free"
     then do
       now <- Time.currentTime
       count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day'|] (pid, now)
-      pure $ count > fromInteger freeTierDailyMaxEvents
-    else pure False
+      let limit = fromInteger freeTierDailyMaxEvents
+      pure $ if count >= limit then FreeTierExceeded count limit else if count >= (limit * 80) `div` 100 then FreeTierWarning count limit else FreeTierOk
+    else pure NotFreeTier
+
+checkFreeTierExceeded :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es Bool
+checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
+ where
+  isExceeded (FreeTierExceeded _ _) = True
+  isExceeded _ = False
 
 
 serviceColors :: V.Vector Text
@@ -679,7 +698,7 @@ instance AE.ToJSON a => ToHttpApiData (JSONHttpApiData a) where
 
 
 freeTierDailyMaxEvents :: Integer
-freeTierDailyMaxEvents = 1000
+freeTierDailyMaxEvents = 10000
 
 
 -- | Pretty print count numbers, converting large values to K/M/B format

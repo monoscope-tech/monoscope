@@ -18,7 +18,7 @@ import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (checkFreeTierExceeded)
+import Utils (checkFreeTierStatus)
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
@@ -38,7 +38,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
         _ -> "events"
 
   hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid requestType sortV (fromMaybe 0 skipM) filterV
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
 
@@ -87,7 +87,7 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
           { sessM = Just sess
           , currProject = Just project
           , pageTitle = "API Catalog"
-          , freeTierExceeded = freeTierExceeded
+          , freeTierStatus = freeTierStatus
           , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
               a_ ([href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Incoming", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Incoming" then "tab-active text-textStrong" else ""] <> navTabAttrs) "Incoming"
               a_ ([href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] <> navTabAttrs) "Outgoing"
@@ -186,7 +186,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         _ -> Just "events"
   endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortV searchM page (fromMaybe "" requestTypeM)
   inboxCount <- Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let requestType = fromMaybe "Incoming" requestTypeM
       baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={requestType}&host={host}&sort={currentSort}|]
@@ -196,7 +196,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           , currProject = Just project
           , prePageTitle = Just "API Catalog"
           , pageTitle = "Endpoints for " <> host
-          , freeTierExceeded = freeTierExceeded
+          , freeTierStatus = freeTierStatus
           , config = appCtx.env
           , navTabs =
               Just

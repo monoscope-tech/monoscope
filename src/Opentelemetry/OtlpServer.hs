@@ -65,6 +65,8 @@ import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
+import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Common.V1.Common_Fields qualified as PCF
@@ -1371,55 +1373,71 @@ isAesonTextEmpty (Just (AesonText v)) =
     _ -> False
 
 
+-- | Check if a project's free tier is exceeded using cached data (non-blocking).
+-- Returns True if the API key resolves to a free-tier project that has exceeded its daily limit.
+isFreeTierExceededCached :: AuthContext -> Maybe Text -> IO Bool
+isFreeTierExceededCached appCtx = \case
+  Nothing -> pure False
+  Just key -> do
+    pidM <- join <$> Cache.lookup appCtx.projectKeyCache key
+    case pidM of
+      Nothing -> pure False
+      Just pid -> do
+        cacheM <- Cache.lookup appCtx.projectCache pid
+        pure $ case cacheM of
+          Just pc -> pc.paymentPlan == "Free" && pc.dailyEventCount >= fromInteger freeTierDailyMaxEvents
+          Nothing -> False
+
+
 -- | RpcHandler for trace service with metadata access
 traceServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf TS.TraceService "export")
 traceServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
-  -- Get request metadata (includes Authorization header)
   metadata <- getRequestMetadata call
   let apiKey = otlpApiKey metadata
-
-  -- Receive the request
   Proto req <- recvFinalInput call
-
-  -- Process the request with API key from metadata
-  _ <- runBackground appLogger appCtx tp $ processTraceRequest apiKey req
-
-  -- Send empty response
-  sendFinalOutput call (defMessage, NoMetadata)
+  exceeded <- isFreeTierExceededCached appCtx apiKey
+  if exceeded
+    then do
+      let count = fromIntegral $ sum [length (ss ^. PTF.spans) | rs <- req ^. TSF.resourceSpans, ss <- rs ^. PTF.scopeSpans]
+          resp = defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ count & TSF.errorMessage .~ "Free tier daily event limit exceeded")
+      sendFinalOutput call (resp, NoMetadata)
+    else do
+      _ <- runBackground appLogger appCtx tp $ processTraceRequest apiKey req
+      sendFinalOutput call (defMessage, NoMetadata)
 
 
 -- | RpcHandler for logs service with metadata access
 logsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf LS.LogsService "export")
 logsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
-  -- Get request metadata (includes Authorization header)
   metadata <- getRequestMetadata call
   let apiKey = otlpApiKey metadata
-
-  -- Receive the request
   Proto req <- recvFinalInput call
-
-  -- Process the request with API key from metadata
-  _ <- runBackground appLogger appCtx tp $ processLogsRequest apiKey req
-
-  -- Send empty response
-  sendFinalOutput call (defMessage, NoMetadata)
+  exceeded <- isFreeTierExceededCached appCtx apiKey
+  if exceeded
+    then do
+      let count = fromIntegral $ sum [length (sl ^. PLF.logRecords) | rl <- req ^. LSF.resourceLogs, sl <- rl ^. PLF.scopeLogs]
+          resp = defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ count & LSF.errorMessage .~ "Free tier daily event limit exceeded")
+      sendFinalOutput call (resp, NoMetadata)
+    else do
+      _ <- runBackground appLogger appCtx tp $ processLogsRequest apiKey req
+      sendFinalOutput call (defMessage, NoMetadata)
 
 
 -- | RpcHandler for metrics service with metadata access
 metricsServiceRpcHandler :: Logger -> AuthContext -> TracerProvider -> RpcHandler IO (Protobuf MS.MetricsService "export")
 metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
-  -- Get request metadata (includes Authorization header)
   metadata <- getRequestMetadata call
   let apiKey = otlpApiKey metadata
-
-  -- Receive the request
   Proto req <- recvFinalInput call
-
-  -- Process the request with API key from metadata
-  _ <- runBackground appLogger appCtx tp $ processMetricsRequest apiKey req
-
-  -- Send empty response
-  sendFinalOutput call (defMessage, NoMetadata)
+  exceeded <- isFreeTierExceededCached appCtx apiKey
+  if exceeded
+    then do
+      let count = fromIntegral $ sum [length (sm ^. PMF.metrics) | rm <- req ^. MSF.resourceMetrics, sm <- rm ^. PMF.scopeMetrics]
+          resp = defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ count & MSF.errorMessage .~ "Free tier daily event limit exceeded")
+      sendFinalOutput call (resp, NoMetadata)
+    else do
+      _ <- runBackground appLogger appCtx tp $ processMetricsRequest apiKey req
+      sendFinalOutput call (defMessage, NoMetadata)
 
 
 services :: Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]

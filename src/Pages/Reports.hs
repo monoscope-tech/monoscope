@@ -43,7 +43,7 @@ import Pkg.EmailTemplates qualified as ET
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders, addSuccessToast)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, loadingIndicatorWith_)
+import Utils (FreeTierStatus, LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, loadingIndicatorWith_)
 
 
 data PerformanceReport = PerformanceReport
@@ -289,11 +289,11 @@ instance ToHtml ReportsPost where
   toHtmlRaw = toHtml
 
 
-wrapSingleResponse :: Projects.Session -> Projects.Project -> Bool -> EnvConfig -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
-wrapSingleResponse sess project freeTierExceeded config pageTitle hxRequestM content = case hxRequestM of
+wrapSingleResponse :: Projects.Session -> Projects.Project -> FreeTierStatus -> EnvConfig -> Text -> Maybe Text -> (Text, Text, Text) -> ATAuthCtx (RespHeaders ReportsGet)
+wrapSingleResponse sess project freeTierStatus config pageTitle hxRequestM content = case hxRequestM of
   Just _ -> addRespHeaders $ ReportsGetSingle' content
   _ -> do
-    let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle, freeTierExceeded, config}
+    let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle, freeTierStatus, config}
     addRespHeaders $ ReportsGetSingle $ PageCtx bwconf content
 
 
@@ -302,13 +302,13 @@ singleReportGetH pid rid hxRequestM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   reportM <- Issues.getReportById rid
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   content <- case reportM of
     Nothing -> pure ("unknown", "Report not found", "")
     Just report -> do
       (dateLabel, emailHtml) <- reportToEmailHtml report project sess.user.firstName
       pure (report.reportType, dateLabel, emailHtml)
-  wrapSingleResponse sess project freeTierExceeded appCtx.env "Report" hxRequestM content
+  wrapSingleResponse sess project freeTierStatus appCtx.env "Report" hxRequestM content
 
 
 reportsLiveGetH :: Projects.ProjectId -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
@@ -316,9 +316,9 @@ reportsLiveGetH pid hxRequestM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   (dateLabel, emailHtml) <- buildLiveReportEmailHtml pid project sess.user.firstName
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   let content = ("weekly" :: Text, dateLabel, emailHtml)
-  wrapSingleResponse sess project freeTierExceeded appCtx.env "Reports" hxRequestM content
+  wrapSingleResponse sess project freeTierStatus appCtx.env "Reports" hxRequestM content
 
 
 reportsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders ReportsGet)
@@ -330,7 +330,7 @@ reportsGetH pid page hxRequest hxBoosted = do
 
   reportsList <- Issues.reportHistoryByProject pid pg
   let reports = V.fromList reportsList
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   let nextUrl =
         if V.length reports < 20
           then Nothing
@@ -343,7 +343,7 @@ reportsGetH pid page hxRequest hxBoosted = do
               { sessM = Just sess
               , currProject = Just project
               , pageTitle = "Reports"
-              , freeTierExceeded = freeTierExceeded
+              , freeTierStatus = freeTierStatus
               , config = appCtx.env
               }
       addRespHeaders $ ReportsGetMain $ PageCtx bwconf (pid, reports, nextUrl, project.dailyNotif, project.weeklyNotif)
