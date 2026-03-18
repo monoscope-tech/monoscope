@@ -408,7 +408,7 @@ data IntegrationsConfig = IntegrationsConfig
 
 integrationsBody :: IntegrationsConfig -> Html ()
 integrationsBody IntegrationsConfig{..} = do
-  section_ [id_ "main-content"] $ settingsSection_ do
+  settingsSection_ do
     let pid = projectId.toText
     settingsH2_ "Integrations"
 
@@ -985,7 +985,7 @@ instance ToHtml ManageMembers where
 
 manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Html ()
 manageMembersBody pid projMembers paymentPlan =
-  div_ [id_ "main-content"] $ settingsSection_ do
+  settingsSection_ do
     settingsH2_ "Team"
 
     -- Tabs: Members | Teams
@@ -1014,7 +1014,7 @@ manageMembersBody pid projMembers paymentPlan =
             p_ [class_ "text-sm text-textStrong font-medium"] "Free plan allows only 1 team member"
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
-      form_ [class_ "space-y-6", hxPost_ "", hxTarget_ settingsContentTarget, hxSwap_ "outerHTML", hxIndicator_ "#submitIndicator"] do
+      form_ [class_ "space-y-6", hxPost_ "", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
         div_ [class_ "space-y-3"] do
           label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
           div_ [class_ "flex gap-2"] do
@@ -1431,14 +1431,14 @@ processProjectPostForm cpRaw pid = do
 
 createProjectBody :: Projects.PersistentSession -> Projects.ProjectId -> EnvConfig -> Text -> CreateProjectForm -> CreateProjectFormError -> Projects.Project -> Html ()
 createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
-  div_ [id_ "main-content"] $ settingsSection_ do
+  settingsSection_ do
     settingsH2_ "Project Settings"
 
     form_
       [ class_ "space-y-5 sm:space-y-8"
       , hxPost_ $ "/p/update/" <> pid.toText
       , hxTarget_ settingsContentTarget
-      , hxSwap_ "outerHTML"
+      , hxSwap_ "innerHTML"
       , id_ "createUpdateBodyForm"
       , hxIndicator_ "#createIndicator"
       , [__| on change add .form-dirty to me |]
