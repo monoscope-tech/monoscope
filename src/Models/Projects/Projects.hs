@@ -64,6 +64,10 @@ module Models.Projects.Projects (
   insertSession,
   getPersistentSession,
   newPersistentSessionId,
+  -- Audit Log
+  AuditEvent (..),
+  logAudit,
+  logAuditS,
 )
 where
 
@@ -796,3 +800,40 @@ sessionAndProject pid = do
             Just p -> pure (sess, p)
             Nothing -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
     _ -> throwError $ err302{errHeaders = [("Location", "/?missingProjectPermission")]}
+
+
+----------------------------------------------------------------------
+-- Audit Log
+----------------------------------------------------------------------
+
+data AuditEvent
+  = AEProjectDeleted
+  | AEProjectCreated
+  | AEProjectUpdated
+  | AEMemberAdded
+  | AEMemberRemoved
+  | AEMemberPermissionChanged
+  | AEApiKeyCreated
+  | AEApiKeyRevoked
+  | AEApiKeyActivated
+  | AEMonitorDeleted
+  | AES3Configured
+  | AES3Removed
+  | AEIntegrationConnected
+  | AEIntegrationDisconnected
+  | AEPlanChanged
+  deriving stock (Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (Display, FromField, ToField) via WrappedEnumSC "AE" AuditEvent
+
+
+logAudit :: DB es => ProjectId -> AuditEvent -> Maybe UserId -> Maybe Text -> Maybe AE.Value -> Eff es ()
+logAudit pid event actorId actorEmail metadataM =
+  void
+    $ PG.execute
+      [sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (?, ?, ?, ?, ?) |]
+      (pid, event, actorId, actorEmail, Aeson <$> metadataM)
+
+
+logAuditS :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AE.Value -> Eff es ()
+logAuditS pid event sess = logAudit pid event (Just sess.user.id) (Just $ CI.original sess.user.email)

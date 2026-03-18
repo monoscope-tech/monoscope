@@ -367,6 +367,9 @@ pagerdutyConnectH pid form = do
     then addErrorToast "PagerDuty integration key is too short" Nothing >> integrationsSettingsGetH pid
     else do
       void $ insertPagerdutyData pid key
+      sess <- Projects.getSession
+      Projects.logAuditS pid Projects.AEIntegrationConnected sess
+        $ Just $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
       addSuccessToast "PagerDuty connected" Nothing
       integrationsSettingsGetH pid
 
@@ -374,6 +377,9 @@ pagerdutyConnectH pid form = do
 pagerdutyDisconnectH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 pagerdutyDisconnectH pid = do
   void $ deletePagerdutyData pid
+  sess <- Projects.getSession
+  Projects.logAuditS pid Projects.AEIntegrationDisconnected sess
+    $ Just $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
   addSuccessToast "PagerDuty disconnected" Nothing
   integrationsSettingsGetH pid
 
@@ -384,6 +390,9 @@ slackDisconnectH pid = do
   if deleted > 0
     then do
       void $ ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
+      sess <- Projects.getSession
+      Projects.logAuditS pid Projects.AEIntegrationDisconnected sess
+        $ Just $ AE.object ["integration" AE..= ("slack" :: Text)]
       addSuccessToast "Slack disconnected" Nothing
     else addErrorToast "Failed to disconnect Slack" Nothing
   integrationsSettingsGetH pid
@@ -622,6 +631,9 @@ manageMembersPostH pid onboardingM form = do
 
   whenJust (nonEmpty deletedUAndP) $ void . ProjectMembers.softDeleteProjectMembers
   when (project.paymentPlan == "Free") $ void $ ProjectMembers.deactivateNonOwnerMembers pid
+  unless (null uAndPNew) $ Projects.logAuditS pid Projects.AEMemberAdded sess
+    $ Just $ AE.object ["added" AE..= map fst uAndPNew]
+  unless (null uAndPOldAndChanged) $ Projects.logAuditS pid Projects.AEMemberPermissionChanged sess Nothing
 
   projMembersLatest <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
   if isJust onboardingM
@@ -1081,6 +1093,8 @@ deleteMemberH pid memberId = do
           addRespHeaders ""
         else do
           _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
+          Projects.logAuditS pid Projects.AEMemberRemoved sess
+            $ Just $ AE.object ["removed_email" AE..= CI.original member.email]
           addSuccessToast "Member removed" Nothing
           addRespHeaders ""
 
@@ -1199,6 +1213,7 @@ projectOnboardingH = do
       _ <- ProjectApiKeys.insertProjectApiKey pApiKey
       let projectMember = ProjectMembers.CreateProjectMembers pid sess.user.id ProjectMembers.PAdmin
       _ <- ProjectMembers.insertProjectMembers [projectMember]
+      Projects.logAuditS pid Projects.AEProjectCreated sess Nothing
       let h = "/p/" <> pid.toText <> "/onboarding"
       pure $ addHeader h $ PageCtx bwconf ""
 
@@ -1275,6 +1290,7 @@ deleteProjectGetH pid = do
       _ <- Projects.deleteProject pid
       _ <- liftIO $ withResource appCtx.pool \conn ->
         createJob conn "background_jobs" $ BackgroundJobs.DeletedProject pid
+      Projects.logAuditS pid Projects.AEProjectDeleted sess Nothing
       addSuccessToast "Deleted Project Successfully" Nothing
       redirectCS "/"
       addRespHeaders $ PostNoContent ""
@@ -1357,9 +1373,12 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
           $ forM_ users
           $ \user -> addConvertKitUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
+  let auditPlan name = Projects.logAuditS pid Projects.AEPlanChanged sess
+        $ Just $ AE.object ["plan" AE..= name]
   case plan of
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
+      auditPlan ("Open Source" :: Text)
       handleOnboarding "Open Source"
       void $ ProjectMembers.activateAllMembers pid
     _ -> case orderIdM of
@@ -1371,11 +1390,13 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
                 firstSubId = show target.attributes.firstSubscriptionItem.id
                 productName = target.attributes.productName
             _ <- updatePricing productName subId firstSubId orderId
+            auditPlan productName
             handleOnboarding productName
             void $ ProjectMembers.activateAllMembers pid
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
+        auditPlan ("Free" :: Text)
         handleOnboarding "Free"
         void $ ProjectMembers.deactivateNonOwnerMembers pid
   if project.paymentPlan == "ONBOARDING" || isOnboarding == Just True
@@ -1425,6 +1446,7 @@ processProjectPostForm cpRaw pid = do
       addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
     else do
       _ <- Projects.updateProject (createProjectFormToModel pid project.subId project.firstSubItemId project.orderId project.paymentPlan cp)
+      Projects.logAuditS pid Projects.AEProjectUpdated sess Nothing
       addSuccessToast "Updated Project Successfully" Nothing
       addRespHeaders $ ProjectPost (CreateProjectResp sess.persistentSession pid envCfg "" cp (def @CreateProjectFormError) project)
 
@@ -1485,7 +1507,7 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
           p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
       button_
         [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1 shrink-0 max-sm:w-full"
-        , hxGet_ $ "/p/" <> pid.toText <> "/delete"
+        , hxDelete_ $ "/p/" <> pid.toText <> "/delete"
         , hxConfirm_ "Are you sure you want to delete this project? This action cannot be undone."
         ]
         do

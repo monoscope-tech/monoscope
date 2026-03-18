@@ -719,7 +719,13 @@ alertMuteH pid monitorId durationMinsM = do
 alertUnmuteH, alertResolveH, alertDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
 alertUnmuteH = monitorActionH Monitors.monitorUnmuteByIds "Monitor unmuted"
 alertResolveH = monitorActionH Monitors.monitorResolveByIds "Monitor resolved"
-alertDeleteH = monitorActionH Monitors.monitorSoftDeleteByIds "Monitor deleted"
+alertDeleteH pid monitorId = do
+  (sess, _) <- Projects.sessionAndProject pid
+  void $ Monitors.monitorSoftDeleteByIds [monitorId]
+  Projects.logAuditS pid Projects.AEMonitorDeleted sess Nothing
+  addSuccessToast "Monitor deleted" Nothing
+  redirectCS $ "/p/" <> pid.toText <> "/monitors"
+  addRespHeaders ""
 
 
 renderLastRunCol :: UnifiedMonitorItem -> Html ()

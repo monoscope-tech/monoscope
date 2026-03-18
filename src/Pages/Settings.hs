@@ -102,6 +102,8 @@ brings3PostH pid s3Form = do
       if bExists
         then do
           _ <- Projects.updateProjectS3Bucket pid $ Just s3Form
+          sess <- Projects.getSession
+          Projects.logAuditS pid Projects.AES3Configured sess Nothing
           addSuccessToast "Connected succesfully" Nothing
           addRespHeaders $ connectionBadge_ "Connected"
         else do
@@ -114,7 +116,7 @@ brings3RemoveH pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   _ <- Projects.updateProjectS3Bucket pid Nothing
-
+  Projects.logAuditS pid Projects.AES3Removed sess Nothing
   addSuccessToast "Removed S3 bucket" Nothing
   addRespHeaders $ connectionBadge_ "Not connected"
 
@@ -177,6 +179,8 @@ apiPostH pid apiKeyForm = do
   apiKeys <- do
     ProjectApiKeys.insertProjectApiKey pApiKey
     V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
+  Projects.logAuditS pid Projects.AEApiKeyCreated sess
+    $ Just $ AE.object ["key_title" AE..= title apiKeyForm]
   addSuccessToast "Created API Key Successfully" Nothing
   addTriggerEvent "closeModal" ""
   case from apiKeyForm of
@@ -190,7 +194,9 @@ apiDeleteH pid keyid = do
   res <- ProjectApiKeys.revokeApiKey keyid
   apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
-    then addSuccessToast "Revoked API Key Successfully" Nothing
+    then do
+      Projects.logAuditS pid Projects.AEApiKeyRevoked sess Nothing
+      addSuccessToast "Revoked API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
   addRespHeaders $ ApiPost pid apikeys Nothing
 
@@ -201,7 +207,9 @@ apiActivateH pid keyid = do
   res <- ProjectApiKeys.activateApiKey keyid
   apikeys <- V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   if res > 0
-    then addSuccessToast "Activated API Key Successfully" Nothing
+    then do
+      Projects.logAuditS pid Projects.AEApiKeyActivated sess Nothing
+      addSuccessToast "Activated API Key Successfully" Nothing
     else addErrorToast "Something went wrong" Nothing
   addRespHeaders $ ApiPost pid apikeys Nothing
 
