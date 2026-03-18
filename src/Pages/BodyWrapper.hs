@@ -16,7 +16,7 @@ import Pkg.DeriveUtils (hashAssetFile)
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, freeTierLimitExceededBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
+import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -42,7 +42,7 @@ onboardingChecklist_ project = do
       items =
         [ (hasEvents, "Send first event", "/p/" <> pid <> "/onboarding?step=Integration", "paper-plane")
         , (exploredLogs, "Explore logs", "/p/" <> pid <> "/log_explorer", "magnifying-glass")
-        , (createdMonitor, "Create a monitor", "/p/" <> pid <> "/monitors/new", "bell")
+        , (createdMonitor, "Create a monitor", "/p/" <> pid <> "/monitors", "bell")
         , (setupNotifs, "Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope")
         ]
           :: [(Bool, Text, Text, Text)]
@@ -120,7 +120,7 @@ data BWConfig = BWConfig
   , pageActions :: Maybe (Html ())
   , docsLink :: Maybe Text
   , isSettingsPage :: Bool
-  , freeTierExceeded :: Bool
+  , freeTierStatus :: FreeTierStatus
   , hideNavbar :: Bool -- When True, hides the entire navbar
   , headContent :: Maybe (Html ()) -- Optional HTML content to include in the head
   , config :: EnvConfig -- Environment configuration for telemetry
@@ -497,7 +497,7 @@ bodyWrapper bcfg child = do
                       then whenJust bcfg.currProject \p -> paletteTriggerFloating p
                       else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
-                      when bcfg.freeTierExceeded $ whenJust bcfg.currProject (\p -> freeTierLimitExceededBanner p.id.toText)
+                      whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
                       if bcfg.isSettingsPage
                         then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
                         else child
