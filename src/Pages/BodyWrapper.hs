@@ -916,7 +916,7 @@ navBottomList pidTxt =
   [ ("gear", "General", "/p/" <> pidTxt <> "/settings")
   , ("key", "API Keys", "/p/" <> pidTxt <> "/apis")
   , ("users", "Team", "/p/" <> pidTxt <> "/manage_members")
-  , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/integrations")
+  , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/settings/integrations")
   , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing")
   ]
 

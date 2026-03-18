@@ -371,7 +371,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , onboardingProject :: mode :- "p" :> "new" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] (PageCtx (Html ()))) -- p represents project
   , createPost :: mode :- "p" :> "update" :> Capture "projectId" Projects.ProjectId :> ReqBody '[FormUrlEncoded] CreateProject.CreateProjectForm :> Post '[HTML] (RespHeaders CreateProject.CreateProject)
   , settingsGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
-  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
+  , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Project management
     deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Get '[HTML] (RespHeaders CreateProject.CreateProject)
   , deleteProjectH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "delete" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
@@ -387,11 +387,11 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Notifications
     notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
-  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
-  , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
-  , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "slack" :> Delete '[HTML] (RespHeaders (Html ()))
-  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
-  , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
+  , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
+  , pagerdutyDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> "disconnect" :> Post '[HTML] (RespHeaders (Html ()))
+  , slackDisconnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "slack" :> Delete '[HTML] (RespHeaders (Html ()))
+  , notificationsTestPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "test" :> ReqBody '[FormUrlEncoded] Settings.TestForm :> Post '[HTML] (RespHeaders (Html ()))
+  , notificationsTestHistoryGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "history" :> Get '[HTML] (RespHeaders Settings.NotificationTestHistoryGet)
   , -- Onboarding routes
     onboading :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> QPT "step" :> Get '[HTML] (RespHeaders Onboarding.OnboardingGet)
   , onboardingInfoPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "info" :> ReqBody '[FormUrlEncoded] Onboarding.OnboardingInfoForm :> Post '[HTML] (RespHeaders Onboarding.OnboardingInfoPost)

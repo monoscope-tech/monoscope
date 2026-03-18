@@ -227,7 +227,7 @@ installedSuccess botPlatform pidM = do
             p_ [class_ "text-textWeak text-sm mx-auto max-w-2xl "] $ toHtml $ "Start receiving real-time alerts and interact with your API data directly from " <> botPlatform <> ". Your team can now stay on top of API performance without leaving your chat."
             whenJust pidM \pid ->
               div_ [class_ "mt-6"] do
-                a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/integrations"] "Go back to Integrations"
+                a_ [class_ "btn btn-primary", href_ $ "/p/" <> pid.toText <> "/settings/integrations"] "Go back to Integrations"
           div_ [class_ "max-w-3xl mx-auto"] do
             h3_ [class_ "font-semibold text-textStrong mb-8 text-center"] "Available Commands"
             div_ [class_ "grid gap-4 md:grid-cols-2"] do

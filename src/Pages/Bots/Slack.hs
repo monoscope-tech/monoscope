@@ -137,7 +137,7 @@ linkProjectGetH slack_code stateM = do
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
             else pure $ addHeader "" $ BotLinked $ PageCtx bwconf ("Slack", Just pid)
-        _ -> pure $ addHeader ("/p/" <> pid.toText <> "/integrations") $ NoTokenFound $ PageCtx bwconf ()
+        _ -> pure $ addHeader ("/p/" <> pid.toText <> "/settings/integrations") $ NoTokenFound $ PageCtx bwconf ()
 
 
 slackInteractionsH :: SlackInteraction -> ATBaseCtx AE.Value

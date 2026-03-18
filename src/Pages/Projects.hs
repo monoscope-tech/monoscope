@@ -464,13 +464,13 @@ integrationsBody IntegrationsConfig{..} = do
     -- Test History
     div_ [class_ "pt-6 border-t border-strokeWeak space-y-2"] do
       sectionLabel_ "Test History"
-      div_ [id_ "test-history", hxGet_ [text|/p/$pid/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
+      div_ [id_ "test-history", hxGet_ [text|/p/$pid/settings/integrations/history|], hxTrigger_ "load, testSent from:body", hxSwap_ "innerHTML"] do
         p_ [class_ "text-textWeak text-sm py-4"] "Loading..."
 
 
 renderInlineTestButton :: Text -> Text -> Maybe UUID.UUID -> Html ()
 renderInlineTestButton pid channel teamIdM =
-  form_ [hxPost_ [text|/p/$pid/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
+  form_ [hxPost_ [text|/p/$pid/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "inline"] do
     input_ [type_ "hidden", name_ "channel", value_ channel]
     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
     whenJust teamIdM \tid -> input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText tid]
@@ -531,7 +531,7 @@ renderSlackIntegration envCfg pid slackData channels existingChannels = do
 
       div_ [class_ "flex items-center gap-2"] do
         a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Reconnect"
-        form_ [hxDelete_ [text|/p/$pid/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxSwap_ "none", hxTrigger_ "submit"] do
+        form_ [hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxSwap_ "none", hxTrigger_ "submit"] do
           button_ [class_ "btn btn-xs btn-ghost text-textError", type_ "submit"] "Disconnect"
     Nothing -> do
       a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Connect to Slack"
@@ -551,8 +551,8 @@ renderPagerdutyIntegration pid = div_ [id_ "pagerduty-integration"] . maybe disc
     connectedUI = do
       div_ [class_ "flex items-center gap-2"] do
         span_ [class_ "text-xs text-textSuccess flex items-center gap-1.5"] $ faSprite_ "circle-check" "regular" "h-3.5 w-3.5 text-iconSuccess" >> "Connected"
-        button_ [class_ "btn btn-xs btn-ghost text-textError", hxPost_ [text|/p/$pid/integrations/pagerduty/disconnect|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] "Disconnect"
-    disconnectedUI = form_ [class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/integrations/pagerduty|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] do
+        button_ [class_ "btn btn-xs btn-ghost text-textError", hxPost_ [text|/p/$pid/settings/integrations/pagerduty/disconnect|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] "Disconnect"
+    disconnectedUI = form_ [class_ "flex flex-col gap-2", hxPost_ [text|/p/$pid/settings/integrations/pagerduty|], hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s"] do
       formField_ FieldSm def{placeholder = "Events API v2 Integration Key"} "Integration Key" "integrationKey" False Nothing
       p_ [class_ "text-xs text-textWeak"] "Get from: PagerDuty → Services → Integrations → Events API v2"
       button_ [class_ "btn btn-sm btn-outline w-max", type_ "submit"] "Connect"
@@ -905,7 +905,7 @@ teamPage pid team projMembers slackChannels discordChannels = do
         faSprite_ "circle-info" "regular" "h-4 w-4 inline mr-2"
         "@everyone automatically includes all project members. "
         "Channels configured on the "
-        a_ [href_ ("/p/" <> pid.toText <> "/integrations"), class_ "text-textBrand underline"] "Integrations page"
+        a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
         " are automatically included in @everyone."
     div_ [class_ "flex gap-4 h-full"] do
       div_ [class_ "w-4/12 space-y-4"] do
@@ -933,14 +933,14 @@ teamPage pid team projMembers slackChannels discordChannels = do
                     div_ [class_ "text-xs"] do
                       div_ [class_ "font-medium text-textStrong"] "Test your notification setup"
                       div_ [class_ "text-textWeak mt-0.5"] "Sends a test incident to all configured channels"
-                  form_ [hxPost_ [text|/p/${pid.toText}/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "shrink-0"] do
+                  form_ [hxPost_ [text|/p/${pid.toText}/settings/integrations/test|], hxSwap_ "none", hxTrigger_ "submit", class_ "shrink-0"] do
                     input_ [type_ "hidden", name_ "channel", value_ "all"]
                     input_ [type_ "hidden", name_ "teamId", value_ $ UUID.toText team.id]
                     input_ [type_ "hidden", name_ "issueType", value_ "runtime_exception"]
                     button_ ([type_ "submit", class_ "btn btn-xs btn-primary tap-target", [__| on htmx:afterRequest from closest <form/> trigger testSent on body |]] <> bool [] [disabled_ ""] (not hasAnyChannel)) do
                       faSprite_ "flask-vial" "regular" "h-3.5 w-3.5"
                       " Send Test"
-              div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ [text|/p/${pid.toText}/integrations/history|], hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
+              div_ [id_ $ "team-test-history-" <> UUID.toText team.id, hxGet_ [text|/p/${pid.toText}/settings/integrations/history|], hxTrigger_ "testSent from:body", hxSwap_ "innerHTML", class_ "mt-3"] mempty
       div_ [class_ "flex-1 space-y-4"] do
         lazySection_ "monitors-section" "bell" "Monitors" "Search monitors..." ("/p/" <> pid.toText <> "/monitors/alerts/team/" <> UUID.toText team.id)
         lazySection_ "dashboards-section" "chart-area" "Dashboards" "Search dashboards..." ("/p/" <> pid.toText <> "/dashboards/?teamId=" <> UUID.toText team.id)
@@ -1612,7 +1612,7 @@ teamModal pid team whiteList emailWhiteList channelWhiteList discordWhiteList is
           $ div_ [class_ "py-4"]
           $ infoBanner_ do
             "The @everyone team automatically includes all project members. Use the "
-            a_ [href_ ("/p/" <> pid.toText <> "/integrations"), class_ "text-textBrand underline"] "Integrations page"
+            a_ [href_ ("/p/" <> pid.toText <> "/settings/integrations"), class_ "text-textBrand underline"] "Integrations page"
             " for project-wide channels."
 
         -- Notifications

@@ -71,7 +71,7 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierExceeded, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
+import Utils (checkFreeTierStatus, faSprite_, formatWithCommas, prettyTimeShort, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -336,13 +336,17 @@ alertTeamDeleteH pid monitorId teamId = do
   addRespHeaders $ AlertNoContent ""
 
 
-monitorScheduleSection_ :: Bool -> Int -> Int -> Maybe Text -> Maybe Text -> Html ()
-monitorScheduleSection_ isByos defaultFrequency defaultTimeWindow conditionType chartTargetIdM = do
+monitorScheduleSection_ :: Text -> Int -> Int -> Maybe Text -> Maybe Text -> Html ()
+monitorScheduleSection_ paymentPlan defaultFrequency defaultTimeWindow conditionType chartTargetIdM = do
   let timeOpts :: [(Int, Text)]
       timeOpts = [(1, "minute"), (2, "2 minutes"), (5, "5 minutes"), (10, "10 minutes"), (15, "15 minutes"), (30, "30 minutes"), (60, "hour"), (360, "6 hours"), (720, "12 hours"), (1440, "day")]
+      isByos = paymentPlan == "Bring your own storage"
+      isFree = paymentPlan == "Free"
+      minFreq = if isFree then 60 else if isByos then 1 else 5
+      clampedFreq = max minFreq defaultFrequency
       mkFreqOpt (m, l) =
-        let isDisabled = not isByos && m < 5
-            attrs = [value_ (show m <> "m")] <> [disabled_ "" | isDisabled] <> [selected_ "" | m == defaultFrequency] <> [term "data-tippy-content" "Upgrade to a higher plan to access this frequency" | isDisabled]
+        let isDisabled = m < minFreq
+            attrs = [value_ (show m <> "m")] <> [disabled_ "" | isDisabled] <> [selected_ "" | m == clampedFreq]
          in option_ attrs ("every " <> toHtml l)
       mkTimeOpt (m, l) = option_ ([value_ (show m <> "m")] <> [selected_ "" | m == defaultTimeWindow]) ("the last " <> toHtml l)
       isThresholdType = conditionType == Just "threshold_exceeded" || isNothing conditionType
@@ -350,6 +354,7 @@ monitorScheduleSection_ isByos defaultFrequency defaultTimeWindow conditionType 
         Just chartId -> Just $ term "_" [text|on change set chart to document.getElementById('${chartId}') if chart exists then call chart.updateRollup(my.value) end|]
         Nothing -> Just [__|on change set qb to document.querySelector('query-builder') if qb exists then call qb.updateBinInQuery('timestamp', my.value) end|]
   panel_ def{icon = Just "clock", collapsible = Just True} "Monitor Schedule" do
+    when isFree $ p_ [class_ "text-xs text-textWeak mt-1"] "Free plan: hourly minimum frequency. Upgrade for faster checks."
     div_ [class_ "flex gap-2 py-2"] do
       formSelectField_ FieldSm "Execute the query" "frequency" False $ forM_ timeOpts mkFreqOpt
       formField_ FieldSm def "Include rows from" "timeWindow" False
@@ -508,7 +513,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
 
   let totalInactive = V.length inactiveAlerts
 
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let currentURL = "/p/" <> pid.toText <> "/monitors?"
   let monitorsTable =
@@ -548,7 +553,7 @@ unifiedMonitorsGetH pid filterTM sinceM = do
           , pageTitle = "Monitors"
           , menuItem = Just "Monitors"
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
-          , freeTierExceeded = freeTierExceeded
+          , freeTierStatus = freeTierStatus
           , config = appCtx.env
           , pageActions = Just $ div_ [class_ "flex gap-2"] do
               a_ [class_ "btn btn-sm btn-primary gap-2", href_ $ "/p/" <> pid.toText <> "/log_explorer#create-alert-toggle"] do
@@ -771,9 +776,9 @@ unifiedMonitorOverviewH pid monitorId = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   currTime <- Time.currentTime
-  (freeTierExceeded, alertM) <-
+  (freeTierStatus, alertM) <-
     concurrently
-      (checkFreeTierExceeded pid project.paymentPlan)
+      (checkFreeTierStatus pid project.paymentPlan)
       ( case UUID.fromText monitorId of
           Just uuid -> Monitors.queryMonitorById (Monitors.QueryMonitorId uuid)
           Nothing -> pure Nothing
@@ -787,7 +792,7 @@ unifiedMonitorOverviewH pid monitorId = do
           , prePageTitle = Just "Monitors"
           , menuItem = Just "Monitors"
           , docsLink = Just "https://monoscope.tech/docs/monitors/"
-          , freeTierExceeded = freeTierExceeded
+          , freeTierStatus = freeTierStatus
           , config = appCtx.config
           }
 
@@ -991,7 +996,7 @@ alertNotificationsTab_ alert teams = do
         div_ [class_ "text-sm text-textWeak"] "No teams configured for this monitor."
         div_ [class_ "pt-2 flex items-center gap-1"] do
           span_ [class_ "text-sm text-textWeak"] "Project level notification integrations will be used."
-          a_ [href_ $ "/p/" <> alert.projectId.toText <> "/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
+          a_ [href_ $ "/p/" <> alert.projectId.toText <> "/settings/integrations", class_ "text-sm text-textBrand hover:underline"] "Configure integrations"
       unless (V.null teams)
         $ div_ [class_ "flex flex-wrap gap-4 mb-4"]
         $ forM_ teams \team ->
