@@ -62,7 +62,6 @@ module Utils (
 where
 
 import Data.Aeson as AE
-import Data.Default (Default (..))
 import Data.Aeson.Extra.Merge (lodashMerge)
 import Data.Aeson.Key (fromText)
 import Data.Aeson.Key qualified as AEK
@@ -70,6 +69,7 @@ import Data.Aeson.KeyMap (lookup)
 import Data.Aeson.KeyMap qualified as AEKM
 import Data.ByteString qualified as BS
 import Data.Char (isAlpha, isAlphaNum, isDigit)
+import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
@@ -478,9 +478,11 @@ formatUTC utcTime =
 
 
 data FreeTierStatus = NotFreeTier | FreeTierOk | FreeTierWarning Int Int | FreeTierExceeded Int Int
-  deriving stock (Eq, Show, Generic)
+  deriving stock (Eq, Generic, Show)
+
 
 instance Default FreeTierStatus where def = NotFreeTier
+
 
 freeTierUsageBanner :: Text -> FreeTierStatus -> Html ()
 freeTierUsageBanner pid = \case
@@ -494,6 +496,7 @@ freeTierUsageBanner pid = \case
       a_ [class_ "underline underline-offset-2 link font-medium", href_ $ "/p/" <> pid <> "/manage_billing"] "Upgrade to keep sending events \x2192"
   _ -> pass
 
+
 checkFreeTierStatus :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
 checkFreeTierStatus pid paymentPlan =
   if paymentPlan == "Free"
@@ -504,11 +507,12 @@ checkFreeTierStatus pid paymentPlan =
       pure $ if count >= limit then FreeTierExceeded count limit else if count >= (limit * 80) `div` 100 then FreeTierWarning count limit else FreeTierOk
     else pure NotFreeTier
 
+
 checkFreeTierExceeded :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
- where
-  isExceeded (FreeTierExceeded _ _) = True
-  isExceeded _ = False
+  where
+    isExceeded (FreeTierExceeded _ _) = True
+    isExceeded _ = False
 
 
 serviceColors :: V.Vector Text

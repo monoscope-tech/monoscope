@@ -63,10 +63,10 @@ import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
-import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
-import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
+import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService_Fields qualified as MSF
+import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Common.V1.Common_Fields qualified as PCF

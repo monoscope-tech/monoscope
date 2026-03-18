@@ -641,8 +641,12 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
         eventName :: Text = if exceeded then "system.free_tier.exceeded" else "system.free_tier.warning"
     Relude.when (warning || exceeded) do
       -- Dedup: skip if we already logged this event for this project today
-      alreadyNotified <- maybe False fromOnly . listToMaybe <$> PG.query
-        [sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=? AND name=? AND timestamp > ?::timestamptz - interval '1 day') |] (pid, eventName, now)
+      alreadyNotified <-
+        maybe False fromOnly
+          . listToMaybe
+          <$> PG.query
+            [sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=? AND name=? AND timestamp > ?::timestamptz - interval '1 day') |]
+            (pid, eventName, now)
       Relude.unless alreadyNotified do
         ctx <- ask @Config.AuthContext
         let sev = if exceeded then SLError else SLWarn
