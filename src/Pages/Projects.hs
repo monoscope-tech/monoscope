@@ -369,7 +369,8 @@ pagerdutyConnectH pid form = do
       void $ insertPagerdutyData pid key
       sess <- Projects.getSession
       Projects.logAuditS pid Projects.AEIntegrationConnected sess
-        $ Just $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
+        $ Just
+        $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
       addSuccessToast "PagerDuty connected" Nothing
       integrationsSettingsGetH pid
 
@@ -379,7 +380,8 @@ pagerdutyDisconnectH pid = do
   void $ deletePagerdutyData pid
   sess <- Projects.getSession
   Projects.logAuditS pid Projects.AEIntegrationDisconnected sess
-    $ Just $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
+    $ Just
+    $ AE.object ["integration" AE..= ("pagerduty" :: Text)]
   addSuccessToast "PagerDuty disconnected" Nothing
   integrationsSettingsGetH pid
 
@@ -392,7 +394,8 @@ slackDisconnectH pid = do
       void $ ProjectMembers.removeSlackChannelsFromEveryoneTeam pid
       sess <- Projects.getSession
       Projects.logAuditS pid Projects.AEIntegrationDisconnected sess
-        $ Just $ AE.object ["integration" AE..= ("slack" :: Text)]
+        $ Just
+        $ AE.object ["integration" AE..= ("slack" :: Text)]
       addSuccessToast "Slack disconnected" Nothing
     else addErrorToast "Failed to disconnect Slack" Nothing
   integrationsSettingsGetH pid
@@ -631,8 +634,10 @@ manageMembersPostH pid onboardingM form = do
 
   whenJust (nonEmpty deletedUAndP) $ void . ProjectMembers.softDeleteProjectMembers
   when (project.paymentPlan == "Free") $ void $ ProjectMembers.deactivateNonOwnerMembers pid
-  unless (null uAndPNew) $ Projects.logAuditS pid Projects.AEMemberAdded sess
-    $ Just $ AE.object ["added" AE..= map fst uAndPNew]
+  unless (null uAndPNew)
+    $ Projects.logAuditS pid Projects.AEMemberAdded sess
+    $ Just
+    $ AE.object ["added" AE..= map fst uAndPNew]
   unless (null uAndPOldAndChanged) $ Projects.logAuditS pid Projects.AEMemberPermissionChanged sess Nothing
 
   projMembersLatest <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
@@ -1094,7 +1099,8 @@ deleteMemberH pid memberId = do
         else do
           _ <- ProjectMembers.softDeleteProjectMembers (memberId :| [])
           Projects.logAuditS pid Projects.AEMemberRemoved sess
-            $ Just $ AE.object ["removed_email" AE..= CI.original member.email]
+            $ Just
+            $ AE.object ["removed_email" AE..= CI.original member.email]
           addSuccessToast "Member removed" Nothing
           addRespHeaders ""
 
@@ -1373,8 +1379,10 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
           $ forM_ users
           $ \user -> addConvertKitUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
-  let auditPlan name = Projects.logAuditS pid Projects.AEPlanChanged sess
-        $ Just $ AE.object ["plan" AE..= name]
+  let auditPlan name =
+        Projects.logAuditS pid Projects.AEPlanChanged sess
+          $ Just
+          $ AE.object ["plan" AE..= name]
   case plan of
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""

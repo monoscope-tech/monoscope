@@ -180,7 +180,8 @@ apiPostH pid apiKeyForm = do
     ProjectApiKeys.insertProjectApiKey pApiKey
     V.fromList <$> ProjectApiKeys.projectApiKeysByProjectId pid
   Projects.logAuditS pid Projects.AEApiKeyCreated sess
-    $ Just $ AE.object ["key_title" AE..= title apiKeyForm]
+    $ Just
+    $ AE.object ["key_title" AE..= title apiKeyForm]
   addSuccessToast "Created API Key Successfully" Nothing
   addTriggerEvent "closeModal" ""
   case from apiKeyForm of
