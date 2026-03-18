@@ -50,7 +50,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, faSprite_, formatUTC, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, statusFillColorText)
+import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -590,12 +590,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           Nothing -> buildLogResult (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
     else do
       -- Full HTML path: parallelize independent DB queries
-      (tableAsVecE, queryLib, facetSummary, freeTierExceeded, teams, patterns) <- Ki.scoped \scope -> do
+      (tableAsVecE, queryLib, facetSummary, freeTierStatus, teams, patterns) <- Ki.scoped \scope -> do
         let aw = Ki.atomically . Ki.await
         t1 <- Ki.fork scope fetchOrSkip
         t2 <- Ki.fork scope $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
         t3 <- Ki.fork scope $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
-        t4 <- Ki.fork scope $ checkFreeTierExceeded pid project.paymentPlan
+        t4 <- Ki.fork scope $ checkFreeTierStatus pid project.paymentPlan
         t5 <- Ki.fork scope $ V.fromList <$> ManageMembers.getTeams pid
         t6 <- Ki.fork scope $ case effectiveVizType of
           Just "patterns" -> Just . second V.fromList <$> LogQueries.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
@@ -626,7 +626,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , currProject = Just project
               , pageTitle = "Explorer"
               , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/"
-              , freeTierExceeded = freeTierExceeded
+              , freeTierStatus = freeTierStatus
               , config = authCtx.config
               , headContent = headContent
               , pageActions = Just $ div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
@@ -667,7 +667,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   , resetLogsURL = r.resetLogsURL
                   , recentLogsURL = r.recentLogsURL
                   , currentRange
-                  , exceededFreeTier = freeTierExceeded
+                  , exceededFreeTier = case freeTierStatus of FreeTierExceeded _ _ -> True; _ -> False
                   , query = queryM'
                   , cursor = r.cursor
                   , isTestLog = Nothing
@@ -1072,7 +1072,7 @@ aiSearchH pid requestBody = do
           -- Fetch precomputed facets for context (last 24 hours)
           let dayAgo = addUTCTime (-86400) now
           facetSummaryM <- Fields.getFacetSummary pid "otel_logs_and_spans" dayAgo now
-          let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM}
+          let config = (AI.defaultAgenticConfig pid){AI.facetContext = facetSummaryM, AI.timezone = timezoneM, AI.maxIterations = 2}
           result <- AI.runAgenticQuery config inputText envCfg.openaiModel envCfg.openaiApiKey
 
           case result of
@@ -1126,7 +1126,6 @@ curateCols summaryCols cols = sortBy sortAccordingly filteredCols
 alertConfigurationForm_ :: Projects.Project -> Maybe Monitors.QueryMonitor -> V.Vector ManageMembers.Team -> Html ()
 alertConfigurationForm_ project alertM teams = do
   let pid = project.id
-      isByos = project.paymentPlan == "Bring your own storage"
   div_ [class_ "surface-raised h-full flex flex-col group/alt"] do
     -- Header section (more compact)
     div_ [class_ "flex items-center justify-between px-4 py-2.5"] do
@@ -1166,7 +1165,7 @@ alertConfigurationForm_ project alertM teams = do
           -- Monitor Schedule section (shared component)
           let defaultFrequency = maybe 5 (.checkIntervalMins) alertM
               conditionType = if maybe True (\x -> x.alertThreshold > 0 && isJust x.warningThreshold) alertM then Just "threshold_exceeded" else Just "has_matches"
-          AlertUI.monitorScheduleSection_ isByos defaultFrequency 5 conditionType Nothing
+          AlertUI.monitorScheduleSection_ project.paymentPlan defaultFrequency 5 conditionType Nothing
 
           -- Thresholds section (shared component)
           AlertUI.thresholdsSection_ Nothing (fmap (.alertThreshold) alertM) ((.warningThreshold) =<< alertM) (maybe False (.triggerLessThan) alertM) ((.alertRecoveryThreshold) =<< alertM) ((.warningRecoveryThreshold) =<< alertM)

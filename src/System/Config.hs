@@ -155,8 +155,8 @@ instance DefConfig EnvConfig where
       , maxConcurrentJobs = 4 -- Sane default, can be increased based on CPU cores
       , showDemoProject = False -- Default to hidden
       , postmarkFromEmail = "hello@monoscope.tech"
-      , openaiModel = "gpt-4.1-mini"
-      , openaiSmallModel = "gpt-4.1-nano"
+      , openaiModel = "gpt-5.4-mini"
+      , openaiSmallModel = "gpt-5.4-nano"
       }
 
 
