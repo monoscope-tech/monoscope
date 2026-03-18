@@ -67,7 +67,7 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Relude hiding (ask, asks)
-import Servant (err400, err404, errBody)
+import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
@@ -440,7 +440,7 @@ notificationsTestPostH pid TestForm{..} = do
   when (maybe 0 fromOnly (listToMaybe recentTests) > (0 :: Int))
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
-  project <- Projects.projectById pid >>= maybe (throwError err404) pure
+  (_, project) <- Projects.sessionAndProject pid
   let alert = bool (sampleAlertByIssueTypeText issueType project.title) (sampleReport project.title) (issueType == "report")
       getTeam tid = listToMaybe <$> getTeamsById pid (V.singleton tid)
 

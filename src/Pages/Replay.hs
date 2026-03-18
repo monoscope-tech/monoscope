@@ -211,22 +211,18 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
 
 replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders AE.Value)
 replaySessionGetH pid sessionId = do
+  (_, p) <- Projects.sessionAndProject pid
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let envCfg = ctx.config
-  project <- Projects.projectById pid
-  case project of
-    Just p -> do
-      let (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
-          conn = getMinioConnectInfo acc sec region bucket endpoint
-          sessionStr = UUID.toText sessionId
-      result <- tryAny $ getSessionEvents conn pid bucket sessionStr
-      case result of
-        Right replayEvents -> addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
-        Left err -> do
-          Log.logAttention "Error fetching replay session from MinIO" (HM.fromList [("session", sessionStr), ("projectId", pid.toText), ("error", toText $ show err)])
-          addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Failed to load session" :: Text)]
-    Nothing -> do
-      addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Project not found" :: Text)]
+      (acc, sec, region, bucket, endpoint) = maybe (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint) (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl)) p.s3Bucket
+      conn = getMinioConnectInfo acc sec region bucket endpoint
+      sessionStr = UUID.toText sessionId
+  result <- tryAny $ getSessionEvents conn pid bucket sessionStr
+  case result of
+    Right replayEvents -> addRespHeaders $ AE.object ["events" AE..= AE.Array replayEvents]
+    Left err -> do
+      Log.logAttention "Error fetching replay session from MinIO" (HM.fromList [("session", sessionStr), ("projectId", pid.toText), ("error", toText $ show err)])
+      addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Failed to load session" :: Text)]
 
 
 -- | Merge a specific replay session's S3 event files (triggered when file count exceeds threshold)

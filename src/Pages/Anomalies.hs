@@ -97,7 +97,7 @@ import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierExceeded, deleteParam, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, deleteParam, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -1143,7 +1143,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
       perPage = maybe 25 (Unsafe.read . toString) perPageM
       currentSort = fromMaybe "-created_at" sortM
 
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
   currTime <- liftIO getCurrentTime
 
   let period = fromMaybe "24h" periodM
@@ -1217,7 +1217,7 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
           , currProject = Just project
           , pageTitle = "Issues"
           , menuItem = Just "Issues"
-          , freeTierExceeded = freeTierExceeded
+          , freeTierStatus = freeTierStatus
           , config = appCtx.config
           , headContent = Just highlightJsHead_
           , navTabs =
@@ -1668,6 +1668,7 @@ eventDisplay = \case
 
 errorGroupMembersGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
 errorGroupMembersGetH pid errorId = do
+  _ <- Projects.sessionAndProject pid
   members <- PatternMerge.getErrorPatternGroupMembers (ErrorPatternId errorId)
   addRespHeaders
     $ unless (null members)
@@ -1697,7 +1698,8 @@ errorGroupMembersGetH pid errorId = do
 
 
 errorUnmergePostH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders (Html ()))
-errorUnmergePostH _pid errorId = do
+errorUnmergePostH pid errorId = do
+  _ <- Projects.sessionAndProject pid
   void $ PatternMerge.unmergeErrorPattern (ErrorPatternId errorId)
   addSuccessToast "Pattern unmerged" Nothing
   addRespHeaders $ div_ [class_ "p-3 bg-fillSuccess-weak rounded-lg text-sm text-fillSuccess-strong"] "Pattern unmerged successfully"

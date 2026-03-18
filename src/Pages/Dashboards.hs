@@ -846,6 +846,7 @@ populateWidgetPngUrls secret hostUrl pid (sinceStr, fromDStr, toDStr) = mapM \w 
 
 dashboardWidgetPutH :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe Text -> Widget.Widget -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardWidgetPutH pid dashId widgetIdM tabSlugM widget = do
+  _ <- Projects.sessionAndProject pid
   (_, dash) <- getDashAndVM dashId Nothing
   uid <- UUID.genUUID <&> UUID.toText
   let normalizedWidgetIdM = normalizeWidgetId <$> widgetIdM
@@ -927,6 +928,7 @@ dashboardWidgetReorderPatchH
   -- ^ The ordered list of widget IDs
   -> ATAuthCtx (RespHeaders NoContent)
 dashboardWidgetReorderPatchH pid dashId tabSlugM widgetOrder = do
+  _ <- Projects.sessionAndProject pid
   (_, dash) <- getDashAndVM dashId Nothing
 
   let oldWidgets = case (tabSlugM, dash.tabs) of
@@ -1032,7 +1034,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       widgetsWithPngUrls <- populateWidgetPngUrls appCtx.env.apiKeyEncryptionSecretKey appCtx.config.hostUrl pid timeParams widgetsWithAlerts
       let dash'' = dash' & #widgets .~ widgetsWithPngUrls
 
-      freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+      freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
       let bwconf =
             (def :: BWConfig)
@@ -1042,12 +1044,12 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
               , pageTitle = dashTitle dashVM.title
               , pageTitleModalId = Just "pageTitleModalId"
               , config = appCtx.config
-              , freeTierExceeded = freeTierExceeded
+              , freeTierStatus = freeTierStatus
               , headContent = Just dashboardHeadContent_
               , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
                   TimePicker.timepicker_ Nothing currentRange Nothing
                   TimePicker.refreshButton_
-                  dashboardActions_ pid dashId Nothing currentRange
+                  dashboardActions_ pid project.paymentPlan dashId Nothing currentRange
               , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
               }
       addRespHeaders $ PageCtx bwconf $ DashboardGet pid dashId dash'' dashVM allParams
@@ -1061,8 +1063,8 @@ numberedStep_ n title content = div_ [class_ "space-y-4"] do
   div_ [class_ "pl-10"] content
 
 
-widgetViewerEditor_ :: Projects.ProjectId -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
-widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
+widgetViewerEditor_ :: Projects.ProjectId -> Text -> Maybe Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Maybe Widget.Widget -> Text -> Html ()
+widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingWidgetM activeTab = div_ [class_ "group/wgtexp"] do
   let isNewWidget = isNothing existingWidgetM
   let effectiveActiveTab = if isNewWidget then "edit" else activeTab
 
@@ -1251,12 +1253,12 @@ widgetViewerEditor_ pid dashboardIdM tabSlugM currentRange existingWidgetM activ
           Just dashId -> "/p/" <> pid.toText <> "/widgets/" <> sourceWid <> "/alert?dashboard_id=" <> dashId.toText
           Nothing -> ""
     div_ [class_ "hidden group-has-[.page-drawer-tab-alerts:checked]/wgtexp:block mt-6"] do
-      widgetAlertConfig_ pid alertFormId alertEndpoint wid sourceWid widgetToUse
+      widgetAlertConfig_ pid paymentPlan alertFormId alertEndpoint wid sourceWid widgetToUse
 
 
 -- | Widget alert configuration form (unified with Log Explorer form structure)
-widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Widget.Widget -> Html ()
-widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget = do
+widgetAlertConfig_ :: Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Widget.Widget -> Html ()
+widgetAlertConfig_ _pid paymentPlan alertFormId alertEndpoint chartTargetId widgetId widget = do
   let hasAlert = isJust widget.alertId
       defaultTitle = fromMaybe "Widget Alert" widget.title <> " - Threshold Alert"
   -- Enable Alert toggle
@@ -1281,7 +1283,7 @@ widgetAlertConfig_ _pid alertFormId alertEndpoint chartTargetId widgetId widget 
 
       Components.formField_ Components.FieldSm def{Components.value = defaultTitle, Components.placeholder = "e.g. High error rate monitor"} "Name" "title" True Nothing
       -- Monitor Schedule section (shared component)
-      Alerts.monitorScheduleSection_ True 5 5 (Just "threshold_exceeded") (Just chartTargetId)
+      Alerts.monitorScheduleSection_ paymentPlan 5 5 (Just "threshold_exceeded") (Just chartTargetId)
       -- Thresholds section (shared component)
       Alerts.thresholdsSection_ (Just chartTargetId) widget.alertThreshold widget.warningThreshold False Nothing Nothing
       -- Widget-specific: Show threshold lines option
@@ -1336,6 +1338,7 @@ data WidgetAlertForm = WidgetAlertForm
 
 widgetAlertUpsertH :: Projects.ProjectId -> Text -> Maybe UUID.UUID -> WidgetAlertForm -> ATAuthCtx (RespHeaders (Html ()))
 widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
+  _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
 
   -- Check if alert already exists for this widget
@@ -1400,7 +1403,8 @@ widgetAlertUpsertH pid _widgetIdPath dashboardIdM form = do
 
 
 widgetAlertDeleteH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (Html ()))
-widgetAlertDeleteH _pid widgetId = do
+widgetAlertDeleteH pid widgetId = do
+  _ <- Projects.sessionAndProject pid
   _ <- Monitors.deleteMonitorsByWidgetIds [widgetId]
   addSuccessToast "Monitor removed from widget" Nothing
   addRespHeaders $ toHtml ("" :: Text)
@@ -1409,8 +1413,8 @@ widgetAlertDeleteH _pid widgetId = do
 -- visTypes is now imported from LogQueryBox to avoid circular dependencies
 
 -- | Wrapper for the new widget editor
-newWidget_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
-newWidget_ pid dashId tabSlugM currentRange = widgetViewerEditor_ pid (Just dashId) tabSlugM currentRange Nothing "edit"
+newWidget_ :: Projects.ProjectId -> Text -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
+newWidget_ pid paymentPlan dashId tabSlugM currentRange = widgetViewerEditor_ pid paymentPlan (Just dashId) tabSlugM currentRange Nothing "edit"
 
 
 --------------------------------------------------------------------
@@ -1687,13 +1691,13 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters =
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
       addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode}
     else do
-      freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+      freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
       let bwconf =
             (def :: BWConfig)
               { sessM = Just sess
               , currProject = Just project
               , pageTitle = "Dashboards"
-              , freeTierExceeded = freeTierExceeded
+              , freeTierStatus = freeTierStatus
               , config = appCtx.config
               , headContent = Just dashboardHeadContent_
               , pageActions = Just $ label_ [Lucid.for_ "newDashboardMdl", class_ "btn btn-sm btn-primary gap-2"] do
@@ -1842,6 +1846,7 @@ data DashboardRenameForm = DashboardRenameForm
 -- It updates the title and optionally the git file path.
 dashboardRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> DashboardRenameForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardRenamePatchH pid dashId form = do
+  _ <- Projects.sessionAndProject pid
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
     Nothing -> do
@@ -1870,13 +1875,14 @@ dashboardRenamePatchH pid dashId form = do
 -- It creates a new dashboard with the same content but with "(Copy)" appended to the title.
 dashboardDuplicatePostH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDuplicatePostH pid dashId = do
+  _ <- Projects.sessionAndProject pid
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
     Nothing -> do
       addErrorToast "Dashboard not found or does not belong to this project" Nothing
       addRespHeaders $ DashboardPostError "Dashboard not found or does not belong to this project"
     Just dashVM -> do
-      (sess, _) <- Projects.sessionAndProject pid
+      sess <- Projects.getSession
       now <- Time.currentTime
       newDashId <- UUIDId <$> UUID.genUUID
 
@@ -1924,6 +1930,7 @@ dashboardStarPostH pid dashId = do
 -- After deletion, redirects to the dashboard list page.
 dashboardDeleteH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardDeleteH pid dashId = do
+  _ <- Projects.sessionAndProject pid
   mDashboard <- Dashboards.getDashboardById dashId
   case mDashboard of
     Nothing -> throwError $ err404{errBody = "Dashboard not found or does not belong to this project"}
@@ -1945,6 +1952,7 @@ data DashboardBulkActionForm = DashboardBulkActionForm
 
 dashboardBulkActionPostH :: Projects.ProjectId -> Text -> DashboardBulkActionForm -> ATAuthCtx (RespHeaders NoContent)
 dashboardBulkActionPostH pid action DashboardBulkActionForm{..} = do
+  _ <- Projects.sessionAndProject pid
   case action of
     "delete" -> do
       _ <- Dashboards.deleteDashboardsByIds pid $ V.fromList itemId
@@ -1978,6 +1986,7 @@ data WidgetMoveForm = WidgetMoveForm
 -- When source_dashboard_id is provided and differs from target dashboard, this copies the widget to a different dashboard.
 dashboardDuplicateWidgetPostH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe UUID.UUID -> ATAuthCtx (RespHeaders Widget.Widget)
 dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
+  _ <- Projects.sessionAndProject pid
   let sourceDashId = maybe targetDashId UUIDId sourceDashIdM
       isCrossDashboard = sourceDashId /= targetDashId
 
@@ -2062,6 +2071,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
 
 dashboardWidgetExpandGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> ATAuthCtx (RespHeaders (Html ()))
 dashboardWidgetExpandGetH pid dashId widgetId = do
+  (_, project) <- Projects.sessionAndProject pid
   (_, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
   let timeParams = (Nothing, Nothing, Nothing)
@@ -2071,12 +2081,13 @@ dashboardWidgetExpandGetH pid dashId widgetId = do
     Nothing -> throwError $ err404{errBody = "Widget not found in dashboard"}
     Just widgetToExpand -> do
       processedWidget <- processWidget pid now timeParams allParamsWithConstants widgetToExpand
-      addRespHeaders $ widgetViewerEditor_ pid (Just dashId) Nothing Nothing (Just processedWidget) "edit"
+      addRespHeaders $ widgetViewerEditor_ pid project.paymentPlan (Just dashId) Nothing Nothing (Just processedWidget) "edit"
 
 
 -- | SQL preview endpoint for debugging KQL queries (shows generated SQL)
 widgetSqlPreviewGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
 widgetSqlPreviewGetH pid queryM sinceStr fromDStr toDStr = do
+  _ <- Projects.sessionAndProject pid
   now <- Time.currentTime
   let (fromD, toD, _) = TimePicker.parseTimeRange now (TimePicker.TimePicker sinceStr fromDStr toDStr)
       sqlCfg = defSqlQueryCfg pid now Nothing Nothing & #dateRange .~ (fromD, toD)
@@ -2231,7 +2242,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
       pure $ dash' & #tabs ?~ processedTabs
     Nothing -> pure dash'
 
-  freeTierExceeded <- checkFreeTierExceeded pid project.paymentPlan
+  freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let bwconf =
         (def :: BWConfig)
@@ -2243,12 +2254,12 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
           , pageTitleModalId = Just "pageTitleModalId"
           , pageTitleSuffixModalId = Just "tabRenameModalId" -- Modal for renaming tab
           , config = appCtx.config
-          , freeTierExceeded = freeTierExceeded
+          , freeTierStatus = freeTierStatus
           , headContent = Just dashboardHeadContent_
           , pageActions = Just $ div_ [class_ "flex gap-3 max-md:gap-1 items-center"] do
               TimePicker.timepicker_ Nothing currentRange Nothing
               TimePicker.refreshButton_
-              dashboardActions_ pid dashId (Just tabSlug) currentRange
+              dashboardActions_ pid project.paymentPlan dashId (Just tabSlug) currentRange
           , docsLink = Just "https://monoscope.tech/docs/dashboard/dashboard-pages/dashboard/"
           }
   -- Pass the active tab slug and computed constants in params for rendering
@@ -2261,6 +2272,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
 -- This returns only the tab content panel for htmx swapping
 dashboardTabContentGetH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Maybe Text)] -> ATAuthCtx (RespHeaders (Html ()))
 dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = do
+  _ <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   now <- Time.currentTime
   (_dashVM, dash) <- getDashAndVM dashId fileM
@@ -2355,6 +2367,7 @@ instance ToHtml TabRenameRes where
 -- | Handler for renaming a tab
 dashboardTabRenamePatchH :: Projects.ProjectId -> Dashboards.DashboardId -> Text -> TabRenameForm -> ATAuthCtx (RespHeaders TabRenameRes)
 dashboardTabRenamePatchH pid dashId tabSlug form = do
+  _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM dashId Nothing
   now <- Time.currentTime
 
@@ -2378,10 +2391,10 @@ dashboardTabRenamePatchH pid dashId tabSlug form = do
 
 
 -- | Unified dashboard actions (add widget button, yaml drawer, context menu)
-dashboardActions_ :: Projects.ProjectId -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
-dashboardActions_ pid dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
+dashboardActions_ :: Projects.ProjectId -> Text -> Dashboards.DashboardId -> Maybe Text -> Maybe (Text, Text) -> Html ()
+dashboardActions_ pid paymentPlan dashId tabSlugM currentRange = div_ [class_ "flex items-center"] do
   span_ [class_ "text-fillDisabled mr-2 max-md:hidden"] "|"
-  div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
+  div_ [class_ "max-md:hidden"] $ Components.drawer_ "page-data-drawer" Nothing (Just $ newWidget_ pid paymentPlan dashId tabSlugM currentRange) $ span_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Add a new widget", data_ "tippy-content" "Add a new widget"] $ faSprite_ "plus" "regular" "w-3 h-3"
   div_ [class_ "max-md:hidden"] $ yamlEditorDrawer_ pid dashId
   div_ [class_ "dropdown dropdown-end"] do
     div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
@@ -2429,6 +2442,7 @@ newtype YamlForm = YamlForm {yaml :: Text}
 -- | Get dashboard schema as YAML (returns HTML with yaml-editor component)
 dashboardYamlGetH :: Projects.ProjectId -> Dashboards.DashboardId -> ATAuthCtx (RespHeaders (Html ()))
 dashboardYamlGetH pid dashId = do
+  _ <- Projects.sessionAndProject pid
   (dashVM, dash) <- getDashAndVM dashId Nothing
   teams <- ManageMembers.getTeamsById pid dashVM.teams
   let schema = GitSync.buildSchemaWithMeta (Just dash) dashVM.title (V.toList dashVM.tags) (map (.handle) teams)
@@ -2444,6 +2458,7 @@ yamlEditorContent_ yamlText = term "yaml-editor" [class_ "h-full w-full block", 
 -- | Save dashboard schema from YAML (validates and saves)
 dashboardYamlPutH :: Projects.ProjectId -> Dashboards.DashboardId -> YamlForm -> ATAuthCtx (RespHeaders (Html ()))
 dashboardYamlPutH pid dashId form = do
+  _ <- Projects.sessionAndProject pid
   case GitSync.yamlToDashboard (encodeUtf8 form.yaml) of
     Left err -> addRespHeaders $ yamlValidationError_ err
     Right dashboard -> do

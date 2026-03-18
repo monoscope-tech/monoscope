@@ -431,7 +431,7 @@ selectProjectsForUser uid = do
         FROM projects.projects AS pp
         JOIN projects.project_members AS ppm ON (pp.id = ppm.project_id)
         JOIN users.users AS us ON (us.id = ppm.user_id)
-        WHERE ppm.user_id = ? AND pp.deleted_at IS NULL
+        WHERE ppm.user_id = ? AND pp.deleted_at IS NULL AND ppm.active = TRUE
         ORDER BY updated_at DESC
       |]
 

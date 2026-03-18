@@ -194,6 +194,7 @@ minsToInterval = \case
 
 alertUpsertPostH :: Projects.ProjectId -> AlertUpsertForm -> ATAuthCtx (RespHeaders Alert)
 alertUpsertPostH pid form = do
+  _ <- Projects.sessionAndProject pid
   let alertId = form.alertId >>= UUID.fromText
   queryMonitorId <- liftIO $ case alertId of
     Just alertId' -> pure (Monitors.QueryMonitorId alertId')
@@ -223,12 +224,14 @@ alertUpsertPostH pid form = do
 
 alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
 alertListGetH pid = do
+  _ <- Projects.sessionAndProject pid
   monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
   addRespHeaders $ AlertListGet monitors
 
 
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
+  _ <- Projects.sessionAndProject pid
   void $ Monitors.monitorToggleActiveById monitorId
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
   addRespHeaders $ AlertNoContent ""
@@ -236,6 +239,7 @@ alertSingleToggleActiveH pid monitorId = do
 
 alertSingleGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleGetH pid monitorId = do
+  _ <- Projects.sessionAndProject pid
   monitor <- Monitors.queryMonitorById monitorId
   addRespHeaders $ AlertSingle pid monitor
 
@@ -325,12 +329,13 @@ end
 -- | Alert overview page handler - redirects to unified monitor overview
 alertOverviewGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertOverviewGetH pid alertId = do
-  -- Redirect to the unified monitor overview page
+  _ <- Projects.sessionAndProject pid
   addRespHeaders $ AlertRedirect $ "/p/" <> pid.toText <> "/monitors/" <> alertId.toText <> "/overview"
 
 
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)
 alertTeamDeleteH pid monitorId teamId = do
+  _ <- Projects.sessionAndProject pid
   _ <- Monitors.monitorRemoveTeam pid monitorId teamId
   addSuccessToast "Team removed from monitor successfully" Nothing
   addRespHeaders $ AlertNoContent ""
@@ -469,6 +474,7 @@ teamAlertsGetH pid teamId = do
 
 alertBulkActionH :: Projects.ProjectId -> Text -> TBulkActionForm -> ATAuthCtx (RespHeaders (PageCtx (Table UnifiedMonitorItem)))
 alertBulkActionH pid action form = do
+  _ <- Projects.sessionAndProject pid
   let monitorIds = Monitors.QueryMonitorId <$> form.itemId
   unless (null monitorIds) $ case action of
     "deactivate" -> void $ Monitors.monitorDeactivateByIds monitorIds
@@ -693,6 +699,7 @@ buildTeamMap pid = do
 
 monitorActionH :: ([Monitors.QueryMonitorId] -> ATAuthCtx Int64) -> Text -> Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders (Html ()))
 monitorActionH action msg pid monitorId = do
+  _ <- Projects.sessionAndProject pid
   void $ action [monitorId]
   addSuccessToast msg Nothing
   redirectCS $ "/p/" <> pid.toText <> "/monitors"
@@ -701,6 +708,7 @@ monitorActionH action msg pid monitorId = do
 
 alertMuteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATAuthCtx (RespHeaders (Html ()))
 alertMuteH pid monitorId durationMinsM = do
+  _ <- Projects.sessionAndProject pid
   void $ Monitors.monitorMuteByIds durationMinsM [monitorId]
   let msg = maybe "Monitor muted indefinitely" (const "Monitor muted") durationMinsM
   addSuccessToast msg Nothing

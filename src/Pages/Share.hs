@@ -34,6 +34,7 @@ data ReqForm = ReqForm
 
 shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
+  _ <- Projects.sessionAndProject pid
   let eventType = fromMaybe "request" reqTypeM
   shareId <- liftIO UUIDV4.nextRandom
   res <-
