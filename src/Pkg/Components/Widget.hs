@@ -1368,6 +1368,8 @@ summaryStyleClass = \case
 renderSummaryTags :: Text -> Html ()
 renderSummaryTags txt = span_ [class_ "inline-flex flex-wrap items-center gap-1"] $ forM_ (T.words txt) \seg ->
   case T.breakOn "⇒" seg of
-    (prefix, rest) | not (T.null rest), Just (';', style) <- T.uncons =<< T.stripPrefix (T.takeWhile (/= ';') prefix) prefix ->
-      span_ [class_ $ summaryStyleClass style] $ toHtml (T.drop 1 rest)
+    (prefix, rest)
+      | not (T.null rest)
+      , Just (';', style) <- T.uncons =<< T.stripPrefix (T.takeWhile (/= ';') prefix) prefix ->
+          span_ [class_ $ summaryStyleClass style] $ toHtml (T.drop 1 rest)
     _ -> toHtml (" " <> seg)
