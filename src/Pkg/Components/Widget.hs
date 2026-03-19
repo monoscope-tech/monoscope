@@ -1168,7 +1168,7 @@ renderTableWithDataAndParams widget dataRows params = do
               td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
                 if isJust col.progress
                   then renderProgressCell col value maxValues valueWidths
-                  else toHtml $ formatColumnValue col value
+                  else renderCellValue col value
 
   -- Add row click handler script if needed
   whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
@@ -1336,3 +1336,38 @@ formatColumnValue col value = case col.columnType of
       Just v -> toText $ getDurationNSMS (fromIntegral (round v :: Int))
       Nothing -> value <> foldMap (" " <>) col.unit
   _ -> value <> foldMap (" " <>) col.unit
+
+
+-- | Render cell value, parsing summary tags (field;style⇒value) into badges
+renderCellValue :: TableColumn -> Text -> Html ()
+renderCellValue col value
+  | T.isInfixOf "⇒" formatted = renderSummaryTags formatted
+  | otherwise = toHtml formatted
+  where
+    formatted = formatColumnValue col value
+
+
+-- | Style mapping matching web-components/src/log-list-utils.ts STYLE_MAPPINGS
+summaryStyleClass :: Text -> Text
+summaryStyleClass = \case
+  "badge-error" -> "badge badge-sm badge-error"
+  "badge-warning" -> "badge badge-sm badge-warning"
+  "badge-info" -> "badge badge-sm badge-info"
+  "badge-success" -> "badge badge-sm badge-success"
+  "badge-neutral" -> "badge badge-sm badge-neutral"
+  "error-strong" -> "badge badge-sm badge-error"
+  "error-weak" -> "badge badge-sm opacity-70 badge-error"
+  "warning-strong" -> "badge badge-sm badge-warning"
+  "info-strong" -> "badge badge-sm badge-info"
+  "success-strong" -> "badge badge-sm badge-success"
+  "neutral" -> "badge badge-sm badge-neutral"
+  s | "right-badge-" `T.isPrefixOf` s -> "badge badge-sm ml-auto " <> T.drop 6 s
+  _ -> "badge badge-sm badge-neutral"
+
+
+renderSummaryTags :: Text -> Html ()
+renderSummaryTags txt = span_ [class_ "inline-flex flex-wrap items-center gap-1"] $ forM_ (T.words txt) \seg ->
+  case T.breakOn "⇒" seg of
+    (prefix, rest) | not (T.null rest), Just (';', style) <- T.uncons =<< T.stripPrefix (T.takeWhile (/= ';') prefix) prefix ->
+      span_ [class_ $ summaryStyleClass style] $ toHtml (T.drop 1 rest)
+    _ -> toHtml (" " <> seg)
