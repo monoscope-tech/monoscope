@@ -37,7 +37,7 @@ clearAllTestData tr = withResource tr.trPool \conn -> do
 
 queryMetrics :: TestResources -> Text -> Text -> Text -> IO Charts.MetricsData
 queryMetrics tr query timeFrom timeTo =
-  runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") []
+  runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just query) Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") []
 
 
 -- Format time offset from baseTime as ISO8601 string

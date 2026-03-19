@@ -84,7 +84,7 @@ spec = aroundAll withTestResources do
       forM_ (zip3 keys ["cpu.usage", "memory.usage", "disk.usage"] [75.5, 82.3, 45.1]) $ \(key, metricName, value) -> ingestMetric tr key metricName value frozenTime
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       let (timeFrom, timeTo) = testTimeRange
-      result <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length result.dataset `shouldSatisfy` (> 0)
 
     it "Test 4.2: should reject metrics with invalid API key" $ \tr -> do
@@ -104,7 +104,7 @@ spec = aroundAll withTestResources do
       forM_ ([0 .. 5] :: [Int]) $ \i -> ingestLog tr key "Log entry" (addUTCTime (fromIntegral (i * 60)) frozenTime)
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       let (timeFrom, timeTo) = testTimeRange
-      result <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") []
+      result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "spans") []
       V.length result.dataset `shouldSatisfy` (> 0)
       V.toList result.headers `shouldContain` ["timestamp"]
 
@@ -122,7 +122,7 @@ spec = aroundAll withTestResources do
       V.length dataset `shouldSatisfy` (>= 6) -- 3 logs + 3 traces
       -- Verify metrics
       let (timeFrom, timeTo) = testTimeRange
-      metricResult <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+      metricResult <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
       V.length metricResult.dataset `shouldSatisfy` (> 0)
 
     it "Test 8.1: should handle bulk ingestion (50+ messages)" $ \tr -> do
@@ -157,7 +157,7 @@ spec = aroundAll withTestResources do
         ingestMetricWithHeader tr key "header.metric" 123.45 frozenTime
         void $ runAllBackgroundJobs frozenTime tr.trATCtx
         let (timeFrom, timeTo) = testTimeRange
-        result <- runQueryEffect tr $ Charts.queryMetrics (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
+        result <- runQueryEffect tr $ Charts.queryMetrics Nothing (Just Charts.DTMetric) (Just pid) (Just "summarize count(*) by bin_auto(timestamp)") Nothing Nothing (Just timeFrom) (Just timeTo) (Just "metrics") []
         V.length result.dataset `shouldSatisfy` (> 0)
 
       it "Test 9.4: should prefer resource attribute auth over header when both present" $ \tr -> do
