@@ -309,16 +309,18 @@ const updateChartData = async (chart: any, opt: any, shouldFetch: boolean, widge
     opt.xAxis.min = from;  // Already in ms from server
     opt.xAxis.max = to;
     opt.dataset.source = [trmHeaders || [], ...dataset];
-    opt.yAxis.max = stats.max;
-    if (widgetData.chartType != 'line') {
-      opt.yAxis.max = stats.max_group_sum;
+    if (stats) {
+      opt.yAxis.max = stats.max;
+      if (widgetData.chartType != 'line') {
+        opt.yAxis.max = stats.max_group_sum;
+      }
     }
 
     const subtitle = $(`${chartId}Subtitle`);
     subtitle && (subtitle.innerHTML = `${window.formatNumber(rows_per_min)}/min`);
 
     const value = $(`${chartId}Value`);
-    if (value) {
+    if (value && stats) {
       const durationUnits = ['ns', 'μs', 'us', 'ms', 's', 'm', 'h'];
       const unit = widgetData.unit || '';
       const isDuration = durationUnits.includes(unit);

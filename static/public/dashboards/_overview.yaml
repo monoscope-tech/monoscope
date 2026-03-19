@@ -690,7 +690,7 @@ tabs:
   - name: Logs
     icon: file-text
     widgets:
-      # Log Stats - Enhanced with timeseries
+      # 1. Situation at a glance
       - type: group
         title: Log Metrics
         layout: { w: 12, h: 4 }
@@ -739,7 +739,7 @@ tabs:
             unit: services
             layout: { w: 3, h: 2 }
 
-      # Log Volume Time Series
+      # 2. Trends — side by side
       - type: 'timeseries'
         title: 'Log Volume by Level'
         query: |
@@ -749,7 +749,6 @@ tabs:
           | limit 10000
         layout: { w: 6, h: 4 }
 
-      # Error Log Trends by Service
       - type: 'timeseries'
         title: 'Error Logs by Service'
         theme: 'roma'
@@ -777,11 +776,11 @@ tabs:
           ORDER BY time DESC
         layout: { w: 6, h: 4 }
 
-      # Top Error Patterns - NEW: Grouped error analysis
+      # 3. Error tables — drill-down context above the log stream
       - type: table
         title: 'Top Error Patterns'
-        description: 'Most frequent error messages grouped by pattern. Focus on high-count errors first.'
-        layout: { w: 6, h: 6 }
+        layout: { w: 6, h: 5 }
+        db_source: postgres
         columns:
           - field: error_pattern
             title: Error Pattern
@@ -795,82 +794,52 @@ tabs:
             title: Last Seen
         sql: |
           SELECT
-            LEFT(COALESCE(
-              attributes___exception___message,
-              attributes___exception___type,
-              body::text,
-              status_message
-            ), 80) as error_pattern,
-            COUNT(*)::text as count,
-            resource___service___name as service,
-            MAX(timestamp)::text as last_seen
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND (level IN ('ERROR', 'FATAL') OR status_code = 'ERROR')
-            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
-            {{time_filter}}
-          GROUP BY error_pattern, service
-          ORDER BY COUNT(*) DESC
+            LEFT(log_pattern, 80) as error_pattern,
+            occurrence_count::text as count,
+            COALESCE(service_name, 'unknown') as service,
+            last_seen_at::text as last_seen
+          FROM apis.log_patterns
+          WHERE project_id = '{{project_id}}'
+            AND canonical_id IS NULL
+            AND (log_level IN ('ERROR', 'FATAL') OR source_field = 'exception')
+            AND ('{{var-service}}' = '' OR service_name = '{{var-service}}')
+          ORDER BY occurrence_count DESC
           LIMIT 20
 
-      # Logs by Service Distribution
-      - type: 'tree_map'
-        title: 'Logs by Service'
-        layout: { w: 6, h: 6 }
-        sql: |
-          SELECT
-            COALESCE(resource___service___name, 'Unknown') as service,
-            COUNT(*)::float as count
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND body IS NOT NULL
-            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
-            {{time_filter}}
-          GROUP BY service
-          ORDER BY count DESC
-          LIMIT 20
-
-      # Recent Error Logs with Trace Links
       - type: table
         title: 'Recent Errors'
-        layout: { w: 12, h: 5 }
+        layout: { w: 6, h: 5 }
+        db_source: postgres
         columns:
-          - field: timestamp
-            title: Time
+          - field: last_seen
+            title: Last Seen
           - field: service
             title: Service
-          - field: error_message
-            title: Error
-          - field: trace_id
-            title: Trace ID
+          - field: error_pattern
+            title: Error Pattern
+          - field: count
+            title: Count
+            columnType: number
         sql: |
           SELECT
-            timestamp::text,
-            resource___service___name as service,
-            LEFT(COALESCE(attributes___exception___message, body::text, status_message), 100) as error_message,
-            context___trace_id as trace_id
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND (level IN ('ERROR', 'FATAL') OR status_code = 'ERROR')
-            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
-            {{time_filter}}
-          ORDER BY timestamp DESC
+            last_seen_at::text as last_seen,
+            COALESCE(service_name, 'unknown') as service,
+            LEFT(log_pattern, 100) as error_pattern,
+            occurrence_count::text as count
+          FROM apis.log_patterns
+          WHERE project_id = '{{project_id}}'
+            AND canonical_id IS NULL
+            AND (log_level IN ('ERROR', 'FATAL') OR source_field = 'exception')
+            AND ('{{var-service}}' = '' OR service_name = '{{var-service}}')
+          ORDER BY last_seen_at DESC
           LIMIT 50
 
-      # Log Stream
+      # 4. Log Stream at the bottom
       - type: logs
         title: 'Log Stream'
-        layout: { w: 12, h: 8 }
-        sql: |
-          SELECT *
-          FROM otel_logs_and_spans
-          WHERE project_id='{{project_id}}'
-            AND body IS NOT NULL
-            AND ('{{var-service}}' = '' OR resource___service___name = '{{var-service}}')
-            AND ('{{var-resource}}' = '' OR name = '{{var-resource}}')
-            {{time_filter}}
-          ORDER BY timestamp DESC
-          LIMIT 500
+        layout: { w: 12, h: 10 }
+        query: |
+          body != null
 
   - name: Databases
     icon: database

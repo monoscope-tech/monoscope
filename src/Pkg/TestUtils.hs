@@ -1053,7 +1053,7 @@ routeRequest tr path params
   | "/chart_data" `T.isPrefixOf` path = do
       result <-
         runQueryEffect tr
-          $ Charts.queryMetrics Nothing (Just testPid) query Nothing since from to source []
+          $ Charts.queryMetrics Nothing Nothing (Just testPid) query Nothing since from to source []
       pure $ mockResponse $ AE.encode result
   | otherwise = error $ "runHTTPtoServant: unhandled path: " <> path
   where

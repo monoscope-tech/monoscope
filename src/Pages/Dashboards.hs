@@ -736,7 +736,7 @@ processConstant pid now (sinceStr, fromDStr, toDStr) allParams constantBase = do
         Right queryResults -> do
           let toTextList = map (map valueToText . V.toList) $ V.toList queryResults
           Log.logDebug "Dashboard constant SQL query completed" (constant.key, duration) $> constant{Dashboards.result = Just toTextList}
-    (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
+    (Nothing, Just kqlQuery) -> runQuery "KQL" (Charts.queryMetrics Nothing (Just Charts.DTText) (Just pid) (Just kqlQuery) Nothing sinceStr fromDStr toDStr Nothing allParams) (map V.toList . V.toList . (.dataText))
     _ -> pure constant
   where
     valueToText :: AE.Value -> Text
@@ -771,10 +771,10 @@ processWidget pid now timeRange allParams widgetBase = do
 fetchWidgetData :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Time.Time :> es) => Projects.ProjectId -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Widget.Widget -> Eff es Widget.Widget
 fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget = case widget.wType of
   Widget.WTStat -> do
-    stat <- Charts.queryMetrics (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    stat <- Charts.queryMetrics widget.dbSource (Just Charts.DTFloat) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ def{Widget.source = AE.Null, Widget.value = stat.dataFloat}
   _ -> do
-    metricsD <- Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    metricsD <- Charts.queryMetrics widget.dbSource (Just Charts.DTMetric) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     pure $ widget & #dataset ?~ Widget.toWidgetDataset metricsD
 
 
@@ -790,14 +790,14 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
   Widget.WTStat -> fetchWidgetData pid (sinceStr, fromDStr, toDStr) allParams widget
   Widget.WTTable -> do
     -- Fetch table data
-    tableData <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    tableData <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     -- Render the table with data server-side
     pure
       $ widget
       & #html
         ?~ renderText (Widget.renderTableWithDataAndParams widget tableData.dataText allParams)
   Widget.WTTraces -> do
-    tracesD <- Charts.queryMetrics (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
+    tracesD <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
     shapeWithDuration <- Telemetry.getTraceShapes pid trIds
     let grouped = M.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- shapeWithDuration]

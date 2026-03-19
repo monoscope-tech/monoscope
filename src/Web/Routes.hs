@@ -433,7 +433,7 @@ server pool =
     , clientMetadata = Auth.clientMetadataH
     , lemonWebhook = Settings.webhookPostH
     , githubWebhook = GitSync.githubWebhookPostH
-    , chartsDataShot = Charts.queryMetrics
+    , chartsDataShot = Charts.queryMetrics Nothing
     , rrwebPost = Replay.replayPostH
     , avatarGet = avatarGetH
     , widgetPngGet = widgetPngGetH
@@ -494,7 +494,7 @@ cookieProtectedServer =
     , apiPatch = Settings.apiActivateH
     , apiPost = Settings.apiPostH
     , -- Chart and widget handlers
-      chartsDataGet = Charts.queryMetrics
+      chartsDataGet = Charts.queryMetrics Nothing
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
@@ -703,7 +703,7 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
     if isEager
       then Dashboards.processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widgetWithPid
       else
-        Charts.queryMetrics (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
+        Charts.queryMetrics widgetWithPid.dbSource (Just Charts.DTMetric) (Just pid) widgetWithPid.query widgetWithPid.sql sinceStr fromDStr toDStr Nothing allParams
           <&> \m -> widgetWithPid & #dataset ?~ Widget.toWidgetDataset m
   addRespHeaders processedWidget
 

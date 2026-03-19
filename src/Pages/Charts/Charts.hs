@@ -113,8 +113,8 @@ nonNull (Just "") = Nothing
 nonNull x = x
 
 
-queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
-queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
+queryMetrics :: (DB es, Effectful.Error.Static.Error ServerError :> es, Effectful.Reader.Static.Reader AuthContext :> es, Time.Time :> es) => M Text -> M DataType -> M Projects.ProjectId -> M Text -> M Text -> M Text -> M Text -> M Text -> M Text -> [(Text, Maybe Text)] -> Eff es MetricsData
+queryMetrics dbSource (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -> querySQLM) (nonNull -> sinceM) (nonNull -> fromM) (nonNull -> toM) (nonNull -> sourceM) allParams = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   now <- Time.currentTime
   let (fromD, toD, _currentRange) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
@@ -135,7 +135,7 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
       let (_, qc) = queryASTToComponents sqlQueryComponents queryAST
       let mappngSQL' = mappngSQL <> M.fromList [("query_ast_filters", maybe "" (" AND " <>) qc.whereClause)]
       let sqlQuery = replacePlaceholders mappngSQL' querySQL
-      convertTimestampsToMs <$> liftIO (fetchMetricsData respDataType sqlQuery now fromD toD authCtx)
+      convertTimestampsToMs <$> liftIO (fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource)
     _ -> do
       queryAST <-
         checkpoint (toAnnotation ("queryMetrics", queryM))
@@ -144,13 +144,14 @@ queryMetrics (maybeToMonoid -> respDataType) pidM (nonNull -> queryM) (nonNull -
       let pid = Unsafe.fromJust pidM
       let source = parseMaybe pSource =<< sourceM
       let sqlQueryCfg = (defSqlQueryCfg pid now source Nothing){dateRange = (fromD, toD)}
-      convertTimestampsToMs <$> queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
+      convertTimestampsToMs <$> queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQueryCfg (maybeToMonoid queryM) now fromD toD
 
 
 -- | Execute query with caching support for timeseries queries
 queryMetricsWithCache
   :: (DB es, Time.Time :> es)
   => AuthContext
+  -> Maybe Text
   -> DataType
   -> Projects.ProjectId
   -> Maybe Sources
@@ -161,7 +162,7 @@ queryMetricsWithCache
   -> Maybe UTCTime
   -> Maybe UTCTime
   -> Eff es MetricsData
-queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
+queryMetricsWithCache authCtx dbSource respDataType pid source queryAST sqlQueryCfg originalQuery now fromD toD
   | respDataType /= DTMetric = executeQueryWith sqlQueryCfg queryAST
   | not (QC.hasSummarizeWithBin queryAST) = executeQueryWith sqlQueryCfg queryAST
   | otherwise = do
@@ -196,15 +197,18 @@ queryMetricsWithCache authCtx respDataType pid source queryAST sqlQueryCfg origi
     executeQueryWith cfg ast = do
       let (_, qc) = queryASTToComponents cfg ast
       let sqlQuery = maybeToMonoid qc.finalSummarizeQuery
-      liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx
+      liftIO $ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource
     refetchUnlessAdequate coversRange cached result
       | coversRange || not (V.null result.dataset) || V.null cached.dataset = pure result
       | otherwise = executeQueryWith sqlQueryCfg queryAST
 
 
-fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> IO MetricsData
-fetchMetricsData respDataType sqlQuery now fromD toD authCtx = do
-  let pool = if authCtx.env.enableTimefusionReads then authCtx.timefusionPgPool else authCtx.pool
+fetchMetricsData :: DataType -> Text -> UTCTime -> Maybe UTCTime -> Maybe UTCTime -> AuthContext -> Maybe Text -> IO MetricsData
+fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
+  let pool = case dbSource of
+        Just "postgres" -> authCtx.pool
+        Just "timefusion" -> authCtx.timefusionPgPool
+        _ -> if authCtx.env.enableTimefusionReads then authCtx.timefusionPgPool else authCtx.pool
   let baseMetricsData =
         def
           { from = Just $ round . utcTimeToPOSIXSeconds $ fromMaybe (addUTCTime (-86400) now) fromD

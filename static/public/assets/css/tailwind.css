@@ -47,13 +47,7 @@
   src: url("/public/assets/fonts/InterVariable-Italic.ttf") format("truetype");
 }
 
-/* Basic Inter font features */
-@font-feature-settings {
-  'ss01': 1,  /* Sans-serif simple a */
-  'ss02': 1,  /* Sans-serif g */
-  'cv01': 1,  /* Open zero */
-  'cv02': 1   /* Open four */
-}
+/* Inter font features are applied via :root font-feature-settings below */
 
 @theme {
   --text-2xs: 0.625rem;
@@ -1026,7 +1020,9 @@
 
 html,
 body, :host {
-  line-height: 1;
+  font-family: 'Inter', ui-sans-serif, system-ui, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
+  font-feature-settings: 'liga' 1, 'calt' 1, 'ss01' 1, 'ss02' 1, 'cv01' 1, 'cv02' 1;
+  line-height: 1.45;
   @apply overscroll-none bg-bgBase;
   --brand-color: var(--color-fillBrand-strong);
   --brand-color-light: var(--color-fillBrand-strong);
@@ -1891,13 +1887,6 @@ code, pre, .code, .monospace {
     --chkbg: var(--brand-color);
   }
 }
-@layer components {
-  :root {
-    font-family: 'Inter', sans-serif;
-    font-feature-settings: 'liga' 1, 'calt' 1;
-    font-size: 16px;
-  }
-}
 
 /* Table header — override DaisyUI's low-contrast th color */
 .table thead th {
@@ -1906,6 +1895,13 @@ code, pre, .code, .monospace {
   font-size: 0.75rem !important;
   letter-spacing: 0.025em !important;
   text-transform: uppercase !important;
+}
+
+/* Tabular figures for numeric data alignment */
+.table td,
+.stat-value,
+[data-widget-type] strong {
+  font-variant-numeric: tabular-nums;
 }
 
 @layer custom {

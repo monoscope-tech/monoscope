@@ -269,6 +269,11 @@ export class LogList extends LitElement {
     if (this.initialFetchUrl) {
       const url = new URL(this.initialFetchUrl, window.location.origin);
       url.searchParams.set('json', 'true');
+      // Merge time params from page URL so dashboard time picker changes apply
+      const pageParams = new URLSearchParams(window.location.search);
+      for (const key of ['since', 'from', 'to']) {
+        if (pageParams.has(key)) url.searchParams.set(key, pageParams.get(key)!);
+      }
       return url.toString();
     } else {
       const p = new URLSearchParams(window.location.search);
@@ -698,8 +703,9 @@ export class LogList extends LitElement {
       virtualItems.push(...items);
       if (this.hasMore || items.length > 0) virtualItems.push({ type: 'loadMore' });
     } else {
+      const isEmbedded = !!this.initialFetchUrl;
       // Add fetch recent button at the start (for non-flipped) or end (for flipped)
-      if (!this.flipDirection && items.length > 0) {
+      if (!isEmbedded && !this.flipDirection && items.length > 0) {
         virtualItems.push({ type: 'fetchRecent' });
       }
 
@@ -711,7 +717,7 @@ export class LogList extends LitElement {
         virtualItems.push({ type: 'loadMore' });
       } else if (this.flipDirection) {
         // For flipped direction, add buttons in reverse order
-        if (items.length > 0) {
+        if (!isEmbedded && items.length > 0) {
           virtualItems.push({ type: 'fetchRecent' });
         }
         if (this.hasMore || items.length > 0) {

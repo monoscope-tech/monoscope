@@ -22,6 +22,7 @@ import Language.Haskell.TH.Syntax qualified as THS
 import Log qualified
 import Lucid
 import Lucid.Aria qualified as Aria
+import Lucid.Base (termRaw)
 import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -164,6 +165,7 @@ data Widget = Widget
   , description :: Maybe Text -- Help text shown in info icon tooltip
   , pngUrl :: Maybe Text -- Pre-signed PNG download URL (runtime)
   , _staticRender :: Maybe Bool -- For PNG export: disables scroll legend
+  , dbSource :: Maybe Text -- "postgres" or "timefusion"; Nothing = default routing
   }
   deriving stock (Generic, Show, THS.Lift)
   deriving anyclass (Default, FromForm, NFData)
@@ -333,7 +335,7 @@ widgetHelper_ w' = case w.wType of
     -- Nested grid: flex-1 fills remaining space
     div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
   WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderTable w
-  WTLogs -> gridItem_ $ div_ [class_ $ "h-full "] $ div_ [class_ "p-3"] "Logs widget coming soon"
+  WTLogs -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderLogsWidget w
   WTTraces -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderTraceTable w
   WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
   _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt "] $ renderChart w
@@ -568,10 +570,32 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
               "Delete widget"
 
 
+renderLogsWidget :: Widget -> Html ()
+renderLogsWidget widget = do
+  let wId = maybeToMonoid widget.id
+      pid = maybe "" (.toText) widget._projectId
+      queryParam = maybe "" (\q -> "&query=" <> decodeUtf8 (urlEncode True (encodeUtf8 q))) widget.query
+      fetchUrl = "/p/" <> pid <> "/log_explorer?json=true&layout=1" <> queryParam
+  div_ [class_ "gap-0.5 flex flex-col h-full"] do
+    unless (widget.naked == Just True)
+      $ renderWidgetHeader widget wId widget.title Nothing Nothing Nothing (Just ("Open in Explorer", "/p/" <> pid <> "/log_explorer" <> maybe "" ("?query=" <>) widget.query)) (widget.hideSubtitle == Just True)
+    div_ [class_ "flex-1 flex min-h-0"] do
+      div_ [class_ $ "h-full w-full " <> if widget.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ wId <> "_bordered"] do
+        termRaw
+          "log-list"
+          ( [ id_ wId
+            , class_ "w-full flex flex-col h-full min-w-0"
+            , term "projectId" pid
+            , term "initialFetchUrl" fetchUrl
+            ]
+          )
+          ("" :: Text)
+
+
 renderTraceTable :: Widget -> Html ()
 renderTraceTable widget = do
   let tableId = maybeToMonoid widget.id
-  let eagerWidget = widget & #eager ?~ True
+  let eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
   let widgetJson = fromLazy $ AE.encode eagerWidget
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
     -- Widget header outside the card
@@ -632,7 +656,7 @@ renderTable :: Widget -> Html ()
 renderTable widget = do
   let tableId = maybeToMonoid widget.id
   -- Make table widget eager by default so it fetches data server-side
-  let eagerWidget = widget & #eager ?~ True
+  let eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
   let widgetJson = decodeUtf8 $ fromLazy $ AE.encode eagerWidget
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
     -- Widget header outside the card
