@@ -6,12 +6,15 @@ import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
+import Data.Char (isDigit)
 import Data.Default
 import Data.Generics.Labels ()
 import Data.HashMap.Lazy qualified as HM
 import Data.Map.Strict qualified as M
 import Data.Scientific (fromFloatDigits)
 import Data.Text qualified as T
+import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
+import Data.Time.Format (formatTime)
 import Data.Vector qualified as V
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
@@ -27,9 +30,6 @@ import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTri
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Data.Char (isDigit)
-import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
-import Data.Time.Format (formatTime)
 import NeatInterpolation
 import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
