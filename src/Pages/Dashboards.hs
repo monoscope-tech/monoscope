@@ -59,7 +59,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
-import Effectful (Eff, (:>))
+import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Log (Log)
@@ -579,10 +579,10 @@ widgetOrderTriggerForm_ url isOob =
     ""
 
 
-loadDashboardFromVM :: Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
-loadDashboardFromVM dashVM = case dashVM.schema of
+loadDashboardFromVM :: [Dashboards.Dashboard] -> Dashboards.DashboardVM -> Maybe Dashboards.Dashboard
+loadDashboardFromVM templates dashVM = case dashVM.schema of
   Just schema_ -> pure schema_
-  Nothing -> find (\d -> d.file == dashVM.baseTemplate) dashboardTemplates
+  Nothing -> find (\d -> d.file == dashVM.baseTemplate) templates
 
 
 -- Process a single dashboard variable recursively.
@@ -988,8 +988,10 @@ updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
     updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
-getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es, Effectful.Reader.Static.Reader AuthContext :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM dashId fileM = do
+  appCtx <- ask @AuthContext
+  templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
   dashVM <-
     Dashboards.getDashboardById dashId >>= \case
       Just v -> pure v
@@ -997,7 +999,7 @@ getDashAndVM dashId fileM = do
 
   dash <- case fileM of
     Just file -> Dashboards.readDashboardEndpoint file
-    Nothing -> pure $ fromMaybe def (loadDashboardFromVM dashVM)
+    Nothing -> pure $ fromMaybe def (loadDashboardFromVM templates dashVM)
 
   pure (dashVM, dash)
 
@@ -1099,7 +1101,7 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
       stickySentinelId = widPrefix <> "-sticky-sentinel"
       stickyContainerId = widPrefix <> "-sticky-container"
 
-  let widgetJSON = decodeUtf8 $ fromLazy $ AE.encode widgetToUse
+  let widgetJSON = Widget.encodeText widgetToUse
   let formAction = case dashboardIdM of
         Just dashId ->
           let baseUrl = "/p/" <> pid.toText <> "/dashboards/" <> dashId.toText
@@ -1431,6 +1433,7 @@ data DashboardsGetD = DashboardsGetD
   , filters :: DashboardFilters
   , availableTags :: [Text]
   , copyMode :: Maybe (Text, Dashboards.DashboardId) -- (widgetId, sourceDashboardId) for copy-to-dashboard mode
+  , dashTemplates :: [Dashboards.Dashboard]
   }
   deriving (Generic)
 data DashboardsGet
@@ -1514,7 +1517,7 @@ dashboardsGet_ dg = do
             kbd_ [class_ "kbd kbd-sm"] "/"
         div_ [class_ "space-y-1 h-auto overflow-auto", id_ "dashListItemParent"] do
           renderDashboardListItem True "tmplRadio0" "Blank dashboard" "" (Just "Get started from a blank slate") (Just "cards-blank") Nothing
-          iforM_ dashboardTemplates \idx dashTmpl -> do
+          iforM_ dg.dashTemplates \idx dashTmpl -> do
             let tmplItemClass = "tmplRadio" <> show (idx + 1)
             renderDashboardListItem False tmplItemClass (maybeToMonoid dashTmpl.title) (maybeToMonoid dashTmpl.file) dashTmpl.description dashTmpl.icon dashTmpl.preview
 
@@ -1522,7 +1525,7 @@ dashboardsGet_ dg = do
         div_ [class_ "flex items-end gap-2"] do
           div_ [class_ "flex w-full gap-2"] do
             formField_ FieldSm def{placeholder = "Dashboard Title"} "Dashboard name" "title" True Nothing
-            let teamList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
+            let teamList = Widget.encodeText $ (\x -> AE.object ["name" AE..= x.handle, "value" AE..= x.id]) <$> dg.teams
             formField_ FieldSm def{placeholder = "Add teams"} "Teams" "teamHandlesInput" False $ Just $ tagInput_ "teamHandlesInput" "Add teams" [data_ "tagify-text-prop" "name", data_ "tagify-whitelist" teamList]
             formField_ FieldSm def{placeholder = "reports/"} "Folder" "fileDir" False Nothing
           div_ [class_ "shrink"] $ button_ [class_ "btn btn-primary btn-sm", type_ "submit"] "Create"
@@ -1538,8 +1541,8 @@ dashboardsGet_ dg = do
   div_ [id_ "itemsListPage", class_ "mx-auto gap-8 w-full flex flex-col h-full overflow-hidden group/pg"] do
     let getTeams x = mapMaybe (\xx -> find (\t -> t.id == xx) dg.teams) (V.toList x.teams)
 
-    let getDashIcon dash = maybe "square-dashed" (\d -> fromMaybe "square-dashed" d.icon) (loadDashboardFromVM dash)
-        getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dash)
+    let getDashIcon dash = maybe "square-dashed" (\d -> fromMaybe "square-dashed" d.icon) (loadDashboardFromVM dg.dashTemplates dash)
+        getWidgetCount dash = maybe 0 (length . (.widgets)) (loadDashboardFromVM dg.dashTemplates dash)
 
     let noBulkActions = dg.embedded || dg.hideActions || isJust dg.copyMode
         inCopyMode = isJust dg.copyMode
@@ -1687,9 +1690,10 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters =
       isTeamView = isJust teamIdM
       copyMode = (,) <$> copyWidgetIdM <*> (UUIDId <$> sourceDashIdM)
 
+  templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
   if embedded || isTeamView
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode}
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode, dashTemplates = templates}
     else do
       freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
       let bwconf =
@@ -1716,7 +1720,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters =
                 , activeFilters = [("Tags", filters.tag) | not (null filters.tag)]
                 , headerExtra = Nothing
                 }
-      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags, copyMode})
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags, copyMode, dashTemplates = templates})
 
 
 data DashboardRes = DashboardNoContent | DashboardPostError Text | DashboardRenameSuccess Text
@@ -1743,14 +1747,16 @@ data DashboardForm = DashboardForm
 dashboardsPostH :: Projects.ProjectId -> DashboardForm -> ATAuthCtx (RespHeaders DashboardRes)
 dashboardsPostH pid form = do
   (sess, project) <- Projects.sessionAndProject pid
+  appCtx <- ask @AuthContext
   now <- Time.currentTime
   did <- UUIDId <$> UUID.genUUID
+  templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
   if form.title == ""
     then do
       addErrorToast "Dashboard title is required" Nothing
       addRespHeaders $ DashboardPostError "Dashboard title is required"
     else do
-      let dashM = find (\dashboard -> dashboard.file == Just form.file) dashboardTemplates
+      let dashM = find (\dashboard -> dashboard.file == Just form.file) templates
       let redirectURI = "/p/" <> pid.toText <> "/dashboards/" <> did.toText
           dir = fromMaybe "" form.fileDir
           filePath = if T.null dir then Nothing else Just $ (if T.last dir == '/' then dir else dir <> "/") <> GitSync.titleToFilePath form.title
@@ -1778,8 +1784,14 @@ dashboardsPostH pid form = do
 
 
 -- TH splice: reads all dashboard YAML files from static/public/dashboards at compile time
-dashboardTemplates :: [Dashboards.Dashboard]
-dashboardTemplates = $(Dashboards.readDashboardsFromDirectory "static/public/dashboards")
+dashboardTemplatesCompiled :: [Dashboards.Dashboard]
+dashboardTemplatesCompiled = $(Dashboards.readDashboardsFromDirectory "static/public/dashboards")
+
+-- When liveReload is True, reads from disk on every access (for dev iteration without restart).
+getDashboardTemplates :: (IOE :> es) => Bool -> Eff es [Dashboards.Dashboard]
+getDashboardTemplates liveReload
+  | liveReload = liftIO $ Dashboards.readDashboardsFromDisk "static/public/dashboards"
+  | otherwise = pure dashboardTemplatesCompiled
 
 
 -- THe current /p/:projectId/  handler. Redirects users to the overview dashboard if it exists, or creates it.
@@ -2061,7 +2073,7 @@ dashboardDuplicateWidgetPostH pid targetDashId widgetId sourceDashIdM = do
       _ <- Dashboards.updateSchemaAndUpdatedAt targetDashId updatedDash now
       syncDashboardAndQueuePush pid targetDashId
 
-      addWidgetJSON $ decodeUtf8 $ fromLazy $ AE.encode widgetCopy
+      addWidgetJSON $ Widget.encodeText widgetCopy
       let toastMsg = case targetDashNameM of
             Just name -> "Widget copied to " <> name
             Nothing -> "Widget duplicated successfully"

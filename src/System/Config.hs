@@ -135,6 +135,7 @@ data EnvConfig = EnvConfig
   , maxConcurrentJobs :: Int
   , showDemoProject :: Bool
   , pauseNotifications :: Bool
+  , liveReloadDashboards :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

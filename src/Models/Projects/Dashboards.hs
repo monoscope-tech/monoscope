@@ -3,6 +3,7 @@ module Models.Projects.Dashboards (
   DashboardVM (..),
   DashboardId,
   readDashboardFile,
+  readDashboardsFromDisk,
   Variable (..),
   VariableType (..),
   Tab (..),
@@ -216,6 +217,12 @@ readDashboardFile dir file = do
           putStrLn $ "Error decoding YAML in file: " ++ filePath ++ ": " ++ show err
           pure Nothing
         Right dashboard -> pure (Just $ dashboard{file = Just $ fromString file})
+
+
+readDashboardsFromDisk :: FilePath -> IO [Dashboard]
+readDashboardsFromDisk dir = do
+  files <- sort . filter (".yaml" `L.isSuffixOf`) <$> listDirectory dir
+  catMaybes <$> mapM (readDashboardFile dir) files
 
 
 readDashboardEndpoint :: (Error ServerError :> es, HTTP :> es) => Text -> Eff es Dashboard

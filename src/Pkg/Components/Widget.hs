@@ -1,4 +1,4 @@
-module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson) where
+module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson, encodeText) where
 
 import Control.Lens
 import Data.Aeson qualified as AE
@@ -244,50 +244,14 @@ data RowClickAction = RowClickAction
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] RowClickAction
 
 
-renderRowClickScript :: Text -> RowClickAction -> Maybe [TableColumn] -> Html ()
-renderRowClickScript tableId onRowClick columns = do
-  let onRowClickJson = decodeUtf8 $ AE.encode onRowClick
-      columnsJson = decodeUtf8 $ AE.encode columns
-  script_
-    [type_ "text/javascript"]
-    [text|
-    (function() {
-      const tableId = '${tableId}';
-      const onRowClick = ${onRowClickJson};
-      const columns = ${columnsJson};
+-- | Encode a value as JSON Text (used for data attributes, widget JSON, etc.)
+encodeText :: (AE.ToJSON a) => a -> Text
+encodeText = decodeUtf8 . fromLazy . AE.encode
 
-      // Delegate click events to table rows
-      document.getElementById(tableId).addEventListener('click', function(e) {
-        const tr = e.target.closest('tr[data-row]');
-        if (!tr) return;
-
-        const rowData = JSON.parse(tr.dataset.row);
-
-        // Set variable
-        if (onRowClick.setVariable) {
-          const varName = onRowClick.setVariable;
-          const value = onRowClick.value ?
-            onRowClick.value.replace(/\{\{row\.(\w+)\}\}/g, (_, field) => rowData[field]) :
-            rowData[columns[0].field];
-
-          const url = new URL(window.location.href);
-          url.searchParams.set('var-' + varName, value);
-          history.pushState({}, '', url.toString());
-          window.dispatchEvent(new Event('update-query'));
-
-          // Navigate to tab if specified
-          if (onRowClick.navigateToTab && window.switchDashboardTab) {
-            const tabs = document.querySelectorAll('[data-tab-index]');
-            tabs.forEach((tab, idx) => {
-              if (tab.textContent.includes(onRowClick.navigateToTab)) {
-                window.switchDashboardTab(idx);
-              }
-            });
-          }
-        }
-      });
-    })();
-    |]
+-- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
+rowClickTableAttrs :: Widget -> [Attribute]
+rowClickTableAttrs widget = flip foldMap widget.onRowClick \action ->
+  [data_ "on-row-click" (encodeText action)]
 
 
 -- Used when converting a widget json to its html representation. Eg in a query chart builder
@@ -301,7 +265,7 @@ widgetPostH pid sinceM fromM toM widget = do
 
 widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since fromM toM =
-  let widgetJson = decodeUtf8 @Text $ toStrict $ AE.encode widget
+  let widgetJson = encodeText widget
       encodedJson = toUriStr widgetJson
       sig = signWidgetUrl secret pid widgetJson
       timeParams = mconcat $ catMaybes [("&since=" <>) . toUriStr <$> since, ("&from=" <>) . toUriStr <$> fromM, ("&to=" <>) . toUriStr <$> toM]
@@ -360,7 +324,7 @@ widgetHelper_ w' = case w.wType of
     attrs =
       foldMap (\(name, field) -> foldMap (\v -> [term ("gs-" <> name) (show v)]) (w.layout >>= field)) layoutFields
         <> foldMap (\h -> [term "gs-h" (show h)]) effectiveHeight
-    widgetJson = decodeUtf8 $ fromLazy $ AE.encode w
+    widgetJson = encodeText w
     autoFitAttr = memptyIfFalse (w.wType `elem` [WTAnomalies, WTGroup, WTTable, WTLogs, WTTraces, WTFlamegraph]) [data_ "mobile-autofit" ""]
     gridItem_ =
       if w.naked == Just True
@@ -660,7 +624,7 @@ renderTable widget = do
   let tableId = maybeToMonoid widget.id
   -- Make table widget eager by default so it fetches data server-side
   let eagerWidget = widget & #eager ?~ True & #pngUrl .~ Nothing & #html .~ Nothing & #dataset .~ Nothing
-  let widgetJson = decodeUtf8 $ fromLazy $ AE.encode eagerWidget
+  let widgetJson = encodeText eagerWidget
   div_ [class_ "gap-0.5 flex flex-col h-full"] do
     -- Widget header outside the card
     unless (widget.naked == Just True)
@@ -690,9 +654,11 @@ renderTable widget = do
                 Nothing -> do
                   -- Otherwise render table structure with HTMX for updates
                   table_
-                    [ class_ "table table-zebra table-sm w-full relative"
-                    , id_ tableId
-                    ]
+                    ( [ class_ "table table-zebra table-sm w-full relative"
+                      , id_ tableId
+                      ]
+                        <> rowClickTableAttrs widget
+                    )
                     do
                       -- Table header
                       thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
@@ -712,9 +678,6 @@ renderTable widget = do
                         $ tr_ []
                         $ td_ [colspan_ "100", class_ "text-center py-8"]
                         $ loadingIndicator_ LdSM LdSpinner
-
-    -- Add row click handler script if needed
-    whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
 
 
 -- | Render stat widget content with HTMX lazy loading support
@@ -789,15 +752,15 @@ renderChart widget = do
           unless (widget.wType == WTStat) $ div_ [class_ $ "h-0 max-h-full overflow-hidden w-full flex-1 min-h-0" <> bool " p-2" "" isStat] do
             div_ [class_ "h-full w-full", id_ $ maybeToMonoid widget.id] ""
             let theme = fromMaybe "default" widget.theme
-            let echartOpt = decodeUtf8 $ AE.encode $ widgetToECharts widget
+            let echartOpt = encodeText $ widgetToECharts widget
             let yAxisLabel = fromMaybe (maybeToMonoid widget.unit) (widget.yAxis >>= (.label))
-            let query = decodeUtf8 $ AE.encode widget.query
-            let pid = decodeUtf8 $ AE.encode $ widget._projectId <&> (.toText)
+            let query = encodeText widget.query
+            let pid = encodeText $ widget._projectId <&> (.toText)
             let querySQL = maybeToMonoid widget.sql
             let chartType = mapWidgetTypeToChartType widget.wType
             let summarizeBy = T.toLower $ T.drop 2 $ show $ fromMaybe SBSum widget.summarizeBy
             let summarizeByPfx = summarizeByPrefix $ fromMaybe SBSum widget.summarizeBy
-            let wType = decodeUtf8 $ AE.encode widget.wType
+            let wType = encodeText widget.wType
             let legendPos = fromMaybe "bottom" widget.legendPosition
             let widgetUnit = maybeToMonoid widget.unit
             let alertThresholdJS = maybe "null" show widget.alertThreshold
@@ -1124,57 +1087,58 @@ renderTableWithDataAndParams widget dataRows params = do
       currentVar = widget.onRowClick >>= (.setVariable) >>= \var -> find ((== "var-" <> var) . fst) params >>= snd
 
   -- Render complete table with data
-  table_ [class_ "table table-zebra table-sm w-full relative", id_ tableId] do
-    -- Table header
-    thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
-      tr_ [] do
-        ifor_ columns \idx col ->
-          th_
-            [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
-            , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
-            , data_ "sort-direction" "none"
+  table_
+    ( [class_ "table table-zebra table-sm w-full relative", id_ tableId]
+        <> rowClickTableAttrs widget
+    )
+    do
+      -- Table header
+      thead_ [class_ "sticky top-0 z-10 before:content-[''] before:absolute before:left-0 before:right-0 before:bottom-0 before:h-px before:bg-strokeWeak"] do
+        tr_ [] do
+          ifor_ columns \idx col ->
+            th_
+              [ class_ $ "text-left bg-bgRaised sticky top-0 cursor-pointer hover:bg-fillWeak transition-colors group " <> fromMaybe "" col.align
+              , onclick_ $ "window.sortTable('" <> tableId <> "', " <> show (idx :: Int) <> ", this)"
+              , data_ "sort-direction" "none"
+              ]
+              do
+                div_ [class_ "flex items-center justify-between"] do
+                  toHtml col.title
+                  span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
+
+      -- Table body with data
+      tbody_ [] do
+        -- Calculate max values for column percentages
+        let maxValues = calculateMaxValues columns dataRows
+
+        -- Calculate max formatted width for each progress column
+        let valueWidths =
+              M.fromList
+                [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (fromMaybe "" $ row V.!? idx))) 5 dataRows)
+                | (col, idx) <- zip columns [0 ..]
+                , isJust col.progress
+                ]
+
+        -- Render table rows
+        V.forM_ dataRows \row -> do
+          let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
+          let firstColValue = maybe "" (\c -> getRowValue c 0 row) (listToMaybe columns)
+          let rowValue = case widget.onRowClick >>= (.value) of
+                Just tmpl -> T.replace "{{row.resource_name}}" firstColValue tmpl
+                Nothing -> firstColValue
+          let isSelected = Just rowValue == currentVar
+
+          tr_
+            [ class_ $ "hover cursor-pointer" <> if isSelected then " bg-fillBrand/20 border-l-4 border-borderBrand" else ""
+            , data_ "row" (encodeText rowData)
             ]
             do
-              div_ [class_ "flex items-center justify-between"] do
-                toHtml col.title
-                span_ [class_ "sort-arrow ml-1 text-iconNeutral opacity-0 group-hover:opacity-100", data_ "sort" "none"] "↕"
-
-    -- Table body with data
-    tbody_ [] do
-      -- Calculate max values for column percentages
-      let maxValues = calculateMaxValues columns dataRows
-
-      -- Calculate max formatted width for each progress column
-      let valueWidths =
-            M.fromList
-              [ (col.field, V.foldl' (\acc row -> max acc (T.length $ formatColumnValue col (fromMaybe "" $ row V.!? idx))) 5 dataRows)
-              | (col, idx) <- zip columns [0 ..]
-              , isJust col.progress
-              ]
-
-      -- Render table rows
-      V.forM_ dataRows \row -> do
-        let rowData = AE.object [(K.fromText col.field, AE.String $ getRowValue col idx row) | (col, idx) <- zip columns [0 ..]]
-        let firstColValue = maybe "" (\c -> getRowValue c 0 row) (listToMaybe columns)
-        let rowValue = case widget.onRowClick >>= (.value) of
-              Just tmpl -> T.replace "{{row.resource_name}}" firstColValue tmpl
-              Nothing -> firstColValue
-        let isSelected = Just rowValue == currentVar
-
-        tr_
-          [ class_ $ "hover cursor-pointer" <> if isSelected then " bg-fillBrand/20 border-l-4 border-borderBrand" else ""
-          , data_ "row" (decodeUtf8 $ fromLazy $ AE.encode rowData)
-          ]
-          do
-            ifor_ columns \idx col -> do
-              let value = getRowValue col idx row
-              td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
-                if isJust col.progress
-                  then renderProgressCell col value maxValues valueWidths
-                  else renderCellValue col value
-
-  -- Add row click handler script if needed
-  whenJust widget.onRowClick \action -> renderRowClickScript tableId action widget.columns
+              ifor_ columns \idx col -> do
+                let value = getRowValue col idx row
+                td_ [class_ $ fromMaybe "" col.align <> if col.columnType `elem` [Just ("number" :: Text), Just ("duration" :: Text)] then " monospace" else ""] do
+                  if isJust col.progress
+                    then renderProgressCell col value maxValues valueWidths
+                    else renderCellValue col value
 
 
 renderTraceDataTable :: Widget -> V.Vector (V.Vector Text) -> HashMap Text [(Text, Int, Int)] -> HashMap Text [Telemetry.SpanRecord] -> Text -> Html ()
@@ -1204,7 +1168,7 @@ renderTraceDataTable widget dataRows spGroup spansGrouped colorsJson = do
                    in getSpanJson (targ <&> \(_, d, c) -> (d, c)) x
               )
                 <$> fromMaybe [] (HM.lookup val spansGrouped)
-        let spjson = decodeUtf8 $ fromLazy $ AE.encode spansJson
+        let spjson = encodeText spansJson
         let clcFun = [text|on click toggle .hidden on the next <tr/> then call flameGraphChart($spjson, "$val", $colorsJson)|]
         tr_ [term "_" clcFun, class_ "cursor-pointer"] do
           ifor_ columns \idx col -> do
