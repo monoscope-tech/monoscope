@@ -27,6 +27,9 @@ import Lucid.Htmx (hxExt_, hxGet_, hxPost_, hxSelect_, hxSwap_, hxTarget_, hxTri
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Data.Char (isDigit)
+import Data.Time (ZonedTime, defaultTimeLocale, parseTimeM)
+import Data.Time.Format (formatTime)
 import NeatInterpolation
 import Network.HTTP.Types (urlEncode)
 import Pages.Charts.Charts qualified as Charts
@@ -1335,7 +1338,20 @@ formatColumnValue col value = case col.columnType of
     case readMaybe (toString value) :: Maybe Double of
       Just v -> toText $ getDurationNSMS (fromIntegral (round v :: Int))
       Nothing -> value <> foldMap (" " <>) col.unit
-  _ -> value <> foldMap (" " <>) col.unit
+  _ -> fromMaybe value (formatTimestampValue value) <> foldMap (" " <>) col.unit
+
+
+-- | Try to parse a PostgreSQL timestamp and format as "Mar 19, 09:05"
+-- Normalizes short timezone offsets (+00 → +0000) that %z can't parse
+formatTimestampValue :: Text -> Maybe Text
+formatTimestampValue (T.strip -> val)
+  | T.length val < 19 = Nothing
+  | otherwise = fmt <$> (parseTimeM True defaultTimeLocale "%Y-%m-%d %H:%M:%S%Q%z" (toString normalized) :: Maybe ZonedTime)
+  where
+    normalized = case T.breakOnEnd "+" val of
+      (pfx, tz) | not (T.null pfx), T.length tz < 4 -> pfx <> tz <> T.replicate (4 - T.length (T.filter isDigit tz)) "0"
+      _ -> val
+    fmt = toText . formatTime defaultTimeLocale "%b %d, %H:%M"
 
 
 -- | Render cell value, parsing summary tags (field;style⇒value) into badges
