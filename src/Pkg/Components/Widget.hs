@@ -245,8 +245,9 @@ data RowClickAction = RowClickAction
 
 
 -- | Encode a value as JSON Text (used for data attributes, widget JSON, etc.)
-encodeText :: (AE.ToJSON a) => a -> Text
+encodeText :: AE.ToJSON a => a -> Text
 encodeText = decodeUtf8 . fromLazy . AE.encode
+
 
 -- | Data attributes for table row click handling (delegated via global JS handler in widgets.ts)
 rowClickTableAttrs :: Widget -> [Attribute]

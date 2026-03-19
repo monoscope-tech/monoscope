@@ -988,7 +988,7 @@ updateTabBySlug slug f dash = dash & #tabs %~ fmap (map updateTab)
     updateTab tab = if slugify tab.name == slug then f tab else tab
 
 
-getDashAndVM :: (DB es, Error ServerError :> es, Wreq.HTTP :> es, Effectful.Reader.Static.Reader AuthContext :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
+getDashAndVM :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServerError :> es, Wreq.HTTP :> es) => Dashboards.DashboardId -> Maybe Text -> Eff es (Dashboards.DashboardVM, Dashboards.Dashboard)
 getDashAndVM dashId fileM = do
   appCtx <- ask @AuthContext
   templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
@@ -1787,8 +1787,9 @@ dashboardsPostH pid form = do
 dashboardTemplatesCompiled :: [Dashboards.Dashboard]
 dashboardTemplatesCompiled = $(Dashboards.readDashboardsFromDirectory "static/public/dashboards")
 
+
 -- When liveReload is True, reads from disk on every access (for dev iteration without restart).
-getDashboardTemplates :: (IOE :> es) => Bool -> Eff es [Dashboards.Dashboard]
+getDashboardTemplates :: IOE :> es => Bool -> Eff es [Dashboards.Dashboard]
 getDashboardTemplates liveReload
   | liveReload = liftIO $ Dashboards.readDashboardsFromDisk "static/public/dashboards"
   | otherwise = pure dashboardTemplatesCompiled
