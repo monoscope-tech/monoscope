@@ -873,8 +873,10 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
       -- Cancel any existing LemonSqueezy subscription (auto-migration)
       whenJustM (Projects.projectById pid) \project ->
         case Projects.billingProvider project.subId of
-          Projects.LemonSqueezyProvider -> whenJust project.subId
-            $ liftIO . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
+          Projects.LemonSqueezyProvider ->
+            whenJust project.subId
+              $ liftIO
+              . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
           _ -> pass
       subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
       void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId
