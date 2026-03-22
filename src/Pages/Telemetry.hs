@@ -350,7 +350,7 @@ drawerExpandScript detailUrl =
 
 chartList :: Projects.ProjectId -> Text -> V.Vector Telemetry.MetricChartListData -> Maybe Text -> Html ()
 chartList pid source metricList nextUrl = do
-  forM_ metricList $ \metric -> do
+  forM_ metricList \metric ->
     div_ [class_ "w-full flex flex-col gap-2 metric_filterble"] do
       let detailUrl = metricDetailUrl pid metric.metricName source
       let expandBtn = drawerExpandScript detailUrl
@@ -560,9 +560,9 @@ metricRefCounts dashboards monitors metricNames = Map.fromList $ map countRefs m
       where
         matchingDashboards = filter (dashboardHasMetric mn) dashboards
         totalWidgets = sum $ map (countWidgetsWithMetric mn) dashboards
-    alertCount mn = length (filter (\m -> any (`T.isInfixOf` m.logQuery) ["\"" <> mn <> "\"", "'" <> mn <> "'", "metric=" <> mn, "metric_name=" <> mn]) monitors)
+    alertCount mn = sum [1 :: Int | m <- monitors, any (`T.isInfixOf` m.logQuery) ["\"" <> mn <> "\"", "'" <> mn <> "'", "metric=" <> mn, "metric_name=" <> mn]]
     dashboardHasMetric mn d = any (widgetRefsMetric mn) (allWidgets d)
-    countWidgetsWithMetric mn d = length (filter (widgetRefsMetric mn) (allWidgets d))
+    countWidgetsWithMetric mn d = sum [1 :: Int | w <- allWidgets d, widgetRefsMetric mn w]
     allWidgets d = case d.schema of
       Nothing -> []
       Just schema -> schema.widgets <> maybe [] (concatMap (.widgets)) schema.tabs

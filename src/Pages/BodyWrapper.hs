@@ -46,7 +46,7 @@ onboardingChecklist_ project = do
         , (setupNotifs, "Set up notifications", "/p/" <> pid <> "/settings/integrations", "envelope")
         ]
           :: [(Bool, Text, Text, Text)]
-      doneCount = length (filter (\(d, _, _, _) -> d) items)
+      doneCount = sum [1 :: Int | (True, _, _, _) <- items]
       totalCount = length items
       allDone = doneCount == totalCount
       dismissed = V.elem "checklist_dismissed" steps
@@ -494,7 +494,7 @@ bodyWrapper bcfg child = do
                       (currUser.email == "hello@monoscope.tech")
                       loginBanner
                     if bcfg.isSettingsPage || bcfg.hideNavbar
-                      then whenJust bcfg.currProject \p -> paletteTriggerFloating p
+                      then whenJust bcfg.currProject paletteTriggerFloating
                       else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)

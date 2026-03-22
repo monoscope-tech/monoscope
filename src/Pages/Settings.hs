@@ -659,7 +659,7 @@ manageBillingGetH pid from = do
   let cycleStart = calculateCycleStartDate dat currentTime
   totalRequests <- Projects.getTotalUsage pid cycleStart
   let requestAfter = totalRequests - 20_000_000
-  let estimatedAmount = show $ if requestAfter <= 0 then "34.00" else printf "%.2f" (fromIntegral requestAfter / 500_000 + 34.00)
+  let estimatedAmount = show $ if requestAfter <= 0 then "29.00" else printf "%.2f" (fromIntegral requestAfter / 500_000 + 29.00)
   let last_reported = show project.usageLastReported
   let bwconf =
         (def :: BWConfig)
@@ -751,7 +751,7 @@ verifyStripeSignature sigHeader payload secret =
            in any (BA.constEq expected) (mapMaybe decodeHexSig sigs)
     _ -> False
   where
-    parts h = T.splitOn "," h
+    parts = T.splitOn ","
     parseTimestamp h = listToMaybe [encodeUtf8 v | p <- parts h, Just v <- [T.stripPrefix "t=" p]]
     parseSignatures h = [v | p <- parts h, Just v <- [T.stripPrefix "v1=" p]]
     decodeHexSig = rightToMaybe . B16.decode . encodeUtf8
@@ -873,8 +873,8 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
       -- Cancel any existing LemonSqueezy subscription (auto-migration)
       whenJustM (Projects.projectById pid) \project ->
         case Projects.billingProvider project.subId of
-          Projects.LemonSqueezyProvider -> whenJust project.subId \lsSid ->
-            liftIO $ cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey lsSid
+          Projects.LemonSqueezyProvider -> whenJust project.subId
+            $ liftIO . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
           _ -> pass
       subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
       void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId

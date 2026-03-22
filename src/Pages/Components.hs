@@ -100,8 +100,8 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
         when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (isCurrent "Free")
         unless basicAuthEnabled $ popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled useStripe
         unless basicAuthEnabled $ systemsPricing pid criticalUrl (isCurrent "Bring your own storage") useStripe
-    when (not useStripe) do
-      script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
+    unless useStripe
+      $ script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
       [text|
                const price_indicator = document.querySelector("#price_range");
@@ -131,7 +131,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                 }
                }
             |]
-    when (not useStripe)
+    unless useStripe
       $ script_
         [text|
              window.payLemon = function(plan, url) {

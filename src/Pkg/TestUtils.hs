@@ -1113,14 +1113,14 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
             & PTF.attributes
           .~ attrs & PTF.events
           .~ events
-            & maybe id (\s -> PTF.status .~ s) statusM
+            & maybe id (PTF.status .~) statusM
       scopeSpan = defMessage & PTF.spans .~ [otelSpan]
    in defMessage & TSF.resourceSpans .~ [defMessage & PTF.resource .~ resource & PTF.scopeSpans .~ [scopeSpan]]
 
 
 createOtelSpanAtTime :: Text -> Text -> Text -> Maybe Text -> Text -> UTCTime -> TS.ExportTraceServiceRequest
-createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName timestamp =
-  mkSpanRequest trId spanId parentSpanIdM spanName [] Nothing [mkAttr "http.method" "GET"] (mkResource apiKey []) timestamp
+createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName =
+  mkSpanRequest trId spanId parentSpanIdM spanName [] Nothing [mkAttr "http.method" "GET"] (mkResource apiKey [])
 
 
 createOtelTraceAtTime :: Text -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest

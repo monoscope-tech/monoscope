@@ -142,7 +142,7 @@ renderPalette pid recents issues monitors dashboards = do
           -- Recents
           unless (null recents)
             $ div_ [class_ "cmd-section cmd-palette-recents"]
-            $ forM_ recents \r -> recentItem pidTxt r
+            $ forM_ recents (recentItem pidTxt)
           -- Category: Dashboards
           categoryItem pidTxt "dashboards" "dashboard" "Dashboards" (length dashboards + 1)
           cmdItem pidTxt "child" "dashboards" [] [data_ "cmd-category" "dashboards", style_ "display:none"] "dashboard" "All Dashboards" "Page"
