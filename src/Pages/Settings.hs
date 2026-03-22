@@ -39,8 +39,8 @@ module Pages.Settings (
 ) where
 
 import Control.Lens ((.~), (^.), (^?))
-import Data.Aeson.Lens qualified as AL
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens qualified as AL
 import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
@@ -85,10 +85,10 @@ import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
-import UnliftIO.Exception (try)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
+import UnliftIO.Exception (try)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64.URL qualified as B64
@@ -860,6 +860,7 @@ lemonSqueezyOpts apiKey =
   Wreq.defaults
     & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
     & (Wreq.header "Content-Type" .~ ["application/vnd.api+json"])
+
 
 cancelLemonSqueezySubscription :: Text -> Text -> IO ()
 cancelLemonSqueezySubscription apiKey subId =
