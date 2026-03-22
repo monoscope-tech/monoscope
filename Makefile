@@ -148,7 +148,7 @@ tmux-live-reload-cli:
 	$(call tmux_run,make live-reload-cli 2>&1 | tee build-cli.log)
 
 e2e-install:
-	cd e2e && npm install && npx playwright install chromium
+	@test -x e2e/node_modules/.bin/playwright || (cd e2e && npm install && npx playwright install chromium)
 
 test-e2e: e2e-install
 	cd e2e && npx playwright test

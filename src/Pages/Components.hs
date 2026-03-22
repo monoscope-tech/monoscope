@@ -85,7 +85,7 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
         | basicAuthEnabled = "grid-cols-1 md:grid-cols-2"
         | freePricingEnabled = "grid-cols-1 md:grid-cols-3"
         | otherwise = "grid-cols-1 md:grid-cols-2"
-      useStripe = provider /= Projects.LemonSqueezyProvider
+      useStripe = provider /= Projects.LemonSqueezyProvider -- NoBillingProvider (new projects) defaults to Stripe
   div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do

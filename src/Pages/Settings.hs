@@ -38,7 +38,8 @@ module Pages.Settings (
   verifyStripeSignature,
 ) where
 
-import Control.Lens ((.~), (^.))
+import Control.Lens ((.~), (^.), (^?))
+import Data.Aeson.Lens qualified as AL
 import Data.Aeson qualified as AE
 import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types qualified as B64
@@ -84,6 +85,7 @@ import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
 import Relude hiding (ask, asks)
 import Servant (err400, errBody)
+import UnliftIO.Exception (try)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
@@ -642,11 +644,25 @@ webhookPostH secretHeaderM dat = do
     _ -> pure ""
 
 
-newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text, Text, Bool, Bool, Projects.BillingProvider))
+data BillingData = BillingData
+  { pid :: Projects.ProjectId
+  , totalReqs :: Int64
+  , amount :: Text
+  , lastReported :: Text
+  , lemonUrl :: Text
+  , critical :: Text
+  , paymentPlan :: Text
+  , enableFreetier :: Bool
+  , basicAuthEnabled :: Bool
+  , provider :: Projects.BillingProvider
+  }
+
+
+newtype BillingGet = BillingGet (PageCtx BillingData)
 
 
 instance ToHtml BillingGet where
-  toHtml (BillingGet (PageCtx bwconf (pid, totalReqs, amount, last_reported, lemonUrl, critical, paymentPlan, enableFreetier, basicAuthEnabled, provider))) = toHtml $ PageCtx bwconf $ billingPage pid totalReqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled provider
+  toHtml (BillingGet (PageCtx bwconf d)) = toHtml $ PageCtx bwconf $ billingPage d.pid d.totalReqs d.amount d.lastReported d.lemonUrl d.critical d.paymentPlan d.enableFreetier d.basicAuthEnabled d.provider
   toHtmlRaw = toHtml
 
 
@@ -673,7 +689,7 @@ manageBillingGetH pid from = do
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
   let provider = Projects.billingProvider project.subId
-  addRespHeaders $ BillingGet $ PageCtx bwconf (pid, totalRequests, estimatedAmount, last_reported, lemonUrl, critical, project.paymentPlan, envCfg.enableFreetier, envCfg.basicAuthEnabled, provider)
+  addRespHeaders $ BillingGet $ PageCtx bwconf BillingData{pid, totalReqs = totalRequests, amount = estimatedAmount, lastReported = last_reported, lemonUrl, critical, paymentPlan = project.paymentPlan, enableFreetier = envCfg.enableFreetier, basicAuthEnabled = envCfg.basicAuthEnabled, provider}
 
 
 billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Bool -> Projects.BillingProvider -> Html ()
@@ -805,7 +821,7 @@ createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOver
                ]
     resp <- stripeRequest apiKey "checkout/sessions" params
     let body = resp ^. Wreq.responseBody
-    pure $ AE.decode @AE.Value body >>= jf "url"
+    pure $ AE.decode @AE.Value body >>= jsonField "url"
 
 
 createStripePortalSession :: Text -> Text -> Text -> IO (Maybe Text)
@@ -819,7 +835,7 @@ createStripePortalSession apiKey customerId returnUrl =
         , ("return_url", encodeUtf8 returnUrl)
         ]
     let body = resp ^. Wreq.responseBody
-    pure $ AE.decode @AE.Value body >>= jf "url"
+    pure $ AE.decode @AE.Value body >>= jsonField "url"
 
 
 cancelStripeSubscription :: Text -> Text -> IO ()
@@ -839,18 +855,20 @@ reportUsageToStripe apiKey customerId eventName quantity =
       ]
 
 
+lemonSqueezyOpts :: Text -> Wreq.Options
+lemonSqueezyOpts apiKey =
+  Wreq.defaults
+    & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+    & (Wreq.header "Content-Type" .~ ["application/vnd.api+json"])
+
 cancelLemonSqueezySubscription :: Text -> Text -> IO ()
-cancelLemonSqueezySubscription apiKey subId = do
-  let opts =
-        Wreq.defaults
-          & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
-          & (Wreq.header "Content-Type" .~ ["application/vnd.api+json"])
-  void $ Wreq.deleteWith opts ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString subId)
+cancelLemonSqueezySubscription apiKey subId =
+  void $ Wreq.deleteWith (lemonSqueezyOpts apiKey) ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString subId)
 
 
 -- Extract a field from a JSON value (safe, returns Nothing for non-objects)
-jf :: AE.FromJSON a => AE.Key -> AE.Value -> Maybe a
-jf k = parseMaybe (AE.withObject "" (AE..: k))
+jsonField :: AE.FromJSON a => AE.Key -> AE.Value -> Maybe a
+jsonField k = parseMaybe (AE.withObject "" (AE..: k))
 
 
 stripeWebhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
@@ -861,18 +879,18 @@ stripeWebhookPostH sigHeaderM rawBody = do
   case sigHeaderM of
     Nothing -> do
       Log.logAttention "Stripe webhook missing signature header" ()
-      pure "missing signature"
+      throwError err400{errBody = "missing signature"}
     Just sigHeader
       | not (verifyStripeSignature now sigHeader rawBody (encodeUtf8 secret)) -> do
           Log.logAttention "Stripe webhook invalid signature" ()
-          pure "invalid signature"
+          throwError err400{errBody = "invalid signature"}
     Just _ -> case AE.eitherDecodeStrict rawBody of
       Left err -> do
         Log.logAttention "Stripe webhook invalid JSON" err
-        pure "invalid json"
+        throwError err400{errBody = "invalid json"}
       Right event -> do
-        let eventType = jf "type" event :: Maybe Text
-            sessionObj = jf "data" event >>= jf "object" :: Maybe AE.Value
+        let eventType = jsonField "type" event :: Maybe Text
+            sessionObj = jsonField "data" event >>= jsonField "object" :: Maybe AE.Value
             notifyMembers pid (subj, html) = Notify.runNotifyProduction do
               users <- Projects.usersByProjectId pid
               forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
@@ -887,29 +905,33 @@ stripeWebhookPostH sigHeaderM rawBody = do
 
 handleStripeCheckout :: EnvConfig -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
 handleStripeCheckout envConfig obj notifyMembers billingUrl = do
-  let pidM = jf "client_reference_id" obj :: Maybe Text
-      subIdM = jf "subscription" obj :: Maybe Text
-      customerIdM = jf "customer" obj :: Maybe Text
-      planFromMetadata = (jf "metadata" obj :: Maybe AE.Value) >>= jf "plan" :: Maybe Text
+  let pidM = jsonField "client_reference_id" obj :: Maybe Text
+      subIdM = jsonField "subscription" obj :: Maybe Text
+      customerIdM = jsonField "customer" obj :: Maybe Text
+      planFromMetadata = (jsonField "metadata" obj :: Maybe AE.Value) >>= jsonField "plan" :: Maybe Text
   case (pidM >>= Projects.projectIdFromText, subIdM, customerIdM) of
     (Just pid, Just subId, Just customerId) -> do
       let plan = fromMaybe "GraduatedPricing" planFromMetadata
       projectM <- Projects.projectById pid
-      -- Cancel any existing LemonSqueezy subscription (auto-migration)
-      whenJust projectM \project ->
-        case Projects.billingProvider project.subId of
-          Projects.LemonSqueezyProvider ->
-            whenJust project.subId
-              $ liftIO
-              . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
-          _ -> pass
-      subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
-      when (isNothing subItemId) $ Log.logAttention "Stripe sub item ID not found" subId
-      void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId
-      void $ ProjectMembers.activateAllMembers pid
-      whenJust projectM \project ->
-        notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
-      pure "checkout processed"
+      -- Idempotency: skip if this subscription is already set on the project
+      if maybe False (\p -> p.subId == Just subId) projectM
+        then pure "already processed"
+        else do
+          -- Cancel any existing LemonSqueezy subscription (auto-migration)
+          whenJust projectM \project ->
+            case Projects.billingProvider project.subId of
+              Projects.LemonSqueezyProvider ->
+                whenJust project.subId
+                  $ liftIO
+                  . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
+              _ -> pass
+          subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
+          when (isNothing subItemId) $ Log.logAttention "Stripe sub item ID not found" subId
+          void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId
+          void $ ProjectMembers.activateAllMembers pid
+          whenJust projectM \project ->
+            notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
+          pure "checkout processed"
     _ -> do
       Log.logAttention "Stripe checkout missing project/sub/customer" (pidM, subIdM, customerIdM)
       pure "missing fields"
@@ -920,16 +942,12 @@ getStripeSubItemId apiKey subId =
   tryStripe $ do
     resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
     let body = resp ^. Wreq.responseBody
-    pure $ do
-      obj <- AE.decode @AE.Value body
-      items <- jf "items" obj
-      itemsData <- jf "data" items :: Maybe [AE.Value]
-      listToMaybe itemsData >>= jf "id"
+    pure $ AE.decode @AE.Value body >>= (^? AL.key "items" . AL.key "data" . AL.nth 0 . AL.key "id" . AL._String)
 
 
 handleStripeSubDeleted :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
 handleStripeSubDeleted obj notifyMembers billingUrl = do
-  let subIdM = jf "id" obj :: Maybe Text
+  let subIdM = jsonField "id" obj :: Maybe Text
   case subIdM of
     Just subId -> do
       whenJustM (Projects.projectBySubId subId) \project ->
@@ -941,18 +959,20 @@ handleStripeSubDeleted obj notifyMembers billingUrl = do
 
 handleStripeSubUpdated :: AE.Value -> ATBaseCtx (Html ())
 handleStripeSubUpdated obj = do
-  let subIdM = jf "id" obj :: Maybe Text
-      newItemIdM = (jf "items" obj >>= jf "data" :: Maybe [AE.Value]) >>= listToMaybe >>= jf "id" :: Maybe Text
+  let subIdM = jsonField "id" obj :: Maybe Text
+      newItemIdM = (jsonField "items" obj >>= jsonField "data" :: Maybe [AE.Value]) >>= listToMaybe >>= jsonField "id" :: Maybe Text
   case (subIdM, newItemIdM) of
     (Just subId, Just newItemId) ->
       void $ Projects.updateSubItemIdBySubId newItemId subId
-    _ -> pass
+    _ -> Log.logAttention "Stripe subscription.updated missing sub_id or item_id" (subIdM, newItemIdM)
   pure "subscription updated"
 
 
+-- Notification only — Stripe retries payments automatically over its dunning period.
+-- Downgrade happens via customer.subscription.deleted when Stripe gives up.
 handleStripePaymentFailed :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
 handleStripePaymentFailed obj notifyMembers billingUrl = do
-  let customerIdM = jf "customer" obj :: Maybe Text
+  let customerIdM = jsonField "customer" obj :: Maybe Text
   case customerIdM of
     Just customerId -> do
       whenJustM (Projects.projectByOrderId customerId) \project ->

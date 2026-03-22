@@ -706,11 +706,11 @@ data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
 
 
 billingProvider :: Maybe Text -> BillingProvider
-billingProvider (Just sid)
-  | "sub_" `T.isPrefixOf` sid = StripeProvider
-  | not (T.null sid) && T.all isDigit sid = LemonSqueezyProvider
-  | otherwise = NoBillingProvider
-billingProvider _ = NoBillingProvider
+billingProvider = \case
+  Just sid
+    | "sub_" `T.isPrefixOf` sid -> StripeProvider
+    | not (T.null sid) && T.all isDigit sid -> LemonSqueezyProvider
+  _ -> NoBillingProvider
 
 
 downgradeToFreeBySubId :: DB es => Text -> Eff es Int64
@@ -719,6 +719,7 @@ downgradeToFreeBySubId sid = PG.execute q (Only sid)
     q = [sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE sub_id = ?|]
 
 
+-- order_id stores Stripe customer_id for Stripe users (semantic mismatch, TODO: add customer_id column)
 updateStripeProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
 updateStripeProjectBilling pid plan subId firstSubItemId customerId =
   PG.execute q (plan, subId, firstSubItemId, customerId, pid)

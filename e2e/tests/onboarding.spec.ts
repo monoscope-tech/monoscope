@@ -94,7 +94,7 @@ test.describe("Onboarding flow", () => {
     await expect(page.getByText("Go to your dashboard")).toBeVisible();
   });
 
-  test("full onboarding flow end-to-end", async ({ page }) => {
+  test("onboarding steps 1-4 flow sequentially", async ({ page }) => {
     await page.goto(ONBOARDING_URL);
     await page.locator('input[name="firstName"]').fill("E2E");
     await page.locator('input[name="lastName"]').fill("Test");
