@@ -771,15 +771,17 @@ stripeRequest apiKey endpoint =
 
 -- Catch wreq HTTP exceptions and log them
 tryStripe :: IO (Maybe a) -> IO (Maybe a)
-tryStripe action = try action >>= \case
-  Right r -> pure r
-  Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e) $> Nothing
+tryStripe action =
+  try action >>= \case
+    Right r -> pure r
+    Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e) $> Nothing
 
 
 tryStripe_ :: IO a -> IO ()
-tryStripe_ action = try (void action) >>= \case
-  Right () -> pass
-  Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e)
+tryStripe_ action =
+  try (void action) >>= \case
+    Right () -> pass
+    Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e)
 
 
 createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
