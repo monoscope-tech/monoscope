@@ -49,6 +49,7 @@ import Data.Default
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), getZonedTime, timeOfDayToTime, timeToTimeOfDay)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Calendar (fromGregorian, toGregorian)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
@@ -741,11 +742,13 @@ calculateCycleStartDate start current =
 -- Stripe
 ----------------------------------------------------------------------
 
-verifyStripeSignature :: Text -> ByteString -> ByteString -> Bool
-verifyStripeSignature sigHeader payload secret =
+verifyStripeSignature :: UTCTime -> Text -> ByteString -> ByteString -> Bool
+verifyStripeSignature now sigHeader payload secret =
   case (parseTimestamp sigHeader, parseSignatures sigHeader) of
     (Just ts, sigs)
-      | not (null sigs) ->
+      | not (null sigs)
+      , Just epoch <- readMaybe @Integer (decodeUtf8 ts)
+      , abs (round (utcTimeToPOSIXSeconds now) - epoch) <= (300 :: Integer) ->
           let signedPayload = ts <> "." <> payload
               expected = BA.convert (HMAC.hmac secret signedPayload :: HMAC.HMAC SHA256) :: ByteString
            in any (BA.constEq expected) (mapMaybe decodeHexSig sigs)
@@ -757,10 +760,12 @@ verifyStripeSignature sigHeader payload secret =
     decodeHexSig = rightToMaybe . B16.decode . encodeUtf8
 
 
+stripeOpts :: Text -> Wreq.Options
+stripeOpts apiKey = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+
 stripeRequest :: Text -> Text -> [(ByteString, ByteString)] -> IO (Wreq.Response LByteString)
-stripeRequest apiKey endpoint params = do
-  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
-  Wreq.postWith opts ("https://api.stripe.com/v1/" <> toString endpoint) params
+stripeRequest apiKey endpoint =
+  Wreq.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
 
 
 createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
@@ -800,9 +805,8 @@ createStripePortalSession apiKey customerId returnUrl = do
 
 
 cancelStripeSubscription :: Text -> Text -> IO ()
-cancelStripeSubscription apiKey subId = do
-  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
-  void $ Wreq.deleteWith opts ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+cancelStripeSubscription apiKey subId =
+  void $ Wreq.deleteWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
 
 
 reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
@@ -834,14 +838,16 @@ jf k = parseMaybe (AE.withObject "" (AE..: k))
 stripeWebhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
 stripeWebhookPostH sigHeaderM rawBody = do
   envConfig <- asks env
+  now <- Time.currentTime
   let secret = envConfig.stripeWebhookSecret
   case sigHeaderM of
     Nothing -> do
       Log.logAttention "Stripe webhook missing signature header" ()
       pure "missing signature"
-    Just sigHeader | not (verifyStripeSignature sigHeader rawBody (encodeUtf8 secret)) -> do
-      Log.logAttention "Stripe webhook invalid signature" ()
-      pure "invalid signature"
+    Just sigHeader
+      | not (verifyStripeSignature now sigHeader rawBody (encodeUtf8 secret)) -> do
+          Log.logAttention "Stripe webhook invalid signature" ()
+          pure "invalid signature"
     Just _ -> case AE.eitherDecodeStrict rawBody of
       Left err -> do
         Log.logAttention "Stripe webhook invalid JSON" err
@@ -870,8 +876,9 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
   case (pidM >>= Projects.projectIdFromText, subIdM, customerIdM) of
     (Just pid, Just subId, Just customerId) -> do
       let plan = fromMaybe "GraduatedPricing" planFromMetadata
+      projectM <- Projects.projectById pid
       -- Cancel any existing LemonSqueezy subscription (auto-migration)
-      whenJustM (Projects.projectById pid) \project ->
+      whenJust projectM \project ->
         case Projects.billingProvider project.subId of
           Projects.LemonSqueezyProvider ->
             whenJust project.subId
@@ -881,7 +888,7 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
       subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
       void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId
       void $ ProjectMembers.activateAllMembers pid
-      whenJustM (Projects.projectById pid) \project ->
+      whenJust projectM \project ->
         notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
       pure "checkout processed"
     _ -> do
@@ -891,8 +898,7 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
 
 getStripeSubItemId :: Text -> Text -> IO (Maybe Text)
 getStripeSubItemId apiKey subId = do
-  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
-  resp <- Wreq.getWith opts ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
   let body = resp ^. Wreq.responseBody
   pure $ do
     obj <- AE.decode @AE.Value body
@@ -907,8 +913,7 @@ handleStripeSubDeleted obj notifyMembers billingUrl = do
   let subIdM = jf "id" obj :: Maybe Text
   case subIdM of
     Just subId -> do
-      projects <- DB.query [sql|SELECT p.* FROM projects.projects p WHERE sub_id = ?|] (Only subId) :: ATBaseCtx [Projects.Project]
-      forM_ (listToMaybe projects) \project ->
+      whenJustM (Projects.projectBySubId subId) \project ->
         notifyMembers project.id $ ET.planDowngradedEmail project.title "was cancelled" (billingUrl project.id)
       void $ Projects.downgradeToFreeBySubId subId
       pure "subscription deleted"
@@ -922,7 +927,7 @@ handleStripeSubUpdated obj = do
       newItemIdM = listToMaybe (fromMaybe [] itemsM) >>= jf "id" :: Maybe Text
   case (subIdM, newItemIdM) of
     (Just subId, Just newItemId) ->
-      void $ DB.execute [sql|UPDATE projects.projects SET first_sub_item_id = ? WHERE sub_id = ?|] (newItemId, subId)
+      void $ Projects.updateSubItemIdBySubId newItemId subId
     _ -> pass
   pure "subscription updated"
 
@@ -932,8 +937,7 @@ handleStripePaymentFailed obj notifyMembers billingUrl = do
   let customerIdM = jf "customer" obj :: Maybe Text
   case customerIdM of
     Just customerId -> do
-      projects <- DB.query [sql|SELECT p.* FROM projects.projects p WHERE order_id = ?|] (Only customerId) :: ATBaseCtx [Projects.Project]
-      forM_ (listToMaybe projects) \project ->
+      whenJustM (Projects.projectByOrderId customerId) \project ->
         notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
     Nothing -> pass
   pure "payment failed handled"

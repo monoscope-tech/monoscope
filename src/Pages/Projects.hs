@@ -1139,7 +1139,7 @@ newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
 
 stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (RespHeaders (Html ()))
 stripeCheckoutInitH pid form = do
-  (_, _) <- Projects.sessionAndProject pid
+  void $ Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
   urlM <-

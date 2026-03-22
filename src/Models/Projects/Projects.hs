@@ -28,6 +28,8 @@ module Models.Projects.Projects (
   updateProjectBilling,
   projectById,
   projectByOrderId,
+  projectBySubId,
+  updateSubItemIdBySubId,
   projectCacheById,
   projectCacheByIdIO,
   updateProjectReportNotif,
@@ -423,6 +425,17 @@ projectByOrderId :: DB es => Text -> Eff es (Maybe Project)
 projectByOrderId oid = listToMaybe <$> PG.query q (Only oid)
   where
     q = [sql| select p.* from projects.projects p where order_id=?|]
+
+
+projectBySubId :: DB es => Text -> Eff es (Maybe Project)
+projectBySubId subId = listToMaybe <$> PG.query q (Only subId)
+  where
+    q = [sql| select p.* from projects.projects p where sub_id=?|]
+
+
+updateSubItemIdBySubId :: DB es => Text -> Text -> Eff es Int64
+updateSubItemIdBySubId newItemId subId =
+  PG.execute [sql| update projects.projects set first_sub_item_id=? where sub_id=?|] (newItemId, subId)
 
 
 getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
