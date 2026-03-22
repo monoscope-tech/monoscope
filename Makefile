@@ -9,9 +9,12 @@ OS_ARCH := $(ARCH)-$(OS)
 NCPUS := $(shell sysctl -n hw.ncpu 2>/dev/null || nproc 2>/dev/null || echo 4)
 
 css-start:
-	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch
+	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css --watch 2>&1 | tee css.log
 post-css:
 	./node_modules/.bin/tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/public/assets/css/tailwind.min.css
+
+web-components-watch:
+	cd web-components && npm run watch 2>&1 | tee ../web-components.log
 run:
 	cabal run
 
@@ -144,4 +147,4 @@ tmux-live-reload:
 tmux-live-reload-cli:
 	$(call tmux_run,make live-reload-cli 2>&1 | tee build-cli.log)
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch
