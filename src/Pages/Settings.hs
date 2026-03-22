@@ -74,16 +74,14 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
+import Network.Wreq qualified as Wreq
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
-import Network.Wreq qualified as Wreq
 import Relude hiding (ask, asks)
-import "cryptonite" Crypto.Hash (SHA256)
-import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
@@ -91,6 +89,8 @@ import Text.Printf (printf)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64.URL qualified as B64
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
 
 ----------------------------------------------------------------------
@@ -744,10 +744,11 @@ calculateCycleStartDate start current =
 verifyStripeSignature :: Text -> ByteString -> ByteString -> Bool
 verifyStripeSignature sigHeader payload secret =
   case (parseTimestamp sigHeader, parseSignatures sigHeader) of
-    (Just ts, sigs) | not (null sigs) ->
-      let signedPayload = ts <> "." <> payload
-          expected = BA.convert (HMAC.hmac secret signedPayload :: HMAC.HMAC SHA256) :: ByteString
-       in any (BA.constEq expected) (mapMaybe decodeHexSig sigs)
+    (Just ts, sigs)
+      | not (null sigs) ->
+          let signedPayload = ts <> "." <> payload
+              expected = BA.convert (HMAC.hmac secret signedPayload :: HMAC.HMAC SHA256) :: ByteString
+           in any (BA.constEq expected) (mapMaybe decodeHexSig sigs)
     _ -> False
   where
     parts h = T.splitOn "," h
@@ -787,10 +788,13 @@ createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOver
 
 createStripePortalSession :: Text -> Text -> Text -> IO (Maybe Text)
 createStripePortalSession apiKey customerId returnUrl = do
-  resp <- stripeRequest apiKey "billing_portal/sessions"
-    [ ("customer", encodeUtf8 customerId)
-    , ("return_url", encodeUtf8 returnUrl)
-    ]
+  resp <-
+    stripeRequest
+      apiKey
+      "billing_portal/sessions"
+      [ ("customer", encodeUtf8 customerId)
+      , ("return_url", encodeUtf8 returnUrl)
+      ]
   let body = resp ^. Wreq.responseBody
   pure $ AE.decode @AE.Value body >>= jf "url"
 
@@ -802,18 +806,23 @@ cancelStripeSubscription apiKey subId = do
 
 
 reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
-reportUsageToStripe apiKey customerId eventName quantity = void $ stripeRequest apiKey
-  "billing/meter_events"
-  [ ("event_name", encodeUtf8 eventName)
-  , ("payload[value]", encodeUtf8 $ show quantity)
-  , ("payload[stripe_customer_id]", encodeUtf8 customerId)
-  ]
+reportUsageToStripe apiKey customerId eventName quantity =
+  void
+    $ stripeRequest
+      apiKey
+      "billing/meter_events"
+      [ ("event_name", encodeUtf8 eventName)
+      , ("payload[value]", encodeUtf8 $ show quantity)
+      , ("payload[stripe_customer_id]", encodeUtf8 customerId)
+      ]
 
 
 cancelLemonSqueezySubscription :: Text -> Text -> IO ()
 cancelLemonSqueezySubscription apiKey subId = do
-  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
-        & (Wreq.header "Content-Type" .~ ["application/vnd.api+json"])
+  let opts =
+        Wreq.defaults
+          & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+          & (Wreq.header "Content-Type" .~ ["application/vnd.api+json"])
   void $ Wreq.deleteWith opts ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString subId)
 
 

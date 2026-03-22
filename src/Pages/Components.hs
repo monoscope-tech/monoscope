@@ -131,8 +131,9 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                 }
                }
             |]
-    when (not useStripe) $ script_
-      [text|
+    when (not useStripe)
+      $ script_
+        [text|
              window.payLemon = function(plan, url) {
              LemonSqueezy.Setup({
                eventHandler: ({event, data}) => {

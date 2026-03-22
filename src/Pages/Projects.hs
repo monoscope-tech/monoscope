@@ -1142,9 +1142,16 @@ stripeCheckoutInitH pid form = do
   (_, _) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  urlM <- liftIO $ Settings.createStripeCheckoutSession
-    envCfg.stripeSecretKey envCfg.hostUrl pid form.plan
-    envCfg.stripePriceIdGraduated envCfg.stripePriceIdGraduatedOverage envCfg.stripePriceIdByos
+  urlM <-
+    liftIO
+      $ Settings.createStripeCheckoutSession
+        envCfg.stripeSecretKey
+        envCfg.hostUrl
+        pid
+        form.plan
+        envCfg.stripePriceIdGraduated
+        envCfg.stripePriceIdGraduatedOverage
+        envCfg.stripePriceIdByos
   case urlM of
     Just url -> redirectCS url >> addRespHeaders ""
     Nothing -> addErrorToast "Failed to create checkout session" Nothing >> addRespHeaders ""
