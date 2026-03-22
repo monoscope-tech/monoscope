@@ -204,7 +204,7 @@ instance ToHtml OnboardingGet where
         SurveyStep{..} -> onboardingConfigBody stepPid location functionality
         NotifChannelStep{..} -> notifChannelsWithUrls slackUrl discordUrl stepPid phoneNumber emails hasDiscord hasSlack
         IntegrationStep{..} -> integrationsPage stepPid apiKey
-        PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled
+        PricingStep{..} -> pricingPage stepPid lemonUrl criticalUrl paymentPlan enableFreetier basicAuthEnabled Projects.NoBillingProvider
         InfoStep{..} -> onboardingInfoBody stepPid firstName lastName companyName companySize foundUsFrom
   toHtmlRaw = toHtml
 
@@ -371,13 +371,13 @@ onboardingCompleteBody pid = do
   script_ [src_ "/public/assets/js/confetti.js"] ("" :: Text)
 
 
-pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled = do
+pricingPage :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Projects.BillingProvider -> Html ()
+pricingPage pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled provider = do
   div_ [class_ "w-full max-w-[1100px] mx-auto mt-[70px] mb-10 px-4 md:px-0"] $ do
     div_ [class_ "flex-col gap-4 flex w-full"] $ do
       div_ [class_ "w-full md:w-1/2"] $ do
         stepIndicator 5 "Please pick a plan" $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled True
+      paymentPlanPicker pid lemon critical paymentPlan freeTierEnabled basicAuthEnabled True provider
       div_ [class_ "flex flex-col gap-2 w-full pb-20"] do
         span_ [class_ "text-textStrong text-2xl mt-20"] "FAQ"
         div_ [class_ "join join-vertical w-full mt-4"] do

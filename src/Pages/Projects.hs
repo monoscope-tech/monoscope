@@ -17,6 +17,8 @@ module Pages.Projects (
   deleteMemberH,
   ManageMembersForm (..),
   manageSubGetH,
+  stripeCheckoutInitH,
+  StripeCheckoutForm (..),
   ManageMembers (..),
   -- ManageTeams
   manageTeamsGetH,
@@ -1111,14 +1113,48 @@ manageSubGetH pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
-  sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
-  case sub of
-    Nothing -> do
-      addErrorToast "Subscription ID not found" Nothing
-      addRespHeaders ""
-    Just s -> do
-      redirectCS s.dataVal.attributes.urls.customerPortal
-      addRespHeaders ""
+  case Projects.billingProvider project.subId of
+    Projects.StripeProvider -> do
+      -- order_id stores Stripe customer ID for Stripe users
+      case project.orderId of
+        Just customerId | not (T.null customerId) -> do
+          let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
+          portalUrlM <- liftIO $ Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
+          case portalUrlM of
+            Just url -> redirectCS url >> addRespHeaders ""
+            Nothing -> addErrorToast "Failed to create billing portal" Nothing >> addRespHeaders ""
+        _ -> addErrorToast "Customer ID not found" Nothing >> addRespHeaders ""
+    Projects.LemonSqueezyProvider -> do
+      sub <- liftIO $ getSubscriptionPortalUrl project.subId envCfg.lemonSqueezyApiKey
+      case sub of
+        Nothing -> addErrorToast "Subscription ID not found" Nothing >> addRespHeaders ""
+        Just s -> redirectCS s.dataVal.attributes.urls.customerPortal >> addRespHeaders ""
+    Projects.NoBillingProvider -> addErrorToast "No active subscription" Nothing >> addRespHeaders ""
+
+
+newtype StripeCheckoutForm = StripeCheckoutForm {plan :: Text}
+  deriving stock (Generic, Show)
+  deriving anyclass (FromForm)
+
+
+stripeCheckoutInitH :: Projects.ProjectId -> StripeCheckoutForm -> ATAuthCtx (RespHeaders (Html ()))
+stripeCheckoutInitH pid form = do
+  void $ Projects.sessionAndProject pid
+  appCtx <- ask @AuthContext
+  let envCfg = appCtx.config
+  urlM <-
+    liftIO
+      $ Settings.createStripeCheckoutSession
+        envCfg.stripeSecretKey
+        envCfg.hostUrl
+        pid
+        form.plan
+        envCfg.stripePriceIdGraduated
+        envCfg.stripePriceIdGraduatedOverage
+        envCfg.stripePriceIdByos
+  case urlM of
+    Just url -> redirectCS url >> addRespHeaders ""
+    Nothing -> addErrorToast "Failed to create checkout session" Nothing >> addRespHeaders ""
 
 
 getSubscriptionPortalUrl :: Maybe Text -> Text -> IO (Maybe SubPortalResponse)
@@ -1439,15 +1475,16 @@ pricingUpdateGetH pid = do
   let envCfg = appCtx.config
       lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled
+  let provider = Projects.billingProvider project.subId
+  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled provider
 
 
-pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-pricingPage_ pid lemon critical paymentPlan enableFreeTier basicAuthEnabled = do
+pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Projects.BillingProvider -> Html ()
+pricingPage_ pid lemon critical paymentPlan enableFreeTier basicAuthEnabled provider = do
   section_ [class_ "w-full h-full overflow-y-auto py-12"] do
     div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 max-md:px-2 px-4"] do
       h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled False
+      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled False provider
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)

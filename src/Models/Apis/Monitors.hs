@@ -28,6 +28,7 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Text.Display (Display)
+import Data.Time.Calendar (Day (..))
 import Data.Time.Clock (UTCTime (..), addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -222,7 +223,7 @@ monitorReactivateByIds ids =
 monitorMuteByIds :: (DB es, Time :> es) => Maybe Int -> [QueryMonitorId] -> Eff es Int64
 monitorMuteByIds durationMinsM ids = do
   now <- Time.currentTime
-  let mutedUntil = maybe (UTCTime (toEnum 100000) 0) (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
+  let mutedUntil = maybe (UTCTime (ModifiedJulianDay 100000) 0) (\mins -> addUTCTime (fromIntegral mins * 60) now) durationMinsM
   PG.execute [sql| UPDATE monitors.query_monitors SET muted_until = ? WHERE id = ANY(?::uuid[]) |] (mutedUntil, V.fromList ids)
 
 

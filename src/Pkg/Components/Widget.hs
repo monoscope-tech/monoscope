@@ -287,7 +287,7 @@ widget_ = widgetHelper_
 
 widgetHelper_ :: Widget -> Html ()
 widgetHelper_ w' = case w.wType of
-  WTAnomalies -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
+  WTAnomalies -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ div_ [class_ "gap-0.5 flex flex-col h-full"] do
     unless (w.naked == Just True) $ renderWidgetHeader w (maybeToMonoid w.id) w.title Nothing Nothing Nothing (Just ("View all", "/p/" <> maybeToMonoid (w._projectId <&> (.toText)) <> "/issues")) (w.hideSubtitle == Just True)
     div_ [class_ "flex-1 flex min-h-0"] $ div_ [class_ $ "h-full w-full " <> if w.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ maybeToMonoid w.id <> "_bordered"] $ div_ [class_ "h-full overflow-auto p-3"] $ whenJust w.html toHtmlRaw
   WTGroup -> gridItem_ $ div_ [class_ "h-full flex flex-col border border-strokeWeak rounded-lg surface-raised overflow-hidden group/wgt"] do
@@ -302,11 +302,11 @@ widgetHelper_ w' = case w.wType of
       when isFullWidth $ button_ [class_ "collapse-toggle p-2 rounded hover:bg-fillWeak transition-colors cursor-pointer tap-target", Aria.label_ "Toggle group", [__|on click toggle .hidden on .nested-grid in closest .grid-stack-item then toggle .collapsed on closest .grid-stack-item|]] $ Utils.faSprite_ "chevron-up" "regular" "w-5 h-5 transition-transform"
     -- Nested grid: flex-1 fills remaining space
     div_ [class_ "grid-stack nested-grid flex-1"] $ forM_ (fromMaybe [] w.children) (\wChild -> widgetHelper_ (wChild{_isNested = Just True}))
-  WTTable -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderTable w
-  WTLogs -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderLogsWidget w
-  WTTraces -> gridItem_ $ div_ [class_ $ "h-full group/wgt "] $ renderTraceTable w
-  WTFlamegraph -> gridItem_ $ div_ [class_ $ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
-  _ -> gridItem_ $ div_ [class_ $ " w-full h-full group/wgt "] $ renderChart w
+  WTTable -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderTable w
+  WTLogs -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderLogsWidget w
+  WTTraces -> gridItem_ $ div_ [class_ "h-full group/wgt "] $ renderTraceTable w
+  WTFlamegraph -> gridItem_ $ div_ [class_ "h-full "] $ div_ [class_ "p-3"] "Flamegraph widget coming soon"
+  _ -> gridItem_ $ div_ [class_ " w-full h-full group/wgt "] $ renderChart w
   where
     w = w' & #id %~ maybe (slugify <$> w'.title) Just
     gridStackHandleClass = if w._isNested == Just True then "nested-grid-stack-handle" else "grid-stack-handle"
@@ -551,12 +551,11 @@ renderLogsWidget widget = do
       div_ [class_ $ "h-full w-full " <> if widget.naked == Just True then "" else "surface-raised rounded-2xl", id_ $ wId <> "_bordered"] do
         termRaw
           "log-list"
-          ( [ id_ wId
-            , class_ "w-full flex flex-col h-full min-w-0"
-            , term "projectId" pid
-            , term "initialFetchUrl" fetchUrl
-            ]
-          )
+          [ id_ wId
+          , class_ "w-full flex flex-col h-full min-w-0"
+          , term "projectId" pid
+          , term "initialFetchUrl" fetchUrl
+          ]
           ("" :: Text)
 
 
@@ -1347,7 +1346,7 @@ summaryStyleClass = \case
 
 
 renderSummaryTags :: Text -> Html ()
-renderSummaryTags txt = span_ [class_ "inline-flex flex-wrap items-center gap-1"] $ forM_ (T.words txt) \seg ->
+renderSummaryTags txt = span_ [class_ "inline-flex flex-wrap items-center gap-1"] $ forM_ (words txt) \seg ->
   case T.breakOn "⇒" seg of
     (prefix, rest)
       | not (T.null rest)

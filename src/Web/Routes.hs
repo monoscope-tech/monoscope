@@ -186,6 +186,7 @@ data Routes mode = Routes
   , whatsappIncomingPost :: mode :- "whatsapp" :> "incoming" :> ReqBody '[FormUrlEncoded] Whatsapp.TwilioWhatsAppMessage :> Post '[JSON] AE.Value
   , clientMetadata :: mode :- "api" :> "client_metadata" :> Header "Authorization" Text :> Get '[JSON] Auth.ClientMetadata
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] Settings.WebhookData :> Post '[HTML] (Html ())
+  , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
@@ -384,6 +385,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , teamGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> Capture "teamHandle" Text :> QPT "layout" :> Get '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , teamBulkAction :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_teams" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> QPT "teamView" :> Post '[HTML] (RespHeaders ManageMembers.ManageTeams)
   , manageSubscriptionGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_subscription" :> Get '[HTML] (RespHeaders (Html ()))
+  , stripeCheckout :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "stripe_checkout" :> ReqBody '[FormUrlEncoded] CreateProject.StripeCheckoutForm :> Post '[HTML] (RespHeaders (Html ()))
   , -- Notifications
     notificationsUpdateChannelPost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "notifications-channels" :> ReqBody '[FormUrlEncoded] Integrations.NotifListForm :> Post '[HTML] (RespHeaders (Html ()))
   , pagerdutyConnect :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "integrations" :> "pagerduty" :> ReqBody '[FormUrlEncoded] Integrations.PagerdutyConnectForm :> Post '[HTML] (RespHeaders (Html ()))
@@ -432,6 +434,7 @@ server pool =
     , whatsappIncomingPost = Whatsapp.whatsappIncomingPostH
     , clientMetadata = Auth.clientMetadataH
     , lemonWebhook = Settings.webhookPostH
+    , stripeWebhook = Settings.stripeWebhookPostH
     , githubWebhook = GitSync.githubWebhookPostH
     , chartsDataShot = Charts.queryMetrics Nothing
     , rrwebPost = Replay.replayPostH
@@ -625,6 +628,7 @@ projectsServer =
     , teamGet = ManageMembers.teamGetH
     , teamBulkAction = ManageMembers.manageTeamBulkActionH
     , manageSubscriptionGet = ManageMembers.manageSubGetH
+    , stripeCheckout = ManageMembers.stripeCheckoutInitH
     , onboading = Onboarding.onboardingGetH
     , onboardingInfoPost = Onboarding.onboardingInfoPostH
     , onboardingConfPost = Onboarding.onboardingConfPostH

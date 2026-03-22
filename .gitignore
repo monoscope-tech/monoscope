@@ -53,3 +53,6 @@ tests_optimized.log
 chart-cli
 web-components/bun.lock
 .ralph/agent/
+e2e/node_modules/
+e2e/test-results/
+e2e/playwright-report/

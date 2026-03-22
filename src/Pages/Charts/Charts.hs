@@ -249,7 +249,7 @@ fetchMetricsData respDataType sqlQuery now fromD toD authCtx dbSource = do
           { dataJSON = V.fromList chartData
           , rowsCount = fromIntegral $ length chartData
           }
-  pure $ either (const baseMetricsData) id result
+  pure $ fromRight baseMetricsData result
 
 
 -- | Convert timestamps in MetricsData from seconds to milliseconds for ECharts

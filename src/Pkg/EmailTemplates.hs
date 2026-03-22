@@ -404,7 +404,7 @@ errorCard errorsUrl e =
           when (i > 0) $ span_ [style_ "color: #c0c5cc; padding: 0 6px;"] "\183"
           toHtml val
     when (e.stackTrace /= "") $ tr_ $ td_ [style_ "padding: 0 20px 15px 20px;"] do
-      let traceLines = T.lines e.stackTrace
+      let traceLines = lines e.stackTrace
           lastLines = takeEnd 2 traceLines
           hasMore = length traceLines > 2
       div_ [class_ "error-card-stack"] $ toHtml $ T.intercalate "\n" lastLines
@@ -636,7 +636,7 @@ barLegendWithCount color label count = td_ [class_ "bar-legend", style_ "font-si
 
 changeIndicator :: Double -> Bool -> Html ()
 changeIndicator pct invertColor
-  | pct == 0 = pure ()
+  | pct == 0 = pass
   | otherwise =
       let isUp = pct > 0
           arrow = if isUp then "\8593 " else "\8595 "
@@ -652,7 +652,7 @@ changeIndicator pct invertColor
 
 -- | Strip `field;style⇒value` summary badge tokens to plain text values
 stripSummaryBadges :: Text -> Text
-stripSummaryBadges = T.unwords . mapMaybe extractValue . T.words
+stripSummaryBadges = unwords . mapMaybe extractValue . words
   where
     extractValue token = case T.breakOn "\8658" token of
       (_, "") -> Just token
@@ -674,7 +674,7 @@ issueTypeBadge iType critical =
 -- | Render an SVG sparkline as an inline data URI image (email-safe, works in dark/light mode)
 sparklineImg :: [Int] -> Html ()
 sparklineImg buckets
-  | null buckets || all (== 0) buckets = pure ()
+  | null buckets || all (== 0) buckets = pass
   | otherwise =
       let peakVal = foldl' max 1 buckets
           peak = fromIntegral @Int @Double peakVal

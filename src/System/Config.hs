@@ -136,6 +136,12 @@ data EnvConfig = EnvConfig
   , showDemoProject :: Bool
   , pauseNotifications :: Bool
   , liveReloadDashboards :: Bool
+  , stripeSecretKey :: Text
+  , stripeWebhookSecret :: Text
+  , stripePublishableKey :: Text
+  , stripePriceIdGraduated :: Text
+  , stripePriceIdGraduatedOverage :: Text
+  , stripePriceIdByos :: Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

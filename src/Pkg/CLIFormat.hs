@@ -14,7 +14,6 @@ module Pkg.CLIFormat (
 import Relude
 
 import Data.Aeson qualified as AE
-import Data.List qualified as L
 import Data.Scientific (FPFormat (..), Scientific, formatScientific, isInteger)
 import Data.Text qualified as T
 import Data.Vector qualified as V
@@ -74,7 +73,7 @@ renderSummaryItems = T.intercalate " " . mapMaybe renderItem
 -- []
 colWidths :: [[Text]] -> [Int]
 colWidths [] = []
-colWidths rows = map (min 60 . foldl' (\acc t -> max acc (T.length t)) 0) $ L.transpose padded
+colWidths rows = map (min 60 . foldl' (\acc t -> max acc (T.length t)) 0) $ transpose padded
   where
     ncols = foldl' (\acc r -> max acc (length r)) 0 rows
     padded = map (\r -> r <> replicate (ncols - length r) "") rows

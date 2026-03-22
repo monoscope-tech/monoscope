@@ -275,18 +275,18 @@ webhookTestCases =
     , \testPid pool callWebhook -> do
         setupProjectWithSubscription pool testPid "GraduatedPricing"
         _ <- callWebhook
-        verifyPaymentPlan pool testPid "FREE"
+        verifyPaymentPlan pool testPid "Free"
     )
   ,
     ( "subscription_resumed"
     , "should upgrade to paid on subscription_resumed event"
     , createWebhookPayload "subscription_resumed"
     , \testPid pool callWebhook -> do
-        _ <- withResource pool \conn -> PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = 'FREE', order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (Only testPid)
+        _ <- withResource pool \conn -> PGS.execute conn [sql|UPDATE projects.projects SET payment_plan = 'Free', order_id = '67890', sub_id = '12345', first_sub_item_id = '111' WHERE id = ?|] (Only testPid)
         _ <- callWebhook
         paymentPlan <- withResource pool \conn -> PGS.query conn [sql|SELECT payment_plan FROM projects.projects WHERE id = ?|] (Only testPid)
         case paymentPlan of
-          [Only (plan :: Text)] -> plan `shouldNotBe` "FREE"
+          [Only (plan :: Text)] -> plan `shouldNotBe` "Free"
           _ -> fail "Failed to query payment plan"
     )
   ,
@@ -296,7 +296,7 @@ webhookTestCases =
     , \testPid pool callWebhook -> do
         setupProjectWithSubscription pool testPid "GraduatedPricing"
         _ <- callWebhook
-        verifyPaymentPlan pool testPid "FREE"
+        verifyPaymentPlan pool testPid "Free"
     )
   ]
 
@@ -376,7 +376,7 @@ billingUsageTests = do
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
-      LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
+      LemonSqueezy.BillingGet (PageCtx _ d) | let totalReqs = d.totalReqs -> do
         totalReqs `shouldBe` 5 -- Should count the 5 spans we ingested
   it "should handle cycle boundaries correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     currentTime <- liftIO getCurrentTime
@@ -401,7 +401,7 @@ billingUsageTests = do
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
-      LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _)) -> do
+      LemonSqueezy.BillingGet (PageCtx _ d) | let totalReqs = d.totalReqs -> do
         totalReqs `shouldBe` 1 -- Should only count the recent span
 
 

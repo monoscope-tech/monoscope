@@ -147,4 +147,16 @@ tmux-live-reload:
 tmux-live-reload-cli:
 	$(call tmux_run,make live-reload-cli 2>&1 | tee build-cli.log)
 
-.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch
+e2e-install:
+	@test -x e2e/node_modules/.bin/playwright || (cd e2e && npm install && npx playwright install chromium)
+
+test-e2e: e2e-install
+	cd e2e && npx playwright test
+
+test-e2e-real: e2e-install
+	cd e2e && E2E_REAL_PROVIDERS=true npx playwright test
+
+test-e2e-ui: e2e-install
+	cd e2e && npx playwright test --ui
+
+.PHONY: all test fmt lint fix-lint live-reload live-reload-cli live-reload-doctests build-chart-cli build-chart-cli-linux tmux-live-reload tmux-live-reload-cli web-components-watch e2e-install test-e2e test-e2e-real test-e2e-ui
