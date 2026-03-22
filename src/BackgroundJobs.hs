@@ -72,6 +72,7 @@ import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, creat
 import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Pages.Bots.Utils (ReportType (..))
+import Pages.Settings qualified as Settings
 import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
@@ -371,7 +372,11 @@ processBackgroundJob authCtx bgJob =
         Log.logTrace "Total events to report" ("events_count", totalToReport + totalMetricsCount)
         let totalUsage = totalToReport + totalMetricsCount
         Relude.when (totalUsage > 0) do
-          liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
+          case Projects.billingProvider project.subId of
+            Projects.StripeProvider -> whenJust (mfilter (not . T.null) project.orderId) \custId ->
+              liftIO $ Settings.reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" totalUsage
+            Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
+            Projects.NoBillingProvider -> pass
           void $ Projects.addDailyUsageReport pid totalUsage
           void $ Projects.updateUsageLastReported pid currentTime
       Log.logTrace "Completed usage report for project" ("project_id", pid.toText)

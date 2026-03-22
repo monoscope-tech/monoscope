@@ -28,10 +28,22 @@ module Pages.Settings (
   FirstSubItem (..),
   manageBillingGetH,
   BillingGet (..),
+  -- Stripe
+  stripeWebhookPostH,
+  createStripeCheckoutSession,
+  createStripePortalSession,
+  cancelStripeSubscription,
+  reportUsageToStripe,
+  cancelLemonSqueezySubscription,
+  verifyStripeSignature,
 ) where
 
+import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
+import Data.Aeson.Types (parseMaybe)
 import Data.Base64.Types qualified as B64
+import Data.ByteArray qualified as BA
+import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
 import Data.Default
 import Data.Effectful.Notify qualified as Notify
@@ -68,7 +80,10 @@ import Pkg.Components.Table qualified as Table
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (sampleAlertByIssueTypeText, sampleReport, sendDiscordAlert, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendWhatsAppAlert)
+import Network.Wreq qualified as Wreq
 import Relude hiding (ask, asks)
+import "cryptonite" Crypto.Hash (SHA256)
+import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
@@ -626,11 +641,11 @@ webhookPostH secretHeaderM dat = do
     _ -> pure ""
 
 
-newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text, Text, Bool, Bool))
+newtype BillingGet = BillingGet (PageCtx (Projects.ProjectId, Int64, Text, Text, Text, Text, Text, Bool, Bool, Projects.BillingProvider))
 
 
 instance ToHtml BillingGet where
-  toHtml (BillingGet (PageCtx bwconf (pid, totalReqs, amount, last_reported, lemonUrl, critical, paymentPlan, enableFreetier, basicAuthEnabled))) = toHtml $ PageCtx bwconf $ billingPage pid totalReqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled
+  toHtml (BillingGet (PageCtx bwconf (pid, totalReqs, amount, last_reported, lemonUrl, critical, paymentPlan, enableFreetier, basicAuthEnabled, provider))) = toHtml $ PageCtx bwconf $ billingPage pid totalReqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled provider
   toHtmlRaw = toHtml
 
 
@@ -656,11 +671,12 @@ manageBillingGetH pid from = do
           }
   let lemonUrl = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
       critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  addRespHeaders $ BillingGet $ PageCtx bwconf (pid, totalRequests, estimatedAmount, last_reported, lemonUrl, critical, project.paymentPlan, envCfg.enableFreetier, envCfg.basicAuthEnabled)
+  let provider = Projects.billingProvider project.subId
+  addRespHeaders $ BillingGet $ PageCtx bwconf (pid, totalRequests, estimatedAmount, last_reported, lemonUrl, critical, project.paymentPlan, envCfg.enableFreetier, envCfg.basicAuthEnabled, provider)
 
 
-billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Bool -> Html ()
-billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled = div_ [id_ "main-content"] do
+billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Bool -> Projects.BillingProvider -> Html ()
+billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled provider = div_ [id_ "main-content"] do
   let pidTxt = pid.toText
       isFree = paymentPlan == "Free"
       planPrice
@@ -706,7 +722,7 @@ billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFr
     div_ [class_ "text-center text-sm text-textWeak w-full mx-auto max-w-96"] do
       span_ [class_ "text-textStrong text-2xl font-semibold"] "Compare Plans"
       p_ [class_ "mt-2 mb-4"] "Drag the slider to estimate costs at different usage levels."
-    paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled False
+    paymentPlanPicker pid lemonUrl critical paymentPlan enableFreetier basicAuthEnabled False provider
 
 
 calculateCycleStartDate :: UTCTime -> UTCTime -> UTCTime
@@ -719,3 +735,194 @@ calculateCycleStartDate start current =
         | currentMonth == 1 = fromGregorian (currentYear - 1) 12 startDay
         | otherwise = fromGregorian currentYear (currentMonth - 1) startDay
    in UTCTime cycleStartDay (timeOfDayToTime timeOfDay)
+
+
+----------------------------------------------------------------------
+-- Stripe
+----------------------------------------------------------------------
+
+verifyStripeSignature :: Text -> ByteString -> ByteString -> Bool
+verifyStripeSignature sigHeader payload secret =
+  case (parseTimestamp sigHeader, parseSignatures sigHeader) of
+    (Just ts, sigs) | not (null sigs) ->
+      let signedPayload = ts <> "." <> payload
+          expected = BA.convert (HMAC.hmac secret signedPayload :: HMAC.HMAC SHA256) :: ByteString
+       in any (BA.constEq expected) (mapMaybe decodeHexSig sigs)
+    _ -> False
+  where
+    parts h = T.splitOn "," h
+    parseTimestamp h = listToMaybe [encodeUtf8 v | p <- parts h, Just v <- [T.stripPrefix "t=" p]]
+    parseSignatures h = [v | p <- parts h, Just v <- [T.stripPrefix "v1=" p]]
+    decodeHexSig = rightToMaybe . B16.decode . encodeUtf8
+
+
+stripeRequest :: Text -> Text -> [(ByteString, ByteString)] -> IO (Wreq.Response LByteString)
+stripeRequest apiKey endpoint params = do
+  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+  Wreq.postWith opts ("https://api.stripe.com/v1/" <> toString endpoint) params
+
+
+createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
+createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
+  let prices = case plan of
+        "SystemsPricing" -> [("line_items[0][price]", encodeUtf8 priceIdBYOS), ("line_items[0][quantity]", "1")]
+        _ ->
+          [ ("line_items[0][price]", encodeUtf8 priceIdGraduated)
+          , ("line_items[0][quantity]", "1")
+          , ("line_items[1][price]", encodeUtf8 priceIdOverage)
+          ]
+      params =
+        prices
+          <> [ ("mode", "subscription")
+             , ("client_reference_id", encodeUtf8 pid.toText)
+             , ("metadata[project_id]", encodeUtf8 pid.toText)
+             , ("metadata[plan]", encodeUtf8 plan)
+             , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
+             , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
+             ]
+  resp <- stripeRequest apiKey "checkout/sessions" params
+  let body = resp ^. Wreq.responseBody
+  pure $ AE.decode @AE.Value body >>= jf "url"
+
+
+createStripePortalSession :: Text -> Text -> Text -> IO (Maybe Text)
+createStripePortalSession apiKey customerId returnUrl = do
+  resp <- stripeRequest apiKey "billing_portal/sessions"
+    [ ("customer", encodeUtf8 customerId)
+    , ("return_url", encodeUtf8 returnUrl)
+    ]
+  let body = resp ^. Wreq.responseBody
+  pure $ AE.decode @AE.Value body >>= jf "url"
+
+
+cancelStripeSubscription :: Text -> Text -> IO ()
+cancelStripeSubscription apiKey subId = do
+  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+  void $ Wreq.deleteWith opts ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+
+
+reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
+reportUsageToStripe apiKey customerId eventName quantity = void $ stripeRequest apiKey
+  "billing/meter_events"
+  [ ("event_name", encodeUtf8 eventName)
+  , ("payload[value]", encodeUtf8 $ show quantity)
+  , ("payload[stripe_customer_id]", encodeUtf8 customerId)
+  ]
+
+
+cancelLemonSqueezySubscription :: Text -> Text -> IO ()
+cancelLemonSqueezySubscription apiKey subId = do
+  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+        & (Wreq.header "Content-Type" .~ ["application/vnd.api+json"])
+  void $ Wreq.deleteWith opts ("https://api.lemonsqueezy.com/v1/subscriptions/" <> toString subId)
+
+
+-- Extract a field from a JSON value (safe, returns Nothing for non-objects)
+jf :: AE.FromJSON a => AE.Key -> AE.Value -> Maybe a
+jf k = parseMaybe (AE.withObject "" (AE..: k))
+
+
+stripeWebhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
+stripeWebhookPostH sigHeaderM rawBody = do
+  envConfig <- asks env
+  let secret = envConfig.stripeWebhookSecret
+  case sigHeaderM of
+    Nothing -> do
+      Log.logAttention "Stripe webhook missing signature header" ()
+      pure "missing signature"
+    Just sigHeader | not (verifyStripeSignature sigHeader rawBody (encodeUtf8 secret)) -> do
+      Log.logAttention "Stripe webhook invalid signature" ()
+      pure "invalid signature"
+    Just _ -> case AE.eitherDecodeStrict rawBody of
+      Left err -> do
+        Log.logAttention "Stripe webhook invalid JSON" err
+        pure "invalid json"
+      Right event -> do
+        let eventType = jf "type" event :: Maybe Text
+            sessionObj = jf "data" event >>= jf "object" :: Maybe AE.Value
+            notifyMembers pid (subj, html) = Notify.runNotifyProduction do
+              users <- Projects.usersByProjectId pid
+              forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+            billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
+        case (eventType, sessionObj) of
+          (Just "checkout.session.completed", Just obj) -> handleStripeCheckout envConfig obj notifyMembers billingUrl
+          (Just "customer.subscription.deleted", Just obj) -> handleStripeSubDeleted obj notifyMembers billingUrl
+          (Just "customer.subscription.updated", Just obj) -> handleStripeSubUpdated obj
+          (Just "invoice.payment_failed", Just obj) -> handleStripePaymentFailed obj notifyMembers billingUrl
+          _ -> pure ""
+
+
+handleStripeCheckout :: EnvConfig -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
+handleStripeCheckout envConfig obj notifyMembers billingUrl = do
+  let pidM = jf "client_reference_id" obj :: Maybe Text
+      subIdM = jf "subscription" obj :: Maybe Text
+      customerIdM = jf "customer" obj :: Maybe Text
+      planFromMetadata = (jf "metadata" obj :: Maybe AE.Value) >>= jf "plan" :: Maybe Text
+  case (pidM >>= Projects.projectIdFromText, subIdM, customerIdM) of
+    (Just pid, Just subId, Just customerId) -> do
+      let plan = fromMaybe "GraduatedPricing" planFromMetadata
+      -- Cancel any existing LemonSqueezy subscription (auto-migration)
+      whenJustM (Projects.projectById pid) \project ->
+        case Projects.billingProvider project.subId of
+          Projects.LemonSqueezyProvider -> whenJust project.subId \lsSid ->
+            liftIO $ cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey lsSid
+          _ -> pass
+      subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
+      void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId
+      void $ ProjectMembers.activateAllMembers pid
+      whenJustM (Projects.projectById pid) \project ->
+        notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
+      pure "checkout processed"
+    _ -> do
+      Log.logAttention "Stripe checkout missing project/sub/customer" (pidM, subIdM, customerIdM)
+      pure "missing fields"
+
+
+getStripeSubItemId :: Text -> Text -> IO (Maybe Text)
+getStripeSubItemId apiKey subId = do
+  let opts = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+  resp <- Wreq.getWith opts ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  let body = resp ^. Wreq.responseBody
+  pure $ do
+    obj <- AE.decode @AE.Value body
+    items <- jf "items" obj
+    itemsData <- jf "data" items :: Maybe [AE.Value]
+    firstItem <- listToMaybe itemsData
+    jf "id" firstItem
+
+
+handleStripeSubDeleted :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
+handleStripeSubDeleted obj notifyMembers billingUrl = do
+  let subIdM = jf "id" obj :: Maybe Text
+  case subIdM of
+    Just subId -> do
+      projects <- DB.query [sql|SELECT p.* FROM projects.projects p WHERE sub_id = ?|] (Only subId) :: ATBaseCtx [Projects.Project]
+      forM_ (listToMaybe projects) \project ->
+        notifyMembers project.id $ ET.planDowngradedEmail project.title "was cancelled" (billingUrl project.id)
+      void $ Projects.downgradeToFreeBySubId subId
+      pure "subscription deleted"
+    Nothing -> pure "missing sub id"
+
+
+handleStripeSubUpdated :: AE.Value -> ATBaseCtx (Html ())
+handleStripeSubUpdated obj = do
+  let subIdM = jf "id" obj :: Maybe Text
+      itemsM = jf "items" obj >>= jf "data" :: Maybe [AE.Value]
+      newItemIdM = listToMaybe (fromMaybe [] itemsM) >>= jf "id" :: Maybe Text
+  case (subIdM, newItemIdM) of
+    (Just subId, Just newItemId) ->
+      void $ DB.execute [sql|UPDATE projects.projects SET first_sub_item_id = ? WHERE sub_id = ?|] (newItemId, subId)
+    _ -> pass
+  pure "subscription updated"
+
+
+handleStripePaymentFailed :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
+handleStripePaymentFailed obj notifyMembers billingUrl = do
+  let customerIdM = jf "customer" obj :: Maybe Text
+  case customerIdM of
+    Just customerId -> do
+      projects <- DB.query [sql|SELECT p.* FROM projects.projects p WHERE order_id = ?|] (Only customerId) :: ATBaseCtx [Projects.Project]
+      forM_ (listToMaybe projects) \project ->
+        notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
+    Nothing -> pass
+  pure "payment failed handled"

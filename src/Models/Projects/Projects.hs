@@ -43,7 +43,9 @@ module Models.Projects.Projects (
   queryLibInsert,
   queryLibTitleEdit,
   queryLibItemDelete,
-  -- LemonSqueezy
+  -- Billing
+  BillingProvider (..),
+  billingProvider,
   LemonSub (..),
   LemonSubId (..),
   addSubscription,
@@ -51,6 +53,8 @@ module Models.Projects.Projects (
   addDailyUsageReport,
   upgradeToPaid,
   downgradeToFree,
+  downgradeToFreeBySubId,
+  updateStripeProjectBilling,
   -- Sessions
   PersistentSessionId (..),
   PersistentSession (..),
@@ -75,10 +79,12 @@ where
 
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
+import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.UUID qualified as UUID
 import Data.Pool (Pool)
+import Data.Text qualified as T
 import Data.Text.Display
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -672,6 +678,38 @@ upgradeToPaid :: DB es => Int -> Int -> Int -> Eff es Int64
 upgradeToPaid orderId' subId subItemId = PG.execute q (show subId, show subItemId, show orderId')
   where
     q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing', sub_id = ?, first_sub_item_id = ? WHERE order_id = ?|]
+
+
+-- | >>> billingProvider (Just "sub_abc123")
+-- StripeProvider
+-- >>> billingProvider (Just "12345")
+-- LemonSqueezyProvider
+-- >>> billingProvider Nothing
+-- NoBillingProvider
+-- >>> billingProvider (Just "")
+-- NoBillingProvider
+data BillingProvider = StripeProvider | LemonSqueezyProvider | NoBillingProvider
+  deriving stock (Eq, Show)
+
+
+billingProvider :: Maybe Text -> BillingProvider
+billingProvider (Just sid)
+  | "sub_" `T.isPrefixOf` sid = StripeProvider
+  | not (T.null sid) && T.all isDigit sid = LemonSqueezyProvider
+billingProvider _ = NoBillingProvider
+
+
+downgradeToFreeBySubId :: DB es => Text -> Eff es Int64
+downgradeToFreeBySubId sid = PG.execute q (Only sid)
+  where
+    q = [sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE sub_id = ?|]
+
+
+updateStripeProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
+updateStripeProjectBilling pid plan subId firstSubItemId customerId =
+  PG.execute q (plan, subId, firstSubItemId, customerId, pid)
+  where
+    q = [sql|UPDATE projects.projects SET payment_plan = ?, sub_id = ?, first_sub_item_id = ?, order_id = ? WHERE id = ?|]
 
 
 -- Sessions

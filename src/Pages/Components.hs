@@ -79,12 +79,13 @@ dateTime t endTM = do
       toHtml $ " - " <> formatTime defaultTimeLocale "%b. %d, %I:%M:%S %p" endT
 
 
-paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Html ()
-paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled isOnboarding = do
+paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()
+paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicAuthEnabled isOnboarding provider = do
   let gridCols
         | basicAuthEnabled = "grid-cols-1 md:grid-cols-2"
         | freePricingEnabled = "grid-cols-1 md:grid-cols-3"
         | otherwise = "grid-cols-1 md:grid-cols-2"
+      useStripe = provider /= Projects.LemonSqueezyProvider
   div_ ([class_ "flex flex-col gap-8 w-full"] <> [hxVals_ "{\"isOnboarding\": true}" | isOnboarding]) do
     unless basicAuthEnabled $ div_ [class_ "flex flex-col gap-2 w-full"] do
       div_ [class_ "flex items-center justify-between w-full gap-4"] do
@@ -97,34 +98,12 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
         when basicAuthEnabled $ openSourcePricing pid (isCurrent "Open Source")
         when basicAuthEnabled enterprisePricing
         when (freePricingEnabled && not basicAuthEnabled) $ freePricing pid (isCurrent "Free")
-        unless basicAuthEnabled $ popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled
-        unless basicAuthEnabled $ systemsPricing pid criticalUrl (isCurrent "Bring your own storage")
-    script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
+        unless basicAuthEnabled $ popularPricing pid lemonUrl (isCurrent "Bring nothing") freePricingEnabled useStripe
+        unless basicAuthEnabled $ systemsPricing pid criticalUrl (isCurrent "Bring your own storage") useStripe
+    when (not useStripe) do
+      script_ [src_ "https://assets.lemonsqueezy.com/lemon.js"] ("" :: Text)
     script_
       [text|
-
-             window.payLemon = function(plan, url) {
-             LemonSqueezy.Setup({
-               eventHandler: ({event, data}) => {
-                 if(event === "Checkout.Success") {
-                     let inputs = document.querySelectorAll(".orderId")
-                     for (let input of inputs)  {
-                      input.value = data.order.data.id
-                     }
-                     LemonSqueezy.Url.Close()
-                     gtag('event', 'conversion', {
-                         'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
-                         'value': 20.0,
-                         'currency': 'EUR',
-                         'transaction_id': '',
-                     });
-                     htmx.trigger("#"+ plan, "click")
-                 }
-               }
-             })
-              LemonSqueezy.Url.Open(url);
-             };
-
                const price_indicator = document.querySelector("#price_range");
                const priceContainer = document.querySelector("#price")
                const criticalContainer = document.querySelector("#critical_price")
@@ -151,6 +130,30 @@ paymentPlanPicker pid lemonUrl criticalUrl currentPlan freePricingEnabled basicA
                   window.paymentPlanUrl = "$criticalUrl"
                 }
                }
+            |]
+    when (not useStripe) $ script_
+      [text|
+             window.payLemon = function(plan, url) {
+             LemonSqueezy.Setup({
+               eventHandler: ({event, data}) => {
+                 if(event === "Checkout.Success") {
+                     let inputs = document.querySelectorAll(".orderId")
+                     for (let input of inputs)  {
+                      input.value = data.order.data.id
+                     }
+                     LemonSqueezy.Url.Close()
+                     gtag('event', 'conversion', {
+                         'send_to': 'AW-11285541899/rf7NCKzf_9YYEIvoroUq',
+                         'value': 20.0,
+                         'currency': 'EUR',
+                         'transaction_id': '',
+                     });
+                     htmx.trigger("#"+ plan, "click")
+                 }
+               }
+             })
+              LemonSqueezy.Url.Open(url);
+             };
             |]
 
 
@@ -208,34 +211,42 @@ freePricing pid isCurrent =
         "What's included:"
 
 
-popularPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Html ()
-popularPricing pid lemonUrl isCurrent freeTierEnabled =
+popularPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Bool -> Html ()
+popularPricing pid lemonUrl isCurrent freeTierEnabled useStripe =
   div_ [class_ "relative"]
     $ div_ (pricingPostAttrs pid "GraduatedPricing" "outline-strokeWeak shadow-[0px_3px_3px_-1.5px_rgba(10,13,18,0.04)] shadow-[0px_8px_8px_-4px_rgba(10,13,18,0.03)] shadow-[0px_20px_24px_-4px_rgba(10,13,18,0.08)]" [hxVals_ "js:{orderIdM: document.querySelector('#popularPricing').value}"]) do
       div_ [class_ "pricing-gradient-slate-wide"] pass
       div_ [class_ "relative flex flex-col gap-2 overflow-hidden", onpointerdown_ "handlePaymentPlanSelect(event, 'popularPlan')", id_ "popularPlan"] do
         input_ [type_ "hidden", class_ "orderId", id_ "popularPricing", name_ "ord", value_ ""]
+        let cta
+              | isCurrent = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls True "", type_ "button"] "Current plan"
+              | useStripe = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "btn-primary", hxPost_ ("/p/" <> pid.toText <> "/stripe_checkout"), hxVals_ "{\"plan\": \"GraduatedPricing\"}", hxSwap_ "none", type_ "button"] "Start 30 day free trial"
+              | otherwise = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "btn-primary", term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |], type_ "button"] "Start 30 day free trial"
         pricingContent_
           "Bring nothing"
           "This plan can be adjusted"
           (priceDisplay_ [id_ "price"] "29" "/per month")
-          (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "btn-primary", term "_" [text|on click call window.payLemon("GraduatedPricing","$lemonUrl") |], type_ "button"] $ if isCurrent then "Current plan" else "Start 30 day free trial")
+          cta
           ["Fully managed cloud service", "Predictable usage-based pricing", "Intelligent incident alerts", "Query your data in english", "30 days data retention included"]
           (span_ [] $ when freeTierEnabled $ "Everything in " >> span_ [class_ "text-textBrand"] "free" >> " plus...")
 
 
-systemsPricing :: Projects.ProjectId -> Text -> Bool -> Html ()
-systemsPricing pid critical isCurrent =
+systemsPricing :: Projects.ProjectId -> Text -> Bool -> Bool -> Html ()
+systemsPricing pid critical isCurrent useStripe =
   pricingBadge_ (span_ [class_ "text-sm font-medium leading-tight"] "🌟" >> span_ [class_ "leading-tight text-sm"] "MOST POPULAR")
     $ div_ (pricingPostAttrs pid "SystemsPricing" "outline-strokeBrand-strong" [hxVals_ "js:{orderIdM: document.querySelector('#systemsPricing').value}"])
     $ div_ [class_ "flex flex-col gap-2", onpointerdown_ "handlePaymentPlanSelect(event, 'systemsPlan')", id_ "systemsPlan"] do
       input_ [type_ "hidden", class_ "orderId", id_ "systemsPricing", name_ "ord", value_ ""]
       div_ [class_ "pricing-gradient-brand-wide"] pass
+      let cta
+            | isCurrent = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls True "", type_ "button"] "Current plan"
+            | useStripe = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "bg-fillStrong text-textInverse-strong", hxPost_ ("/p/" <> pid.toText <> "/stripe_checkout"), hxVals_ "{\"plan\": \"SystemsPricing\"}", hxSwap_ "none", type_ "button"] "Start 30 day free trial"
+            | otherwise = div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls False "bg-fillStrong text-textInverse-strong", term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |], type_ "button"] "Start 30 day free trial"
       pricingContent_
         "Bring your own storage"
         "Business plan"
         (priceDisplay_ [id_ "critical_price"] "199" "/per month")
-        (div_ [[__|on click halt|]] $ button_ [class_ $ pricingBtnCls isCurrent "bg-fillStrong text-textInverse-strong", term "_" [text|on click call window.payLemon("SystemsPricing", "$critical") |], type_ "button"] $ if isCurrent then "Current plan" else "Start 30 day free trial")
+        cta
         ["Own and control all your data", "Save all your data to any S3-compatible bucket", "Unlimited data retention period", "Query years of data via monoscope", "No extra cost for data retention"]
         (span_ [] $ "Everything in " >> span_ [class_ "text-textBrand"] "bring nothing" >> " plus...")
 
