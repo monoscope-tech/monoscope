@@ -709,6 +709,7 @@ billingProvider :: Maybe Text -> BillingProvider
 billingProvider (Just sid)
   | "sub_" `T.isPrefixOf` sid = StripeProvider
   | not (T.null sid) && T.all isDigit sid = LemonSqueezyProvider
+  | otherwise = NoBillingProvider
 billingProvider _ = NoBillingProvider
 
 

@@ -769,50 +769,65 @@ stripeRequest apiKey endpoint =
   Wreq.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
 
 
+-- Catch wreq HTTP exceptions and log them
+tryStripe :: IO (Maybe a) -> IO (Maybe a)
+tryStripe action = try action >>= \case
+  Right r -> pure r
+  Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e) $> Nothing
+
+
+tryStripe_ :: IO a -> IO ()
+tryStripe_ action = try (void action) >>= \case
+  Right () -> pass
+  Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e)
+
+
 createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
-createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
-  let prices = case plan of
-        "SystemsPricing" -> [("line_items[0][price]", encodeUtf8 priceIdBYOS), ("line_items[0][quantity]", "1")]
-        _ ->
-          [ ("line_items[0][price]", encodeUtf8 priceIdGraduated)
-          , ("line_items[0][quantity]", "1")
-          , ("line_items[1][price]", encodeUtf8 priceIdOverage)
-          ]
-      params =
-        prices
-          <> [ ("mode", "subscription")
-             , ("client_reference_id", encodeUtf8 pid.toText)
-             , ("metadata[project_id]", encodeUtf8 pid.toText)
-             , ("metadata[plan]", encodeUtf8 plan)
-             , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
-             , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
-             ]
-  resp <- stripeRequest apiKey "checkout/sessions" params
-  let body = resp ^. Wreq.responseBody
-  pure $ AE.decode @AE.Value body >>= jf "url"
+createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS =
+  tryStripe $ do
+    let prices = case plan of
+          "SystemsPricing" -> [("line_items[0][price]", encodeUtf8 priceIdBYOS), ("line_items[0][quantity]", "1")]
+          _ ->
+            [ ("line_items[0][price]", encodeUtf8 priceIdGraduated)
+            , ("line_items[0][quantity]", "1")
+            , ("line_items[1][price]", encodeUtf8 priceIdOverage)
+            ]
+        params =
+          prices
+            <> [ ("mode", "subscription")
+               , ("client_reference_id", encodeUtf8 pid.toText)
+               , ("metadata[project_id]", encodeUtf8 pid.toText)
+               , ("metadata[plan]", encodeUtf8 plan)
+               , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
+               , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
+               ]
+    resp <- stripeRequest apiKey "checkout/sessions" params
+    let body = resp ^. Wreq.responseBody
+    pure $ AE.decode @AE.Value body >>= jf "url"
 
 
 createStripePortalSession :: Text -> Text -> Text -> IO (Maybe Text)
-createStripePortalSession apiKey customerId returnUrl = do
-  resp <-
-    stripeRequest
-      apiKey
-      "billing_portal/sessions"
-      [ ("customer", encodeUtf8 customerId)
-      , ("return_url", encodeUtf8 returnUrl)
-      ]
-  let body = resp ^. Wreq.responseBody
-  pure $ AE.decode @AE.Value body >>= jf "url"
+createStripePortalSession apiKey customerId returnUrl =
+  tryStripe $ do
+    resp <-
+      stripeRequest
+        apiKey
+        "billing_portal/sessions"
+        [ ("customer", encodeUtf8 customerId)
+        , ("return_url", encodeUtf8 returnUrl)
+        ]
+    let body = resp ^. Wreq.responseBody
+    pure $ AE.decode @AE.Value body >>= jf "url"
 
 
 cancelStripeSubscription :: Text -> Text -> IO ()
 cancelStripeSubscription apiKey subId =
-  void $ Wreq.deleteWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  tryStripe_ $ Wreq.deleteWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
 
 
 reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
 reportUsageToStripe apiKey customerId eventName quantity =
-  void
+  tryStripe_
     $ stripeRequest
       apiKey
       "billing/meter_events"
@@ -887,6 +902,7 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
               . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
           _ -> pass
       subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
+      when (isNothing subItemId) $ Log.logAttention "Stripe sub item ID not found" subId
       void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId
       void $ ProjectMembers.activateAllMembers pid
       whenJust projectM \project ->
@@ -898,15 +914,15 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
 
 
 getStripeSubItemId :: Text -> Text -> IO (Maybe Text)
-getStripeSubItemId apiKey subId = do
-  resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
-  let body = resp ^. Wreq.responseBody
-  pure $ do
-    obj <- AE.decode @AE.Value body
-    items <- jf "items" obj
-    itemsData <- jf "data" items :: Maybe [AE.Value]
-    firstItem <- listToMaybe itemsData
-    jf "id" firstItem
+getStripeSubItemId apiKey subId =
+  tryStripe $ do
+    resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+    let body = resp ^. Wreq.responseBody
+    pure $ do
+      obj <- AE.decode @AE.Value body
+      items <- jf "items" obj
+      itemsData <- jf "data" items :: Maybe [AE.Value]
+      listToMaybe itemsData >>= jf "id"
 
 
 handleStripeSubDeleted :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
@@ -924,8 +940,7 @@ handleStripeSubDeleted obj notifyMembers billingUrl = do
 handleStripeSubUpdated :: AE.Value -> ATBaseCtx (Html ())
 handleStripeSubUpdated obj = do
   let subIdM = jf "id" obj :: Maybe Text
-      itemsM = jf "items" obj >>= jf "data" :: Maybe [AE.Value]
-      newItemIdM = listToMaybe (fromMaybe [] itemsM) >>= jf "id" :: Maybe Text
+      newItemIdM = (jf "items" obj >>= jf "data" :: Maybe [AE.Value]) >>= listToMaybe >>= jf "id" :: Maybe Text
   case (subIdM, newItemIdM) of
     (Just subId, Just newItemId) ->
       void $ Projects.updateSubItemIdBySubId newItemId subId
