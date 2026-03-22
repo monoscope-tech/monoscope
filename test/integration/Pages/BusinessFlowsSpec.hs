@@ -376,7 +376,7 @@ billingUsageTests = do
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
-      LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _, _)) -> do
+      LemonSqueezy.BillingGet (PageCtx _ d) | let totalReqs = d.totalReqs -> do
         totalReqs `shouldBe` 5 -- Should count the 5 spans we ingested
   it "should handle cycle boundaries correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     currentTime <- liftIO getCurrentTime
@@ -401,7 +401,7 @@ billingUsageTests = do
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
-      LemonSqueezy.BillingGet (PageCtx _ (_, totalReqs, _, _, _, _, _, _, _, _)) -> do
+      LemonSqueezy.BillingGet (PageCtx _ d) | let totalReqs = d.totalReqs -> do
         totalReqs `shouldBe` 1 -- Should only count the recent span
 
 
