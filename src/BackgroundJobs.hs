@@ -364,7 +364,7 @@ processBackgroundJob authCtx bgJob =
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
     ReportUsage pid -> whenJustM (Projects.projectById pid) \project -> do
       Log.logTrace "Reporting usage for project" ("project_id", pid.toText)
-      Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust project.firstSubItemId \fSubId -> do
+      Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
         currentTime <- liftIO getZonedTime
         totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
         totalMetricsCount <- Telemetry.getTotalMetricsCount pid project.usageLastReported

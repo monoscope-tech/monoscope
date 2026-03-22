@@ -34,6 +34,7 @@ import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
 import Data.CaseInsensitive qualified as CI
 import Data.Default
+import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), getZonedTime, timeOfDayToTime, timeToTimeOfDay)
 import Data.Time.Calendar (fromGregorian, toGregorian)
@@ -57,6 +58,7 @@ import Lucid.Hyperscript (__)
 import Models.Apis.Integrations (DiscordData (..), PagerdutyData (..), SlackData (..), getDiscordDataByProjectId, getPagerdutyByProjectId, getProjectSlackData)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.ProjectMembers (Team (..), getTeamsById, resolveTeamEmails)
+import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
@@ -575,7 +577,11 @@ webhookPostH :: Maybe Text -> WebhookData -> ATBaseCtx (Html ())
 webhookPostH secretHeaderM dat = do
   envConfig <- asks env
   let orderId = dat.dataVal.attributes.orderId
-  let subItem = dat.dataVal.attributes.firstSubscriptionItem
+      subItem = dat.dataVal.attributes.firstSubscriptionItem
+      notifyMembers pid (subj, html) = Notify.runNotifyProduction do
+        users <- Projects.usersByProjectId pid
+        forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+      billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
   case dat.meta.eventName of
     "subscription_created" -> do
       currentTime <- liftIO getZonedTime
@@ -596,14 +602,25 @@ webhookPostH secretHeaderM dat = do
               , userEmail = dat.dataVal.attributes.userEmail
               }
       _ <- Projects.addSubscription sub
+      -- Safety net: update project billing if frontend checkout callback failed
+      whenJust (Projects.projectIdFromText projectId) \pid -> do
+        void $ Projects.updateProjectBilling pid dat.dataVal.attributes.productName (show subItem.subscriptionId) (show subItem.id) (show orderId)
+        whenJustM (Projects.projectById pid) \project ->
+          notifyMembers pid $ ET.planUpgradedEmail project.title dat.dataVal.attributes.productName (billingUrl pid)
       pure "subscription created"
     "subscription_cancelled" -> do
+      whenJustM (Projects.projectByOrderId (show orderId)) \project ->
+        notifyMembers project.id $ ET.planDowngradedEmail project.title "was cancelled" (billingUrl project.id)
       _ <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
       pure "downgraded"
     "subscription_resumed" -> do
       _ <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id
+      whenJustM (Projects.projectByOrderId (show orderId)) \project ->
+        notifyMembers project.id $ ET.planUpgradedEmail project.title "GraduatedPricing" (billingUrl project.id)
       pure "Upgraded"
     "subscription_expired" -> do
+      whenJustM (Projects.projectByOrderId (show orderId)) \project ->
+        notifyMembers project.id $ ET.planDowngradedEmail project.title "has expired" (billingUrl project.id)
       _ <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
       pure "Downgraded to free,sub expired"
     _ -> pure ""

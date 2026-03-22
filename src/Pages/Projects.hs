@@ -94,7 +94,8 @@ import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.DeriveUtils (UUIDId (..))
-import Pkg.Mail (addConvertKitUserOrganization)
+import Pkg.EmailTemplates qualified as ET
+import Pkg.Mail (addConvertKitUserOrganization, sendRenderedEmail)
 import Relude hiding (ask, asks)
 import Relude.Unsafe qualified as Unsafe
 import Servant (addHeader)
@@ -1379,10 +1380,12 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
           $ forM_ users
           $ \user -> addConvertKitUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
-  let auditPlan name =
+  let billingUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
+      auditPlan name =
         Projects.logAuditS pid Projects.AEPlanChanged sess
           $ Just
           $ AE.object ["plan" AE..= name]
+      notifyPlanChange email = sendRenderedEmail (CI.original email)
   case plan of
     Just "Open Source" | envCfg.basicAuthEnabled -> do
       _ <- updatePricing "Open Source" "" "" ""
@@ -1401,12 +1404,18 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
             auditPlan productName
             handleOnboarding productName
             void $ ProjectMembers.activateAllMembers pid
+            let (subj, html) = ET.planUpgradedEmail project.title productName billingUrl
+            users <- Projects.usersByProjectId pid
+            forM_ users \u -> notifyPlanChange u.email subj (ET.renderEmail subj html)
           _ -> addErrorToast "Something went wrong while fetching subscription id" Nothing
       Nothing -> do
         _ <- updatePricing "Free" "" "" ""
         auditPlan ("Free" :: Text)
         handleOnboarding "Free"
         void $ ProjectMembers.deactivateNonOwnerMembers pid
+        let (subj, html) = ET.planDowngradedEmail project.title "was cancelled" billingUrl
+        users <- Projects.usersByProjectId pid
+        forM_ users \u -> notifyPlanChange u.email subj (ET.renderEmail subj html)
   if project.paymentPlan == "ONBOARDING" || isOnboarding == Just True
     then do
       redirectCS $ "/p/" <> pid.toText <> "/"

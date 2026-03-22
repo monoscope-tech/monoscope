@@ -19,6 +19,8 @@ module Pkg.EmailTemplates (
   monitorAlertEmail,
   monitorRecoveryEmail,
   freeTierUsageEmail,
+  planUpgradedEmail,
+  planDowngradedEmail,
 
   -- * Sample data for previews
   sampleProjectInvite,
@@ -885,3 +887,44 @@ freeTierUsageEmail projectName billingUrl used limit exceeded =
           emailSignoff
           emailFallbackUrl billingUrl
       )
+
+
+planUpgradedEmail :: Text -> Text -> Text -> (Text, Html ())
+planUpgradedEmail projectName newPlan billingUrl =
+  ( "[···] Plan upgraded to " <> newPlan <> " - " <> projectName
+  , emailBody do
+      h1_ "Plan Upgraded"
+      p_ do
+        "Your "
+        b_ $ toHtml projectName
+        " project has been upgraded to the "
+        b_ $ toHtml newPlan
+        " plan. Thank you for your support!"
+      emailButton billingUrl "View Billing"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl billingUrl
+  )
+
+
+planDowngradedEmail :: Text -> Text -> Text -> (Text, Html ())
+planDowngradedEmail projectName reason billingUrl =
+  ( "[···] Plan downgraded to Free - " <> projectName
+  , emailBody do
+      h1_ "Plan Downgraded to Free"
+      p_ do
+        "Your "
+        b_ $ toHtml projectName
+        " project has been downgraded to the Free plan because your subscription "
+        toHtml reason
+        "."
+      p_ "On the Free plan, daily event limits apply and additional team members will be deactivated. You can re-subscribe at any time to restore full access."
+      emailButton billingUrl "Upgrade Plan"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl billingUrl
+  )

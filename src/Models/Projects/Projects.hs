@@ -25,7 +25,9 @@ module Models.Projects.Projects (
   updateProject,
   deleteProject,
   updateProjectPricing,
+  updateProjectBilling,
   projectById,
+  projectByOrderId,
   projectCacheById,
   projectCacheByIdIO,
   updateProjectReportNotif,
@@ -411,6 +413,12 @@ projectById pid = listToMaybe <$> PG.query q (Only pid)
     q = [sql| select p.* from projects.projects p where id=?|]
 
 
+projectByOrderId :: DB es => Text -> Eff es (Maybe Project)
+projectByOrderId oid = listToMaybe <$> PG.query q (Only oid)
+  where
+    q = [sql| select p.* from projects.projects p where order_id=?|]
+
+
 getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
 getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
   where
@@ -464,6 +472,13 @@ updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted
   PG.execute q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
   where
     q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, onboarding_steps_completed=? where id=?;|]
+
+
+updateProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
+updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
+  PG.execute q (paymentPlan, subId, firstSubItemId, orderId, pid)
+  where
+    q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=? WHERE id=? AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
 
 
 updateProjectReportNotif :: DB es => ProjectId -> Text -> Eff es Int64
@@ -648,15 +663,15 @@ getTotalUsage pid start = do
 
 
 downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
-downgradeToFree orderId' subId subItemId = PG.execute q (show orderId', show subId, show subItemId)
+downgradeToFree orderId' _subId _subItemId = PG.execute q (Only $ show orderId')
   where
-    q = [sql|UPDATE projects.projects SET payment_plan = 'FREE' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]
+    q = [sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE order_id = ?|]
 
 
 upgradeToPaid :: DB es => Int -> Int -> Int -> Eff es Int64
-upgradeToPaid orderId' subId subItemId = PG.execute q (show orderId', show subId, show subItemId)
+upgradeToPaid orderId' subId subItemId = PG.execute q (show subId, show subItemId, show orderId')
   where
-    q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing' WHERE order_id = ? AND sub_id = ? AND first_sub_item_id = ?|]
+    q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing', sub_id = ?, first_sub_item_id = ? WHERE order_id = ?|]
 
 
 -- Sessions
