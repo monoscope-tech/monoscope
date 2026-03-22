@@ -49,8 +49,8 @@ import Data.Default
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), getZonedTime, timeOfDayToTime, timeToTimeOfDay)
-import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Calendar (fromGregorian, toGregorian)
+import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
@@ -762,6 +762,7 @@ verifyStripeSignature now sigHeader payload secret =
 
 stripeOpts :: Text -> Wreq.Options
 stripeOpts apiKey = Wreq.defaults & (Wreq.header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+
 
 stripeRequest :: Text -> Text -> [(ByteString, ByteString)] -> IO (Wreq.Response LByteString)
 stripeRequest apiKey endpoint =
