@@ -471,7 +471,7 @@ discordErrorAlert alertType err issTitle project projectUrl chartUrlM occTextM =
 discordMonitorAlert :: Text -> Text -> Maybe Text -> AE.Value
 discordMonitorAlert monitorTitle monitorUrl chartUrlM =
   AE.object
-    $ [ "embeds"
+    [ "embeds"
           AE..= AE.Array
             [ AE.object
                 $ [ "title" AE..= ("🤖 Log Alert: " <> monitorTitle)

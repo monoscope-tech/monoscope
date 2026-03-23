@@ -311,23 +311,23 @@ projectDeletedEmail userName projectName =
 -- =============================================================================
 
 runtimeErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-runtimeErrorsEmail projectName errorsUrl errors chartUrlM occTextM =
-  runtimeErrorVariantEmail "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - " projectName errorsUrl errors "We've detected a new runtime error in your " chartUrlM occTextM
+runtimeErrorsEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - " projectName errorsUrl errors "We've detected a new runtime error in your "
 
 
 escalatingErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-escalatingErrorsEmail projectName errorsUrl errors chartUrlM occTextM =
-  runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected escalating runtime errors in your " chartUrlM occTextM
+escalatingErrorsEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected escalating runtime errors in your "
 
 
 regressedErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-regressedErrorsEmail projectName errorsUrl errors chartUrlM occTextM =
-  runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected regressed runtime errors in your " chartUrlM occTextM
+regressedErrorsEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected regressed runtime errors in your "
 
 
 errorSpikesEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
-errorSpikesEmail projectName errorsUrl errors chartUrlM occTextM =
-  runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " projectName errorsUrl errors "We've detected a runtime error spike in your " chartUrlM occTextM
+errorSpikesEmail projectName errorsUrl errors =
+  runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " projectName errorsUrl errors "We've detected a runtime error spike in your "
 
 
 runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Text -> Maybe Text -> Maybe Text -> (Text, Html ())

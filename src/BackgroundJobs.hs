@@ -1063,7 +1063,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
           let alertType = alertTypeForState sub.errorState
               errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
               occTextM = if sub.occurrences1h > 0 then Just (show sub.occurrences1h <> " occurrences in last hour") else Nothing
-              fromTime = addUTCTime (-15 * 60) now
+              fromTime = addUTCTime (-(15 * 60)) now
           chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
           let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM}
               ~(subj, html) = case alertType of
@@ -2422,7 +2422,7 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
   projectM <- Projects.projectById pid
   whenJust projectM \project -> Relude.when project.errorAlerts do
     users <- Projects.usersByProjectId pid
-    let fromTime = addUTCTime (-15 * 60) now
+    let fromTime = addUTCTime (-(15 * 60)) now
     chartUrlM <- errorTrendChartUrl authCtx pid errorData.hash (formatUTC fromTime) (formatUTC now)
     let alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing}
         errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
