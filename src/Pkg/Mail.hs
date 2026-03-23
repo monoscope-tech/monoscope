@@ -49,7 +49,7 @@ sendSlackMessage pid message = do
 
 data NotificationAlerts
   = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
-  | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType}
+  | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text}
   | ShapeAlert
   | ReportAlert
       { reportType :: Text
@@ -65,6 +65,7 @@ data NotificationAlerts
   | MonitorsAlert
       { monitorTitle :: Text
       , monitorUrl :: Text
+      , chartUrl :: Maybe Text
       }
   | LogPatternAlert
       { issueUrl :: Text
@@ -116,10 +117,10 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData issueTitle pTitle projectUrl
+            RuntimeErrorAlert{..} -> Just $ discordErrorAlert runtimeAlertType errorData issueTitle pTitle projectUrl chartUrl occurrenceText
             EndpointAlert{..} -> Just $ discordNewEndpointAlert project endpoints endpointHash projectUrl
             ReportAlert{..} -> Just $ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle reportUrl allChartUrl errorChartUrl
-            MonitorsAlert{..} -> Just $ AE.object ["text" AE..= ("🤖 *Log Alert triggered for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
+            MonitorsAlert{..} -> Just $ discordMonitorAlert monitorTitle monitorUrl chartUrl
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["text" AE..= ("✅ *Alert resolved for `" <> monitorTitle <> "`* \n<" <> monitorUrl <> "|View Monitor>")]
             LogPatternAlert{..} -> Just $ mkDiscordLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount sampleMessage pTitle
             LogPatternRateChangeAlert{..} -> Just $ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle
@@ -146,10 +147,10 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
     (Just cid, Just bt) -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
-            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData issueTitle pTitle cid projectUrl
+            RuntimeErrorAlert{..} -> Just $ slackErrorAlert runtimeAlertType errorData issueTitle pTitle cid projectUrl chartUrl occurrenceText
             EndpointAlert{..} -> Just $ slackNewEndpointsAlert project endpoints cid endpointHash projectUrl
             ReportAlert{..} -> Just $ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown pTitle cid reportUrl allChartUrl errorChartUrl
-            MonitorsAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for " <> monitorTitle)]]]]
+            MonitorsAlert{..} -> Just $ slackMonitorAlert monitorTitle monitorUrl chartUrl cid
             MonitorsRecoveryAlert{..} -> Just $ AE.object ["blocks" AE..= AE.Array [AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("✅ Alert resolved for " <> monitorTitle)]]]]
             LogPatternAlert{..} -> Just $ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount pTitle cid
             LogPatternRateChangeAlert{..} -> Just $ mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent pTitle cid
@@ -244,37 +245,44 @@ slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown 
     sumr = V.take 10 $ V.map (\(name, errCount, evCount) -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> name <> ":* Errors-" <> toText (show errCount) <> ", Total-" <> toText (show evCount))]) breakDown
 
 
-slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Text -> AE.Value
-slackErrorAlert alertType err issTitle project channelId projectUrl =
+slackErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> AE.Value
+slackErrorAlert alertType err issTitle project channelId projectUrl chartUrlM occTextM =
   AE.object
     [ "blocks"
         AE..= AE.Array
-          [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
-          , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
-          , AE.object
-              [ "type" AE..= "context"
-              , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> T.take 500 err.stackTrace <> "`")], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]]
-              ]
-          , AE.object
-              [ "type" AE..= "context"
-              , "elements"
-                  AE..= AE.Array
-                    [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> fromMaybe "" err.traceId)]
-                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> fromMaybe "" err.spanId)]
-                    , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "" err.serviceName)]
+          ( V.fromList
+              $ [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
+                , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
+                , AE.object
+                    [ "type" AE..= "context"
+                    , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> T.take 500 err.stackTrace <> "`")], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]]
                     ]
-              ]
-          , AE.object
-              [ "type" AE..= "context"
-              , "elements"
-                  AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> project)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]]
-              ]
-          , AE.object ["type" AE..= "divider"]
-          , AE.object
-              [ "type" AE..= "actions"
-              , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= targetUrl, "style" AE..= "primary"]]
-              ]
-          ]
+                , AE.object
+                    [ "type" AE..= "context"
+                    , "elements"
+                        AE..= AE.Array
+                          ( V.fromList
+                              $ [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> fromMaybe "" err.traceId)]
+                                , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> fromMaybe "" err.spanId)]
+                                , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "" err.serviceName)]
+                                ]
+                              <> maybeToList (occTextM <&> \t -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Occurrences:* " <> t)])
+                          )
+                    ]
+                , AE.object
+                    [ "type" AE..= "context"
+                    , "elements"
+                        AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> project)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]]
+                    ]
+                ]
+              <> maybeToList (chartUrlM <&> \u -> AE.object ["type" AE..= "image", "image_url" AE..= u, "alt_text" AE..= "Error trend"])
+              <> [ AE.object ["type" AE..= "divider"]
+                 , AE.object
+                     [ "type" AE..= "actions"
+                     , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= targetUrl, "style" AE..= "primary"]]
+                     ]
+                 ]
+          )
     , "channel" AE..= channelId
     ]
   where
@@ -284,6 +292,20 @@ slackErrorAlert alertType err issTitle project channelId projectUrl =
     path = fromMaybe "" err.requestPath
     enp = "`" <> method <> " " <> path <> "`"
     firstSeen = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" err.when
+
+
+slackMonitorAlert :: Text -> Text -> Maybe Text -> Text -> AE.Value
+slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
+  AE.object
+    [ "blocks"
+        AE..= AE.Array
+          ( V.fromList
+              $ [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for <" <> monitorUrl <> "|" <> monitorTitle <> ">")]]
+                ]
+              <> maybeToList (chartUrlM <&> \u -> AE.object ["type" AE..= "image", "image_url" AE..= u, "alt_text" AE..= "Monitor trend"])
+          )
+    , "channel" AE..= channelId
+    ]
 
 
 slackNewEndpointsAlert :: Text -> V.Vector Text -> Text -> Text -> Text -> AE.Value
@@ -405,26 +427,33 @@ discordReportAlert reportType startTime endTime totalErrors totalEvents breakDow
       T.intercalate "\n" $ V.toList $ V.take 10 $ V.map (\(name, errCount, evCount) -> "* **" <> name <> "**: Total errors-" <> show errCount <> ", Total events-" <> show evCount) breakDown
 
 
-discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> AE.Value
-discordErrorAlert alertType err issTitle project projectUrl =
-  [aesonQQ|{
-"embeds": [
- {
-      "title": #{titleText},
-      "description": #{msg},
-      "color": 16711680,
-      "fields": [
-        {"name": "Endpoint", "value": #{enp},"inline": true},
-        {"name": "Project","value": #{project}, "inline": true},
-        {"name": "First Seen", "value": #{firstSeen},"inline": true},
-        {"name": "Trace Id" , "value": #{trId},"inline": true},
-        {"name": "Span Id", "value": #{spanId},"inline": true},
-        {"name": "Service", "value": #{serviceName},"inline": true}
-      ],
-      "url": #{url}
-    }],
-  "content": #{discordMsg}
-}|]
+discordErrorAlert :: RuntimeAlertType -> ErrorPatterns.ATError -> Text -> Text -> Text -> Maybe Text -> Maybe Text -> AE.Value
+discordErrorAlert alertType err issTitle project projectUrl chartUrlM occTextM =
+  AE.object
+    [ "embeds"
+        AE..= AE.Array
+          [ AE.object
+              $ [ "title" AE..= titleText
+                , "description" AE..= msg
+                , "color" AE..= (16711680 :: Int)
+                , "fields"
+                    AE..= AE.Array
+                      ( fromList
+                          $ [ AE.object ["name" AE..= "Endpoint", "value" AE..= enp, "inline" AE..= True]
+                            , AE.object ["name" AE..= "Project", "value" AE..= project, "inline" AE..= True]
+                            , AE.object ["name" AE..= "First Seen", "value" AE..= firstSeen, "inline" AE..= True]
+                            , AE.object ["name" AE..= "Trace Id", "value" AE..= trId, "inline" AE..= True]
+                            , AE.object ["name" AE..= "Span Id", "value" AE..= spanId', "inline" AE..= True]
+                            , AE.object ["name" AE..= "Service", "value" AE..= serviceName', "inline" AE..= True]
+                            ]
+                          <> maybeToList (occTextM <&> \t -> AE.object ["name" AE..= "Occurrences", "value" AE..= t, "inline" AE..= True])
+                      )
+                , "url" AE..= url
+                ]
+              <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
+          ]
+    , "content" AE..= discordMsg
+    ]
   where
     discordMsg = (runtimeAlertMessages alertType).discordContent
     titleText = err.errorType <> ": " <> issTitle
@@ -435,8 +464,24 @@ discordErrorAlert alertType err issTitle project projectUrl =
     enp = "`" <> method <> " " <> path <> "`"
     firstSeen = toText $ formatTime defaultTimeLocale "%b %-e, %Y, %-l:%M:%S %p" err.when
     trId = fromMaybe "" err.traceId
-    spanId = fromMaybe "" err.spanId
-    serviceName = fromMaybe "" err.serviceName
+    spanId' = fromMaybe "" err.spanId
+    serviceName' = fromMaybe "" err.serviceName
+
+
+discordMonitorAlert :: Text -> Text -> Maybe Text -> AE.Value
+discordMonitorAlert monitorTitle monitorUrl chartUrlM =
+  AE.object
+    $ [ "embeds"
+          AE..= AE.Array
+            [ AE.object
+                $ [ "title" AE..= ("🤖 Log Alert: " <> monitorTitle)
+                  , "color" AE..= (16711680 :: Int)
+                  , "url" AE..= monitorUrl
+                  ]
+                <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
+            ]
+      , "content" AE..= ("🤖 Alert triggered for " <> monitorTitle)
+      ]
 
 
 discordNewEndpointAlert :: Text -> V.Vector Text -> Text -> Text -> AE.Value
@@ -528,17 +573,17 @@ mkDiscordLogPatternRateChangePayload patternText issueUrl logLevel serviceName d
 
 
 sendPagerdutyAlertToService :: Notify.Notify :> es => Text -> NotificationAlerts -> Text -> Text -> Eff es ()
-sendPagerdutyAlertToService integrationKey (MonitorsAlert monitorTitle monitorUrl) projectTitle _ =
-  Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": " <> monitorTitle) Notify.PDCritical (AE.object ["url" AE..= monitorUrl]) monitorUrl
+sendPagerdutyAlertToService integrationKey MonitorsAlert{monitorTitle, monitorUrl, chartUrl} projectTitle _ =
+  Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": " <> monitorTitle) Notify.PDCritical (AE.object $ ["url" AE..= monitorUrl] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) monitorUrl
 sendPagerdutyAlertToService integrationKey (MonitorsRecoveryAlert monitorTitle monitorUrl) projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDResolve ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": Resolved - " <> monitorTitle) Notify.PDInfo (AE.object ["url" AE..= monitorUrl]) monitorUrl
 sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
   let endpointUrl = projectUrl <> "/issues/by_hash/" <> hash
       endpointNames = T.intercalate ", " $ V.toList endpoints
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
-sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData} projectTitle projectUrl =
+sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
-   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> issueTitle) Notify.PDError (AE.object ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message]) errorUrl
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
 sendPagerdutyAlertToService integrationKey LogPatternAlert{issueUrl, patternText, logLevel, serviceName} projectTitle _ =
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-logpattern-" <> T.take 40 patternText) (projectTitle <> ": New Log Pattern - " <> T.take 80 patternText) (maybe Notify.PDWarning (\l -> if l == "error" then Notify.PDCritical else Notify.PDWarning) logLevel) (AE.object ["pattern" AE..= patternText, "service" AE..= serviceName, "level" AE..= logLevel]) issueUrl
 sendPagerdutyAlertToService integrationKey LogPatternRateChangeAlert{issueUrl, patternText, logLevel, serviceName, direction, currentRate, baselineMean, changePercent} projectTitle _ =
@@ -572,9 +617,11 @@ sampleAlert = \case
           , ErrorPatterns.runtime = Just "nodejs"
           }
         NewRuntimeError
-  QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test"
-  LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test"
-  LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test"
+        Nothing
+        (Just "42 occurrences in last hour")
+  QueryAlert -> const $ MonitorsAlert "🧪 TEST: High Error Rate" "https://example.com/test" Nothing
+  LogPattern -> const $ MonitorsAlert "🧪 TEST: New Log Pattern" "https://example.com/test" Nothing
+  LogPatternRateChange -> const $ MonitorsAlert "🧪 TEST: Log Pattern Rate Change" "https://example.com/test" Nothing
 
 
 sampleRuntimeAlert :: RuntimeAlertType -> Text -> NotificationAlerts

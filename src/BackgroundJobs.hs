@@ -8,6 +8,7 @@ import Control.Lens (view, (.~), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
+import Data.Default (def)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID qualified as UUID
@@ -93,7 +94,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
 import UnliftIO.Exception (bracket, catch, try)
-import Utils (freeTierDailyMaxEvents, replaceAllFormats, toXXHash)
+import Utils (formatUTC, freeTierDailyMaxEvents, replaceAllFormats, toXXHash)
 
 
 data BgJobs
@@ -914,7 +915,6 @@ processOneMinuteErrors scheduledTime pid = do
       let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
           errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
       processProjectErrors pid allErrors scheduledTime
-      notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) allErrors)
       -- Upsert hourly rollup stats (aggregated by hash)
       let hashGroups = HM.toList $ V.foldl' addError HM.empty allErrors
           addError acc e = HM.insertWith addCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc
@@ -945,6 +945,8 @@ processOneMinuteErrors scheduledTime pid = do
       let hashToSpans = HM.toList $ V.foldl' (\acc e -> maybe acc (\sId -> HM.insertWith (\new old -> let !r = new <> old in r) ("err:" <> e.hash) [sId] acc) e.spanId) HM.empty allErrors
       forM_ hashToSpans \(hashTag, sIds) ->
         void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, oneMinuteAgo, scheduledTime, PGArray sIds, hashTag)
+      -- Notify after hashes are injected so chart queries can find "err:<hash>" in spans
+      notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) allErrors)
       Relude.when (V.length spansWithErrors == 2000)
         $ processErrorsPaginated oneMinuteAgo (skip + 2000)
 
@@ -957,6 +959,7 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , issueTitle :: Text
   , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
+  , occurrences1h :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, NFData)
@@ -990,6 +993,22 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
     project.notificationsChannel
 
 
+errorTrendChartUrl :: (Log :> es) => Config.AuthContext -> Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe Text)
+errorTrendChartUrl ctx pid errHash fromTxt toTxt = toMaybe <$>
+  Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid
+    def{Widget.wType = Widget.WTTimeseries, Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+    Nothing (Just fromTxt) (Just toTxt)
+  where toMaybe t = if T.null t then Nothing else Just t
+
+
+monitorTrendChartUrl :: (Log :> es) => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
+monitorTrendChartUrl ctx pid monitor fromTxt toTxt = toMaybe <$>
+  Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid
+    def{Widget.wType = Widget.WTTimeseries, Widget.query = Just monitor.logQuery, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
+    Nothing (Just fromTxt) (Just toTxt)
+  where toMaybe t = if T.null t then Nothing else Just t
+
+
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
 notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
   ctx <- ask @Config.AuthContext
@@ -1000,7 +1019,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
         [sql|
           SELECT DISTINCT ON (e.id)
                  e.id, e.error_data, e.state, i.id, i.title,
-                 e.slack_thread_ts, e.discord_message_id
+                 e.slack_thread_ts, e.discord_message_id, e.occurrences_1h
           FROM apis.error_patterns e
           JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
           WHERE e.project_id = ?
@@ -1028,12 +1047,15 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
               _ -> NewRuntimeError
         results <- forConcurrently dueErrors \sub -> do
           let alertType = alertTypeForState sub.errorState
-              alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType}
               errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
+              occTextM = if sub.occurrences1h > 0 then Just (show sub.occurrences1h <> " occurrences in last hour") else Nothing
+              fromTime = addUTCTime (-15 * 60) now
+          chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
+          let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM}
               ~(subj, html) = case alertType of
-                EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData]
-                RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData]
-                _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData]
+                EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
+                RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
+                _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
           (finalSlackTs, finalDiscordMsgId) <-
             sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
           pure (sub.errorId, finalSlackTs, finalDiscordMsgId)
@@ -1216,6 +1238,10 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
     let hostUrl = appCtx.env.hostUrl
         monitorListUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
         thresholdDir = if monitor.triggerLessThan then "below" else "above" :: Text
+    now <- Time.currentTime
+    let chartMins = min 240 $ max 15 (4 * monitor.checkIntervalMins)
+        chartFrom = addUTCTime (negate $ fromIntegral chartMins * 60) now
+    chartUrlM <- if isRecovery then pure Nothing else monitorTrendChartUrl appCtx monitor.projectId monitor (formatUTC chartFrom) (formatUTC now)
     (alert, alertUrl) <-
       if isRecovery
         then pure (MonitorsRecoveryAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = monitorListUrl}, monitorListUrl)
@@ -1223,7 +1249,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
           issue <- Issues.createQueryAlertIssue monitor.projectId (show monitor.id) monitor.alertConfig.title monitor.logQuery monitor.alertThreshold value thresholdDir
           Issues.insertIssue issue
           let issueUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/issues/" <> issue.id.toText
-          pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl}, issueUrl)
+          pure (MonitorsAlert{monitorTitle = monitor.alertConfig.title, monitorUrl = issueUrl, chartUrl = chartUrlM}, issueUrl)
     targetTeams <-
       if null teams
         then maybeToList <$> ProjectMembers.getEveryoneTeam monitor.projectId
@@ -1231,7 +1257,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
     let (subj, html) =
           if isRecovery
             then ET.monitorRecoveryEmail p.title monitor.alertConfig.title alertUrl
-            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value monitor.alertThreshold thresholdDir
+            else ET.monitorAlertEmail p.title monitor.alertConfig.title alertUrl value monitor.alertThreshold thresholdDir chartUrlM
         renderedBody = ET.renderEmail subj html
     for_ targetTeams \team -> dispatchTeamNotifications
       team
@@ -2369,7 +2395,7 @@ createAndNotifyErrorIssue
   -> Issues.Issue
   -> RuntimeAlertType
   -> ErrorPatterns.ATError
-  -> (Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ()))
+  -> (Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ()))
   -> ErrorPatterns.ErrorPatternId
   -> (Maybe Text, Maybe Text)
   -> ATBackgroundCtx ()
@@ -2382,9 +2408,11 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
   projectM <- Projects.projectById pid
   whenJust projectM \project -> Relude.when project.errorAlerts do
     users <- Projects.usersByProjectId pid
-    let alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType}
+    let fromTime = addUTCTime (-15 * 60) now
+    chartUrlM <- errorTrendChartUrl authCtx pid errorData.hash (formatUTC fromTime) (formatUTC now)
+    let alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing}
         errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
-        (subj, html) = emailFn project.title errorsUrl [errorData]
+        (subj, html) = emailFn project.title errorsUrl [errorData] chartUrlM Nothing
     (finalSlackTs, finalDiscordMsgId) <-
       sendAlertToChannels alert pid project users errorsUrl subj html (existSlackTs, existDiscordId)
     void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorPatternId finalSlackTs finalDiscordMsgId now
