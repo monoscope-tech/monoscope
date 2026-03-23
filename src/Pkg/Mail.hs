@@ -472,16 +472,16 @@ discordMonitorAlert :: Text -> Text -> Maybe Text -> AE.Value
 discordMonitorAlert monitorTitle monitorUrl chartUrlM =
   AE.object
     [ "embeds"
-          AE..= AE.Array
-            [ AE.object
-                $ [ "title" AE..= ("🤖 Log Alert: " <> monitorTitle)
-                  , "color" AE..= (16711680 :: Int)
-                  , "url" AE..= monitorUrl
-                  ]
-                <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
-            ]
-      , "content" AE..= ("🤖 Alert triggered for " <> monitorTitle)
-      ]
+        AE..= AE.Array
+          [ AE.object
+              $ [ "title" AE..= ("🤖 Log Alert: " <> monitorTitle)
+                , "color" AE..= (16711680 :: Int)
+                , "url" AE..= monitorUrl
+                ]
+              <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
+          ]
+    , "content" AE..= ("🤖 Alert triggered for " <> monitorTitle)
+    ]
 
 
 discordNewEndpointAlert :: Text -> V.Vector Text -> Text -> Text -> AE.Value
