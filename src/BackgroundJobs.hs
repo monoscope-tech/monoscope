@@ -8,8 +8,8 @@ import Control.Lens (view, (.~), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
-import Data.Default (def)
 import Data.CaseInsensitive qualified as CI
+import Data.Default (def)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
@@ -993,20 +993,34 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
     project.notificationsChannel
 
 
-errorTrendChartUrl :: (Log :> es) => Config.AuthContext -> Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe Text)
-errorTrendChartUrl ctx pid errHash fromTxt toTxt = toMaybe <$>
-  Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid
-    def{Widget.wType = Widget.WTTimeseries, Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
-    Nothing (Just fromTxt) (Just toTxt)
-  where toMaybe t = if T.null t then Nothing else Just t
+errorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe Text)
+errorTrendChartUrl ctx pid errHash fromTxt toTxt =
+  toMaybe
+    <$> Widget.widgetPngUrl
+      ctx.env.apiKeyEncryptionSecretKey
+      ctx.env.hostUrl
+      pid
+      def{Widget.wType = Widget.WTTimeseries, Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+      Nothing
+      (Just fromTxt)
+      (Just toTxt)
+  where
+    toMaybe t = if T.null t then Nothing else Just t
 
 
-monitorTrendChartUrl :: (Log :> es) => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
-monitorTrendChartUrl ctx pid monitor fromTxt toTxt = toMaybe <$>
-  Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid
-    def{Widget.wType = Widget.WTTimeseries, Widget.query = Just monitor.logQuery, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
-    Nothing (Just fromTxt) (Just toTxt)
-  where toMaybe t = if T.null t then Nothing else Just t
+monitorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
+monitorTrendChartUrl ctx pid monitor fromTxt toTxt =
+  toMaybe
+    <$> Widget.widgetPngUrl
+      ctx.env.apiKeyEncryptionSecretKey
+      ctx.env.hostUrl
+      pid
+      def{Widget.wType = Widget.WTTimeseries, Widget.query = Just monitor.logQuery, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
+      Nothing
+      (Just fromTxt)
+      (Just toTxt)
+  where
+    toMaybe t = if T.null t then Nothing else Just t
 
 
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
