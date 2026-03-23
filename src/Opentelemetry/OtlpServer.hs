@@ -94,28 +94,14 @@ newtype OtlpRequestMetadata = OtlpRequestMetadata
   deriving (Eq, Show)
 
 
--- | Parse Authorization header from gRPC metadata
+-- | Parse API key from gRPC metadata (Authorization header, x-api-key header)
 instance ParseMetadata OtlpRequestMetadata where
   parseMetadata metadata = do
-    -- Look for "authorization" header (case-insensitive)
-    let authHeader = find isAuthHeader metadata
-    pure
-      $ OtlpRequestMetadata
-        { otlpApiKey = fmap extractApiKey authHeader
-        }
-    where
-      isAuthHeader :: CustomMetadata -> Bool
-      isAuthHeader (CustomMetadata (AsciiHeader name) _) =
-        CI.mk name == CI.mk "authorization"
-      isAuthHeader _ = False
-
-      extractApiKey :: CustomMetadata -> Text
-      extractApiKey (CustomMetadata _ value) =
-        -- Support both "Bearer <token>" and raw token formats
-        let valueText = decodeUtf8 value
-         in case T.stripPrefix "Bearer " valueText of
-              Just token -> T.strip token
-              Nothing -> T.strip valueText
+    let findHeader name = find (\case CustomMetadata (AsciiHeader n) _ -> CI.mk n == CI.mk name; _ -> False) metadata
+        extractValue (CustomMetadata _ value) = T.strip $ decodeUtf8 value
+        stripBearer v = fromMaybe v $ T.stripPrefix "Bearer " v
+        apiKey = (stripBearer . extractValue <$> findHeader "authorization") <|> (extractValue <$> findHeader "x-api-key")
+    pure $ OtlpRequestMetadata{otlpApiKey = apiKey}
 
 
 -- | Global error counters for common parsing errors (wire type, UTF-8, etc)
@@ -158,47 +144,72 @@ minValidTimestampNanos = 946684800000000000
 -- import Network.GRPC.Server.Service (Service, service, method, fromServices)
 
 -- | Generic lens-based attribute extraction from spans
+-- | Keys that carry project identity and must not be stored in telemetry payloads
+projectSecretKeys :: [Text]
+projectSecretKeys = ["at-project-key", "at-project-id", "x-api-key"]
+
+
+-- | Extract a string attribute by key from a KeyValue vector
+getAttr :: Text -> V.Vector PC.KeyValue -> Maybe Text
+getAttr !key kvs = (^. PCF.value . PCF.stringValue) <$> V.find ((== key) . (^. PCF.key)) kvs
+
+
+-- | Extract a string from inside a kvlist attribute (e.g. x-api-key inside grpc.metadata)
+getNestedAttr :: Text -> Text -> V.Vector PC.KeyValue -> Maybe Text
+getNestedAttr !outerKey !innerKey kvs = do
+  kv <- V.find ((== outerKey) . (^. PCF.key)) kvs
+  PC.AnyValue'KvlistValue kvl <- kv ^. PCF.value . PCF.maybe'value
+  (^. PCF.value . PCF.stringValue) <$> find ((== innerKey) . (^. PCF.key)) (kvl ^. PCF.values)
+
+
+-- | Extract API key from attributes, checking at-project-key, x-api-key, then x-api-key inside grpc.metadata/http.headers
+getApiKeyAttr :: V.Vector PC.KeyValue -> Maybe Text
+getApiKeyAttr kvs =
+  getAttr "at-project-key" kvs
+    <|> getAttr "x-api-key" kvs
+    <|> getNestedAttr "grpc.metadata" "x-api-key" kvs
+    <|> getNestedAttr "http.headers" "x-api-key" kvs
+
+
 getSpanAttributeValue :: Text -> V.Vector PT.ResourceSpans -> V.Vector Text
-getSpanAttributeValue !attribute = V.mapMaybe (\rs -> getResourceAttr rs <|> getSpanAttr rs)
+getSpanAttributeValue !attribute = V.mapMaybe (\rs -> getAttr attribute (resourceAttributes rs) <|> getSpanAttr rs)
   where
-    getResourceAttr rs = getAttr (resourceAttributes (rs ^. PTF.resource))
     getSpanAttr rs =
       let spans = V.fromList (rs ^. PTF.scopeSpans) >>= (\s -> V.fromList (s ^. PTF.spans))
-       in listToMaybe $ V.toList $ V.mapMaybe (getAttr . spanAttributes) spans
+       in listToMaybe $ V.toList $ V.mapMaybe (getAttr attribute . V.fromList . (^. PTF.attributes)) spans
+    resourceAttributes rs = V.fromList $ rs ^. PTF.resource . PRF.attributes
 
-    getAttr :: V.Vector PC.KeyValue -> Maybe Text
-    getAttr kvs = V.find ((== attribute) . (^. PCF.key)) kvs >>= \kv -> Just (kv ^. PCF.value . PCF.stringValue)
 
-    resourceAttributes resource = V.fromList $ resource ^. PRF.attributes
-    spanAttributes spn = V.fromList $ spn ^. PTF.attributes
+-- | Extract project API keys from resource spans, checking all supported key locations
+getSpanApiKey :: V.Vector PT.ResourceSpans -> V.Vector Text
+getSpanApiKey = V.mapMaybe (\rs -> getApiKeyAttr (V.fromList $ rs ^. PTF.resource . PRF.attributes))
 
 
 -- | Extract attribute values from resource logs
 getLogAttributeValue :: Text -> V.Vector PL.ResourceLogs -> V.Vector Text
-getLogAttributeValue !attribute = V.mapMaybe (\rl -> getResourceAttr rl <|> getLogAttr rl)
+getLogAttributeValue !attribute = V.mapMaybe (\rl -> getAttr attribute (resourceAttributes rl) <|> getLogAttr rl)
   where
-    getResourceAttr rl = getAttr (resourceAttributes (rl ^. PLF.resource))
     getLogAttr rl =
       let logs = V.fromList (rl ^. PLF.scopeLogs) >>= (\s -> V.fromList (s ^. PLF.logRecords))
-       in listToMaybe $ V.toList $ V.mapMaybe (getAttr . logAttributes) logs
+       in listToMaybe $ V.toList $ V.mapMaybe (getAttr attribute . V.fromList . (^. PLF.attributes)) logs
+    resourceAttributes rl = V.fromList $ rl ^. PLF.resource . PRF.attributes
 
-    getAttr :: V.Vector PC.KeyValue -> Maybe Text
-    getAttr kvs = V.find ((== attribute) . (^. PCF.key)) kvs >>= \kv -> Just (kv ^. PCF.value . PCF.stringValue)
 
-    resourceAttributes resource = V.fromList $ resource ^. PRF.attributes
-    logAttributes log = V.fromList $ log ^. PLF.attributes
+-- | Extract project API keys from resource logs, checking all supported key locations
+getLogApiKey :: V.Vector PL.ResourceLogs -> V.Vector Text
+getLogApiKey = V.mapMaybe (\rl -> getApiKeyAttr (V.fromList $ rl ^. PLF.resource . PRF.attributes))
 
 
 -- | Extract metric attribute values
 getMetricAttributeValue :: Text -> V.Vector PM.ResourceMetrics -> Maybe Text
 getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe getResourceAttr rms
   where
-    getResourceAttr rm = getAttr (resourceAttributes (rm ^. PMF.resource))
+    getResourceAttr rm = getAttr attribute (V.fromList $ rm ^. PMF.resource . PRF.attributes)
 
-    getAttr :: V.Vector PC.KeyValue -> Maybe Text
-    getAttr kvs = V.find ((== attribute) . (^. PCF.key)) kvs >>= \kv -> Just (kv ^. PCF.value . PCF.stringValue)
 
-    resourceAttributes resource = V.fromList $ resource ^. PRF.attributes
+-- | Extract project API key from resource metrics, checking all supported key locations
+getMetricApiKey :: V.Vector PM.ResourceMetrics -> Maybe Text
+getMetricApiKey !rms = listToMaybe $ V.toList $ V.mapMaybe (\rm -> getApiKeyAttr (V.fromList $ rm ^. PMF.resource . PRF.attributes)) rms
 
 
 -- | Process a list of messages
@@ -239,11 +250,11 @@ processList msgs !attrs = checkpoint "processList" $ do
             msgs
             appCtx
             fallbackTime
-            (\req -> getLogAttributeValue "at-project-key" (V.fromList $ req ^. PLF.resourceLogs))
+            (\req -> getLogApiKey (V.fromList $ req ^. PLF.resourceLogs))
             (\req -> V.toList $ V.catMaybes $ Projects.projectIdFromText <$> getLogAttributeValue "at-project-id" (V.fromList $ req ^. PLF.resourceLogs))
             ( \ft caches keyToId req ->
                 let !rls = V.fromList $ req ^. PLF.resourceLogs
-                    !pkeys = getLogAttributeValue "at-project-key" rls
+                    !pkeys = getLogApiKey rls
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.force $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
@@ -254,11 +265,11 @@ processList msgs !attrs = checkpoint "processList" $ do
             msgs
             appCtx
             fallbackTime
-            (\req -> getSpanAttributeValue "at-project-key" (V.fromList $ req ^. PTF.resourceSpans))
+            (\req -> getSpanApiKey (V.fromList $ req ^. PTF.resourceSpans))
             (\req -> V.toList $ V.catMaybes $ Projects.projectIdFromText <$> getSpanAttributeValue "at-project-id" (V.fromList $ req ^. PTF.resourceSpans))
             ( \ft caches keyToId req ->
                 let !rss = V.force $ V.fromList $ req ^. PTF.resourceSpans
-                    !pkeys = getSpanAttributeValue "at-project-key" rss
+                    !pkeys = getSpanApiKey rss
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.force $ V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
@@ -269,11 +280,11 @@ processList msgs !attrs = checkpoint "processList" $ do
             msgs
             appCtx
             fallbackTime
-            (\req -> maybe V.empty V.singleton $ getMetricAttributeValue "at-project-key" (V.fromList $ req ^. PMF.resourceMetrics))
+            (\req -> maybe V.empty V.singleton $ getMetricApiKey (V.fromList $ req ^. PMF.resourceMetrics))
             (\req -> maybeToList $ Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" (V.fromList $ req ^. PMF.resourceMetrics))
             ( \ft caches keyToId req ->
                 let !rms = V.fromList $ req ^. PMF.resourceMetrics
-                    !pidM = getMetricAttributeValue "at-project-key" rms >>= (`HM.lookup` keyToId)
+                    !pidM = getMetricApiKey rms >>= (`HM.lookup` keyToId)
                     !pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" rms
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
@@ -649,7 +660,7 @@ keyValueToJSON !kvs =
     !allPairs' = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList kvs]
     !allPairs = migrateHttpSemanticConventions allPairs'
 
-    specialKeys = ["at-project-key", "at-project-id"]
+    specialKeys = projectSecretKeys
     (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) allPairs
     nestedObj = nestedJsonFromDotNotation nestedPairs
     flatObj = AE.object [AEK.fromText k AE..= v | (k, v) <- flatPairs]
@@ -697,7 +708,7 @@ resourceToJSON (Just resource) =
   let
     attrs = V.fromList $ resource ^. PRF.attributes
     attrPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList attrs]
-    specialKeys = ["at-project-key", "at-project-id"]
+    specialKeys = projectSecretKeys
     (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) attrPairs
 
     nestedObj = nestedJsonFromDotNotation nestedPairs
@@ -711,7 +722,7 @@ resourceToJSON (Just resource) =
 
 -- Remove project metadata from JSON
 removeProjectId :: AE.Value -> AE.Value
-removeProjectId (AE.Object o) = AE.Object $ foldr KEM.delete o ["at-project-key", "at-project-id"]
+removeProjectId (AE.Object o) = AE.Object $ foldr KEM.delete o (map AEK.fromText projectSecretKeys)
 removeProjectId (AE.Array arr) = AE.Array $ V.map removeProjectId arr
 removeProjectId v = v
 
@@ -737,7 +748,7 @@ normalizeSeverityLevel txt = fst <$> Map.lookup (T.toUpper txt) severityMap
 -- | Convert ResourceLogs to OtelLogsAndSpans
 convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
-  let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-key" (V.singleton resourceLogs)
+  let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogApiKey (V.singleton resourceLogs)
       projectId = case find (\(k, _) -> k == projectKey) pids of
         Just (_, v) -> Just v
         Nothing ->
@@ -851,7 +862,7 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
     $ V.toList
     $ V.map
       ( \rs ->
-          let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanAttributeValue "at-project-key" (V.singleton rs)
+          let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanApiKey (V.singleton rs)
               projectId =
                 case find (\(k, _) -> k == projectKey && k /= "") pids of
                   Just (_, v) -> Just v
@@ -1166,7 +1177,7 @@ processTraceRequest metadataApiKey req = do
   appCtx <- ask @AuthContext
 
   let !resourceSpans = V.fromList $ req ^. TSF.resourceSpans
-      !projectKeys = getSpanAttributeValue "at-project-key" resourceSpans
+      !projectKeys = getSpanApiKey resourceSpans
       atIds' = getSpanAttributeValue "at-project-id" resourceSpans
       atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
@@ -1237,7 +1248,7 @@ processLogsRequest metadataApiKey req = do
   appCtx <- ask @AuthContext
 
   let !resourceLogs = V.fromList $ req ^. PLF.resourceLogs
-      !projectKeys = getLogAttributeValue "at-project-key" resourceLogs
+      !projectKeys = getLogApiKey resourceLogs
       atIds' = getLogAttributeValue "at-project-id" resourceLogs
       atIds = V.catMaybes $ Projects.projectIdFromText <$> atIds'
 
@@ -1307,7 +1318,7 @@ processMetricsRequest metadataApiKey req = do
   appCtx <- ask @AuthContext
 
   let !resourceMetrics = V.fromList $ req ^. PMF.resourceMetrics
-      !projectKey = getMetricAttributeValue "at-project-key" resourceMetrics
+      !projectKey = getMetricApiKey resourceMetrics
 
   pidM <- do
     -- Try metadata API key first, then resource attribute key, then project ID

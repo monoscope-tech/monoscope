@@ -10,6 +10,7 @@ receivers:
         cors:
           allowed_origins:
             - '*'
+
 processors:
   batch:
     send_batch_size: 1024
@@ -29,6 +30,11 @@ processors:
       - key: grpc.metadata
         from_context: grpc.metadata
         action: insert
+      # Extract x-api-key from headers/metadata into a resource-level attribute
+      # so the backend can resolve project keys from the Kafka path
+      - key: x-api-key
+        from_context: metadata.x-api-key
+        action: insert
   resource:
     attributes:
       - key: http.headers
@@ -37,23 +43,14 @@ processors:
       - key: grpc.metadata
         from_attribute: grpc.metadata
         action: upsert
+      - key: x-api-key
+        from_attribute: x-api-key
+        action: upsert
 
 exporters:
   debug:
     verbosity: detailed
-  googlecloudpubsub:
-    project: past-3
-    topic: projects/past-3/topics/otlp-stream-prod
   kafka:
-    # logs:
-    #   topic: otlp-logs
-    #   encoding: otlp_proto
-    # metrics:
-    #   topic: otlp-metrics
-    #   encoding: otlp_proto
-    # traces:
-    #   topic: otlp-traces
-    #   encoding: otlp_proto
     partition_traces_by_id: true
     partition_metrics_by_resource_attributes: true
     partition_logs_by_resource_attributes: true
@@ -62,14 +59,10 @@ exporters:
       num_consumers: 6
     producer:
       max_message_bytes: 10000000
-
     brokers:
       - redpanda-0.s.past3.tech:19092
       - redpanda-1.s.past3.tech:29092
       - redpanda-2.s.past3.tech:39092
-      # - srv-captain--redpanda-0:9092
-      # - srv-captain--redpanda-1:9092
-      # - srv-captain--redpanda-2:9092
     auth:
       sasl:
         username: ${env:KAFKA_USERNAME}
