@@ -251,37 +251,37 @@ slackErrorAlert alertType err issTitle project channelId projectUrl chartUrlM oc
     [ "blocks"
         AE..= AE.Array
           ( V.fromList
-              $ [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
-                , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
-                , AE.object
+              ([ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= title]]
+               , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> err.message <> "\n```")]]
+               , AE.object
                     [ "type" AE..= "context"
                     , "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Stack:* `" <> T.take 500 err.stackTrace <> "`")], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Endpoint:* " <> enp)]]
                     ]
-                , AE.object
+               , AE.object
                     [ "type" AE..= "context"
                     , "elements"
                         AE..= AE.Array
                           ( V.fromList
-                              $ [ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> fromMaybe "" err.traceId)]
-                                , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> fromMaybe "" err.spanId)]
-                                , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "" err.serviceName)]
-                                ]
-                              <> maybeToList (occTextM <&> \t -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Occurrences:* " <> t)])
+                              ([ AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Trace Id:* " <> fromMaybe "" err.traceId)]
+                               , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Span Id:* " <> fromMaybe "" err.spanId)]
+                               , AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Service:* " <> fromMaybe "" err.serviceName)]
+                               ]
+                              <> maybeToList (occTextM <&> \t -> AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Occurrences:* " <> t)]))
                           )
                     ]
-                , AE.object
+               , AE.object
                     [ "type" AE..= "context"
                     , "elements"
                         AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*Project:* " <> project)], AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*First seen:* " <> firstSeen)]]
                     ]
-                ]
+               ]
               <> maybeToList (chartUrlM <&> \u -> AE.object ["type" AE..= "image", "image_url" AE..= u, "alt_text" AE..= "Error trend"])
               <> [ AE.object ["type" AE..= "divider"]
                  , AE.object
                      [ "type" AE..= "actions"
                      , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 Investigate", "emoji" AE..= True], "url" AE..= targetUrl, "style" AE..= "primary"]]
                      ]
-                 ]
+                 ])
           )
     , "channel" AE..= channelId
     ]
@@ -300,9 +300,15 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
     [ "blocks"
         AE..= AE.Array
           ( V.fromList
-              $ [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for <" <> monitorUrl <> "|" <> monitorTitle <> ">")]]
-                ]
+              ([ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("🤖 Alert triggered for <" <> monitorUrl <> "|" <> monitorTitle <> ">")]]
+               ]
               <> maybeToList (chartUrlM <&> \u -> AE.object ["type" AE..= "image", "image_url" AE..= u, "alt_text" AE..= "Monitor trend"])
+              <> [ AE.object ["type" AE..= "divider"]
+                 , AE.object
+                     [ "type" AE..= "actions"
+                     , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 View Monitor", "emoji" AE..= True], "url" AE..= monitorUrl, "style" AE..= "primary"]]
+                     ]
+                 ])
           )
     , "channel" AE..= channelId
     ]
@@ -433,24 +439,24 @@ discordErrorAlert alertType err issTitle project projectUrl chartUrlM occTextM =
     [ "embeds"
         AE..= AE.Array
           [ AE.object
-              $ [ "title" AE..= titleText
-                , "description" AE..= msg
-                , "color" AE..= (16711680 :: Int)
-                , "fields"
+              ([ "title" AE..= titleText
+               , "description" AE..= msg
+               , "color" AE..= (16711680 :: Int)
+               , "fields"
                     AE..= AE.Array
-                      ( fromList
-                          $ [ AE.object ["name" AE..= "Endpoint", "value" AE..= enp, "inline" AE..= True]
-                            , AE.object ["name" AE..= "Project", "value" AE..= project, "inline" AE..= True]
-                            , AE.object ["name" AE..= "First Seen", "value" AE..= firstSeen, "inline" AE..= True]
-                            , AE.object ["name" AE..= "Trace Id", "value" AE..= trId, "inline" AE..= True]
-                            , AE.object ["name" AE..= "Span Id", "value" AE..= spanId', "inline" AE..= True]
-                            , AE.object ["name" AE..= "Service", "value" AE..= serviceName', "inline" AE..= True]
-                            ]
-                          <> maybeToList (occTextM <&> \t -> AE.object ["name" AE..= "Occurrences", "value" AE..= t, "inline" AE..= True])
+                      ( V.fromList
+                          ([ AE.object ["name" AE..= "Endpoint", "value" AE..= enp, "inline" AE..= True]
+                           , AE.object ["name" AE..= "Project", "value" AE..= project, "inline" AE..= True]
+                           , AE.object ["name" AE..= "First Seen", "value" AE..= firstSeen, "inline" AE..= True]
+                           , AE.object ["name" AE..= "Trace Id", "value" AE..= trId, "inline" AE..= True]
+                           , AE.object ["name" AE..= "Span Id", "value" AE..= spanId', "inline" AE..= True]
+                           , AE.object ["name" AE..= "Service", "value" AE..= serviceName', "inline" AE..= True]
+                           ]
+                          <> maybeToList (occTextM <&> \t -> AE.object ["name" AE..= "Occurrences", "value" AE..= t, "inline" AE..= True]))
                       )
-                , "url" AE..= url
-                ]
-              <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
+               , "url" AE..= url
+               ]
+              <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u]))
           ]
     , "content" AE..= discordMsg
     ]
@@ -474,11 +480,11 @@ discordMonitorAlert monitorTitle monitorUrl chartUrlM =
     [ "embeds"
         AE..= AE.Array
           [ AE.object
-              $ [ "title" AE..= ("🤖 Log Alert: " <> monitorTitle)
-                , "color" AE..= (16711680 :: Int)
-                , "url" AE..= monitorUrl
-                ]
-              <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u])
+              ([ "title" AE..= ("🤖 Log Alert: " <> monitorTitle)
+               , "color" AE..= (16711680 :: Int)
+               , "url" AE..= monitorUrl
+               ]
+              <> maybeToList (chartUrlM <&> \u -> "image" AE..= AE.object ["url" AE..= u]))
           ]
     , "content" AE..= ("🤖 Alert triggered for " <> monitorTitle)
     ]
