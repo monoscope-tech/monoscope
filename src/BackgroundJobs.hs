@@ -995,12 +995,15 @@ sendAlertToChannels alert pid project users alertUrl subj html (initSlackTs, ini
 
 trendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Widget.Widget -> Text -> Text -> Eff es (Maybe Text)
 trendChartUrl ctx pid widget fromTxt toTxt =
-  mfilter (not . T.null) . Just
+  mfilter (not . T.null)
+    . Just
     <$> Widget.widgetPngUrl ctx.env.apiKeyEncryptionSecretKey ctx.env.hostUrl pid widget Nothing (Just fromTxt) (Just toTxt)
+
 
 errorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Text -> Text -> Text -> Eff es (Maybe Text)
 errorTrendChartUrl ctx pid errHash =
   trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
+
 
 monitorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
 monitorTrendChartUrl ctx pid monitor =
