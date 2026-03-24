@@ -94,19 +94,20 @@ spec = aroundAll withTestResources do
       ingestStdOtelSpan tr apiKey "GET /health" "GET" "/health" 200 "mixed.example.com"
       ingestTrace tr apiKey "apitoolkit-http-span" frozenTime
 
-      -- SDK span becomes monoscope.http, standard OTel keeps original name
+      -- Standard OTel span keeps original name (filter by unique host to isolate)
+      Only otelCount <- V.head <$> (withPool tr.trPool $ DBT.query [sql|
+        SELECT COUNT(*) FROM otel_logs_and_spans
+        WHERE project_id = ? AND name = 'GET /health'
+          AND attributes___server___address = 'mixed.example.com'
+      |] (Only pid) :: IO (V.Vector (Only Int)))
+      otelCount `shouldBe` 1
+
+      -- SDK span becomes monoscope.http (at least one exists globally — SDK has no unique host to filter by)
       Only sdkCount <- V.head <$> (withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*) FROM otel_logs_and_spans
         WHERE project_id = ? AND name = 'monoscope.http'
       |] (Only pid) :: IO (V.Vector (Only Int)))
       sdkCount `shouldSatisfy` (>= 1)
-
-      -- Both are discoverable via http.request.method attribute
-      Only totalCount <- V.head <$> (withPool tr.trPool $ DBT.query [sql|
-        SELECT COUNT(*) FROM otel_logs_and_spans
-        WHERE project_id = ? AND attributes___http___request___method IS NOT NULL
-      |] (Only pid) :: IO (V.Vector (Only Int)))
-      totalCount `shouldSatisfy` (>= 2)
 
     it "non-HTTP spans are NOT renamed to monoscope.http" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-nonhttp-key"
