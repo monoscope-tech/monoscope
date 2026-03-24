@@ -993,8 +993,10 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       -- Detect standard OTel HTTP spans (not from our SDK) by checking for http.request.method
       spanName' = pSpan ^. PTF.name
       isStandardOtelHttpSpan =
-        spanName' /= "apitoolkit-http-span"
-          && spanName' /= "monoscope.http"
+        spanName'
+          /= "apitoolkit-http-span"
+          && spanName'
+          /= "monoscope.http"
           && (spanKind == PT.Span'SPAN_KIND_SERVER || spanKind == PT.Span'SPAN_KIND_CLIENT)
           && isJust (attributes >>= Map.lookup "http" >>= httpMethod)
       httpMethod = \case
