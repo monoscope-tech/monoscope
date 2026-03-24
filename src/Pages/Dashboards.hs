@@ -60,7 +60,7 @@ import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful (Eff, IOE, (:>))
-import Effectful.Concurrent.Async (pooledForConcurrently)
+import Effectful.Concurrent.Async (concurrently, pooledForConcurrently)
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (Reader, ask)
@@ -610,6 +610,15 @@ processVariable pid now timeRange@(sinceStr, fromDStr, toDStr) allParams variabl
     valueToText v = decodeUtf8 $ AE.encode v
 
 
+-- | Process all dashboard variables concurrently.
+processVariablesConcurrently :: Projects.ProjectId -> UTCTime -> (Maybe Text, Maybe Text, Maybe Text) -> [(Text, Maybe Text)] -> Dashboards.Dashboard -> ATAuthCtx Dashboards.Dashboard
+processVariablesConcurrently pid now timeParams allParams dash = case dash.variables of
+  Nothing -> pure dash
+  Just vars -> do
+    vars' <- pooledForConcurrently vars (processVariable pid now timeParams allParams)
+    pure $ dash & #variables ?~ vars'
+
+
 -- | Get required variables without values (respecting dependsOn order)
 unsetRequiredVars :: [Dashboards.Variable] -> [Dashboards.Variable]
 unsetRequiredVars vars = filter shouldShow vars
@@ -799,15 +808,14 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
-    shapeWithDuration <- Telemetry.getTraceShapes pid trIds
+    (shapeWithDuration, spanRecords') <- concurrently
+      (Telemetry.getTraceShapes pid trIds)
+      (Telemetry.getSpanRecordsByTraceIds pid trIds Nothing)
     let grouped = M.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- shapeWithDuration]
-
-    spanRecords' <- Telemetry.getSpanRecordsByTraceIds pid trIds Nothing
-    let spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
+        spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
         serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
-    let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
-    let spansGrouped = M.fromListWith (++) [(sp.traceId, [sp]) | sp <- V.toList spanRecords]
-    shapesAvgs <- Telemetry.getTraceShapes pid trIds
+        colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
+        spansGrouped = M.fromListWith (++) [(sp.traceId, [sp]) | sp <- V.toList spanRecords]
 
     pure
       $ widget
@@ -1028,7 +1036,7 @@ dashboardGetH pid dashId fileM fromDStr toDStr sinceStr allParams = do
       let dashWithConstants = dash & #constants ?~ processedConstants
           processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
-      dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
+      dash' <- processVariablesConcurrently pid now timeParams allParamsWithConstants dashWithConstants
       -- Process widgets concurrently
       processedWidgets <- pooledForConcurrently dash'.widgets processWidgetWithDashboardId
       -- Populate alert statuses and PNG URLs for widgets
@@ -2237,7 +2245,7 @@ dashboardTabGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allParams = d
   let dashWithConstants = dash & #constants ?~ processedConstants
       processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
-  dash' <- forOf (#variables . traverse . traverse) dashWithConstants (processVariable pid now timeParams allParamsWithConstants)
+  dash' <- processVariablesConcurrently pid now timeParams allParamsWithConstants dashWithConstants
 
   -- Only process widgets for the ACTIVE tab (lazy loading - other tabs load via htmx)
   -- Note: We don't process dash.widgets here since this is a tab-based dashboard
@@ -2308,8 +2316,8 @@ dashboardTabContentGetH pid dashId tabSlug fileM fromDStr toDStr sinceStr allPar
         let processWidgetWithDashboardId = mkWidgetProcessor pid dashId now timeParams allParamsWithConstants
 
         -- Process variables to check if tab requires one that's not set
-        processedVars <- traverse (traverse (processVariable pid now timeParams allParamsWithConstants)) dash.variables
-        let varToPrompt = findVarToPrompt (Just tab) (fromMaybe [] processedVars)
+        dash' <- processVariablesConcurrently pid now timeParams allParamsWithConstants dash
+        let varToPrompt = findVarToPrompt (Just tab) (fromMaybe [] dash'.variables)
 
         -- Process widgets concurrently to speed up tabs with multiple eager widgets
         processedWidgets <- pooledForConcurrently tab.widgets processWidgetWithDashboardId

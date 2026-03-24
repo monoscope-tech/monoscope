@@ -922,6 +922,12 @@ buildPathParams (x : xs) (v : vs) acc = buildPathParams xs vs param
 --
 -- >>> map isUrlIdLike ["best-restaurants-2025-guide", "GetUserProfileData"]
 -- [False,False]
+--
+-- >>> map isUrlIdLike ["0PUK6V6EV0", "HQTGWGPNH4", "xk7f3m9p", "abc123def456"]
+-- [True,True,True,True]
+--
+-- >>> map isUrlIdLike ["V2", "API", "S3", "route53"]
+-- [False,False,False,False]
 isUrlIdLike :: Text -> Bool
 isUrlIdLike seg
   | T.null seg = False
@@ -929,11 +935,13 @@ isUrlIdLike seg
   | not (T.isPrefixOf ":" seg) && T.any (== ':') seg = True -- namespaced: type:value
   | len > 20 && hasMixed = True -- long mixed alphanumeric (no hyphens — excludes slugs)
   | len > 16 && isBase64Url = True -- base64url-encoded token (requires digits)
+  | len >= 6 && hasMixed && isLowVowel = True -- short IDs: mixed alphanumeric with few vowels
   | otherwise = False
   where
     len = T.length seg
     hasMixed = T.any isAlpha seg && T.any isDigit seg && T.all isAlphaNum seg
     isBase64Url = T.all (\c -> isAlphaNum c || c == '-' || c == '_') seg && T.any isUpper seg && T.any isLower seg && T.any isDigit seg
+    isLowVowel = T.foldl' (\n c -> if c `elem` ("aeiouAEIOU" :: String) then n + 1 else n) (0 :: Int) seg * 4 < len
 
 
 -- | Check if a concrete URL path matches a pre-split template with {param} wildcards.
