@@ -4,7 +4,6 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
-import Data.Ord (clamp)
 import Control.Lens (view, (.~), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
@@ -19,6 +18,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.List as L (partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Lazy qualified as Map
+import Data.Ord (clamp)
 import Data.Pool (withResource)
 import Data.Set qualified as S
 import Data.Text qualified as T
