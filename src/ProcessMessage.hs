@@ -215,19 +215,13 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
       -- Navigate nested JSON to extract values using lens
       !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
 
-      !routePath =
-        fromMaybe "/"
-          $ (attrValue ^? key "http" . key "route" . _String)
-          <|> (attrValue ^? key "url" . key "path" . _String)
+      !routePath = fromMaybe "/" $ asum [attrValue ^? key "http" . key "route" . _String, attrValue ^? key "url" . key "path" . _String]
 
       !statusCode = fromMaybe 200 $ do
         statusStr <- attrValue ^? key "http" . key "response" . key "status_code" . _String
         readMaybe $ toString statusStr
 
-      !host =
-        fromMaybe ""
-          $ (attrValue ^? key "net" . key "host" . key "name" . _String)
-          <|> (attrValue ^? key "server" . key "address" . _String)
+      !host = fromMaybe "" $ asum [attrValue ^? key "net" . key "host" . key "name" . _String, attrValue ^? key "server" . key "address" . _String]
 
       -- Extract SDK type from attributes (needed for URL normalization)
       !sdkTypeStr =

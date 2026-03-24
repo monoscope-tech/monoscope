@@ -119,8 +119,8 @@ data EndpointRequestStats = EndpointRequestStats
 endpointRequestStatsByProject :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> Eff es (V.Vector EndpointRequestStats)
 endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = withConnection \conn -> liftIO $ V.fromList <$> PGS.query conn (Query $ encodeUtf8 q) queryParams
   where
-    -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM
+    -- pHostParams repeated: hostFilter has 2 placeholders (OR clause), pHostQuery has 1
     queryParams = [toField pid] ++ (pHostParams <> pHostParams) ++ [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
 
     isOutgoing = requestType == "Outgoing"

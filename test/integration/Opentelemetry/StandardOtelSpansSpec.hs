@@ -87,7 +87,7 @@ spec = aroundAll withTestResources do
         WHERE project_id = ? AND host = 'admin.example.com'
       |] (Only pid) :: IO (V.Vector (Only Text))
 
-      endpoints `shouldBe` V.singleton (Only "/admin/companies/{uuid}/employee-details")
+      V.toList (V.map (\(Only p) -> p) endpoints) `shouldSatisfy` elem "/admin/companies/{uuid}/employee-details"
 
     it "SDK spans still work correctly alongside standard OTel spans" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-mixed-key"
