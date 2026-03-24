@@ -2,6 +2,7 @@ module Pages.BusinessFlowsSpec (spec) where
 
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
+import Data.Int (Int64)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
@@ -376,8 +377,8 @@ billingUsageTests = do
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
-      LemonSqueezy.BillingGet (PageCtx _ d) | let totalReqs = d.totalReqs -> do
-        totalReqs `shouldBe` 5 -- Should count the 5 spans we ingested
+      LemonSqueezy.BillingGet (PageCtx _ d) ->
+        d.totalReqs `shouldBe` (5 :: Int64) -- Should count the 5 spans we ingested
   it "should handle cycle boundaries correctly" \TestContext{tcResources = tr, tcProjectId = testPid} -> do
     currentTime <- liftIO getCurrentTime
     let cycleStart = addUTCTime (-(40 * 24 * 60 * 60)) currentTime -- 40 days ago (more than a month)
@@ -401,8 +402,8 @@ billingUsageTests = do
     (_, result) <- testServant tr $ LemonSqueezy.manageBillingGetH testPid Nothing
 
     case result of
-      LemonSqueezy.BillingGet (PageCtx _ d) | let totalReqs = d.totalReqs -> do
-        totalReqs `shouldBe` 1 -- Should only count the recent span
+      LemonSqueezy.BillingGet (PageCtx _ d) ->
+        d.totalReqs `shouldBe` (1 :: Int64) -- Should only count the recent span
 
 
 -- | Replay Session Recording Tests

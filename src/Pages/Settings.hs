@@ -28,6 +28,7 @@ module Pages.Settings (
   FirstSubItem (..),
   manageBillingGetH,
   BillingGet (..),
+  BillingData (..),
   -- Stripe
   stripeWebhookPostH,
   createStripeCheckoutSession,
