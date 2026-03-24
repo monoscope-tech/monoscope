@@ -46,13 +46,14 @@ ingestStdOtelSpan tr apiKey spanName method urlPath statusCode serverAddr = do
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Standard OpenTelemetry HTTP Spans" do
-    it "ingests standard OTel HTTP span and normalizes name to monoscope.http" \tr -> do
+    it "ingests standard OTel HTTP span preserving original name" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-key"
       ingestStdOtelSpan tr apiKey "GET /api/users" "GET" "/api/users/550e8400-e29b-41d4-a716-446655440000" 200 "api.example.com"
 
+      -- Original span name is preserved (not renamed to monoscope.http)
       spans <- withPool tr.trPool $ DBT.query [sql|
         SELECT name FROM otel_logs_and_spans
-        WHERE project_id = ? AND name = 'monoscope.http'
+        WHERE project_id = ? AND attributes___http___request___method IS NOT NULL AND name = 'GET /api/users'
         ORDER BY timestamp DESC LIMIT 5
       |] (Only pid) :: IO (V.Vector (Only Text))
       V.length spans `shouldSatisfy` (>= 1)
@@ -94,12 +95,19 @@ spec = aroundAll withTestResources do
       ingestStdOtelSpan tr apiKey "GET /health" "GET" "/health" 200 "mixed.example.com"
       ingestTrace tr apiKey "apitoolkit-http-span" frozenTime
 
-      -- Both should be stored as monoscope.http
-      [Only count] <- V.toList <$> (withPool tr.trPool $ DBT.query [sql|
+      -- SDK span becomes monoscope.http, standard OTel keeps original name
+      [Only sdkCount] <- V.toList <$> (withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*) FROM otel_logs_and_spans
         WHERE project_id = ? AND name = 'monoscope.http'
       |] (Only pid) :: IO (V.Vector (Only Int)))
-      count `shouldSatisfy` (>= 2)
+      sdkCount `shouldSatisfy` (>= 1)
+
+      -- Both are discoverable via http.request.method attribute
+      [Only totalCount] <- V.toList <$> (withPool tr.trPool $ DBT.query [sql|
+        SELECT COUNT(*) FROM otel_logs_and_spans
+        WHERE project_id = ? AND attributes___http___request___method IS NOT NULL
+      |] (Only pid) :: IO (V.Vector (Only Int)))
+      totalCount `shouldSatisfy` (>= 2)
 
     it "non-HTTP spans are NOT renamed to monoscope.http" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-nonhttp-key"

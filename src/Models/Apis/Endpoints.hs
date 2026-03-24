@@ -136,11 +136,11 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
       [text| 
       
    WITH filtered_requests AS (
-    SELECT attributes->'http'->>'route' AS url_path,
+    SELECT COALESCE(attributes->'http'->>'route', attributes___url___path, '/') AS url_path,
            attributes___http___request___method AS method,
            COUNT(*) AS eventsCount
     FROM otel_logs_and_spans
-    WHERE project_id = ? AND name = 'monoscope.http' $hostFilter
+    WHERE project_id = ? AND attributes___http___request___method IS NOT NULL $hostFilter
     GROUP BY url_path, method
 )
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(fr.eventsCount, 0) as total_requests
@@ -202,7 +202,7 @@ WITH filtered_requests AS (
     FROM otel_logs_and_spans
     WHERE project_id = ?
       AND $timeRange
-      AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
+      AND attributes___http___request___method IS NOT NULL
       AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
     GROUP BY host
 )

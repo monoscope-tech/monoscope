@@ -37,6 +37,7 @@ import NeatInterpolation (text)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Components qualified as Components
 import Pages.LogExplorer.LogItem (getRequestDetails, getServiceColor, getServiceName, spanHasErrors)
+import Pkg.DeriveUtils (unAesonTextMaybe)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
@@ -259,7 +260,7 @@ traceH pid trId timestamp spanIdM nav = do
             if targetIndex < V.length spanRecords - 1
               then Just (spanRecords V.! (targetIndex + 1))
               else Nothing
-      let atpSpan = V.find (\x -> x.name == Just "monoscope.http") (V.fromList spanRecords')
+      let atpSpan = V.find (\x -> x.name == Just "monoscope.http" || isJust (Telemetry.atMapText "http.request.method" (unAesonTextMaybe x.attributes))) (V.fromList spanRecords')
       addRespHeaders $ SpanDetails pid targetSpan atpSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
       traceItemM <- Telemetry.getTraceDetails pid trId timestamp now

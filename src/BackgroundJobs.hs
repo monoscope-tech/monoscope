@@ -737,7 +737,7 @@ processFiveMinuteSpans scheduledTime pid = do
             [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
                          hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
                   FROM otel_logs_and_spans
-              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND name = 'monoscope.http' OFFSET ? LIMIT ? |]
+              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___http___request___method IS NOT NULL OFFSET ? LIMIT ? |]
             (pid, fiveMinutesAgo, scheduledTime, skip, perPage)
       -- Only log if there are actually spans to process (reduces noise in tests)
       Relude.when (V.length httpSpans > 0) $ do

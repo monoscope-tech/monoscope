@@ -1174,7 +1174,7 @@ FROM otel_logs_and_spans
 WHERE 
     project_id = ?::text
     AND timestamp > ? AND timestamp < ?
-    AND name = 'monoscope.http'
+    AND attributes___http___request___method IS NOT NULL
 GROUP BY
     host, method, url_path
 ORDER BY
