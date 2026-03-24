@@ -46,6 +46,9 @@ module Pkg.TestUtils (
   createOtelTraceAtTime,
   createOtelTraceWithExceptionAtTime,
   createGaugeMetricAtTime,
+  mkSpanRequest,
+  mkResource,
+  mkAttr,
 )
 where
 
@@ -1150,6 +1153,7 @@ createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktr
             & PTF.attributes
           .~ [mkAttr "exception.type" excType, mkAttr "exception.message" excMessage, mkAttr "exception.stacktrace" excStacktrace]
       spanStatus = defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ excMessage
-      resource = mkResource apiKey [mkAttr "telemetry.sdk.name" "opentelemetry", mkAttr "telemetry.sdk.language" "nodejs"]
-      attrs = [mkAttr "http.request.method" "GET", mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
+      resource = mkResource apiKey [mkAttr "telemetry.sdk.language" "nodejs"]
+      -- No http.request.method: exception spans shouldn't match the HTTP span filter (attributes___http___request___method IS NOT NULL)
+      attrs = [mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
   pure $ mkSpanRequest trIdText spanIdText Nothing spanName [exceptionEvent] (Just spanStatus) attrs resource timestamp

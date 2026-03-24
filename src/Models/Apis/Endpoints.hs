@@ -119,9 +119,9 @@ data EndpointRequestStats = EndpointRequestStats
 endpointRequestStatsByProject :: DB es => Projects.ProjectId -> Bool -> Bool -> Maybe Text -> Maybe Text -> Maybe Text -> Int -> Text -> Eff es (V.Vector EndpointRequestStats)
 endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = withConnection \conn -> liftIO $ V.fromList <$> PGS.query conn (Query $ encodeUtf8 q) queryParams
   where
-    -- Construct the list of parameters conditionally
     pHostParams = maybe [] (\h -> [toField h]) pHostM
-    queryParams = [toField pid] ++ pHostParams ++ [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
+    -- hostFilter "... net.host.name = ? OR server.address = ?" has 2 ?; pHostQuery "enp.host = ?" has 1 ?
+    queryParams = [toField pid] ++ (pHostParams <> pHostParams) ++ [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
 
     isOutgoing = requestType == "Outgoing"
     offset = page * 30
@@ -129,18 +129,18 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
     -- ackdAt = if ackd && not archived then "AND ann.acknowledged_at IS NOT NULL AND ann.archived_at IS NULL " else "AND ann.acknowledged_at IS NULL "
     -- archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else "AND ann.archived_at IS NULL "
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
-    pHostQuery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
-    hostFilter = case pHostM of Just h -> " AND attributes->'net'->'host'->>'name' = ?"; Nothing -> ""
+    pHostQuery = case pHostM of Just _ -> " AND enp.host = ?"; Nothing -> ""
+    hostFilter = case pHostM of Just _ -> " AND (attributes->'net'->'host'->>'name' = ? OR attributes->'server'->>'address' = ?)"; Nothing -> ""
     orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> "coalesce(fr.eventsCount, 0) DESC"
     q =
       [text| 
       
    WITH filtered_requests AS (
-    SELECT attributes->'http'->>'route' AS url_path,
+    SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
            attributes___http___request___method AS method,
            COUNT(*) AS eventsCount
     FROM otel_logs_and_spans
-    WHERE project_id = ? AND name = 'monoscope.http' $hostFilter
+    WHERE project_id = ? AND attributes___http___request___method IS NOT NULL $hostFilter
     GROUP BY url_path, method
 )
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host, coalesce(fr.eventsCount, 0) as total_requests
@@ -195,14 +195,14 @@ dependenciesAndEventsCount pid requestType sortT skip timeF = do
       q =
         [text|
 WITH filtered_requests AS (
-    SELECT attributes->'net'->'host'->>'name' AS host,
+    SELECT COALESCE(attributes->'net'->'host'->>'name', attributes->'server'->>'address', '') AS host,
            COUNT(*) AS eventsCount,
            MAX(timestamp) AS last_seen,
            MIN(timestamp) AS first_seen
     FROM otel_logs_and_spans
     WHERE project_id = ?
       AND $timeRange
-      AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
+      AND attributes___http___request___method IS NOT NULL
       AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
     GROUP BY host
 )

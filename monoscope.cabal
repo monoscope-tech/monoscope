@@ -81,6 +81,7 @@ extra-source-files:
     static/migrations/0053_device_auth_codes.sql
     static/migrations/0054_command_palette_recents.sql
     static/migrations/0055_metrics_meta_updated_at_index.sql
+    static/migrations/0056_project_audit_log.sql
 
 source-repository head
   type: git
@@ -517,6 +518,7 @@ test-suite integration-tests
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
+      Opentelemetry.StandardOtelSpansSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.Bots.AgenticSpec
