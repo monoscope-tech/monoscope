@@ -310,52 +310,28 @@ projectDeletedEmail userName projectName =
 -- Runtime Errors Template
 -- =============================================================================
 
-runtimeErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
+runtimeErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
 runtimeErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail
-    "New Runtime Error(s)"
-    "[···] New Runtime Exception(s) Detected - "
-    projectName
-    errorsUrl
-    errors
-    "We've detected a new runtime error in your "
+  runtimeErrorVariantEmail "New Runtime Error(s)" "[···] New Runtime Exception(s) Detected - " projectName errorsUrl errors "We've detected a new runtime error in your "
 
 
-escalatingErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
+escalatingErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
 escalatingErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail
-    "Escalating Runtime Error(s)"
-    "[···] Escalating Runtime Error(s) Detected - "
-    projectName
-    errorsUrl
-    errors
-    "We've detected escalating runtime errors in your "
+  runtimeErrorVariantEmail "Escalating Runtime Error(s)" "[···] Escalating Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected escalating runtime errors in your "
 
 
-regressedErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
+regressedErrorsEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
 regressedErrorsEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail
-    "Regressed Runtime Error(s)"
-    "[···] Regressed Runtime Error(s) Detected - "
-    projectName
-    errorsUrl
-    errors
-    "We've detected regressed runtime errors in your "
+  runtimeErrorVariantEmail "Regressed Runtime Error(s)" "[···] Regressed Runtime Error(s) Detected - " projectName errorsUrl errors "We've detected regressed runtime errors in your "
 
 
-errorSpikesEmail :: Text -> Text -> [ErrorPatterns.ATError] -> (Text, Html ())
+errorSpikesEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
 errorSpikesEmail projectName errorsUrl errors =
-  runtimeErrorVariantEmail
-    "Runtime Error Spike(s)"
-    "[···] Runtime Error Spike(s) Detected - "
-    projectName
-    errorsUrl
-    errors
-    "We've detected a runtime error spike in your "
+  runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " projectName errorsUrl errors "We've detected a runtime error spike in your "
 
 
-runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Text -> (Text, Html ())
-runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intro =
+runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Text -> Maybe Text -> Maybe Text -> (Text, Html ())
+runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intro chartUrlM occTextM =
   ( subjectPrefix <> projectName
   , emailBody do
       h1_ $ toHtml heading
@@ -363,6 +339,7 @@ runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intr
         toHtml intro
         b_ $ toHtml projectName
         "."
+      whenJust occTextM $ \t -> p_ [style_ "margin: 8px 0; font-size: 14px; font-weight: 600; color: #57606a;"] $ toHtml t
       emailDivider
       forM_ (take maxErrorCards errors) (errorCard errorsUrl)
       when (length errors > maxErrorCards)
@@ -371,6 +348,7 @@ runtimeErrorVariantEmail heading subjectPrefix projectName errorsUrl errors intr
         $ "and "
         <> show (length errors - maxErrorCards)
         <> " more error(s)…"
+      whenJust chartUrlM $ chartBlock "Error Trend"
       emailButton errorsUrl "View all errors"
   )
   where
@@ -727,7 +705,7 @@ sampleProjectDeleted = projectDeletedEmail "Jane Doe" "My API Project"
 
 
 sampleRuntimeErrors :: (Text, Html ())
-sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3]
+sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope.tech/p/sample-id/issues/" [sampleError1, sampleError2, sampleError3] Nothing (Just "42 occurrences in last hour")
   where
     sampleError1 =
       def
@@ -817,8 +795,8 @@ sampleWeeklyReport eventsChart errorsChart =
 -- Monitor Alert Templates
 -- =============================================================================
 
-monitorAlertEmail :: Text -> Text -> Text -> Double -> Double -> Text -> (Text, Html ())
-monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold direction =
+monitorAlertEmail :: Text -> Text -> Text -> Double -> Double -> Text -> Maybe Text -> (Text, Html ())
+monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold direction chartUrlM =
   ( "[···] Monitor Alert: " <> monitorTitle <> " - " <> projectName
   , emailBody do
       h1_ "Monitor Alert Triggered"
@@ -834,6 +812,7 @@ monitorAlertEmail projectName monitorTitle monitorUrl currentValue threshold dir
         , ("Threshold", show (round threshold :: Int), Nothing)
         , ("Direction", direction, Nothing)
         ]
+      whenJust chartUrlM $ chartBlock "Monitor Trend"
       emailButton monitorUrl "View Monitor"
       emailDivider
       emailHelpLinks
