@@ -808,9 +808,10 @@ processEagerWidget pid now (sinceStr, fromDStr, toDStr) allParams widget = case 
   Widget.WTTraces -> do
     tracesD <- Charts.queryMetrics widget.dbSource (Just Charts.DTText) (Just pid) widget.query widget.sql sinceStr fromDStr toDStr Nothing allParams
     let trIds = V.map V.last tracesD.dataText
-    (shapeWithDuration, spanRecords') <- concurrently
-      (Telemetry.getTraceShapes pid trIds)
-      (Telemetry.getSpanRecordsByTraceIds pid trIds Nothing)
+    (shapeWithDuration, spanRecords') <-
+      concurrently
+        (Telemetry.getTraceShapes pid trIds)
+        (Telemetry.getSpanRecordsByTraceIds pid trIds Nothing)
     let grouped = M.fromListWith (++) [(trId, [(spanName, duration, events)]) | (trId, spanName, duration, events) <- shapeWithDuration]
         spanRecords = V.fromList $ mapMaybe Telemetry.convertOtelLogsAndSpansToSpanRecord spanRecords'
         serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
