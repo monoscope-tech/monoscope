@@ -4,6 +4,7 @@ module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs 
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
+import Data.Ord (clamp)
 import Control.Lens (view, (.~), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
@@ -1049,7 +1050,7 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
         results <- forConcurrently dueErrors \sub -> do
           let alertType = alertTypeForState sub.errorState
               errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-              occTextM = mfilter (> 0) (Just sub.occurrences1h) <&> \n -> show n <> " occurrences in last hour"
+              occTextM = show sub.occurrences1h <> " occurrences in last hour" <$ guard (sub.occurrences1h > 0)
               fromTime = addUTCTime (-(15 * 60)) now
           chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
           let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM}
@@ -1240,7 +1241,7 @@ notifyQueryMonitorStatusChange monitor value isRecovery = do
         monitorListUrl = hostUrl <> "/p/" <> monitor.projectId.toText <> "/monitors"
         thresholdDir = if monitor.triggerLessThan then "below" else "above" :: Text
     now <- Time.currentTime
-    let chartMins = min 240 $ max 15 (4 * monitor.checkIntervalMins)
+    let chartMins = clamp (15, 240) (4 * monitor.checkIntervalMins)
         chartFrom = addUTCTime (negate $ fromIntegral (chartMins * 60)) now
     chartUrlM <- if isRecovery then pure Nothing else monitorTrendChartUrl appCtx monitor.projectId monitor (formatUTC chartFrom) (formatUTC now)
     (alert, alertUrl) <-
