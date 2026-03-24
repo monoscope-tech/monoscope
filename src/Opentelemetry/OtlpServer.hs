@@ -18,12 +18,10 @@ module Opentelemetry.OtlpServer (
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (throwIO)
 import Control.Exception.Annotated (checkpoint)
-import Control.Lens (preview)
 import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
-import Data.Aeson.Lens qualified as AL
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -994,11 +992,6 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
       spanName' = pSpan ^. PTF.name
       isOurSdkSpan = spanName' `elem` ["apitoolkit-http-span", "monoscope.http"]
-      -- Detect standard OTel HTTP spans (not from our SDK) by checking for http.request.method
-      isStandardOtelHttpSpan =
-        not isOurSdkSpan
-          && (spanKind == PT.Span'SPAN_KIND_SERVER || spanKind == PT.Span'SPAN_KIND_CLIENT)
-          && isJust (attributes >>= Map.lookup "http" >>= preview (AL.key "request" . AL.key "method"))
       (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
@@ -1054,7 +1047,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , attributes = fmap AesonText newAttributes
           , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = V.empty
-          , kind = if spanName' == "apitoolkit-http-span" || isStandardOtelHttpSpan then Just "server" else spanKindText
+          , kind = if spanName' == "apitoolkit-http-span" then Just "server" else spanKindText
           , status_code = statusCodeText
           , status_message = statusMsgText
           , duration = Just $ fromIntegral durationNanos

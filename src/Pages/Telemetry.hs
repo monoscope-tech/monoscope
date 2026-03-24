@@ -260,7 +260,7 @@ traceH pid trId timestamp spanIdM nav = do
             if targetIndex < V.length spanRecords - 1
               then Just (spanRecords V.! (targetIndex + 1))
               else Nothing
-      let atpSpan = V.find (\x -> x.name == Just "monoscope.http" || isJust (Telemetry.atMapText "http.request.method" (unAesonTextMaybe x.attributes))) (V.fromList spanRecords')
+      let atpSpan = find (\x -> x.name == Just "monoscope.http" || isJust (Telemetry.atMapText "http.request.method" (unAesonTextMaybe x.attributes))) spanRecords'
       addRespHeaders $ SpanDetails pid targetSpan atpSpan (prevSpan >>= \s -> Just s.spanId) (nextSpan >>= \s -> Just s.spanId)
     else do
       traceItemM <- Telemetry.getTraceDetails pid trId timestamp now
