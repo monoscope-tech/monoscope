@@ -991,6 +991,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                     links
       !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
       spanName' = pSpan ^. PTF.name
+      -- "monoscope.http" included so re-ingested spans get consistent body/attribute processing
       isOurSdkSpan = spanName' `elem` ["apitoolkit-http-span", "monoscope.http"]
       (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
