@@ -46,7 +46,6 @@ module Pkg.TestUtils (
   createOtelTraceAtTime,
   createOtelTraceWithExceptionAtTime,
   createGaugeMetricAtTime,
-  createStandardOtelHttpTrace,
   mkSpanRequest,
   mkResource,
   mkAttr,
@@ -1157,19 +1156,3 @@ createOtelTraceWithExceptionAtTime apiKey spanName excType excMessage excStacktr
       resource = mkResource apiKey [mkAttr "telemetry.sdk.name" "opentelemetry", mkAttr "telemetry.sdk.language" "nodejs"]
       attrs = [mkAttr "http.request.method" "GET", mkAttr "http.route" "/api/users/:id", mkAttr "http.response.status_code" "500"]
   pure $ mkSpanRequest trIdText spanIdText Nothing spanName [exceptionEvent] (Just spanStatus) attrs resource timestamp
-
-
--- | Create a standard OTel HTTP span (as produced by auto-instrumentation, NOT our SDK).
--- Uses new semconv attributes: http.request.method, http.response.status_code, url.path, server.address
-createStandardOtelHttpTrace :: Text -> Text -> Text -> Text -> Int -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest
-createStandardOtelHttpTrace apiKey spanName method urlPath statusCode serverAddr timestamp = do
-  trIdText <- UUID.toText <$> nextRandom
-  spanIdText <- UUID.toText <$> nextRandom
-  let attrs =
-        [ mkAttr "http.request.method" method
-        , mkAttr "http.response.status_code" (show statusCode)
-        , mkAttr "url.path" urlPath
-        , mkAttr "server.address" serverAddr
-        ]
-      resource = mkResource apiKey [mkAttr "telemetry.sdk.name" "opentelemetry", mkAttr "telemetry.sdk.language" "nodejs"]
-  pure $ mkSpanRequest trIdText spanIdText Nothing spanName [] Nothing attrs resource timestamp

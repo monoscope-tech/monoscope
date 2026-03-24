@@ -22,6 +22,8 @@ import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
+import Data.Aeson.Lens qualified as AL
+import Control.Lens (preview)
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
@@ -990,23 +992,18 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                     )
                     links
       !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
-      -- Detect standard OTel HTTP spans (not from our SDK) by checking for http.request.method
       spanName' = pSpan ^. PTF.name
+      isOurSdkSpan = spanName' `elem` ["apitoolkit-http-span", "monoscope.http"]
+      -- Detect standard OTel HTTP spans (not from our SDK) by checking for http.request.method
       isStandardOtelHttpSpan =
-        spanName'
-          /= "apitoolkit-http-span"
-          && spanName'
-          /= "monoscope.http"
+        not isOurSdkSpan
           && (spanKind == PT.Span'SPAN_KIND_SERVER || spanKind == PT.Span'SPAN_KIND_CLIENT)
-          && isJust (attributes >>= Map.lookup "http" >>= httpMethod)
-      httpMethod = \case
-        AE.Object h -> KEM.lookup "request" h >>= \case AE.Object r -> KEM.lookup "method" r; _ -> Nothing
-        _ -> Nothing
+          && isJust (attributes >>= Map.lookup "http" >>= preview (AL.key "request" . AL.key "method"))
       (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
       body =
-        if spanName' == "apitoolkit-http-span" || spanName' == "monoscope.http"
+        if isOurSdkSpan
           then
             Just
               $ AE.object
@@ -1022,7 +1019,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
               _ -> AE.Null
           extractBody _ = AE.Null
       newAttributes =
-        if spanName' == "apitoolkit-http-span" || spanName' == "monoscope.http"
+        if isOurSdkSpan
           then
             let htt = Map.lookup "http" (fromMaybe Map.empty attributes)
              in case htt of
@@ -1057,7 +1054,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , attributes = fmap AesonText newAttributes
           , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = V.empty
-          , kind = if spanName' == "apitoolkit-http-span" then Just "server" else spanKindText
+          , kind = if spanName' == "apitoolkit-http-span" || isStandardOtelHttpSpan then Just "server" else spanKindText
           , status_code = statusCodeText
           , status_message = statusMsgText
           , duration = Just $ fromIntegral durationNanos
@@ -1065,7 +1062,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , end_time = Just validEndTime
           , events = fmap AesonText eventsJson
           , links = linksJson
-          , name = Just $ if spanName' == "apitoolkit-http-span" || isStandardOtelHttpSpan then "monoscope.http" else spanName'
+          , name = Just $ if isOurSdkSpan || isStandardOtelHttpSpan then "monoscope.http" else spanName'
           , parent_id = parentId
           , summary = V.empty -- Will be populated after creation
           , date = validStartTime

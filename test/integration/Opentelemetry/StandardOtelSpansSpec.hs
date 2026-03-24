@@ -27,13 +27,28 @@ jobTime :: UTCTime
 jobTime = addUTCTime 60 frozenTime
 
 
+-- | Ingest a standard OTel HTTP span (as produced by auto-instrumentation, NOT our SDK).
+ingestStdOtelSpan :: TestResources -> Text -> Text -> Text -> Text -> Int -> Text -> IO ()
+ingestStdOtelSpan tr apiKey spanName method urlPath statusCode serverAddr = do
+  trId <- show <$> nextRandom
+  spanId' <- show <$> nextRandom
+  let attrs =
+        [ mkAttr "http.request.method" method
+        , mkAttr "http.response.status_code" (show statusCode)
+        , mkAttr "url.path" urlPath
+        , mkAttr "server.address" serverAddr
+        ]
+      resource = mkResource apiKey [mkAttr "telemetry.sdk.name" "opentelemetry", mkAttr "telemetry.sdk.language" "nodejs"]
+      req = mkSpanRequest trId spanId' Nothing spanName [] Nothing attrs resource frozenTime
+  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+
+
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Standard OpenTelemetry HTTP Spans" do
     it "ingests standard OTel HTTP span and normalizes name to monoscope.http" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-key"
-      req <- createStandardOtelHttpTrace apiKey "GET /api/users" "GET" "/api/users/550e8400-e29b-41d4-a716-446655440000" 200 "api.example.com" frozenTime
-      void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+      ingestStdOtelSpan tr apiKey "GET /api/users" "GET" "/api/users/550e8400-e29b-41d4-a716-446655440000" 200 "api.example.com"
 
       spans <- withPool tr.trPool $ DBT.query [sql|
         SELECT name FROM otel_logs_and_spans
@@ -44,13 +59,8 @@ spec = aroundAll withTestResources do
 
     it "creates endpoints from standard OTel spans after processing" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-endpoint-key"
-      forM_ [1 :: Int .. 3] \_ -> do
-        req <- createStandardOtelHttpTrace apiKey "GET /api/orders" "GET" "/api/orders/12345" 200 "orders.example.com" frozenTime
-        void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
-
-      forM_ [1 :: Int .. 3] \_ -> do
-        req <- createStandardOtelHttpTrace apiKey "POST /api/payments" "POST" "/api/payments" 201 "orders.example.com" frozenTime
-        void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+      replicateM_ 3 $ ingestStdOtelSpan tr apiKey "GET /api/orders" "GET" "/api/orders/12345" 200 "orders.example.com"
+      replicateM_ 3 $ ingestStdOtelSpan tr apiKey "POST /api/payments" "POST" "/api/payments" 201 "orders.example.com"
 
       void $ runTestBg frozenTime tr $ BackgroundJobs.processFiveMinuteSpans jobTime pid
 
@@ -67,9 +77,7 @@ spec = aroundAll withTestResources do
 
     it "normalizes UUID path segments from standard OTel spans" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-uuid-key"
-      forM_ [1 :: Int .. 3] \_ -> do
-        req <- createStandardOtelHttpTrace apiKey "GET" "GET" "/admin/companies/ec8213d0-20e6-4225-bf05-5d8215193d9b/employee-details" 200 "admin.example.com" frozenTime
-        void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+      replicateM_ 3 $ ingestStdOtelSpan tr apiKey "GET" "GET" "/admin/companies/ec8213d0-20e6-4225-bf05-5d8215193d9b/employee-details" 200 "admin.example.com"
 
       void $ runTestBg frozenTime tr $ BackgroundJobs.processFiveMinuteSpans jobTime pid
 
@@ -79,32 +87,25 @@ spec = aroundAll withTestResources do
       |] (Only pid) :: IO (V.Vector (Only Text))
 
       V.length endpoints `shouldBe` 1
-      let (Only path) = V.head endpoints
-      path `shouldBe` "/admin/companies/{uuid}/employee-details"
+      (V.head endpoints) `shouldBe` Only "/admin/companies/{uuid}/employee-details"
 
     it "SDK spans still work correctly alongside standard OTel spans" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-mixed-key"
-      req1 <- createStandardOtelHttpTrace apiKey "GET /health" "GET" "/health" 200 "mixed.example.com" frozenTime
-      void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req1)
-
-      -- SDK span (apitoolkit-http-span) also gets normalized to monoscope.http
+      ingestStdOtelSpan tr apiKey "GET /health" "GET" "/health" 200 "mixed.example.com"
       ingestTrace tr apiKey "apitoolkit-http-span" frozenTime
 
-      spans <- withPool tr.trPool $ DBT.query [sql|
+      -- Both should be stored as monoscope.http
+      [Only count] <- V.toList <$> (withPool tr.trPool $ DBT.query [sql|
         SELECT COUNT(*) FROM otel_logs_and_spans
         WHERE project_id = ? AND name = 'monoscope.http'
-      |] (Only pid) :: IO (V.Vector (Only Int))
-
-      case spans of
-        [Only count] -> count `shouldSatisfy` (>= 2)
-        _ -> error "Unexpected result"
+      |] (Only pid) :: IO (V.Vector (Only Int)))
+      count `shouldSatisfy` (>= 2)
 
     it "non-HTTP spans are NOT renamed to monoscope.http" \tr -> do
       apiKey <- createTestAPIKey tr pid "std-otel-nonhttp-key"
-      -- Use mkSpanRequest directly with NO http attributes to create a non-HTTP span
       trId <- show <$> nextRandom
-      spanId <- show <$> nextRandom
-      let req = mkSpanRequest trId spanId Nothing "db.query" [] Nothing [] (mkResource apiKey [])  frozenTime
+      spanId' <- show <$> nextRandom
+      let req = mkSpanRequest trId spanId' Nothing "db.query" [] Nothing [] (mkResource apiKey []) frozenTime
       void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
 
       spans <- withPool tr.trPool $ DBT.query [sql|
