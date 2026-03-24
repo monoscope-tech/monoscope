@@ -18,12 +18,12 @@ module Opentelemetry.OtlpServer (
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (throwIO)
 import Control.Exception.Annotated (checkpoint)
+import Control.Lens (preview)
 import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Lens qualified as AL
-import Control.Lens (preview)
 import Data.Base64.Types qualified as B64
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
