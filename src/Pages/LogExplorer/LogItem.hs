@@ -154,7 +154,8 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
           aptSpan <- case getRequestDetails (unAesonTextMaybe record.attributes) of
             Just ("HTTP", _, _, _) -> do
               let trIdM = record.context >>= (.trace_id)
-              if (record.name /= Just "apitoolkit-http-span") && (record.name /= Just "monoscope.http")
+              if (record.name /= Just "apitoolkit-http-span")
+                && (record.name /= Just "monoscope.http")
                 && isNothing (atMapText "http.request.method" (unAesonTextMaybe record.attributes))
                 then case trIdM of
                   Just trId ->
