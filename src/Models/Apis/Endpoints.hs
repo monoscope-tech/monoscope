@@ -136,7 +136,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
       [text| 
       
    WITH filtered_requests AS (
-    SELECT COALESCE(attributes->'http'->>'route', attributes___url___path, '/') AS url_path,
+    SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
            attributes___http___request___method AS method,
            COUNT(*) AS eventsCount
     FROM otel_logs_and_spans
