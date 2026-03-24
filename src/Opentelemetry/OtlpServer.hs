@@ -991,20 +991,20 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                     links
       !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
       -- Detect standard OTel HTTP spans (not from our SDK) by checking for http.request.method
+      spanName' = pSpan ^. PTF.name
       isStandardOtelHttpSpan =
-        pSpan
-          ^. PTF.name
-          /= "apitoolkit-http-span"
-          && pSpan
-          ^. PTF.name
-          /= "monoscope.http"
+        spanName' /= "apitoolkit-http-span"
+          && spanName' /= "monoscope.http"
           && (spanKind == PT.Span'SPAN_KIND_SERVER || spanKind == PT.Span'SPAN_KIND_CLIENT)
-          && isJust (attributes >>= Map.lookup "http" >>= (\case AE.Object h -> KEM.lookup "request" h >>= (\case AE.Object r -> KEM.lookup "method" r; _ -> Nothing); _ -> Nothing))
+          && isJust (attributes >>= Map.lookup "http" >>= httpMethod)
+      httpMethod = \case
+        AE.Object h -> KEM.lookup "request" h >>= \case AE.Object r -> KEM.lookup "method" r; _ -> Nothing
+        _ -> Nothing
       (req, res) = case Map.lookup "http" (fromMaybe Map.empty attributes) of
         Just (AE.Object http) -> (KEM.lookup "request" http, KEM.lookup "response" http)
         _ -> (Nothing, Nothing)
       body =
-        if pSpan ^. PTF.name == "apitoolkit-http-span" || pSpan ^. PTF.name == "monoscope.http"
+        if spanName' == "apitoolkit-http-span" || spanName' == "monoscope.http"
           then
             Just
               $ AE.object
@@ -1020,7 +1020,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
               _ -> AE.Null
           extractBody _ = AE.Null
       newAttributes =
-        if pSpan ^. PTF.name == "apitoolkit-http-span" || pSpan ^. PTF.name == "monoscope.http"
+        if spanName' == "apitoolkit-http-span" || spanName' == "monoscope.http"
           then
             let htt = Map.lookup "http" (fromMaybe Map.empty attributes)
              in case htt of
@@ -1055,7 +1055,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , attributes = fmap AesonText newAttributes
           , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = V.empty
-          , kind = if pSpan ^. PTF.name == "apitoolkit-http-span" then Just "server" else spanKindText
+          , kind = if spanName' == "apitoolkit-http-span" then Just "server" else spanKindText
           , status_code = statusCodeText
           , status_message = statusMsgText
           , duration = Just $ fromIntegral durationNanos
@@ -1063,7 +1063,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , end_time = Just validEndTime
           , events = fmap AesonText eventsJson
           , links = linksJson
-          , name = Just $ if pSpan ^. PTF.name == "apitoolkit-http-span" || isStandardOtelHttpSpan then "monoscope.http" else pSpan ^. PTF.name
+          , name = Just $ if spanName' == "apitoolkit-http-span" || isStandardOtelHttpSpan then "monoscope.http" else spanName'
           , parent_id = parentId
           , summary = V.empty -- Will be populated after creation
           , date = validStartTime
