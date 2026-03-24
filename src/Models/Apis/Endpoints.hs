@@ -120,8 +120,9 @@ endpointRequestStatsByProject :: DB es => Projects.ProjectId -> Bool -> Bool -> 
 endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType = withConnection \conn -> liftIO $ V.fromList <$> PGS.query conn (Query $ encodeUtf8 q) queryParams
   where
     -- Construct the list of parameters conditionally
+    hostFilterParams = maybe [] (\h -> [toField h, toField h]) pHostM
     pHostParams = maybe [] (\h -> [toField h]) pHostM
-    queryParams = [toField pid] ++ pHostParams ++ [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
+    queryParams = [toField pid] ++ hostFilterParams ++ [toField pid, toField isOutgoing] ++ pHostParams ++ [toField offset]
 
     isOutgoing = requestType == "Outgoing"
     offset = page * 30
@@ -130,7 +131,7 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
     -- archivedAt = if archived then "AND ann.archived_at IS NOT NULL " else "AND ann.archived_at IS NULL "
     search = case searchM of Just s -> " AND enp.url_path LIKE '%" <> s <> "%'"; Nothing -> ""
     pHostQuery = case pHostM of Just h -> " AND enp.host = ?"; Nothing -> ""
-    hostFilter = case pHostM of Just h -> " AND attributes->'net'->'host'->>'name' = ?"; Nothing -> ""
+    hostFilter = case pHostM of Just h -> " AND (attributes->'net'->'host'->>'name' = ? OR attributes->'server'->>'address' = ?)"; Nothing -> ""
     orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> "coalesce(fr.eventsCount, 0) DESC"
     q =
       [text| 
@@ -195,14 +196,14 @@ dependenciesAndEventsCount pid requestType sortT skip timeF = do
       q =
         [text|
 WITH filtered_requests AS (
-    SELECT attributes->'net'->'host'->>'name' AS host,
+    SELECT COALESCE(attributes->'net'->'host'->>'name', attributes->'server'->>'address', '') AS host,
            COUNT(*) AS eventsCount,
            MAX(timestamp) AS last_seen,
            MIN(timestamp) AS first_seen
     FROM otel_logs_and_spans
     WHERE project_id = ?
       AND $timeRange
-      AND (name = 'monoscope.http' OR name = 'apitoolkit-http-span')
+      AND name = 'monoscope.http'
       AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
     GROUP BY host
 )
