@@ -2420,7 +2420,7 @@ dashboardActions_ pid paymentPlan dashId tabSlugM currentRange = div_ [class_ "f
   div_ [class_ "max-md:hidden"] $ yamlEditorDrawer_ pid dashId
   div_ [class_ "dropdown dropdown-end"] do
     div_ [tabindex_ "0", role_ "button", class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Open context menu", data_ "tippy-content" "Context Menu"] $ faSprite_ "ellipsis" "regular" "w-4 h-4"
-    ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-bgOverlay rounded-box p-2 w-52 shadow-sm leading-none"] do
+    ul_ [tabindex_ "0", class_ "dropdown-content menu menu-md bg-bgRaised rounded-box p-2 w-52 shadow-sm leading-none"] do
       li_ $ label_ [Lucid.for_ "pageTitleModalId", class_ "p-2"] "Rename dashboard"
       whenJust tabSlugM $ \_ -> li_ $ label_ [Lucid.for_ "tabRenameModalId", class_ "p-2"] "Rename tab"
       li_ $ button_ [class_ "p-2 w-full text-left", hxPost_ ("/p/" <> pid.toText <> "/dashboards/" <> dashId.toText <> "/duplicate"), hxSwap_ "none", data_ "tippy-content" "Creates a copy of this dashboard"] "Duplicate dashboard"

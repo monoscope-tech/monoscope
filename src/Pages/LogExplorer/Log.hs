@@ -396,7 +396,7 @@ renderFacets facetSummary = do
                   div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
                     a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded"] do
                       faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
-                    ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgOverlay rounded-box w-52"] do
+                    ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgRaised rounded-box w-52"] do
                       li_
                         $ a_
                           [ term "data-field" (T.replace "___" "." key)

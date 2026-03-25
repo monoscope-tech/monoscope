@@ -16,7 +16,7 @@ import Pkg.DeriveUtils (hashAssetFile)
 import PyF
 import Relude
 import System.Config (EnvConfig (..))
-import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
+import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), faSprite_, fieldContextMenuItems_, freeTierUsageBanner, loadingIndicatorWith_, loadingIndicator_, navTabAttrs)
 
 
 menu :: Projects.ProjectId -> [(Text, Text, Text)]
@@ -434,11 +434,11 @@ bodyWrapper bcfg child = do
             on click
               log "clicked" then
               if I match <.with-context-menu/> then
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu />
+                remove <.log-item-cloned-menu /> then remove .with-context-menu from <.with-context-menu />
               else
-                remove <.log-item-context-menu /> then remove .with-context-menu from <.with-context-menu /> then
+                remove <.log-item-cloned-menu /> then remove .with-context-menu from <.with-context-menu /> then
                 get #log-item-context-menu-tmpl.innerHTML then put it after me then add .with-context-menu to me then
-                _hyperscript.processNode(.log-item-context-menu) then htmx.process(next <.log-item-context-menu/>)
+                _hyperscript.processNode(.log-item-cloned-menu) then htmx.process(next <.log-item-cloned-menu/>)
               end
             end
           end
@@ -527,7 +527,7 @@ bodyWrapper bcfg child = do
       -- Mobile nav backdrop (at body level, after section, so it paints on top)
       label_ [term "for" "mobile-nav-toggle", class_ "fixed inset-0 bg-black/50 backdrop-blur-xs z-40 hidden group-has-[#mobile-nav-toggle:checked]/pg:max-md:block cursor-default", Aria.label_ "Close menu"] ""
       externalHeadScripts_ bcfg.config
-      alerts_
+      globalTemplates_
       script_ [async_ "true", src_ "https://www.googletagmanager.com/gtag/js?id=AW-11285541899"] ("" :: Text)
       script_
         [text|
@@ -649,7 +649,7 @@ projectsDropDown currProject projects = do
   let pidTxt = currProject.id.toText
   div_
     [ term "data-menu" "true"
-    , class_ "origin-top-right z-40 bg-bgOverlay p-2 absolute w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
+    , class_ "origin-top-right z-40 bg-bgRaised p-2 absolute w-[18rem] rounded-xl shadow-lg border border-strokeWeak"
     ]
     do
       when (V.length projects > 1)
@@ -764,7 +764,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
             span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"
-      ul_ [tabindex_ "0", class_ "dropdown-content z-40 menu menu-md bg-bgOverlay rounded-box shadow-sm border border-strokeWeak w-56 mb-2", role_ "menu"] do
+      ul_ [tabindex_ "0", class_ "dropdown-content z-40 menu menu-md bg-bgRaised rounded-box shadow-sm border border-strokeWeak w-56 mb-2", role_ "menu"] do
         div_ [class_ "px-3 py-2 text-sm"] do
           div_ [class_ "font-medium text-textStrong truncate"] $ toHtml userIdentifier
           div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
@@ -852,8 +852,16 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
       whenJust pageActionsM id
 
 
-alerts_ :: Html ()
-alerts_ = do
+globalTemplates_ :: Html ()
+globalTemplates_ = do
+  template_ [id_ "log-item-context-menu-tmpl"] do
+    ul_ [class_ "log-item-cloned-menu dropdown-content z-50 menu p-2 shadow-sm bg-bgRaised rounded-box w-52 absolute", tabindex_ "0"] do
+      fieldContextMenuItems_
+        [__|on click if 'clipboard' in window.navigator then
+              call navigator.clipboard.writeText((closest @data-field-value))
+              send successToast(value:['Value has been added to the Clipboard']) to <body/>
+              halt
+            end|]
   template_ [id_ "successToastTmpl"] do
     div_ [role_ "alert", class_ "alert alert-success max-md:w-full md:w-96 cursor-pointer toast-animate", [__|init wait for click or 30s then transition my opacity to 0 then remove me|]] do
       faSprite_ "circle-check" "solid" "stroke-current shrink-0 w-6 h-6"

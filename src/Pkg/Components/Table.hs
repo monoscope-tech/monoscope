@@ -696,7 +696,7 @@ renderSortMenu sortCfg = do
     div_
       [ id_ "sortMenuDiv"
       , hxBoost_ "true"
-      , class_ "dropdown-content bg-bgOverlay p-1 text-sm border border-strokeWeak z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg"
+      , class_ "dropdown-content bg-bgRaised p-1 text-sm border border-strokeWeak z-50 mt-2 w-72 origin-top-right rounded-md shadow-lg"
       , tabindex_ "0"
       ]
       do

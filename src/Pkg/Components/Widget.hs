@@ -424,7 +424,7 @@ renderWidgetHeader widget wId title valueM subValueM expandBtnFn ctaM hideSub = 
     details_ [class_ "dropdown dropdown-end"] do
       summary_ [class_ "text-iconNeutral cursor-pointer p-2 hover:bg-fillWeak rounded-lg tap-target", Aria.label_ "Widget menu", data_ "tippy-content" "Widget Menu"]
         $ Utils.faSprite_ "ellipsis" "regular" "w-4 h-4"
-      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-bgOverlay rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
+      ul_ [class_ "text-textStrong menu menu-md dropdown-content bg-bgRaised rounded-box p-2 w-52 shadow-sm leading-none z-10"] do
         -- Only show the "Move to dashboard" option if we're in a dashboard context
 
         let dashId = fromMaybe "" widget._dashboardId

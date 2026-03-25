@@ -153,7 +153,7 @@ timepicker_ submitForm currentRange targetIdM = do
   -- DaisyUI popover content
   div_ [class_ "relative w-max"] do
     div_
-      [ class_ "border dropdown dropdown-end menu w-96 max-md:w-[calc(100vw-1rem)] rounded-box bg-bgOverlay shadow-lg"
+      [ class_ "border dropdown dropdown-end menu w-96 max-md:w-[calc(100vw-1rem)] rounded-box bg-bgRaised shadow-lg"
       , term "popover" "manual"
       , id_ $ targetPr <> "-timepicker-popover"
       , term "style" $ "position-anchor:--" <> targetPr <> "-timepicker-anchor"
@@ -276,7 +276,7 @@ refreshButton_ = do
         span_ [class_ "auto-refresh-span text-textWeak max-md:hidden"] "Off"
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
 
-      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-bgOverlay rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
+      ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-bgRaised rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do
         li_ [class_ "menu-title"] "Auto-refresh"
         forM_ refreshOptions \(label, title, ms) ->
           li_
