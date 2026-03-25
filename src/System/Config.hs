@@ -219,7 +219,8 @@ configToEnv config = do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization
     blueMessage ("migration initialized " <> show initializationRes)
-    migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
+    let noTxnOpts = Migrations.defaultOptions{Migrations.optTransactionControl = Migrations.NoNewTransaction}
+    migrationRes <- Migrations.runMigration conn noTxnOpts $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
     blueMessage ("migration result " <> show migrationRes)
     pass
   pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50 & setNumStripes (Just 5))

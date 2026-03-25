@@ -163,7 +163,8 @@ migrate db = do
   conn <- liftIO $ connectPostgreSQL (TmpPostgres.toConnectionString db)
   initializationRes <- Migration.runMigration conn Migration.defaultOptions MigrationInitialization
 
-  migrationRes <- Migration.runMigration conn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+  let noTxnOpts = Migration.defaultOptions{Migration.optTransactionControl = Migration.NoNewTransaction}
+  migrationRes <- Migration.runMigration conn noTxnOpts $ MigrationDirectory migrationsDirr
   -- Set nil user as sudo for tests and create test project
   let q =
         [sql| UPDATE users.users SET is_sudo = true WHERE id = '00000000-0000-0000-0000-000000000000';
@@ -366,7 +367,8 @@ ensureTemplateDatabase connInfo templateDbName = do
 
     -- Run migrations
     _ <- Migration.runMigration templateConn Migration.defaultOptions MigrationInitialization
-    _ <- Migration.runMigration templateConn Migration.defaultOptions $ MigrationDirectory migrationsDirr
+    let noTxnOpts = Migration.defaultOptions{Migration.optTransactionControl = Migration.NoNewTransaction}
+    _ <- Migration.runMigration templateConn noTxnOpts $ MigrationDirectory migrationsDirr
 
     -- Set nil user as sudo for tests and create test project
     let setupData =
