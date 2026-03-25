@@ -71,7 +71,7 @@ import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed), (:.)(..))
+import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed), (:.) (..))
 
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
@@ -479,13 +479,16 @@ data AggregationTemporality = ATUnspecified | ATDelta | ATCumulative
   deriving anyclass (NFData)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake AggregationTemporality
 
+
 instance ToField AggregationTemporality where toField = toField . fromEnum
 
+
 instance FromField AggregationTemporality where
-  fromField f bs = fromField @Int f bs >>= \n ->
-    if n >= fromEnum (minBound @AggregationTemporality) && n <= fromEnum (maxBound @AggregationTemporality)
-      then pure (toEnum n)
-      else returnError ConversionFailed f ("Invalid aggregation_temporality: " <> show n)
+  fromField f bs =
+    fromField @Int f bs >>= \n ->
+      if n >= fromEnum (minBound @AggregationTemporality) && n <= fromEnum (maxBound @AggregationTemporality)
+        then pure (toEnum n)
+        else returnError ConversionFailed f ("Invalid aggregation_temporality: " <> show n)
 
 
 data MetricDataPoint = MetricDataPoint
@@ -744,10 +747,22 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
 
     metaToTuple entry = (entry.projectId, entry.metricName, entry.metricType, entry.metricUnit, entry.metricDescription, fromMaybe "unknown" $ lookupValueText entry.resource "service.name")
     metricToRow entry =
-      ( entry.projectId, entry.metricName, entry.metricType, entry.metricUnit, entry.metricDescription
-      , entry.metricTime, entry.timestamp, entry.attributes, entry.resource, entry.instrumentationScope
-      , entry.metricValue, entry.exemplars, entry.flags
-      ) :. metricValueToNative entry.metricValue :. (entry.aggregationTemporality, entry.isMonotonic)
+      ( entry.projectId
+      , entry.metricName
+      , entry.metricType
+      , entry.metricUnit
+      , entry.metricDescription
+      , entry.metricTime
+      , entry.timestamp
+      , entry.attributes
+      , entry.resource
+      , entry.instrumentationScope
+      , entry.metricValue
+      , entry.exemplars
+      , entry.flags
+      )
+        :. metricValueToNative entry.metricValue
+        :. (entry.aggregationTemporality, entry.isMonotonic)
 
 
 -- OtelLogsAndSpans ToRow instance
