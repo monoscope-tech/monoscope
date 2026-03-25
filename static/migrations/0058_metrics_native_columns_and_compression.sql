@@ -69,6 +69,8 @@ BEGIN
         WHEN lock_not_available THEN
           RAISE NOTICE 'Chunk % is locked, skipping: %', chunk_name, SQLERRM;
           failed_chunks := failed_chunks + 1;
+        WHEN undefined_object OR undefined_table THEN
+          RAISE NOTICE 'Chunk % no longer exists, skipping', chunk_name;
       END;
     END LOOP;
 
@@ -87,7 +89,12 @@ BEGIN
       SELECT c.chunk_name::regclass FROM timescaledb_information.chunks c
       WHERE c.hypertable_schema = 'telemetry' AND c.hypertable_name = 'metrics' AND c.is_compressed = false
     LOOP
-      PERFORM compress_chunk(chunk_name, true);
+      BEGIN
+        PERFORM compress_chunk(chunk_name, true);
+      EXCEPTION
+        WHEN undefined_object OR undefined_table THEN
+          RAISE NOTICE 'Chunk % no longer exists, skipping', chunk_name;
+      END;
     END LOOP;
   END IF;
 END $$;
