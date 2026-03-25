@@ -17,7 +17,7 @@ import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
 import Data.List as L (partition)
 import Data.List.Extra (chunksOf, groupBy)
-import Data.Map.Lazy qualified as Map
+import Data.Map.Strict qualified as Map
 import Data.Ord (clamp)
 import Data.Pool (withResource)
 import Data.Set qualified as S
@@ -1160,8 +1160,8 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   -- Deduplicate using HashMap instead of O(n²) nubBy
   let !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
   let !shapesFinal = deduplicateByHash (.hash) $ V.mapMaybe id shapes
-  let !fieldsFinal = deduplicateByHash (.hash) $ V.concat $ V.toList fields
-  let !formatsFinal = deduplicateByHash (.hash) $ V.concat $ V.toList formats
+  let !fieldsFinal = deduplicateByHash (.hash) $ V.concatMap id fields
+  let !formatsFinal = deduplicateByHash (.hash) $ V.concatMap id formats
 
   -- Only log if there are actually entities to process (reduces noise in tests)
   Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0)

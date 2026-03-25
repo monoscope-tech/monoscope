@@ -23,7 +23,6 @@ where
 
 import Control.Lens ((^?))
 import Control.Monad.ST (ST, runST)
-import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
@@ -162,8 +161,7 @@ processMessages msgs attrs = do
           Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
             mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
             pure $! fromMaybe Projects.defaultProjectCache mpjCache
-        -- Force evaluation of cache pairs
-        pure (zip projectIds cachePairs `using` parList rpar)
+        pure $! zip projectIds cachePairs
       let projectCaches = HM.fromList caches
 
       spans <- forM rMsgs \(rmAckId, msg) -> do

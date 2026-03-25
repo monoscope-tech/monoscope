@@ -18,7 +18,6 @@ module Opentelemetry.OtlpServer (
 import Control.Concurrent (forkIO, threadDelay)
 import Control.Exception (throwIO)
 import Control.Exception.Annotated (checkpoint)
-import Control.Parallel.Strategies (parList, rpar, using)
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
@@ -311,7 +310,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
   checkpoint (cp "") $ do
     processingStartTime <- liftIO getCurrentTime
     let !msgsCount = length msgs
-        !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs] `using` parList rpar
+        !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
         !allProjectKeys = V.force $ V.concat [extractKeys req | (_, Right req) <- decodedMsgs]
         !uniqueProjectKeys = V.force $ V.fromList $ L.nub $ V.toList allProjectKeys
         !atIds = concatMap extractIds [req | (_, Right req) <- decodedMsgs]
@@ -329,7 +328,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
                 Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
                   mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
                   pure $! fromMaybe Projects.defaultProjectCache mpjCache
-              pure (zip projectIds cachePairs `using` parList rpar)
+              pure $! zip projectIds cachePairs
             pure $ HM.fromList caches
           pure (keyToId, projectCaches)
 
@@ -342,14 +341,14 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
           | (_, (ackId, decodeResult)) <- chunk
           ]
 
-    !chunkedResults <- liftIO $ pure (map processChunk chunks `using` parList rpar)
+    let !chunkedResults = map processChunk chunks
 
     forM_ [(idx, err) | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs] \(idx, err) ->
       recordProtoError label err (snd $ msgs L.!! idx) Log.logAttention
 
     let !results = V.fromList $ concat chunkedResults
         (!ackIds, !outputVectors) = V.unzip results
-        !allOutput = V.force $ V.concat $ V.toList outputVectors
+        !allOutput = V.force $ V.concatMap Relude.id outputVectors
 
     processingEndTime <- liftIO getCurrentTime
     let processingDuration = diffUTCTime processingEndTime processingStartTime
