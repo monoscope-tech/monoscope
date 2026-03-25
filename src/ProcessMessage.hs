@@ -28,7 +28,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Extra (lodashMerge)
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as AEKM
-import Data.Aeson.Lens (key, _Object, _String)
+import Data.Aeson.Lens (key, _Number, _Object, _String)
 import Data.Aeson.Types (KeyValue ((.=)), object)
 import Data.Aeson.Types qualified as AE
 import Data.Aeson.Types qualified as AET
@@ -217,11 +217,16 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
 
       !routePath = fromMaybe "/" $ asum [attrValue ^? key "http" . key "route" . _String, attrValue ^? key "url" . key "path" . _String]
 
-      !statusCode = fromMaybe 200 $ do
-        statusStr <- attrValue ^? key "http" . key "response" . key "status_code" . _String
-        readMaybe $ toString statusStr
+      !statusCode = fromMaybe 200 $ asum
+        [ attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString
+        , truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number
+        ] >>= \c -> if c >= 100 && c < 600 then Just c else Nothing
 
-      !host = fromMaybe "" $ asum [attrValue ^? key "net" . key "host" . key "name" . _String, attrValue ^? key "server" . key "address" . _String]
+      !host = fromMaybe "" $ asum
+        [ attrValue ^? key "net" . key "host" . key "name" . _String
+        , attrValue ^? key "server" . key "address" . _String
+        , attrValue ^? key "http" . key "host" . _String
+        ]
 
       -- Extract SDK type from attributes (needed for URL normalization)
       !sdkTypeStr =
