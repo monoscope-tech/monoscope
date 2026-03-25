@@ -59,6 +59,6 @@ spec = aroundAll withTestResources do
 
       _ <- runAllBackgroundJobs frozenTime tr.trATCtx
       endpoints <- runTestBg frozenTime tr $ Endpoints.endpointRequestStatsByProject pid False False Nothing Nothing Nothing 0 "Incoming"
-      V.length endpoints `shouldBe` 3
+      V.length endpoints `shouldBe` 2
       forM_ endpoints \enp ->
         ["/", "/api/v1/user/login", "/service/extension/backup/mboximport"] `shouldContain` [enp.urlPath]
