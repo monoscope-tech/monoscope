@@ -1213,7 +1213,7 @@ getEndpointStats projectId start end = PG.query q (projectId, start, end)
     q =
       [sql|
 SELECT
-    COALESCE(attributes___server___address, attributes___network___peer___address, '') AS host,
+    COALESCE(attributes___server___address, attributes->'net'->'host'->>'name', attributes->'http'->>'host', NULLIF(split_part(split_part(split_part(attributes___url___full, '://', 2), '/', 1), ':', 1), ''), resource___service___name, '') AS host,
     COALESCE(attributes___http___request___method, 'GET') AS method,
     COALESCE(attributes___url___path, '') AS url_path,
     CAST(ROUND(AVG(COALESCE(duration, 0))) AS BIGINT) AS average_duration,

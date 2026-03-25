@@ -1012,7 +1012,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
               Just (AE.String b) -> b64ToJson b
               _ -> AE.Null
           extractBody _ = AE.Null
-      newAttributes =
+      newAttributes' =
         if isOurSdkSpan
           then
             let htt = Map.lookup "http" (fromMaybe Map.empty attributes)
@@ -1027,6 +1027,32 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                      in newHttp
                   _ -> attributes
           else attributes
+      -- Fall back to resource.service.name for server.address when no host attribute is present on HTTP spans
+      !resourceAttrs = jsonToMap $ removeProjectId $ resourceToJSON resourceM
+      newAttributes = case newAttributes' of
+        Just attrs | hasNoHost attrs ->
+          case hostFromUrlFull attrs <|> serviceName of
+            Just sn | not (T.null sn) -> Just $ Map.insertWith mergeObjects "server" (AE.Object $ KEM.singleton "address" (AE.String sn)) attrs
+            _ -> newAttributes'
+        _ -> newAttributes'
+      hasNoHost attrs =
+        isNothing (lookupNested "net" "host" attrs)
+          && isNothing (lookupNested "server" "address" attrs)
+          && isNothing (lookupNested "http" "host" attrs)
+      lookupNested outer inner attrs = Map.lookup outer attrs >>= \case
+        AE.Object o -> KEM.lookup (AEK.fromText inner) o
+        _ -> Nothing
+      hostFromUrlFull attrs = lookupNested "url" "full" attrs >>= \case
+        AE.String u ->
+          let stripped = fromMaybe u $ T.stripPrefix "https://" u <|> T.stripPrefix "http://" u
+              h = T.takeWhile (\c -> c /= '/' && c /= '?' && c /= ':') stripped
+           in if T.null h then Nothing else Just h
+        _ -> Nothing
+      serviceName = resourceAttrs >>= Map.lookup "service" >>= \case
+        AE.Object s -> KEM.lookup "name" s >>= \case AE.String n -> Just n; _ -> Nothing
+        _ -> Nothing
+      mergeObjects (AE.Object new) (AE.Object old) = AE.Object (KEM.union new old)
+      mergeObjects new _ = new
       otelSpan =
         OtelLogsAndSpans
           { project_id = pid.toText
@@ -1046,7 +1072,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
           , severity = Nothing
           , body = fmap AesonText body
           , attributes = fmap AesonText newAttributes
-          , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
+          , resource = fmap AesonText resourceAttrs
           , hashes = V.empty
           , kind = if spanName' == "apitoolkit-http-span" then Just "server" else spanKindText
           , status_code = statusCodeText
