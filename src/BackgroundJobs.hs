@@ -734,8 +734,9 @@ processFiveMinuteSpans scheduledTime pid = do
       httpSpans <-
         V.fromList
           <$> PG.query
-            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                         hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes,
+                         NULL::jsonb as resource, '{}'::text[] as hashes, kind, status_code, status_message, start_time, end_time,
+                         NULL::jsonb as events, NULL::text as links, duration, name, parent_id, '{}'::text[] as summary, date
                   FROM otel_logs_and_spans
               WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___http___request___method IS NOT NULL OFFSET ? LIMIT ? |]
             (pid, fiveMinutesAgo, scheduledTime, skip, perPage)
@@ -883,14 +884,14 @@ processOneMinuteErrors scheduledTime pid = do
       spansWithErrors <-
         V.fromList
           <$> PG.query
-            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                             hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
+                             NULL::text as body, attributes, resource,
+                             '{}'::text[] as hashes, kind, status_code, status_message, start_time, end_time, events,
+                             NULL::text as links, duration, name, parent_id, '{}'::text[] as summary, date
                       FROM otel_logs_and_spans
                   WHERE project_id = ? AND timestamp >= ? AND timestamp < ?
                   AND (
-                    -- Check for error status
                     status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
-                    -- Check for exception events
                     OR (
                       events IS NOT NULL
                       AND EXISTS (
@@ -900,7 +901,6 @@ processOneMinuteErrors scheduledTime pid = do
                            OR event->>'event_name' ILIKE '%error%'
                       )
                     )
-                    -- Check for error attributes
                     OR attributes->>'error' = 'true'
                     OR attributes->>'error.type' IS NOT NULL
                     OR attributes->>'exception.type' IS NOT NULL

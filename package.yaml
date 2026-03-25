@@ -285,7 +285,7 @@ executables:
       - -threaded
       - -fplugin AutoInstrument
       - -rtsopts
-      - -with-rtsopts=-N
+      - '"-with-rtsopts=-N -I5 -Fd2"'
       # - -O2
       # - -fPIC
     dependencies:
