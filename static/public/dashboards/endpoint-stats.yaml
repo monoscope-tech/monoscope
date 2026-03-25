@@ -8,7 +8,7 @@ variables:
     required: true
     multi: false
     help_text: Domain
-    type: query # requires a query that returns 2 fields, an id and a title
+    type: query
     sql: select distinct host from apis.endpoints where project_id='{{project_id}}' limit 500
 
   - key: endpointHash
@@ -17,79 +17,472 @@ variables:
     multi: false
     help_text: Current filtered endpoint
     reload_on_change: true
-    type: query # requires a query that returns 2 fields, an id and a title
+    type: query
     sql: select hash::text, method || ' ' || url_path from apis.endpoints where project_id='{{project_id}}' and host='{{var-host}}' limit 500
 
-widgets:
-  # - type: "timeseries_stat"
-  #   title: "Requests"
-  #   query: requests
-  #   unit: reqs
-  #   layout: { w: 3, h: 2 }
+widgets: []
 
-  - type: group
-    title: Overview
-    layout: { w: 6, h: 4 }
-    children:
-      - type: 'timeseries_stat'
-        title: 'Requests'
-        icon: list-tree
-        query: kind=="server" AND hashes[*]=="{{var-endpointHash}}" | summarize count() by bin_auto(timestamp), status_code
+tabs:
+  - name: Overview
+    icon: grid
+    widgets:
+      # KPI Strip
+      - type: group
+        title: Health
+        layout: { w: 12, h: 4 }
+        children:
+          - type: 'timeseries_stat'
+            title: 'Requests'
+            icon: activity
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}"
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: reqs
+            eager: true
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Error Rate'
+            description: 'Percentage of 5xx server errors. Lower is better.'
+            icon: alert-triangle
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}"
+              | summarize round(countif(coalesce(attributes.http.response.status_code, 0) >= 500) * 100.0 / count(), 2) by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: '%'
+            alert_threshold: 5
+            warning_threshold: 1
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'P95 Latency'
+            description: '95th percentile response time. 95% of requests are faster than this.'
+            icon: clock
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              | summarize p95(duration) / 1000000 by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: ms
+            layout: { w: 3, h: 2 }
+
+          - type: 'stat'
+            title: 'Apdex'
+            description: 'Application Performance Index (0-1). >0.9 excellent, <0.5 poor. Threshold: 500ms satisfied, 2s tolerating.'
+            icon: smile
+            sql: "SELECT ROUND((SUM(CASE WHEN duration <= 500000000 THEN 1.0 WHEN duration <= 2000000000 THEN 0.5 ELSE 0 END)) / GREATEST(1, COUNT(*))::numeric, 2)::float FROM otel_logs_and_spans WHERE project_id='{{project_id}}' AND kind = 'server' AND hashes @> ARRAY['{{var-endpointHash}}'] AND duration IS NOT NULL {{time_filter}}"
+            unit: '/1.0'
+            layout: { w: 3, h: 2 }
+
+      # Time series row: request volume + latency
+      - type: 'timeseries'
+        title: 'Requests by Status Code'
+        query: |
+          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null
+          | summarize count() by bin_auto(timestamp), coalesce(tostring(attributes.http.response.status_code), "unknown")
+          | order by timestamp desc
+          | limit 10000
         unit: reqs
-        eager: true
-        layout: { w: 7, h: 2 }
+        layout: { w: 6, h: 4 }
 
-      # - type: 'stat'
-      #   title: Errors & anomalies
-      #   icon: bug
-      #   sql: select total_anomalies::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-      #   unit: reqs
-      #   eager: true
-      #   layout: { w: 5, h: 2 }
-      #
-      # - type: 'stat'
-      #   title: endpoints
-      #   icon: list-check
-      #   sql: select total_endpoints::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-      #   unit: reqs
-      #   eager: true
-      #   layout: { w: 4, h: 2 }
-      #
-      # - type: 'stat'
-      #   title: Req shapes
-      #   icon: dashboard-list
-      #   sql: select total_shapes::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-      #   unit: reqs
-      #   eager: true
-      #   layout: { w: 4, h: 2 }
-      #
-      # - type: 'stat'
-      #   title: Reqs per min
-      #   icon: arrow-down-to-line
-      #   sql: select requests_per_min::float from apis.project_request_stats where project_id='{{project_id}}'::uuid
-      #   unit: reqs
-      #   eager: true
-      #   layout: { w: 4, h: 2 }
+      - type: 'timeseries_line'
+        title: 'Latency Percentiles'
+        description: 'Response time distribution over time. P50 is median, P95 shows tail latency.'
+        hide_subtitle: true
+        summarize_by: max
+        query: |
+          hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND duration != null
+          | summarize percentiles(duration / 1e6, 50, 75, 90, 95) by bin_auto(timestamp)
+          | order by timestamp desc
+        layout: { w: 6, h: 4 }
 
-  # - type: 'anomalies'
-  #   title: 'Ongoing issues and monitors'
-  #   layout: { w: 6, h: 5 }
-  #
-  - type: 'timeseries'
-    title: 'All requests'
-    query: hashes[*]=="{{var-endpointHash}}" | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
-    unit: reqs
-    layout: { w: 6, h: 4 }
+      # Errors + error breakdown
+      - type: 'timeseries'
+        title: 'Errors (4xx & 5xx)'
+        theme: 'roma'
+        query: |
+          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 400.0
+          | extend error_category = case(attributes.http.response.status_code >= 500, "5xx", attributes.http.response.status_code >= 400, "4xx", tostring(attributes.http.response.status_code))
+          | summarize count() by bin_auto(timestamp), error_category
+          | order by timestamp desc
+          | limit 10000
+        unit: errors
+        layout: { w: 6, h: 4 }
 
-  - type: 'timeseries_line'
-    title: 'Latency percentiles (ms)'
-    hide_subtitle: true
-    summarize_by: max
-    query: hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND attributes.http.response.status_code != null | summarize percentiles(duration / 1e6, 50, 75, 90, 95) by bin_auto(timestamp)
-    layout: { w: 6, h: 4 }
+      - type: 'timeseries'
+        title: 'Time Spent by Downstream Operations'
+        description: 'Where this endpoint spends its time: database queries, external API calls, and internal operations.'
+        sql: |
+          WITH endpoint_spans AS (
+            SELECT
+              extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+              context___span_id as span_id,
+              context___trace_id as trace_id
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND kind = 'server'
+              AND hashes @> ARRAY['{{var-endpointHash}}']
+              {{time_filter}}
+          ),
+          downstream_time AS (
+            SELECT
+              es.time,
+              o.name as operation,
+              SUM(o.duration)::float as duration_ns
+            FROM otel_logs_and_spans o
+            INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
+            WHERE o.project_id='{{project_id}}'
+              AND o.context___span_id != es.span_id
+              AND o.duration IS NOT NULL
+              AND o.name IS NOT NULL
+              {{time_filter}}
+            GROUP BY es.time, o.name
+          )
+          SELECT time, operation, duration_ns as value
+          FROM downstream_time
+          ORDER BY time DESC
+          LIMIT 10000
+        unit: ns
+        layout: { w: 6, h: 4 }
 
-  - type: 'timeseries'
-    title: 'Errors'
-    theme: 'roma'
-    query: kind=="server" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 300.0 AND hashes[*]=="{{var-endpointHash}}" | summarize count() by bin_auto(timestamp), attributes.http.response.status_code
-    layout: { w: 6, h: 4 }
+      # Status code breakdown table
+      - type: table
+        title: 'Status Code Breakdown'
+        layout: { w: 6, h: 4 }
+        columns:
+          - field: status_code
+            title: Status Code
+          - field: count
+            title: Count
+            columnType: number
+            progress: column_percent
+          - field: pct
+            title: '% of Total'
+            progress: value_percent
+          - field: avg_latency
+            title: Avg Latency
+            columnType: duration
+            unit: ms
+            progress: column_percent
+        sql: |
+          SELECT
+            COALESCE(attributes___http___response___status_code::text, 'unknown') as status_code,
+            COUNT(*)::text as count,
+            ROUND((COUNT(*) * 100.0 / GREATEST(1, SUM(COUNT(*)) OVER ()))::numeric, 1)::text as pct,
+            ROUND((AVG(duration) / 1e6)::numeric, 2)::text as avg_latency
+          FROM otel_logs_and_spans
+          WHERE project_id='{{project_id}}'
+            AND kind = 'server'
+            AND hashes @> ARRAY['{{var-endpointHash}}']
+            {{time_filter}}
+          GROUP BY attributes___http___response___status_code
+          ORDER BY COUNT(*) DESC
+          LIMIT 20
+
+      # Downstream dependencies table
+      - type: table
+        title: 'Downstream Dependencies'
+        description: 'Services and operations called by this endpoint. High latency or error rates here often explain endpoint slowness.'
+        layout: { w: 6, h: 4 }
+        columns:
+          - field: operation
+            title: Operation
+          - field: calls
+            title: Calls
+            columnType: number
+            progress: column_percent
+          - field: avg_latency
+            title: Avg Latency
+            columnType: duration
+            unit: ms
+            progress: column_percent
+          - field: error_rate
+            title: Error Rate
+            unit: '%'
+            progress: value_percent
+            progress_variant: error
+        sql: |
+          WITH endpoint_spans AS (
+            SELECT context___span_id as span_id, context___trace_id as trace_id
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND kind = 'server'
+              AND hashes @> ARRAY['{{var-endpointHash}}']
+              {{time_filter}}
+          )
+          SELECT
+            o.name as operation,
+            COUNT(*)::text as calls,
+            ROUND((AVG(o.duration) / 1e6)::numeric, 2)::text as avg_latency,
+            ROUND((COUNT(*) FILTER (WHERE o.status_code = 'ERROR') * 100.0 / GREATEST(1, COUNT(*)))::numeric, 2)::text as error_rate
+          FROM otel_logs_and_spans o
+          INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
+          WHERE o.project_id='{{project_id}}'
+            AND o.context___span_id != es.span_id
+            AND o.name IS NOT NULL
+            AND o.duration IS NOT NULL
+            {{time_filter}}
+          GROUP BY o.name
+          ORDER BY COUNT(*) DESC
+          LIMIT 20
+
+      # Traces
+      - type: traces
+        title: 'Recent Traces'
+        layout: { w: 12, h: 5 }
+        columns:
+          - field: resource_name
+            title: Service
+          - field: span_name
+            title: Operation
+          - field: total_time
+            title: Duration
+            columnType: duration
+          - field: span_count
+            title: Spans
+            columnType: number
+          - field: latency_breakdown
+            title: Latency breakdown
+        sql: |
+          SELECT
+            COALESCE(resource___service___name, 'Unknown'),
+            name,
+            ROUND(duration / 1000000, 2)::text AS duration_ms,
+            (SELECT COUNT(*)::text FROM otel_logs_and_spans c WHERE c.context___trace_id = o.context___trace_id AND c.project_id='{{project_id}}') AS span_count,
+            context___trace_id AS trace_id
+          FROM otel_logs_and_spans o
+          WHERE project_id='{{project_id}}'
+            AND kind = 'server'
+            AND hashes @> ARRAY['{{var-endpointHash}}']
+            AND duration IS NOT NULL
+            {{time_filter}}
+          ORDER BY timestamp DESC
+          LIMIT 20
+
+  - name: Errors
+    icon: alert-triangle
+    widgets:
+      - type: group
+        title: Error Summary
+        layout: { w: 12, h: 4 }
+        children:
+          - type: 'timeseries_stat'
+            title: 'Server Errors (5xx)'
+            icon: alert-triangle
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 500
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: errors
+            alert_threshold: 1
+            layout: { w: 4, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'Client Errors (4xx)'
+            icon: circle-x
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code >= 400 AND attributes.http.response.status_code < 500
+              | summarize count() by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: errors
+            layout: { w: 4, h: 2 }
+
+          - type: 'stat'
+            title: 'Error Rate'
+            icon: percent
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}"
+              | summarize round(countif(coalesce(attributes.http.response.status_code, 0) >= 400) * 100.0 / count(), 2)
+            unit: '%'
+            layout: { w: 4, h: 2 }
+
+      - type: 'timeseries'
+        title: 'Errors by Status Code'
+        theme: 'roma'
+        query: |
+          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND attributes.http.response.status_code != null AND attributes.http.response.status_code >= 400.0
+          | summarize count() by bin_auto(timestamp), coalesce(tostring(attributes.http.response.status_code), "unknown")
+          | order by timestamp desc
+          | limit 10000
+        unit: errors
+        layout: { w: 6, h: 4 }
+
+      - type: 'timeseries'
+        title: 'Errors by Exception Type'
+        theme: 'roma'
+        query: |
+          kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND (status_code == "ERROR" or coalesce(attributes.http.response.status_code, 0) >= 400)
+          | summarize count() by bin_auto(timestamp), coalesce(attributes.exception.type, attributes.error.type, "unknown")
+          | order by timestamp desc
+          | limit 10000
+        unit: errors
+        layout: { w: 6, h: 4 }
+
+      # Error traces
+      - type: traces
+        title: 'Error Traces'
+        layout: { w: 12, h: 6 }
+        columns:
+          - field: resource_name
+            title: Service
+          - field: span_name
+            title: Operation
+          - field: total_time
+            title: Duration
+            columnType: duration
+          - field: span_count
+            title: Spans
+            columnType: number
+          - field: latency_breakdown
+            title: Latency breakdown
+        sql: |
+          SELECT
+            COALESCE(resource___service___name, 'Unknown'),
+            name,
+            ROUND(duration / 1000000, 2)::text AS duration_ms,
+            (SELECT COUNT(*)::text FROM otel_logs_and_spans c WHERE c.context___trace_id = o.context___trace_id AND c.project_id='{{project_id}}') AS span_count,
+            context___trace_id AS trace_id
+          FROM otel_logs_and_spans o
+          WHERE project_id='{{project_id}}'
+            AND kind = 'server'
+            AND hashes @> ARRAY['{{var-endpointHash}}']
+            AND (status_code = 'ERROR' OR COALESCE(attributes___http___response___status_code, 0) >= 400)
+            AND duration IS NOT NULL
+            {{time_filter}}
+          ORDER BY timestamp DESC
+          LIMIT 20
+
+  - name: Latency
+    icon: clock
+    widgets:
+      - type: group
+        title: Latency Summary
+        layout: { w: 12, h: 4 }
+        children:
+          - type: 'timeseries_stat'
+            title: 'P50 Latency'
+            icon: clock
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              | summarize p50(duration) / 1000000 by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: ms
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'P75 Latency'
+            icon: clock
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              | summarize p75(duration) / 1000000 by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: ms
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'P95 Latency'
+            icon: clock
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              | summarize p95(duration) / 1000000 by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: ms
+            layout: { w: 3, h: 2 }
+
+          - type: 'timeseries_stat'
+            title: 'P99 Latency'
+            icon: clock
+            query: |
+              kind=="server" AND hashes[*]=="{{var-endpointHash}}" AND duration != null
+              | summarize p99(duration) / 1000000 by bin_auto(timestamp)
+              | order by timestamp desc
+              | limit 200
+            unit: ms
+            layout: { w: 3, h: 2 }
+
+      - type: 'timeseries_line'
+        title: 'Latency Percentiles Over Time'
+        hide_subtitle: true
+        summarize_by: max
+        query: |
+          hashes[*]=="{{var-endpointHash}}" AND kind=="server" AND duration != null
+          | summarize percentiles(duration / 1e6, 50, 75, 90, 95, 99) by bin_auto(timestamp)
+          | order by timestamp desc
+        layout: { w: 12, h: 5 }
+
+      - type: 'timeseries'
+        title: 'Time Spent by Downstream Operations'
+        description: 'Where time is spent inside this endpoint. Helps identify slow DB queries or external calls.'
+        sql: |
+          WITH endpoint_spans AS (
+            SELECT
+              extract(epoch from time_bucket('{{rollup_interval}}', timestamp))::integer AS time,
+              context___span_id as span_id,
+              context___trace_id as trace_id
+            FROM otel_logs_and_spans
+            WHERE project_id='{{project_id}}'
+              AND kind = 'server'
+              AND hashes @> ARRAY['{{var-endpointHash}}']
+              {{time_filter}}
+          ),
+          downstream_time AS (
+            SELECT
+              es.time,
+              o.name as operation,
+              SUM(o.duration)::float as duration_ns
+            FROM otel_logs_and_spans o
+            INNER JOIN endpoint_spans es ON o.context___trace_id = es.trace_id
+            WHERE o.project_id='{{project_id}}'
+              AND o.context___span_id != es.span_id
+              AND o.duration IS NOT NULL
+              AND o.name IS NOT NULL
+              {{time_filter}}
+            GROUP BY es.time, o.name
+          )
+          SELECT time, operation, duration_ns as value
+          FROM downstream_time
+          ORDER BY time DESC
+          LIMIT 10000
+        unit: ns
+        layout: { w: 12, h: 5 }
+
+      # Slowest traces
+      - type: traces
+        title: 'Slowest Traces'
+        layout: { w: 12, h: 5 }
+        columns:
+          - field: resource_name
+            title: Service
+          - field: span_name
+            title: Operation
+          - field: total_time
+            title: Duration
+            columnType: duration
+          - field: span_count
+            title: Spans
+            columnType: number
+          - field: latency_breakdown
+            title: Latency breakdown
+        sql: |
+          SELECT
+            COALESCE(resource___service___name, 'Unknown'),
+            name,
+            ROUND(duration / 1000000, 2)::text AS duration_ms,
+            (SELECT COUNT(*)::text FROM otel_logs_and_spans c WHERE c.context___trace_id = o.context___trace_id AND c.project_id='{{project_id}}') AS span_count,
+            context___trace_id AS trace_id
+          FROM otel_logs_and_spans o
+          WHERE project_id='{{project_id}}'
+            AND kind = 'server'
+            AND hashes @> ARRAY['{{var-endpointHash}}']
+            AND duration IS NOT NULL
+            {{time_filter}}
+          ORDER BY duration DESC
+          LIMIT 20
