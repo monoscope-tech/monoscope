@@ -82,6 +82,7 @@ extra-source-files:
     static/migrations/0054_command_palette_recents.sql
     static/migrations/0055_metrics_meta_updated_at_index.sql
     static/migrations/0056_project_audit_log.sql
+    static/migrations/0057_http_request_method_index.sql
 
 source-repository head
   type: git

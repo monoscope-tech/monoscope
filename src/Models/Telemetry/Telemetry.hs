@@ -383,8 +383,8 @@ data Histogram = Histogram
   , pointMax :: Double
   }
   deriving (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Histogram
 
 
 data ExponentialHistogram = ExponentialHistogram
@@ -399,8 +399,8 @@ data ExponentialHistogram = ExponentialHistogram
   , zeroThreshold :: Double
   }
   deriving (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake ExponentialHistogram
 
 
 data EHBucket = EHBucket
@@ -408,8 +408,8 @@ data EHBucket = EHBucket
   , bucketCounts :: V.Vector Int
   }
   deriving (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake EHBucket
 
 
 data Summary = Summary
@@ -418,8 +418,8 @@ data Summary = Summary
   , quantiles :: V.Vector Quantile
   }
   deriving (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Summary
 
 
 data Quantile = Quantile
@@ -427,8 +427,8 @@ data Quantile = Quantile
   , value :: Double
   }
   deriving (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON)
   deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Quantile
 
 
 data Exemplar = Exemplar

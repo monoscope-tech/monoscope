@@ -40,6 +40,7 @@ import Data.Time (UTCTime, diffUTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (posixSecondsToUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Data.Vector.Unboxed qualified as VU
 import Effectful
 import Effectful.Concurrent (Concurrent)
 import Effectful.Exception (onException)
@@ -1099,57 +1100,105 @@ convertResourceMetricToMetricRecords fallbackTime pid resourceMetric =
 -- | Convert a single Metric to MetricRecords
 convertMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> Maybe PC.InstrumentationScope -> PM.Metric -> [Telemetry.MetricRecord]
 convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
-  -- For brevity, implementing only gauge metrics as an example
-  -- In a complete implementation, you would handle all metric types
   case metric ^. PMF.maybe'data' of
     Just metricData ->
       case metricData of
-        PM.Metric'Gauge gauge ->
-          let gaugePoints = V.fromList $ gauge ^. PMF.dataPoints
-           in V.toList
-                $ V.map
-                  ( \point ->
-                      let !timeNano = point ^. PMF.timeUnixNano
-                          !validTime =
-                            if timeNano >= minValidTimestampNanos && timeNano /= 0
-                              then nanosecondsToUTC timeNano
-                              else fallbackTime
-                          !value = case point ^. PMF.maybe'value of
-                            Just (PM.NumberDataPoint'AsDouble d) -> d
-                            Just (PM.NumberDataPoint'AsInt i) -> fromIntegral i
-                            _ -> 0
-                          !attributes = keyValueToJSON $ V.fromList $ point ^. PMF.attributes
-                       in Telemetry.MetricRecord
-                            { projectId = unUUIDId pid
-                            , id = Nothing
-                            , metricName = metric ^. PMF.name
-                            , metricDescription = metric ^. PMF.description
-                            , metricUnit = metric ^. PMF.unit
-                            , timestamp = validTime
-                            , metricTime = validTime
-                            , resource = removeProjectId $ resourceToJSON resourceM
-                            , instrumentationScope = case scopeM of
-                                Just scope ->
-                                  AE.object
-                                    [ "name" AE..= (scope ^. PCF.name)
-                                    , "version" AE..= (scope ^. PCF.version)
-                                    , "attributes" AE..= keyValueToJSON (V.fromList $ scope ^. PCF.attributes)
-                                    ]
-                                Nothing -> AE.Null
-                            , metricValue = Telemetry.GaugeValue $ Telemetry.GaugeSum{value = value}
-                            , exemplars = AE.object [] -- Empty object since we can't properly convert the exemplars;  AE.object ["exemplars" AE..= (point ^. PMF.exemplars)]
-                            , metricType = Telemetry.MTGauge
-                            , flags = fromIntegral $ point ^. PMF.flags
-                            , attributes = attributes
-                            , metricMetadata = case scopeM of
-                                Just scope -> AE.object ["scope" AE..= (scope ^. PCF.name)]
-                                Nothing -> AE.Null
-                            }
-                  )
-                  gaugePoints
-        -- Add other metric types (Sum, Histogram, etc.) following a similar pattern
-        _ -> [] -- Not implemented for brevity
+        PM.Metric'Gauge gauge -> convertNumberDataPoints (gauge ^. PMF.dataPoints) Telemetry.MTGauge Telemetry.GaugeValue
+        PM.Metric'Sum s -> convertNumberDataPoints (s ^. PMF.dataPoints) Telemetry.MTSum Telemetry.SumValue
+        PM.Metric'Histogram hist -> mapMaybe convertHistogramPoint $ hist ^. PMF.dataPoints
+        PM.Metric'ExponentialHistogram ehist -> map convertExpHistogramPoint $ ehist ^. PMF.dataPoints
+        PM.Metric'Summary summary -> map convertSummaryPoint $ summary ^. PMF.dataPoints
     Nothing -> []
+  where
+    !res = removeProjectId $ resourceToJSON resourceM
+    !mName = metric ^. PMF.name
+    !mDesc = metric ^. PMF.description
+    !mUnit = metric ^. PMF.unit
+    !scopeJSON = case scopeM of
+      Just scope ->
+        AE.object
+          [ "name" AE..= (scope ^. PCF.name)
+          , "version" AE..= (scope ^. PCF.version)
+          , "attributes" AE..= keyValueToJSON (V.fromList $ scope ^. PCF.attributes)
+          ]
+      Nothing -> AE.Null
+    !metaJSON = case scopeM of
+      Just scope -> AE.object ["scope" AE..= (scope ^. PCF.name)]
+      Nothing -> AE.Null
+
+    pointTime timeNano = if timeNano >= minValidTimestampNanos && timeNano /= 0 then nanosecondsToUTC timeNano else fallbackTime
+    pointAttrs point = keyValueToJSON (point ^. PMF.vec'attributes)
+
+    mkRecord validTime attrs mType mValue fls =
+      Telemetry.MetricRecord
+        { projectId = unUUIDId pid
+        , id = Nothing
+        , metricName = mName
+        , metricDescription = mDesc
+        , metricUnit = mUnit
+        , timestamp = validTime
+        , metricTime = validTime
+        , resource = res
+        , instrumentationScope = scopeJSON
+        , metricValue = mValue
+        , exemplars = AE.object []
+        , metricType = mType
+        , flags = fls
+        , attributes = attrs
+        , metricMetadata = metaJSON
+        }
+
+    convertNumberDataPoints points mType wrap = map go points
+      where
+        go point =
+          let !value = case point ^. PMF.maybe'value of
+                Just (PM.NumberDataPoint'AsDouble d) -> d
+                Just (PM.NumberDataPoint'AsInt i) -> fromIntegral i
+                _ -> 0
+           in mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) mType (wrap $ Telemetry.GaugeSum{value}) (fromIntegral $ point ^. PMF.flags)
+
+    convertHistogramPoint point
+      | VU.length vBCounts /= VU.length vEBounds + 1 = Nothing -- OTLP spec: len(bucket_counts) == len(explicit_bounds) + 1
+      | otherwise = Just $ mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTHistogram (Telemetry.HistogramValue hval) (fromIntegral $ point ^. PMF.flags)
+      where
+        vBCounts = point ^. PMF.vec'bucketCounts
+        vEBounds = point ^. PMF.vec'explicitBounds
+        hval =
+          Telemetry.Histogram
+            { sum = fromMaybe 0 $ point ^. PMF.maybe'sum
+            , count = fromIntegral $ point ^. PMF.count
+            , bucketCounts = V.fromList $ map fromIntegral $ point ^. PMF.bucketCounts
+            , explicitBounds = V.fromList $ point ^. PMF.explicitBounds
+            , pointMin = fromMaybe 0 $ point ^. PMF.maybe'min
+            , pointMax = fromMaybe 0 $ point ^. PMF.maybe'max
+            }
+
+    convertExpHistogramPoint point =
+      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTExponentialHistogram (Telemetry.ExponentialHistogramValue ehval) (fromIntegral $ point ^. PMF.flags)
+      where
+        toBucket b = Telemetry.EHBucket{bucketOffset = fromIntegral $ b ^. PMF.offset, bucketCounts = V.fromList $ map fromIntegral $ b ^. PMF.bucketCounts}
+        !ehval =
+          Telemetry.ExponentialHistogram
+            { sum = fromMaybe 0 $ point ^. PMF.maybe'sum
+            , count = fromIntegral $ point ^. PMF.count
+            , pointMin = fromMaybe 0 $ point ^. PMF.maybe'min
+            , pointMax = fromMaybe 0 $ point ^. PMF.maybe'max
+            , zeroCount = fromIntegral $ point ^. PMF.zeroCount
+            , scale = fromIntegral $ point ^. PMF.scale
+            , pointPositive = toBucket <$> point ^. PMF.maybe'positive
+            , pointNegative = toBucket <$> point ^. PMF.maybe'negative
+            , zeroThreshold = point ^. PMF.zeroThreshold
+            }
+
+    convertSummaryPoint point =
+      mkRecord (pointTime $ point ^. PMF.timeUnixNano) (pointAttrs point) Telemetry.MTSummary (Telemetry.SummaryValue sval) (fromIntegral $ point ^. PMF.flags)
+      where
+        !sval =
+          Telemetry.Summary
+            { sum = point ^. PMF.sum
+            , count = fromIntegral $ point ^. PMF.count
+            , quantiles = V.fromList $ map (\q -> Telemetry.Quantile{quantile = q ^. PMF.quantile, value = q ^. PMF.value}) $ point ^. PMF.quantileValues
+            }
 
 
 ---------------------------------------------------------------------------------------
