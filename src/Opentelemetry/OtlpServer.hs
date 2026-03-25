@@ -1039,18 +1039,21 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
         isNothing (lookupNested "net" "host" attrs)
           && isNothing (lookupNested "server" "address" attrs)
           && isNothing (lookupNested "http" "host" attrs)
-      lookupNested outer inner attrs = Map.lookup outer attrs >>= \case
-        AE.Object o -> KEM.lookup (AEK.fromText inner) o
-        _ -> Nothing
-      hostFromUrlFull attrs = lookupNested "url" "full" attrs >>= \case
-        AE.String u ->
-          let stripped = fromMaybe u $ T.stripPrefix "https://" u <|> T.stripPrefix "http://" u
-              h = T.takeWhile (\c -> c /= '/' && c /= '?' && c /= ':') stripped
-           in if T.null h then Nothing else Just h
-        _ -> Nothing
-      serviceName = resourceAttrs >>= Map.lookup "service" >>= \case
-        AE.Object s -> KEM.lookup "name" s >>= \case AE.String n -> Just n; _ -> Nothing
-        _ -> Nothing
+      lookupNested outer inner attrs =
+        Map.lookup outer attrs >>= \case
+          AE.Object o -> KEM.lookup (AEK.fromText inner) o
+          _ -> Nothing
+      hostFromUrlFull attrs =
+        lookupNested "url" "full" attrs >>= \case
+          AE.String u ->
+            let stripped = fromMaybe u $ T.stripPrefix "https://" u <|> T.stripPrefix "http://" u
+                h = T.takeWhile (\c -> c /= '/' && c /= '?' && c /= ':') stripped
+             in if T.null h then Nothing else Just h
+          _ -> Nothing
+      serviceName =
+        resourceAttrs >>= Map.lookup "service" >>= \case
+          AE.Object s -> KEM.lookup "name" s >>= \case AE.String n -> Just n; _ -> Nothing
+          _ -> Nothing
       mergeObjects (AE.Object new) (AE.Object old) = AE.Object (KEM.union new old)
       mergeObjects new _ = new
       otelSpan =
