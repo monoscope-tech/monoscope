@@ -15,6 +15,7 @@ module Models.Telemetry.Telemetry (
   SeverityLevel (..),
   SpanStatus (..),
   SpanKind (..),
+  AggregationTemporality (..),
   MetricType (..),
   MetricRecord (..),
   ExponentialHistogram (..),
@@ -59,6 +60,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as AEK
 import Data.Aeson.KeyMap qualified as KEM
 import Data.ByteString.Base16 qualified as B16
+import Data.Default (Default (..))
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.List qualified as L (groupBy)
@@ -69,7 +71,8 @@ import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed))
+import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed), (:.)(..))
+
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -335,6 +338,8 @@ data MetricRecord = MetricRecord
   , metricMetadata :: AE.Value
   , exemplars :: AE.Value
   , flags :: Int
+  , aggregationTemporality :: Maybe AggregationTemporality
+  , isMonotonic :: Maybe Bool
   }
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
@@ -440,10 +445,47 @@ data Exemplar = Exemplar
   deriving (AE.FromJSON, AE.ToJSON)
 
 
+data NativeMetricColumns = NativeMetricColumns
+  { nValue :: Maybe Double
+  , nSum :: Maybe Double
+  , nCount :: Maybe Int
+  , nBucketCounts :: Maybe AE.Value
+  , nExplicitBounds :: Maybe AE.Value
+  , nPointMin :: Maybe Double
+  , nPointMax :: Maybe Double
+  , nQuantiles :: Maybe AE.Value
+  }
+  deriving (Generic)
+  deriving anyclass (Default, ToRow)
+
+
+metricValueToNative :: MetricValue -> NativeMetricColumns
+metricValueToNative = \case
+  GaugeValue g -> def{nValue = Just g.value}
+  SumValue g -> def{nValue = Just g.value}
+  HistogramValue h -> def{nSum = Just h.sum, nCount = Just h.count, nBucketCounts = Just $ AE.toJSON h.bucketCounts, nExplicitBounds = Just $ AE.toJSON h.explicitBounds, nPointMin = Just h.pointMin, nPointMax = Just h.pointMax}
+  SummaryValue s -> def{nSum = Just s.sum, nCount = Just s.count, nQuantiles = Just $ AE.toJSON s.quantiles}
+  ExponentialHistogramValue e -> def{nSum = Just e.sum, nCount = Just e.count, nPointMin = Just e.pointMin, nPointMax = Just e.pointMax}
+
+
 data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSummary
   deriving (Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, NFData)
   deriving (FromField, ToField) via WrappedEnum "MT" MetricType
+
+
+data AggregationTemporality = ATUnspecified | ATDelta | ATCumulative
+  deriving (Bounded, Enum, Eq, Generic, Read, Show)
+  deriving anyclass (NFData)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake AggregationTemporality
+
+instance ToField AggregationTemporality where toField = toField . fromEnum
+
+instance FromField AggregationTemporality where
+  fromField f bs = fromField @Int f bs >>= \n ->
+    if n >= fromEnum (minBound @AggregationTemporality) && n <= fromEnum (maxBound @AggregationTemporality)
+      then pure (toEnum n)
+      else returnError ConversionFailed f ("Invalid aggregation_temporality: " <> show n)
 
 
 data MetricDataPoint = MetricDataPoint
@@ -682,15 +724,17 @@ getMetricServiceNames pid = coerce @[Only Text] @[Text] <$> PG.query q pid
 
 bulkInsertMetrics :: DB es => V.Vector MetricRecord -> Eff es ()
 bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
-  void $ PG.executeMany q (V.toList rowsToInsert)
-  void $ PG.executeMany q2 (removeDuplic $ V.toList rows2)
+  void $ PG.executeMany q (V.toList $ V.map metricToRow metrics)
+  void $ PG.executeMany q2 (removeDuplic $ V.toList $ V.map metaToTuple metrics)
   where
     q =
       [sql|
         INSERT INTO telemetry.metrics
         (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp,
-         attributes, resource, instrumentation_scope, metric_value, exemplars, flags)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+         attributes, resource, instrumentation_scope, metric_value, exemplars, flags,
+         value, metric_sum, metric_count, bucket_counts, explicit_bounds, point_min, point_max, quantiles,
+         aggregation_temporality, is_monotonic)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      |]
     q2 =
       [sql|
@@ -698,23 +742,12 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
        ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description, updated_at = current_timestamp
     |]
 
-    rowsToInsert = V.map metricToTuple metrics
-    rows2 = V.map (\(o, t, tr, f, fi, _, _, _, res, _, _, _, _) -> (o, t, tr, f, fi, fromMaybe "unknown" $ lookupValueText res "service.name")) rowsToInsert
-    metricToTuple entry =
-      ( entry.projectId
-      , entry.metricName
-      , entry.metricType
-      , entry.metricUnit
-      , entry.metricDescription
-      , entry.metricTime
-      , entry.timestamp
-      , entry.attributes
-      , entry.resource
-      , entry.instrumentationScope
-      , entry.metricValue
-      , entry.exemplars
-      , entry.flags
-      )
+    metaToTuple entry = (entry.projectId, entry.metricName, entry.metricType, entry.metricUnit, entry.metricDescription, fromMaybe "unknown" $ lookupValueText entry.resource "service.name")
+    metricToRow entry =
+      ( entry.projectId, entry.metricName, entry.metricType, entry.metricUnit, entry.metricDescription
+      , entry.metricTime, entry.timestamp, entry.attributes, entry.resource, entry.instrumentationScope
+      , entry.metricValue, entry.exemplars, entry.flags
+      ) :. metricValueToNative entry.metricValue :. (entry.aggregationTemporality, entry.isMonotonic)
 
 
 -- OtelLogsAndSpans ToRow instance
