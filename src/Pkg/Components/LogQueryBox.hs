@@ -487,30 +487,23 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
       });
     };
     
-    document.addEventListener('DOMContentLoaded', () => {
+    // Immediate init instead of DOMContentLoaded (which never re-fires on HTMX morph).
+    var _initRetries = 0;
+    (function initEditor() {
       const editor = document.getElementById('filterElement');
-      if (editor) {
-        if (editor.setQueryLibrary) {
-          const queryLibraryData = $queryLibDataJson;
-          editor.setQueryLibrary(queryLibraryData);
-        }
-        
-        if (window.schemaManager && window.schemaManager.setSchemaData) {
-          const schemaData = $schemaJson;
-          window.schemaManager.setSchemaData('spans', schemaData);
-          
-          // Force refresh field suggestions in the query-builder component
-          // This makes sure any field inputs get the latest schema data
-          const queryBuilder = document.querySelector('query-builder');
-          if (queryBuilder && typeof queryBuilder.refreshFieldSuggestions === 'function') {
-            queryBuilder.refreshFieldSuggestions();
-          }
-        }
-        
-        if (editor.setPopularSearches) {
-          const popularQueries = $popularQueriesJson;
-          editor.setPopularSearches(popularQueries);
+      if (!editor) { if (++_initRetries < 40) setTimeout(initEditor, 50); return; }
+      if (editor.setQueryLibrary) {
+        editor.setQueryLibrary($queryLibDataJson);
+      }
+      if (window.schemaManager && window.schemaManager.setSchemaData) {
+        window.schemaManager.setSchemaData('spans', $schemaJson);
+        const queryBuilder = document.querySelector('query-builder');
+        if (queryBuilder && typeof queryBuilder.refreshFieldSuggestions === 'function') {
+          queryBuilder.refreshFieldSuggestions();
         }
       }
-    });
+      if (editor.setPopularSearches) {
+        editor.setPopularSearches($popularQueriesJson);
+      }
+    })();
     |]

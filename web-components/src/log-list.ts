@@ -101,6 +101,7 @@ export class LogList extends LitElement {
   private liveStreamInterval: NodeJS.Timeout | null = null;
   private barChart: any = null;
   private lineChart: any = null;
+  private initChartsTimer: ReturnType<typeof setTimeout> | null = null;
   private _loadMoreObserver: IntersectionObserver | null = null;
   private updateBatchTimer: NodeJS.Timeout | null = null;
   private pendingUpdates: Set<string> = new Set();
@@ -246,10 +247,17 @@ export class LogList extends LitElement {
     window.addEventListener('mouseup', this.handleMouseUp);
     window.addEventListener('mousemove', this.boundHandleResize);
 
-    // Chart initialization and events
-    window.addEventListener('load', () => {
+    // Chart initialization - use polling instead of 'load' event which
+    // never re-fires on HTMX morph navigation.
+    let chartRetries = 0;
+    const initCharts = () => {
       this.barChart = (window as any).barChart;
       this.lineChart = (window as any).lineChart;
+      if (!this.barChart && !this.lineChart) {
+        if (++chartRetries < 25) this.initChartsTimer = setTimeout(initCharts, 200);
+        return;
+      }
+      this.initChartsTimer = null;
       if (this.barChart) {
         this.barChart.dispatchAction({
           type: 'takeGlobalCursor',
@@ -261,7 +269,8 @@ export class LogList extends LitElement {
       if (this.lineChart) {
         this.lineChart.on('datazoom', this.handleChartZoom);
       }
-    });
+    };
+    initCharts();
   }
 
   private buildJsonUrl(): string {
@@ -628,6 +637,10 @@ export class LogList extends LitElement {
     if (this.scrollEndTimer) {
       clearTimeout(this.scrollEndTimer);
       this.scrollEndTimer = null;
+    }
+    if (this.initChartsTimer) {
+      clearTimeout(this.initChartsTimer);
+      this.initChartsTimer = null;
     }
 
     // Clean up event listeners
