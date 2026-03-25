@@ -1630,7 +1630,7 @@ enhanceIssuesWithLLM pid issueIds = do
       forM_ issueIds \issueId -> do
         issueM <- Issues.selectIssueById issueId
         case issueM of
-          Nothing -> Log.logAttention "Issue not found for enhancement" issueId
+          Nothing -> Log.logTrace "Issue not found for enhancement (likely cleaned up by endpoint canonicalization)" issueId
           Just issue -> do
             -- Call LLM to enhance the issue based on type
             enhancementResult <- Enhancement.enhanceIssueWithLLM ctx issue
