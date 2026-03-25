@@ -217,16 +217,21 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
 
       !routePath = fromMaybe "/" $ asum [attrValue ^? key "http" . key "route" . _String, attrValue ^? key "url" . key "path" . _String]
 
-      !statusCode = fromMaybe 200 $ asum
-        [ attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString
-        , truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number
-        ] >>= \c -> if c >= 100 && c < 600 then Just c else Nothing
+      !statusCode =
+        fromMaybe 200
+          $ asum
+            [ attrValue ^? key "http" . key "response" . key "status_code" . _String >>= readMaybe @Int . toString
+            , truncate <$> attrValue ^? key "http" . key "response" . key "status_code" . _Number
+            ]
+          >>= \c -> if c >= 100 && c < 600 then Just c else Nothing
 
-      !host = fromMaybe "" $ asum
-        [ attrValue ^? key "net" . key "host" . key "name" . _String
-        , attrValue ^? key "server" . key "address" . _String
-        , attrValue ^? key "http" . key "host" . _String
-        ]
+      !host =
+        fromMaybe ""
+          $ asum
+            [ attrValue ^? key "net" . key "host" . key "name" . _String
+            , attrValue ^? key "server" . key "address" . _String
+            , attrValue ^? key "http" . key "host" . _String
+            ]
 
       -- Extract SDK type from attributes (needed for URL normalization)
       !sdkTypeStr =
