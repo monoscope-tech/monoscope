@@ -423,11 +423,11 @@ buildDrainTreeWithMappingImpl trackIds tokenize logId sampleContent initial item
           ( \(!tree, !xs) item ->
               let tokens = tokenize item
                   lid = logId item
-               in if V.null tokens || T.null lid
+               in if V.null tokens
                     then (tree, xs)
                     else
                       let (!tree', tpl) = updateTreeWithLogM trackIds tree (V.length tokens) (V.head tokens) tokens lid (sampleContent item) now
-                       in (tree', (lid, tpl) : xs)
+                       in if T.null lid then (tree', xs) else (tree', (lid, tpl) : xs)
           )
           (initial, [])
           items
