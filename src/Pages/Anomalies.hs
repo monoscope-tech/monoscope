@@ -273,8 +273,6 @@ defaultSinceRange createdAt now
     ageH = diffUTCTime now (zonedTimeToUTC createdAt) / 3600
 
 
-
-
 -- | Stat box for time display with number large and unit small. Empty input renders nothing.
 timeStatBox_ :: Text -> String -> Html ()
 timeStatBox_ title timeStr
@@ -1255,8 +1253,6 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
-
-
 issueColumns :: Projects.ProjectId -> Text -> [Column IssueVM]
 issueColumns pid period = issueColumnsWithToggle pid period Nothing
 
@@ -1292,8 +1288,6 @@ renderIssueChartCol :: IssueVM -> Html ()
 renderIssueChartCol (IssueVM _ _ _ _ issue) = sparkline_ buckets
   where
     PGArray buckets = issue.activityBuckets
-
-
 
 
 highlightJsHead_ :: Monad m => HtmlT m ()
