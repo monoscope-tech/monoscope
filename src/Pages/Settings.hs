@@ -600,7 +600,7 @@ webhookPostH secretHeaderM dat = do
       notifyMembers pid (subj, html) = Notify.runNotifyProduction do
         users <- Projects.usersByProjectId pid
         forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-      billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
+      billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
   case dat.meta.eventName of
     "subscription_created" -> do
       currentTime <- liftIO getZonedTime
@@ -896,7 +896,7 @@ stripeWebhookPostH sigHeaderM rawBody = do
             notifyMembers pid (subj, html) = Notify.runNotifyProduction do
               users <- Projects.usersByProjectId pid
               forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-            billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
+            billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
         case (eventType, sessionObj) of
           (Just "checkout.session.completed", Just obj) -> handleStripeCheckout envConfig obj notifyMembers billingUrl
           (Just "customer.subscription.deleted", Just obj) -> handleStripeSubDeleted obj notifyMembers billingUrl

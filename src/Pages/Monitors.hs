@@ -4,7 +4,6 @@ module Pages.Monitors (
   alertSingleToggleActiveH,
   alertListGetH,
   alertUpsertPostH,
-  alertOverviewGetH,
   alertTeamDeleteH,
   AlertUpsertForm (..),
   Alert (..),
@@ -325,12 +324,6 @@ end
             ]
             $ faSprite_ (if isJust monitor.deactivatedAt then "arrow-rotate-left" else "trash") "regular" "w-3.5 h-3.5"
 
-
--- | Alert overview page handler - redirects to unified monitor overview
-alertOverviewGetH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
-alertOverviewGetH pid alertId = do
-  _ <- Projects.sessionAndProject pid
-  addRespHeaders $ AlertRedirect $ "/p/" <> pid.toText <> "/monitors/" <> alertId.toText <> "/overview"
 
 
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)

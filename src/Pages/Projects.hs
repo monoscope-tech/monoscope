@@ -29,12 +29,10 @@ module Pages.Projects (
   CreateProjectFormError (..),
   pricingUpdateH,
   PricingUpdateForm (..),
-  projectDeleteGetH,
   projectSettingsGetH,
   projectOnboardingH,
   deleteProjectGetH,
   CreateProject (..),
-  pricingUpdateGetH,
   CreateProjectResp (..),
   manageTeamPostH,
   manageTeamBulkActionH,
@@ -90,7 +88,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsCont
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
@@ -1118,7 +1116,7 @@ manageSubGetH pid = do
       -- order_id stores Stripe customer ID for Stripe users
       case project.orderId of
         Just customerId | not (T.null customerId) -> do
-          let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
+          let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
           portalUrlM <- liftIO $ Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl
           case portalUrlM of
             Just url -> redirectCS url >> addRespHeaders ""
@@ -1416,7 +1414,7 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
           $ forM_ users
           $ \user -> addConvertKitUserOrganization envCfg.convertkitApiKey (CI.original user.email) pid.toText project.title name
 
-  let billingUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/settings/billing"
+  let billingUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
       auditPlan name =
         Projects.logAuditS pid Projects.AEPlanChanged sess
           $ Just
@@ -1461,30 +1459,6 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
       addSuccessToast "Pricing updated successfully" Nothing
       addRespHeaders ""
 
-
-pricingUpdateGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-pricingUpdateGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , config = appCtx.config
-          }
-  let envCfg = appCtx.config
-      lemon = envCfg.lemonSqueezyUrl <> "&checkout[custom][project_id]=" <> pid.toText
-      critical = envCfg.lemonSqueezyCriticalUrl <> "&checkout[custom][project_id]=" <> pid.toText
-  let provider = Projects.billingProvider project.subId
-  addRespHeaders $ PageCtx bwconf $ pricingPage_ pid lemon critical project.paymentPlan appCtx.config.enableFreetier appCtx.config.basicAuthEnabled provider
-
-
-pricingPage_ :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Projects.BillingProvider -> Html ()
-pricingPage_ pid lemon critical paymentPlan enableFreeTier basicAuthEnabled provider = do
-  section_ [class_ "w-full h-full overflow-y-auto py-12"] do
-    div_ [class_ "flex flex-col max-w-4xl mx-auto gap-10 max-md:px-2 px-4"] do
-      h1_ [class_ "font-semibold text-4xl text-textStrong"] "Update pricing"
-      paymentPlanPicker pid lemon critical paymentPlan enableFreeTier basicAuthEnabled False provider
 
 
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
@@ -1569,55 +1543,6 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
           span_ "Delete Project"
 
 
-projectDeleteGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
-projectDeleteGetH pid = do
-  (sess, project) <- Projects.sessionAndProject pid
-  appCtx <- ask @AuthContext
-  let bwconf =
-        (def :: BWConfig)
-          { sessM = Just sess
-          , currProject = Just project
-          , pageTitle = "General"
-          , isSettingsPage = True
-          , config = appCtx.config
-          }
-  addRespHeaders $ PageCtx bwconf $ deleteProjectBody pid
-
-
-deleteProjectBody :: Projects.ProjectId -> Html ()
-deleteProjectBody pid = do
-  let pidText = pid.toText
-  div_ [class_ "w-full h-full overflow-y-auto"] do
-    section_ [class_ "p-8 max-w-2xl mx-auto space-y-6"] do
-      -- Header
-      div_ [class_ "mb-2"] do
-        h2_ [class_ "text-textStrong text-xl font-semibold"] "Delete Project"
-        p_ [class_ "text-textWeak text-sm mt-1"] "Permanently remove this project and all associated data"
-
-      -- Warning card
-      div_ [class_ "surface-raised rounded-2xl p-4"] do
-        div_ [class_ "flex items-start gap-3"] do
-          iconBadge_ ErrorBadge "triangle-alert"
-          div_ [class_ "space-y-2"] do
-            h3_ [class_ "text-sm font-medium text-textStrong"] "Danger Zone"
-            p_ [class_ "text-sm text-textWeak"] "Deleting this project will permanently remove all data including:"
-            ul_ [class_ "text-sm text-textWeak list-disc list-inside space-y-1 ml-1"] do
-              li_ "API keys and configurations"
-              li_ "All collected telemetry data"
-              li_ "Dashboards and saved queries"
-              li_ "Team member access"
-            p_ [class_ "text-sm text-textError font-medium mt-3"] "This action cannot be undone."
-
-      -- Delete button
-      div_ [class_ "flex justify-end"] do
-        button_
-          [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1"
-          , hxGet_ [text|/p/$pidText/delete|]
-          , hxConfirm_ "Are you sure you want to delete this project? This action cannot be undone."
-          ]
-          do
-            faSprite_ "trash" "regular" "w-3 h-3"
-            span_ "Delete Project"
 
 
 alertConfiguration :: Bool -> Bool -> Bool -> Bool -> Html ()

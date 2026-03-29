@@ -71,13 +71,8 @@ import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
 
-import Data.Aeson.Key qualified as AEKey
-import Data.HashMap.Lazy qualified as HM
-import Data.Vector qualified as V
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Anomalies
-import Models.Telemetry.Telemetry qualified as Telemetry
-import NeatInterpolation (text)
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -89,7 +84,6 @@ import Pages.Dashboards qualified as Dashboards
 import Pages.Endpoints qualified as ApiCatalog
 import Pages.GitSync qualified as GitSync
 import Pages.LogExplorer.Log qualified as Log
-import Pages.LogExplorer.LogItem (getServiceName)
 import Pages.LogExplorer.LogItem qualified as LogItem
 import Pages.Monitors qualified as Alerts
 import Pages.Monitors qualified as Testing
@@ -107,7 +101,6 @@ import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
-import Utils
 
 
 -- =============================================================================
@@ -241,7 +234,6 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , widgetPost :: mode :- "p" :> ProjectId :> "widget" :> QPT "since" :> QPT "from" :> QPT "to" :> ReqBody '[JSON, FormUrlEncoded] Widget.Widget :> Post '[HTML] (RespHeaders Widget.Widget)
   , widgetGet :: mode :- "p" :> ProjectId :> "widget" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> AllQueryParams :> Get '[HTML] (RespHeaders Widget.Widget)
   , widgetSqlPreview :: mode :- "p" :> ProjectId :> "widget" :> "sql-preview" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[HTML] (RespHeaders (Html ()))
-  , flamegraphGet :: mode :- "p" :> ProjectId :> "widget" :> "flamegraph" :> Capture "traceId" Text :> QPT "shapeView" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Endpoints and fields
     endpointListGet :: mode :- "p" :> ProjectId :> "endpoints" :> QPT "page" :> QPT "layout" :> QPT "filter" :> QPT "host" :> QPT "request_type" :> QPT "sort" :> HXRequest :> HXBoosted :> HXCurrentURL :> QPT "load_more" :> QPT "search" :> Get '[HTML] (RespHeaders ApiCatalog.EndpointRequestStatsVM)
   , apiCatalogGet :: mode :- "p" :> ProjectId :> "api_catalog" :> QPT "sort" :> QPT "since" :> QPT "request_type" :> QPI "skip" :> Get '[HTML] (RespHeaders ApiCatalog.CatalogList)
@@ -353,7 +345,6 @@ data MonitorsRoutes' mode = MonitorsRoutes'
   , alertUnmutePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "unmute" :> Post '[HTML] (RespHeaders (Html ()))
   , alertResolvePost :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "resolve" :> Post '[HTML] (RespHeaders (Html ()))
   , alertDeleteRoute :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> Delete '[HTML] (RespHeaders (Html ()))
-  , alertOverviewGet :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "overview" :> Get '[HTML] (RespHeaders Alerts.Alert)
   , teamAlertsGetH :: mode :- "alerts" :> "team" :> Capture "team_id" UUID.UUID :> Get '[HTML] (RespHeaders (Table.TableRows Testing.UnifiedMonitorItem))
   , alertTeamDeleteH :: mode :- "alerts" :> Capture "alert_id" Monitors.QueryMonitorId :> "teams" :> Capture "team_id" UUID.UUID :> Delete '[HTML] (RespHeaders Alerts.Alert)
   , alertBulkAction :: mode :- "alerts" :> "bulk_action" :> Capture "action" Text :> ReqBody '[FormUrlEncoded] ManageMembers.TBulkActionForm :> Post '[HTML] (RespHeaders (PageCtx (Table.Table Testing.UnifiedMonitorItem)))
@@ -375,7 +366,6 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , integrationGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "settings" :> "integrations" :> Get '[HTML] (RespHeaders (Html ()))
   , -- Project management
     deleteGet :: mode :- "p" :> Capture "projectID" Projects.ProjectId :> "delete" :> Delete '[HTML] (RespHeaders CreateProject.CreateProject)
-  , deleteProjectH :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "settings" :> "delete" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   , -- Member management
     membersManageGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> Get '[HTML] (RespHeaders ManageMembers.ManageMembers)
   , membersManagePost :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "manage_members" :> QPT "onboarding" :> ReqBody '[FormUrlEncoded] ManageMembers.ManageMembersForm :> Post '[HTML] (RespHeaders ManageMembers.ManageMembers)
@@ -403,7 +393,6 @@ data ProjectsRoutes' mode = ProjectsRoutes'
   , onboardingSkipped :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "skip" :> QPT "step" :> Post '[HTML] (RespHeaders (Html ()))
   , -- Pricing routes
     onboardingPricingUpdate :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "onboarding" :> "pricing" :> ReqBody '[FormUrlEncoded] CreateProject.PricingUpdateForm :> Post '[HTML] (RespHeaders (Html ()))
-  , pricingUpdateGet :: mode :- "p" :> Capture "projectId" Projects.ProjectId :> "update_pricing" :> Get '[HTML] (RespHeaders (PageCtx (Html ())))
   }
   deriving stock (Generic)
 
@@ -501,7 +490,6 @@ cookieProtectedServer =
     , widgetPost = Widget.widgetPostH
     , widgetGet = widgetGetH
     , widgetSqlPreview = Dashboards.widgetSqlPreviewGetH
-    , flamegraphGet = flamegraphGetH
     , -- Slack/Discord handlers
       reportsGet = Reports.reportsGetH
     , reportsLiveGet = Reports.reportsLiveGetH
@@ -596,7 +584,6 @@ monitorsServer pid =
     , alertUnmutePost = Testing.alertUnmuteH pid
     , alertResolvePost = Testing.alertResolveH pid
     , alertDeleteRoute = Testing.alertDeleteH pid
-    , alertOverviewGet = Alerts.alertOverviewGetH pid
     , teamAlertsGetH = Testing.teamAlertsGetH pid
     , alertTeamDeleteH = Alerts.alertTeamDeleteH pid
     , alertBulkAction = Testing.alertBulkActionH pid
@@ -613,7 +600,6 @@ projectsServer =
     , settingsGet = CreateProject.projectSettingsGetH
     , integrationGet = Integrations.integrationsSettingsGetH
     , deleteGet = CreateProject.deleteProjectGetH
-    , deleteProjectH = CreateProject.projectDeleteGetH
     , notificationsUpdateChannelPost = Integrations.updateNotificationsChannel
     , pagerdutyConnect = Integrations.pagerdutyConnectH
     , pagerdutyDisconnect = Integrations.pagerdutyDisconnectH
@@ -635,7 +621,6 @@ projectsServer =
     , onboardingPhoneEmailsPost = Onboarding.phoneEmailPostH
     , onboardingIntegrationCheck = Onboarding.checkIntegrationGet
     , onboardingPricingUpdate = CreateProject.pricingUpdateH
-    , pricingUpdateGet = CreateProject.pricingUpdateGetH
     , onboardingDismissChecklist = Onboarding.dismissChecklistH
     , onboardingSkipped = Onboarding.onboardingStepSkipped
     }
@@ -745,29 +730,6 @@ widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allPa
 
 
 -- flamegraph GET handler
-flamegraphGetH :: Projects.ProjectId -> Text -> Maybe Text -> ATAuthCtx (RespHeaders (Html ()))
-flamegraphGetH pid trId shapeViewM = do
-  now <- Time.currentTime
-  spanRecords' <- Telemetry.getSpanRecordsByTraceId pid trId Nothing now
-  let spanRecords = V.catMaybes $ Telemetry.convertOtelLogsAndSpansToSpanRecord <$> V.fromList spanRecords'
-      serviceColors = getServiceColors ((\x -> getServiceName x.resource) <$> spanRecords)
-      colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
-
-  sp <-
-    maybe
-      (pure $ Widget.getSpanJson Nothing <$> spanRecords)
-      (\_ -> Telemetry.getTraceShapes pid (V.singleton trId) <&> \shapesAvgs -> (\x -> Widget.getSpanJson (find (\(_, n, _, _) -> n == x.spanName) shapesAvgs <&> \(_, _, d, c) -> (d, c)) x) <$> spanRecords)
-      shapeViewM
-
-  let spjson = decodeUtf8 $ AE.encode sp
-  addRespHeaders $ do
-    div_ [class_ "w-full sticky top-0 border-b border-b-strokeWeak h-6 text-xs relative", id_ "time-container"] pass
-    div_ [class_ "w-full overflow-x-hidden min-h-56 h-full relative", id_ $ "a" <> trId] pass
-    div_ [class_ "h-full top-0  absolute z-50 hidden", id_ "time-bar-indicator"] $ div_ [class_ "relative h-full"] $ do
-      div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ "line-time"] "2 ms"
-      div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
-    script_ [text|flameGraphChart($spjson, "a$trId", $colorsJson);|]
-
 
 -- =============================================================================
 -- Email Preview Handlers (dev only)
