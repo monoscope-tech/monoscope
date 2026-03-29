@@ -804,10 +804,11 @@ tryStripe_ action =
 createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
 createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS =
   tryStripe $ do
-    let prices = case plan of
-          "SystemsPricing" -> [("line_items[0][price]", encodeUtf8 priceIdBYOS), ("line_items[0][quantity]", "1")]
-          _ ->
-            [ ("line_items[0][price]", encodeUtf8 priceIdGraduated)
+    let basePrice = case plan of
+          "SystemsPricing" -> priceIdBYOS
+          _ -> priceIdGraduated
+        prices =
+            [ ("line_items[0][price]", encodeUtf8 basePrice)
             , ("line_items[0][quantity]", "1")
             , ("line_items[1][price]", encodeUtf8 priceIdOverage)
             ]
