@@ -159,26 +159,21 @@ runServicesList :: (HTTP :> es, IOE :> es) => CLIConfig -> ServicesListOpts -> O
 runServicesList cfg opts mode = do
   let params =
         catMaybes
-          [ ("since",) <$> (opts.since <|> Just "24h")
-          , ("pid",) <$> cfg.projectId
+          [ Just ("query", "summarize count() by resource.service.name")
+          , ("since",) <$> (opts.since <|> Just "24h")
           ]
-  withAPIResult cfg "/log_explorer/schema" params $ \val -> case mode of
+  withAPIResult cfg "/api/v1/metrics" params $ \val -> case mode of
     OutputJSON -> renderJSON val
     OutputTable -> renderServicesList val
 
 renderServicesList :: (IOE :> es) => AE.Value -> Eff es ()
-renderServicesList val = case extractServices val of
-  [] -> putTextLn "No services found"
-  services -> renderTable ["Service"] (map (: []) services)
-
-extractServices :: AE.Value -> [Text]
-extractServices (AE.Object obj) =
-  case extractTextArray (KM.lookup "service_name" obj <|> KM.lookup "services" obj) of
-    [] -> case KM.lookup "fields" obj of
-      Just (AE.Object fields) -> extractTextArray (KM.lookup "service_name" fields <|> KM.lookup "service" fields)
-      _ -> []
-    xs -> xs
-extractServices _ = []
+renderServicesList val = case val of
+  AE.Object obj -> do
+    let headers = extractTextArray $ KM.lookup "headers" obj
+        rows = extractRows $ KM.lookup "dataText" obj
+    if null headers then putTextLn "No services found"
+    else renderTable headers rows
+  _ -> putTextLn "No services found"
 
 -- Events
 
@@ -220,14 +215,14 @@ data EventsContextOpts = EventsContextOpts
 runEventsSearch :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsSearchOpts -> OutputMode -> Eff es ()
 runEventsSearch cfg opts mode = do
   let params = buildSearchParams opts
-  withAPIResult cfg "/log_explorer" params $ \val -> case mode of
+  withAPIResult cfg "/api/v1/events" params $ \val -> case mode of
     OutputJSON -> renderJSON val
     OutputTable -> renderEventsTable val opts.fields
 
 runEventsGet :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
 runEventsGet cfg opts mode = do
-  let params = [("query", "trace_id:" <> opts.eventId), ("json", "true")]
-  withAPIResult cfg "/log_explorer" params $ \val ->
+  let params = [("query", "trace_id:" <> opts.eventId)]
+  withAPIResult cfg "/api/v1/events" params $ \val ->
     if opts.showTree
       then renderTraceTree val
       else case mode of
@@ -245,9 +240,8 @@ runEventsTail cfg opts kindOverride = do
             , ("source",) <$> (opts.kind <|> kindOverride)
             , ("service",) <$> opts.service
             , ("level",) <$> opts.level
-            , Just ("json", "true")
             ]
-    apiGet cfg "/log_explorer" params >>= \case
+    apiGet cfg "/api/v1/events" params >>= \case
       Left err -> printError (show err)
       Right bs -> case AE.eitherDecode @AE.Value bs of
         Left err -> printError (toText err)
@@ -276,9 +270,8 @@ runEventsContext cfg opts kindOverride mode = do
           , Just ("window", win)
           , ("source",) <$> (opts.kind <|> kindOverride)
           , ("service",) <$> opts.service
-          , Just ("json", "true")
           ]
-  withAPIResult cfg "/log_explorer" params $ \val -> case mode of
+  withAPIResult cfg "/api/v1/events" params $ \val -> case mode of
     OutputJSON -> renderJSON val
     OutputTable -> renderEventsTable val Nothing
 
@@ -293,7 +286,6 @@ buildSearchParams opts =
     , ("service",) <$> opts.service
     , ("level",) <$> opts.level
     , ("limit",) . show <$> opts.limit
-    , Just ("json", "true")
     ]
 
 renderEventsTable :: (IOE :> es) => AE.Value -> Maybe Text -> Eff es ()
@@ -361,8 +353,8 @@ data MetricsChartOpts = MetricsChartOpts
 
 runMetricsQuery :: (HTTP :> es, IOE :> es) => CLIConfig -> MetricsQueryOpts -> OutputMode -> Eff es ()
 runMetricsQuery cfg opts mode = do
-  let params = metricsParams opts.expression opts.since opts.from opts.to opts.step cfg
-  withAPIResult cfg "/chart_data" params $ \val -> do
+  let params = metricsParams opts.expression opts.since opts.from opts.to opts.step
+  withAPIResult cfg "/api/v1/metrics" params $ \val -> do
     case mode of
       OutputJSON -> renderJSON val
       OutputTable -> renderMetricsTable val
@@ -371,8 +363,8 @@ runMetricsQuery cfg opts mode = do
 runMetricsChart :: (HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> Eff es ()
 runMetricsChart cfg opts = do
   let run = do
-        let params = metricsParams opts.expression opts.since opts.from opts.to Nothing cfg
-        withAPIResult cfg "/chart_data" params renderSparkline
+        let params = metricsParams opts.expression opts.since opts.from opts.to Nothing
+        withAPIResult cfg "/api/v1/metrics" params renderSparkline
   case opts.watch of
     Nothing -> run
     Just interval -> forever $ do
@@ -380,15 +372,14 @@ runMetricsChart cfg opts = do
       run
       threadDelay (parseDurationMs interval * 1000)
 
-metricsParams :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> CLIConfig -> [(Text, Text)]
-metricsParams expr mSince mFrom mTo mStep cfg =
+metricsParams :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)]
+metricsParams expr mSince mFrom mTo mStep =
   catMaybes
     [ Just ("query", expr)
     , ("since",) <$> (mSince <|> Just "1h")
     , ("from",) <$> mFrom
     , ("to",) <$> mTo
     , ("step",) <$> mStep
-    , ("pid",) <$> cfg.projectId
     ]
 
 renderMetricsTable :: (IOE :> es) => AE.Value -> Eff es ()

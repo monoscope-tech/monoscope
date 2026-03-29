@@ -1,6 +1,7 @@
 module Pages.LogExplorer.Log (
   apiLogH,
   aiSearchH,
+  queryEvents,
   LogsGet (..),
   LogResult (..),
   ApiLogsPageData (..),
@@ -24,7 +25,9 @@ import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.Error.Static (throwError)
+import Effectful (Eff, (:>))
+import Effectful.Error.Static (Error, throwError)
+import Effectful.Log qualified as ELog
 import Effectful.Labeled (labeled)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
@@ -65,6 +68,7 @@ import BackgroundJobs qualified
 import Data.Map.Strict qualified as Map
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
+import Data.OpenApi qualified
 import Deriving.Aeson qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
@@ -488,6 +492,46 @@ keepNonEmpty (Just "") = Nothing
 keepNonEmpty (Just a) = Just a
 
 
+-- | Core result builder shared by apiLogH and queryEvents.
+buildLogResult :: (DB es, Time.Time :> es) => Projects.ProjectId -> UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> [Text] -> (V.Vector (V.Vector AE.Value), [Text], Int) -> Eff es LogResult
+buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resultCount') = do
+  let colIdxMap = listToIndexHashMap colNames
+      reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
+      reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
+      traceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+      alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
+      (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
+  childSpansList <- LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
+  let finalVecs = requestVecs <> V.fromList childSpansList
+      curatedColNames = nubOrd $ curateCols summaryCols colNames
+      colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+      queryResultCount = V.length requestVecs
+      traces = buildTraceTree colIdxMap queryResultCount finalVecs
+  pure LogResult
+    { finalVecs, curatedColNames, colIdxMap, cursor = reqLastCreatedAtM
+    , nextLogsURL = "", resetLogsURL = "", recentLogsURL = ""
+    , serviceColors = colors, queryResultCount, resultCount = resultCount', traces
+    }
+
+
+-- | Standalone query function for the v1 API events endpoint.
+-- Returns 400 for parse errors, propagates DB errors instead of silently returning empty results.
+queryEvents :: (DB es, ELog.Log :> es, Time.Time :> es, Error Servant.ServerError :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Eff es LogResult
+queryEvents pid queryM sinceM fromM toM sourceM limitM = do
+  now <- Time.currentTime
+  let queryInput = fromMaybe "" queryM
+  queryAST <- case parseQueryToAST queryInput of
+    Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
+    Right ast -> pure ast
+  let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  result <- LogQueries.selectLogTable pid queryAST (toQText queryAST) Nothing (fromD, toD) [] (parseMaybe pSource =<< sourceM) Nothing
+  case result of
+    Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Query failed: " <> err}
+    Right r -> do
+      lr <- buildLogResult pid now sinceM fromM toM [] r
+      pure lr{finalVecs = V.take (fromMaybe 100 limitM) lr.finalVecs}
+
+
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM = do
   (sess, project) <- Projects.sessionAndProject pid
@@ -544,37 +588,14 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
   let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"
 
-  let buildLogResult (requestVecs, colNames, resultCount') = do
-        let colIdxMap = listToIndexHashMap colNames
-            reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
-            reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-            traceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
-            alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
-            (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
-        childSpansList <- LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
-        let finalVecs = requestVecs <> V.fromList childSpansList
-            curatedColNames = nubOrd $ curateCols summaryCols colNames
-            lastFM = reqLastCreatedAtM >>= textToUTC >>= Just . toText . iso8601Show . addUTCTime (-0.001)
-            nextLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-            resetLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-            recentLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
-            colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
-            queryResultCount = V.length requestVecs
-            traces = buildTraceTree colIdxMap queryResultCount finalVecs
-        pure
-          LogResult
-            { finalVecs
-            , curatedColNames
-            , colIdxMap
-            , cursor = reqLastCreatedAtM
-            , nextLogsURL
-            , resetLogsURL
-            , recentLogsURL
-            , serviceColors = colors
-            , queryResultCount
-            , resultCount = resultCount'
-            , traces
-            }
+  let buildLogResult' tableData = do
+        lr <- buildLogResult pid now sinceM fromM toM summaryCols tableData
+        let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
+        pure (lr :: LogResult)
+          { nextLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+          , resetLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+          , recentLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+          }
 
   let fetchOrSkip = if shouldSkipLoad then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0) else fetchLogs
 
@@ -586,8 +607,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       _ -> do
         tableAsVecE <- fetchOrSkip
         case hush tableAsVecE of
-          Just tableResult -> buildLogResult tableResult >>= addRespHeaders . LogsGetJson
-          Nothing -> buildLogResult (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
+          Just tableResult -> buildLogResult' tableResult >>= addRespHeaders . LogsGetJson
+          Nothing -> buildLogResult' (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
     else do
       -- Full HTML path: parallelize independent DB queries
       (tableAsVecE, queryLib, facetSummary, freeTierStatus, teams, patterns) <- Ki.scoped \scope -> do
@@ -645,7 +666,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
       case tableAsVecM of
         Just tableResult -> do
-          r <- buildLogResult tableResult
+          r <- buildLogResult' tableResult
           let patternsToSkip = fromMaybe 0 skipM + maybe 0 (V.length . snd) patterns
 
           -- Build widgets with PNG URLs
@@ -852,6 +873,21 @@ data LogResult = LogResult
   , traces :: [TraceTreeEntry]
   }
 
+-- Manual: field names differ from API JSON keys (e.g. finalVecs -> logsData, curatedColNames -> cols),
+-- and includes a computed "hasMore" field. Can't derive since the record is shared with HTML rendering.
+instance AE.ToJSON LogResult where
+  toJSON r = AE.object
+    [ "logsData" AE..= r.finalVecs, "cols" AE..= r.curatedColNames, "colIdxMap" AE..= r.colIdxMap
+    , "count" AE..= r.resultCount, "queryResultCount" AE..= r.queryResultCount
+    , "hasMore" AE..= (r.queryResultCount < r.resultCount), "traces" AE..= r.traces
+    , "serviceColors" AE..= r.serviceColors, "nextUrl" AE..= r.nextLogsURL
+    , "resetLogsUrl" AE..= r.resetLogsURL, "recentUrl" AE..= r.recentLogsURL
+    ]
+
+instance Data.OpenApi.ToSchema LogResult where
+  declareNamedSchema _ = pure $ Data.OpenApi.NamedSchema (Just "LogResult") mempty
+
+
 
 virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()
 virtualTable pid initialFetchUrl modeM = do
@@ -928,7 +964,7 @@ apiLogsPage page = do
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
         Widget.widget_ page.chartWidget
         div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
-    div_ [class_ "flex max-md:flex-col h-full gap-3.5 overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
+    div_ [class_ "flex max-md:flex-col h-full overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
       -- FACETS
       div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do
         div_ [class_ "sticky top-0 z-10 bg-bgBase relative mb-2"] do
@@ -949,7 +985,7 @@ apiLogsPage page = do
             ]
         whenJust page.facets renderFacets
 
-      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden"] $ resizer_ "facets-container" "facets_width" True
+      div_ [class_ "group-has-[.toggle-filters:checked]/pg:hidden max-md:hidden mr-3.5"] $ resizer_ "facets-container" "facets_width" True
 
       let dW = fromMaybe "100%" page.detailsWidth
           showTrace = isJust page.showTrace
@@ -1020,12 +1056,12 @@ apiLogsPage page = do
           div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
 
       -- Alert configuration panel on the right
-      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden"] $ resizer_ "alert_container" "alert_width" False
+      div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
 
       div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
         alertConfigurationForm_ page.project page.alert page.teams
 
-      div_ [class_ $ "transition-opacity duration-200 hidden group-has-[#viz-logs:checked]/pg:block max-md:hidden " <> if isJust page.targetEvent then "" else "opacity-0 pointer-events-none hidden", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+      div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
       div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase", id_ "log_details_container", term "hx-on::after-swap" "if(window.innerWidth<768)this.classList.add('details-open')"] do
         htmxOverlayIndicator_ "details_indicator"

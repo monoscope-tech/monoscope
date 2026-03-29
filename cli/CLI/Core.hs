@@ -78,17 +78,12 @@ data APIError = APIError {statusCode :: Int, message :: Text}
 
 apiGet :: (HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError LByteString)
 apiGet cfg path params = do
-  let projectRoutes = ["/log_explorer"]
-      needsPrefix = any (`T.isPrefixOf` path) projectRoutes
-      (fullPath, params')
-        | needsPrefix = (maybe "" (\p -> "/p/" <> p) cfg.projectId <> path, filter ((/= "pid") . fst) params)
-        | otherwise = (path, params)
-      url = toString (cfg.apiUrl <> fullPath)
+  let url = toString (cfg.apiUrl <> path)
       opts =
         W.defaults
           & W.header "Accept" .~ ["application/json"]
           & addAuth cfg.apiKey
-          & addParams params'
+          & addParams params
   catch
     (Right . (^. responseBody) <$> getWith opts url)
     (pure . Left . httpExToError)

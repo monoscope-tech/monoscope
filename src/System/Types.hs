@@ -223,6 +223,9 @@ type instance
     (Headers '[Header "Set-Cookie" SetCookie] Sessions.Session)
 
 
+type instance AuthServerData (AuthProtect "api-key-auth") = Sessions.ProjectId
+
+
 type RespHeaders =
   Headers
     '[ HXTriggerAfterSettle

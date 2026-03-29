@@ -27,6 +27,7 @@ module Models.Apis.Monitors (
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
+import Data.OpenApi (ToSchema (..))
 import Data.Text.Display (Display)
 import Data.Time.Calendar (Day (..))
 import Data.Time.Clock (UTCTime (..), addUTCTime)
@@ -56,7 +57,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (SnakeSchema (..), WrappedEnumSC (..))
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
@@ -64,7 +65,7 @@ import System.Types (DB)
 
 newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField, ToSchema)
 
 
 instance HasField "toText" QueryMonitorId Text where
@@ -72,10 +73,12 @@ instance HasField "toText" QueryMonitorId Text where
 
 
 data MonitorStatus = MSNormal | MSWarning | MSAlerting
-  deriving stock (Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "MS" MonitorStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField, ToSchema) via WrappedEnumSC "MS" MonitorStatus
 
+
+instance ToSchema (CI.CI Text) where declareNamedSchema _ = declareNamedSchema (Proxy @Text)
 
 data MonitorAlertConfig = MonitorAlertConfig
   { title :: Text
@@ -90,6 +93,7 @@ data MonitorAlertConfig = MonitorAlertConfig
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson MonitorAlertConfig
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] MonitorAlertConfig
+  deriving (ToSchema) via SnakeSchema MonitorAlertConfig
 
 
 data QueryMonitor = QueryMonitor
@@ -128,6 +132,7 @@ data QueryMonitor = QueryMonitor
   deriving anyclass (Default, FromRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "monitors", TableName "query_monitors", PrimaryKey "id", FieldModifiers '[CamelToSnake]] QueryMonitor)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] QueryMonitor
+  deriving (ToSchema) via SnakeSchema QueryMonitor
 
 
 queryMonitorUpsert :: DB es => QueryMonitor -> Eff es Int64

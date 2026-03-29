@@ -1,4 +1,4 @@
-module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH) where
+module Web.Routes (server, genAuthServerContext, KeepPrefixExp, widgetPngGetH, ApiV1Routes, apiV1OpenApiSpec) where
 
 -- Standard library imports
 import Control.Lens
@@ -51,7 +51,9 @@ import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders)
-import Web.Auth (APItoolkitAuthContext, authHandler, renderError)
+import Data.OpenApi (OpenApi, info, title, version)
+import Servant.OpenApi (toOpenApi)
+import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, renderError)
 import Web.Auth qualified as Auth
 
 -- Model imports
@@ -151,6 +153,22 @@ instance Servant.MimeRender JSON ByteString where
 
 
 -- =============================================================================
+-- Public API v1 Routes
+-- =============================================================================
+
+type ApiV1Routes :: Type -> Type
+type role ApiV1Routes nominal
+data ApiV1Routes mode = ApiV1Routes
+  { eventsSearch :: mode :- "events" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to"
+      :> QPT "source" :> QueryParam "limit" Int :> Get '[JSON] Log.LogResult
+  , metricsQuery :: mode :- "metrics" :> QueryParam "query" Text :> QueryParam "data_type" Charts.DataType
+      :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[JSON] Charts.MetricsData
+  , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
+  , monitorsGet :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
+  } deriving stock (Generic)
+
+
+-- =============================================================================
 -- Route Definitions
 -- =============================================================================
 
@@ -190,6 +208,8 @@ data Routes mode = Routes
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
   , emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (Html ())
   , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (Html ())
+  , apiV1 :: mode :- "api" :> "v1" :> AuthProtect "api-key-auth" :> NamedRoutes ApiV1Routes
+  , apiV1OpenApi :: mode :- "api" :> "v1" :> "openapi.json" :> Get '[JSON] OpenApi
   }
   deriving stock (Generic)
 
@@ -438,6 +458,8 @@ server pool =
     , deviceToken = Auth.deviceTokenH
     , emailPreviewList = emailPreviewListH
     , emailPreview = emailPreviewH
+    , apiV1 = apiV1Server
+    , apiV1OpenApi = pure apiV1OpenApiSpec
     , cookieProtected = \sessionWithCookies ->
         Servant.hoistServerWithContext
           (Proxy @(Servant.NamedRoutes CookieProtectedRoutes))
@@ -452,6 +474,23 @@ server pool =
           )
           cookieProtectedServer
     }
+
+
+-- API v1 server
+apiV1Server :: Projects.ProjectId -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
+apiV1Server pid = ApiV1Routes
+  { eventsSearch = \queryM sinceM fromM toM sourceM limitM ->
+      Log.queryEvents pid queryM sinceM fromM toM sourceM limitM
+  , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
+      Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
+  , schemaGet = pure Schema.telemetrySchema
+  , monitorsGet = Monitors.queryMonitorsAll pid
+  }
+
+
+apiV1OpenApiSpec :: OpenApi
+apiV1OpenApiSpec = toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
+  & info .~ (mempty & title .~ "Monoscope API" & version .~ "1.0")
 
 
 -- Cookie Protected server
@@ -778,8 +817,8 @@ emailPreviewH templateName = do
 -- | The context that will be made available to request handlers. We supply the
 -- "cookie-auth"-tagged request handler defined above, so that the 'HasServer' instance
 -- of 'AuthProtect' can extract the handler and run it on the request.
-genAuthServerContext :: Logger -> AuthContext -> Servant.Context '[APItoolkitAuthContext, Servant.ErrorFormatters]
-genAuthServerContext logger env = authHandler logger env :. errorFormatters env :. EmptyContext
+genAuthServerContext :: Logger -> AuthContext -> Servant.Context '[APItoolkitAuthContext, ApiKeyAuthContext, Servant.ErrorFormatters]
+genAuthServerContext logger env = authHandler logger env :. apiKeyAuthHandler logger env :. errorFormatters env :. EmptyContext
 
 
 errorFormatters :: AuthContext -> Servant.ErrorFormatters

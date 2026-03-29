@@ -276,6 +276,8 @@ library:
     - mime-mail
     - smtp-mail
     - zlib
+    - openapi3
+    - servant-openapi3
 
 executables:
   monoscope-server:
@@ -395,6 +397,7 @@ tests:
       - base16-bytestring
       - directory
       - pg-transact
+      - openapi3
       - monad-time-effectful
       - ki
       - ki-effectful

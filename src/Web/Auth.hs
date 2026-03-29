@@ -5,6 +5,9 @@ module Web.Auth (
   authCallbackH,
   sessionByID,
   authHandler,
+  apiKeyAuthHandler,
+  ApiKeyAuthContext,
+  resolveApiKeyProject,
   APItoolkitAuthContext,
   authorizeUserAndPersist,
   renderError,
@@ -48,6 +51,7 @@ import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
+import Effectful.Reader.Static qualified
 import Effectful.Time (Time, currentTime, runTime)
 import Log (Logger)
 import Lucid (Html, toHtml)
@@ -234,6 +238,32 @@ effToHandler
 effToHandler computation = do
   v <- liftIO . runEff . runErrorNoCallStack @ServerError $ computation
   either T.throwError pure v
+
+
+type ApiKeyAuthContext = AuthHandler Request Projects.ProjectId
+
+
+resolveApiKeyProject :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)
+resolveApiKeyProject bearerToken =
+  ProjectApiKeys.getProjectIdByApiKey (T.replace "Bearer " "" bearerToken)
+
+
+apiKeyAuthHandler :: Logger -> AuthContext -> ApiKeyAuthContext
+apiKeyAuthHandler logger env = mkAuthHandler \req -> do
+  let mbAuth = L.lookup hAuthorization (requestHeaders req) <&> decodeUtf8
+  case mbAuth of
+    Nothing -> T.throwError err401{errBody = "Missing Authorization header"}
+    Just token -> do
+      result <-
+        resolveApiKeyProject token
+          & Logging.runLog (show env.config.environment) logger env.config.logLevel
+          & runWithConnectionPool env.pool
+          & Effectful.Reader.Static.runReader env
+          & runEff
+          & liftIO
+      case result of
+        Nothing -> T.throwError err401{errBody = "Invalid API key"}
+        Just pid -> pure pid
 
 
 logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)

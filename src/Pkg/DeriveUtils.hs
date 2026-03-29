@@ -5,6 +5,7 @@ module Pkg.DeriveUtils (
   BaselineState (..),
   DB,
   PGTextArray (..),
+  SnakeSchema (..),
   UUIDId (..),
   WrappedEnum (..),
   WrappedEnumSC (..),
@@ -22,6 +23,11 @@ module Pkg.DeriveUtils (
 import Control.Exception (throwIO)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
+import Control.Lens ((?~))
+import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
+import Data.OpenApi qualified as OpenApi
+import Data.OpenApi.Internal.Schema (GToSchema)
+import GHC.Generics (Rep)
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default (Default (..))
@@ -112,6 +118,9 @@ newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
   deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
   deriving anyclass (FromRow, ToRow)
 
+instance KnownSymbol name => ToSchema (UUIDId name) where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
+instance ToParamSchema (UUIDId name) where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
+
 
 instance HasField "toText" (UUIDId name) Text where
   getField = UUID.toText . unUUIDId
@@ -188,6 +197,19 @@ instance (KnownSymbol prefix, Read a, Show a) => AE.FromJSON (WrappedEnumSC pref
 
 instance (KnownSymbol prefix, Read a, Show a) => FromHttpApiData (WrappedEnumSC prefix a) where
   parseUrlPiece t = maybe (Left $ "Invalid " <> fromString (symbolVal (Proxy @prefix)) <> " value: " <> t) (Right . WrappedEnumSC) $ decodeEnumSC @prefix (toString @Text t)
+
+instance {-# OVERLAPPABLE #-} (KnownSymbol prefix, Show a, Bounded a, Enum a, Typeable a) => ToSchema (WrappedEnumSC prefix a) where
+  declareNamedSchema (_ :: proxy (WrappedEnumSC prefix a)) = pure $ NamedSchema Nothing $ mempty
+    & type_ ?~ OpenApi.OpenApiString
+    & enum_ ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
+
+
+-- | DerivingVia wrapper: produces ToSchema with snake_case field names matching DAE.Snake's ToJSON output.
+newtype SnakeSchema a = SnakeSchema a
+instance (Generic a, GToSchema (Rep a), Typeable a) => ToSchema (SnakeSchema a) where
+  declareNamedSchema _ = genericDeclareNamedSchema
+    OpenApi.defaultSchemaOptions{OpenApi.fieldLabelModifier = quietSnake . fromString}
+    (Proxy @a)
 
 
 newtype WrappedEnumShow a = WrappedEnumShow a
@@ -282,6 +304,10 @@ instance Default UUID.UUID where
 instance Default AET.Value where
   def = AET.emptyObject
   {-# INLINE def #-}
+
+
+instance ToSchema AET.Value where
+  declareNamedSchema _ = pure $ NamedSchema (Just "JSONValue") mempty
 
 
 instance (Default s, FoldCase s) => Default (CI s) where
