@@ -1,6 +1,5 @@
 module Models.Apis.Endpoints (
   Endpoint (..),
-  SwEndpoint (..),
   EndpointId,
   EndpointRequestStats (..),
   Host (..),
@@ -152,19 +151,6 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
      
   |]
 
-
-data SwEndpoint = SwEndpoint
-  { urlPath :: Text
-  , urlParams :: AE.Value -- Key value map of key to the type. Needs a bit more figuring out.
-  , method :: Text
-  , host :: Text
-  , hash :: Text
-  , description :: Text
-  }
-  deriving stock (Eq, Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
-  deriving (FromField) via Aeson SwEndpoint
-  deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SwEndpoint
 
 
 data HostEvents = HostEvents
