@@ -1460,7 +1460,6 @@ pricingUpdateH pid PricingUpdateForm{orderIdM, plan, isOnboarding} = do
       addRespHeaders ""
 
 
-
 processProjectPostForm :: Valor.Valid CreateProjectForm -> Projects.ProjectId -> ATAuthCtx (RespHeaders CreateProject)
 processProjectPostForm cpRaw pid = do
   appCtx <- ask @AuthContext
@@ -1541,8 +1540,6 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
         do
           faSprite_ "trash" "regular" "w-3 h-3"
           span_ "Delete Project"
-
-
 
 
 alertConfiguration :: Bool -> Bool -> Bool -> Bool -> Html ()

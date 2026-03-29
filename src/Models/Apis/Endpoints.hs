@@ -152,7 +152,6 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
   |]
 
 
-
 data HostEvents = HostEvents
   { host :: Text
   , eventCount :: Integer

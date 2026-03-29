@@ -325,7 +325,6 @@ end
             $ faSprite_ (if isJust monitor.deactivatedAt then "arrow-rotate-left" else "trash") "regular" "w-3.5 h-3.5"
 
 
-
 alertTeamDeleteH :: Projects.ProjectId -> Monitors.QueryMonitorId -> UUID.UUID -> ATAuthCtx (RespHeaders Alert)
 alertTeamDeleteH pid monitorId teamId = do
   _ <- Projects.sessionAndProject pid
