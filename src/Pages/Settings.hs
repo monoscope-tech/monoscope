@@ -808,10 +808,10 @@ createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOver
           "SystemsPricing" -> priceIdBYOS
           _ -> priceIdGraduated
         prices =
-            [ ("line_items[0][price]", encodeUtf8 basePrice)
-            , ("line_items[0][quantity]", "1")
-            , ("line_items[1][price]", encodeUtf8 priceIdOverage)
-            ]
+          [ ("line_items[0][price]", encodeUtf8 basePrice)
+          , ("line_items[0][quantity]", "1")
+          , ("line_items[1][price]", encodeUtf8 priceIdOverage)
+          ]
         params =
           prices
             <> [ ("mode", "subscription")
