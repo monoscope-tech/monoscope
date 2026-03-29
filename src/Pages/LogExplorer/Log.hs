@@ -502,23 +502,24 @@ buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resu
       alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
       (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
   childSpansList <- LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
-  let finalVecs = requestVecs <> V.fromList childSpansList
-      curatedColNames = nubOrd $ curateCols summaryCols colNames
-      colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
+  let logsData = requestVecs <> V.fromList childSpansList
+      cols = nubOrd $ curateCols summaryCols colNames
+      colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") logsData
       queryResultCount = V.length requestVecs
-      traces = buildTraceTree colIdxMap queryResultCount finalVecs
+      traces = buildTraceTree colIdxMap queryResultCount logsData
   pure
     LogResult
-      { finalVecs
-      , curatedColNames
+      { logsData
+      , cols
       , colIdxMap
       , cursor = reqLastCreatedAtM
-      , nextLogsURL = ""
-      , resetLogsURL = ""
-      , recentLogsURL = ""
+      , nextUrl = ""
+      , resetLogsUrl = ""
+      , recentUrl = ""
       , serviceColors = colors
       , queryResultCount
-      , resultCount = resultCount'
+      , count = resultCount'
+      , hasMore = queryResultCount < resultCount'
       , traces
       }
 
@@ -538,7 +539,7 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM = do
     Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Query failed: " <> err}
     Right r -> do
       lr <- buildLogResult pid now sinceM fromM toM [] r
-      pure lr{finalVecs = V.take (fromMaybe 100 limitM) lr.finalVecs}
+      pure lr{logsData = V.take (fromMaybe 100 limitM) lr.logsData}
 
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
@@ -602,9 +603,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
         pure
           (lr :: LogResult)
-            { nextLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-            , resetLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-            , recentLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+            { nextUrl = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+            , resetLogsUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+            , recentUrl = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
             }
 
   let fetchOrSkip = if shouldSkipLoad then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0) else fetchLogs
@@ -690,13 +691,13 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           let page =
                 ApiLogsPageData
                   { pid
-                  , resultCount = r.resultCount
-                  , requestVecs = r.finalVecs
-                  , cols = r.curatedColNames
+                  , resultCount = r.count
+                  , requestVecs = r.logsData
+                  , cols = r.cols
                   , colIdxMap = r.colIdxMap
-                  , nextLogsURL = r.nextLogsURL
-                  , resetLogsURL = r.resetLogsURL
-                  , recentLogsURL = r.recentLogsURL
+                  , nextLogsURL = r.nextUrl
+                  , resetLogsURL = r.resetLogsUrl
+                  , recentLogsURL = r.recentUrl
                   , currentRange
                   , exceededFreeTier = case freeTierStatus of FreeTierExceeded _ _ -> True; _ -> False
                   , query = queryM'
@@ -805,7 +806,7 @@ instance ToHtml LogsGet where
 
 
 instance AE.ToJSON LogsGet where
-  toJSON (LogsGetJson r) = AE.object ["logsData" AE..= r.finalVecs, "serviceColors" AE..= r.serviceColors, "nextUrl" AE..= r.nextLogsURL, "resetLogsUrl" AE..= r.resetLogsURL, "recentUrl" AE..= r.recentLogsURL, "cols" AE..= r.curatedColNames, "colIdxMap" AE..= r.colIdxMap, "count" AE..= r.resultCount, "traces" AE..= r.traces, "hasMore" AE..= (r.queryResultCount < r.resultCount), "queryResultCount" AE..= r.queryResultCount]
+  toJSON (LogsGetJson r) = AE.toJSON r
   toJSON (LogsPatternJson totalPatterns patterns) =
     let total = V.foldl' (\acc p -> acc + p.count) 0 patterns
         patternToSummary pat
@@ -873,34 +874,18 @@ data ApiLogsPageData = ApiLogsPageData
 
 
 data LogResult = LogResult
-  { finalVecs :: V.Vector (V.Vector AE.Value)
-  , curatedColNames :: [Text]
+  { logsData :: V.Vector (V.Vector AE.Value)
+  , cols :: [Text]
   , colIdxMap :: HM.HashMap Text Int
   , cursor :: Maybe Text
-  , nextLogsURL, resetLogsURL, recentLogsURL :: Text
+  , nextUrl, resetLogsUrl, recentUrl :: Text
   , serviceColors :: HM.HashMap Text Text
-  , queryResultCount, resultCount :: Int
+  , queryResultCount, count :: Int
+  , hasMore :: Bool
   , traces :: [TraceTreeEntry]
   }
-
-
--- Manual: field names differ from API JSON keys (e.g. finalVecs -> logsData, curatedColNames -> cols),
--- and includes a computed "hasMore" field. Can't derive since the record is shared with HTML rendering.
-instance AE.ToJSON LogResult where
-  toJSON r =
-    AE.object
-      [ "logsData" AE..= r.finalVecs
-      , "cols" AE..= r.curatedColNames
-      , "colIdxMap" AE..= r.colIdxMap
-      , "count" AE..= r.resultCount
-      , "queryResultCount" AE..= r.queryResultCount
-      , "hasMore" AE..= (r.queryResultCount < r.resultCount)
-      , "traces" AE..= r.traces
-      , "serviceColors" AE..= r.serviceColors
-      , "nextUrl" AE..= r.nextLogsURL
-      , "resetLogsUrl" AE..= r.resetLogsURL
-      , "recentUrl" AE..= r.recentLogsURL
-      ]
+  deriving stock (Generic)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] LogResult
 
 
 instance Data.OpenApi.ToSchema LogResult where
@@ -912,7 +897,7 @@ virtualTable pid initialFetchUrl modeM = do
   termRaw
     "log-list"
     ( [ id_ "resultTable"
-      , class_ "w-full divide-y shrink-1 flex flex-col h-full min-w-0 rr-block"
+      , class_ "w-full shrink-1 flex flex-col h-full min-w-0 rr-block"
       , term "windowTarget" "logList"
       , term "projectId" pid.toText
       ]
