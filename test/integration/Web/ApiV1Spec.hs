@@ -84,9 +84,9 @@ spec = aroundAll withTestResources do
         (json ^? key "hasMore") `shouldSatisfy` isJust
 
       it "returns 400 for malformed query" $ \tr -> do
-        toBaseServantResponse tr.trATCtx tr.trLogger
-          (Log.queryEvents testPid (Just "level:error AND") (Just "1h") Nothing Nothing Nothing Nothing)
-          `shouldThrow` anyException
+        (toBaseServantResponse tr.trATCtx tr.trLogger
+          (Log.queryEvents testPid (Just "|| invalid {{") (Just "1h") Nothing Nothing Nothing Nothing)
+          >>= evaluateWHNF_) `shouldThrow` anyException
 
     describe "Metrics endpoint" do
       it "returns valid MetricsData for count query with JSON round-trip" $ \tr -> do

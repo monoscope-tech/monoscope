@@ -1,16 +1,18 @@
-module Pages.Components (drawer_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_) where
+module Pages.Components (drawer_, emptyState_, resizer_, dateTime, paymentPlanPicker, navBar, modal_, modalCloseButton_, chartSkeleton_, FieldSize (..), FieldCfg (..), formField_, formSelectField_, formCheckbox_, PanelCfg (..), panel_, tagInput_, formActionsModal_, connectionBadge_, confirmModal_, BadgeColor (..), iconBadge_, iconBadgeLg_, iconBadgeXs_, iconBadgeWith_, ModalCfg (..), modalWith_, colorChip_, metadataChip_, getTargetPage, settingsSection_, settingsH2_, sectionLabel_, infoBanner_, settingsNavLink_, dirtyFormSaveAttr_, sparkline_, periodToggle_, abbreviateUnit, compactTimeAgo) where
 
 import Data.Default (Default (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTrigger_, hxVals_)
+import Lucid.Base (makeAttribute, makeElement)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import PyF qualified
 import Relude
-import Utils (LoadingSize (..), LoadingType (..), faSprite_, loadingIndicator_, onpointerdown_)
+import Utils (LoadingSize (..), LoadingType (..), deleteParam, faSprite_, loadingIndicator_, onpointerdown_)
 
 
 -- | Empty state component with optional contextual icon
@@ -667,3 +669,110 @@ settingsNavLink_ href icon title desc =
 -- | Hyperscript attribute for a save button that activates when its parent form changes
 dirtyFormSaveAttr_ :: Attribute
 dirtyFormSaveAttr_ = [__| on change from closest <form/> remove @disabled from me then remove .btn-ghost from me then remove .text-textWeak from me then add .btn-primary to me |]
+
+
+-- | Abbreviate time unit (e.g., "hours" → "hrs")
+--
+-- >>> abbreviateUnit "hours"
+-- "hrs"
+-- >>> abbreviateUnit "minute"
+-- "min"
+-- >>> abbreviateUnit "days"
+-- "days"
+abbreviateUnit :: Text -> Text
+abbreviateUnit "hours" = "hrs"
+abbreviateUnit "hour" = "hr"
+abbreviateUnit "minutes" = "mins"
+abbreviateUnit "minute" = "min"
+abbreviateUnit "seconds" = "secs"
+abbreviateUnit "second" = "sec"
+abbreviateUnit w = w
+
+
+-- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
+compactTimeAgo :: Text -> Text
+compactTimeAgo = unwords . map abbreviateUnit . words
+
+
+periodToggle_ :: Text -> Text -> Text -> Html ()
+periodToggle_ baseUrl targetId currentPeriod =
+  span_ [class_ "inline-flex rounded-md border border-strokeWeak overflow-hidden"] do
+    forM_ ["24h" :: Text, "7d" :: Text] \val ->
+      let url = deleteParam "period" baseUrl <> "&period=" <> val
+       in button_
+            [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillWeak text-textStrong" (val == currentPeriod)
+            , type_ "button"
+            , hxGet_ url
+            , hxTarget_ $ "#" <> targetId
+            , hxSelect_ $ "#" <> targetId
+            , hxSwap_ "outerHTML"
+            , hxPushUrl_ "true"
+            ]
+            $ toHtml val
+
+
+sparkline_ :: [Int] -> Html ()
+sparkline_ buckets
+  | null buckets || all (== 0) buckets = span_ [class_ "text-textWeak text-xs"] "-"
+  | otherwise = do
+      let peakVal = foldr max 1 buckets
+          peak = fromIntegral @Int @Double peakVal
+          n = length buckets
+          h = 40 :: Int
+          barZone = 32 :: Int
+          peakLabel = formatCompact peakVal
+          labelW = T.length peakLabel * 9 + 4
+          gap = 2 :: Int
+          barW = max 2 (120 `div` n - gap)
+          barsEnd = n * (barW + gap)
+          topPad = h - barZone
+          peakIdx = maybe 0 fst $ viaNonEmpty head $ filter ((== peakVal) . snd) $ zip [0 ..] buckets
+          lineX1 = peakIdx * (barW + gap) + barW
+          lineX2 = barsEnd + 2
+          w = lineX2 + labelW
+      with
+        (makeElement "svg")
+        [ makeAttribute "viewBox" $ toText [PyF.fmt|0 0 {w} {h}|]
+        , style_ [PyF.fmt|width:100%;height:{h}px|]
+        , makeAttribute "preserveAspectRatio" "xMinYMid meet"
+        ]
+        $ do
+          forM_ (zip [0 ..] buckets) \(i, v) -> do
+            let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
+            with
+              (makeElement "rect")
+              [ makeAttribute "x" $ show $ i * (barW + gap)
+              , makeAttribute "y" $ show $ h - barH
+              , makeAttribute "width" $ show barW
+              , makeAttribute "height" $ show barH
+              , makeAttribute "rx" "1.5"
+              , makeAttribute "fill" "var(--color-chart-default)"
+              , makeAttribute "opacity" "0.7"
+              ]
+              ""
+          with
+            (makeElement "line")
+            [ makeAttribute "x1" $ show lineX1
+            , makeAttribute "y1" $ show topPad
+            , makeAttribute "x2" $ show lineX2
+            , makeAttribute "y2" $ show topPad
+            , makeAttribute "stroke" "var(--color-textWeak)"
+            , makeAttribute "stroke-width" "0.7"
+            , makeAttribute "stroke-dasharray" "3,2"
+            ]
+            ""
+          with
+            (makeElement "text")
+            [ makeAttribute "x" $ show (lineX2 + 1)
+            , makeAttribute "y" $ show (topPad + 4)
+            , makeAttribute "text-anchor" "start"
+            , makeAttribute "fill" "var(--color-textWeak)"
+            , makeAttribute "font-size" "11"
+            , makeAttribute "font-family" "system-ui"
+            ]
+            $ toHtml peakLabel
+  where
+    formatCompact n
+      | n >= 1000000 = toText [PyF.fmt|{fromIntegral @Int @Double n / 1000000:.1f}M|]
+      | n >= 1000 = toText [PyF.fmt|{fromIntegral @Int @Double n / 1000:.1f}K|]
+      | otherwise = show n

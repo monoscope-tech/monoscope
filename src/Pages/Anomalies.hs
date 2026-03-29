@@ -62,8 +62,8 @@ import Effectful.Time qualified as Time
 import GHC.Records (HasField)
 import Lucid
 import Lucid.Aria qualified as Aria
-import Lucid.Base (TermRaw (termRaw), makeAttribute, makeElement)
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_)
+import Lucid.Base (TermRaw (termRaw), makeAttribute)
+import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxSwap_, hxTarget_, hxTrigger_)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns (ErrorPatternId (..))
@@ -82,7 +82,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import OddJobs.Job (createJob)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (colorChip_, emptyState_, metadataChip_, resizer_)
+import Pages.Components (abbreviateUnit, colorChip_, compactTimeAgo, emptyState_, metadataChip_, periodToggle_, resizer_, sparkline_)
 import Pages.LogExplorer.Log (virtualTable)
 import Pages.Telemetry (tracePage)
 import Pkg.AI qualified as AI
@@ -97,7 +97,7 @@ import Servant (err400, errBody)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, deleteParam, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
+import Utils (LoadingSize (..), LoadingType (..), checkFreeTierStatus, escapedQueryPartial, faSprite_, formatUTC, formatWithCommas, htmxOverlayIndicator_, loadingIndicator_, lookupValueText, methodFillColor, renderMarkdown, toUriStr)
 import Web.FormUrlEncoded (FromForm)
 
 
@@ -273,27 +273,6 @@ defaultSinceRange createdAt now
     ageH = diffUTCTime now (zonedTimeToUTC createdAt) / 3600
 
 
--- | Abbreviate time unit (e.g., "hours" → "hrs")
---
--- >>> abbreviateUnit "hours"
--- "hrs"
--- >>> abbreviateUnit "minute"
--- "min"
--- >>> abbreviateUnit "days"
--- "days"
-abbreviateUnit :: Text -> Text
-abbreviateUnit "hours" = "hrs"
-abbreviateUnit "hour" = "hr"
-abbreviateUnit "minutes" = "mins"
-abbreviateUnit "minute" = "min"
-abbreviateUnit "seconds" = "secs"
-abbreviateUnit "second" = "sec"
-abbreviateUnit w = w
-
-
--- | Compact time ago display (e.g., "23 hrs ago" instead of "23 hours ago")
-compactTimeAgo :: Text -> Text
-compactTimeAgo = unwords . map abbreviateUnit . words
 
 
 -- | Stat box for time display with number large and unit small. Empty input renders nothing.
@@ -1276,21 +1255,6 @@ data IssueVM = IssueVM Bool Bool UTCTime Text Issues.IssueL
   deriving stock (Show)
 
 
-periodToggle_ :: Text -> Text -> Text -> Html ()
-periodToggle_ baseUrl targetId currentPeriod =
-  span_ [class_ "inline-flex rounded-md border border-strokeWeak overflow-hidden"] do
-    forM_ ["24h" :: Text, "7d" :: Text] \val ->
-      let url = deleteParam "period" baseUrl <> "&period=" <> val
-       in button_
-            [ class_ $ "cursor-pointer px-2 py-0.5 text-xs font-medium transition-colors " <> bool "text-textWeak hover:bg-fillWeaker hover:text-textStrong" "bg-fillWeak text-textStrong" (val == currentPeriod)
-            , type_ "button"
-            , hxGet_ url
-            , hxTarget_ $ "#" <> targetId
-            , hxSelect_ $ "#" <> targetId
-            , hxSwap_ "outerHTML"
-            , hxPushUrl_ "true"
-            ]
-            $ toHtml val
 
 
 issueColumns :: Projects.ProjectId -> Text -> [Column IssueVM]
@@ -1330,71 +1294,6 @@ renderIssueChartCol (IssueVM _ _ _ _ issue) = sparkline_ buckets
     PGArray buckets = issue.activityBuckets
 
 
-sparkline_ :: [Int] -> Html ()
-sparkline_ buckets
-  | null buckets || all (== 0) buckets = span_ [class_ "text-textWeak text-xs"] "-"
-  | otherwise = do
-      let peakVal = foldr max 1 buckets
-          peak = fromIntegral @Int @Double peakVal
-          n = length buckets
-          h = 40 :: Int
-          barZone = 32 :: Int
-          peakLabel = formatCompact peakVal
-          labelW = T.length peakLabel * 9 + 4
-          gap = 2 :: Int
-          barW = max 2 (120 `div` n - gap)
-          barsEnd = n * (barW + gap)
-          topPad = h - barZone
-          peakIdx = maybe 0 fst $ viaNonEmpty head $ filter ((== peakVal) . snd) $ zip [0 ..] buckets
-          lineX1 = peakIdx * (barW + gap) + barW
-          lineX2 = barsEnd + 2
-          w = lineX2 + labelW
-      with
-        (makeElement "svg")
-        [ makeAttribute "viewBox" $ toText [fmt|0 0 {w} {h}|]
-        , style_ [fmt|width:100%;height:{h}px|]
-        , makeAttribute "preserveAspectRatio" "xMinYMid meet"
-        ]
-        $ do
-          forM_ (zip [0 ..] buckets) \(i, v) -> do
-            let barH = max 2 (round @Double @Int $ (fromIntegral v / peak) * fromIntegral barZone)
-            with
-              (makeElement "rect")
-              [ makeAttribute "x" $ show $ i * (barW + gap)
-              , makeAttribute "y" $ show $ h - barH
-              , makeAttribute "width" $ show barW
-              , makeAttribute "height" $ show barH
-              , makeAttribute "rx" "1.5"
-              , makeAttribute "fill" "var(--color-chart-default)"
-              , makeAttribute "opacity" "0.7"
-              ]
-              ""
-          with
-            (makeElement "line")
-            [ makeAttribute "x1" $ show lineX1
-            , makeAttribute "y1" $ show topPad
-            , makeAttribute "x2" $ show lineX2
-            , makeAttribute "y2" $ show topPad
-            , makeAttribute "stroke" "var(--color-textWeak)"
-            , makeAttribute "stroke-width" "0.7"
-            , makeAttribute "stroke-dasharray" "3,2"
-            ]
-            ""
-          with
-            (makeElement "text")
-            [ makeAttribute "x" $ show (lineX2 + 1)
-            , makeAttribute "y" $ show (topPad + 4)
-            , makeAttribute "text-anchor" "start"
-            , makeAttribute "fill" "var(--color-textWeak)"
-            , makeAttribute "font-size" "11"
-            , makeAttribute "font-family" "system-ui"
-            ]
-            $ toHtml peakLabel
-  where
-    formatCompact n
-      | n >= 1000000 = toText [fmt|{fromIntegral @Int @Double n / 1000000:.1f}M|]
-      | n >= 1000 = toText [fmt|{fromIntegral @Int @Double n / 1000:.1f}K|]
-      | otherwise = show n
 
 
 highlightJsHead_ :: Monad m => HtmlT m ()

@@ -3,32 +3,34 @@ module Pages.Endpoints (apiCatalogH, HostEventsVM (..), endpointListGetH, Catalo
 import Data.Default (def)
 import Data.Text qualified as T
 import Data.Time (UTCTime)
+import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Fmt (commaizeF, fmt)
 import Lucid
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), navTabAttrs)
-import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs)
-import Pkg.Components.Widget (WidgetAxis (..))
-import Pkg.Components.Widget qualified as Widget
+import Pages.Components (compactTimeAgo, periodToggle_, sparkline_)
+import Pkg.Components.Table (BulkAction (..), Column (..), Config (..), Features (..), SearchMode (..), TabFilter (..), TabFilterOpt (..), Table (..), TableHeaderActions (..), TableRows (..), ZeroState (..), col, withAttrs, withColHeaderExtra)
 import PyF qualified
 import Relude hiding (ask, asks)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
-import Utils (checkFreeTierStatus)
+import Text.Time.Pretty (prettyTimeAuto)
+import Utils (checkFreeTierStatus, formatWithCommas)
 
 
-apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
-apiCatalogH pid sortM timeFilter requestTypeM skipM = do
+apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
+apiCatalogH pid sortM timeFilter requestTypeM periodM skipM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
 
   let requestType = fromMaybe "Incoming" requestTypeM
       currentSort = fromMaybe "-events" sortM
       filterV = fromMaybe "24H" timeFilter
+      period = fromMaybe "24h" periodM
       -- Map new sort format to old format for DB query
       sortV = case currentSort of
         "-events" -> "events"
@@ -37,13 +39,13 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
         "+name" -> "name"
         _ -> "events"
 
-  hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid requestType sortV (fromMaybe 0 skipM) filterV
+  hostsAndEvents <- Endpoints.dependenciesAndEventsCount pid requestType sortV (fromMaybe 0 skipM) filterV period
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   currTime <- Time.currentTime
 
-  let baseUrl = "/p/" <> pid.toText <> "/api_catalog?request_type=" <> requestType <> "&sort=" <> currentSort
-      hostsVM = V.fromList $ map (\host -> HostEventsVM pid host filterV requestType) hostsAndEvents
+  let baseUrl = "/p/" <> pid.toText <> "/api_catalog?request_type=" <> requestType <> "&sort=" <> currentSort <> "&period=" <> period
+      hostsVM = V.fromList $ map (\host -> HostEventsVM pid host filterV requestType period currTime) hostsAndEvents
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -60,11 +62,11 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
   let catalogTable =
         Table
           { config = def{elemID = "apiCatalogForm", containerId = Just "apiCatalogContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
-          , columns = catalogColumns pid requestType
+          , columns = catalogColumns pid requestType baseUrl period
           , rows = hostsVM
           , features =
               def
-                { rowId = Just \(HostEventsVM _ he _ _) -> he.host
+                { rowId = Just \(HostEventsVM _ he _ _ _ _) -> he.host
                 , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/api_catalog/bulk_action/archive"}]
                 , search = Just ClientSide
@@ -93,52 +95,27 @@ apiCatalogH pid sortM timeFilter requestTypeM skipM = do
               a_ ([href_ $ "/p/" <> pid.toText <> "/api_catalog?sort=" <> currentSort <> "&request_type=Outgoing", role_ "tab", class_ $ "tab h-auto! " <> if requestType == "Outgoing" then "tab-active text-textStrong" else ""] <> navTabAttrs) "Outgoing"
           }
   case skipM of
-    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid requestType, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}
+    Just _ -> addRespHeaders $ CatalogListRows $ TableRows{columns = catalogColumns pid requestType baseUrl period, rows = hostsVM, emptyState = Nothing, renderAsTable = True, rowId = Just \(HostEventsVM _ he _ _ _ _) -> he.host, rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"], pagination = Nothing}
     _ -> addRespHeaders $ CatalogListPage $ PageCtx bwconf catalogTable
 
 
-data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Text
+data HostEventsVM = HostEventsVM Projects.ProjectId Endpoints.HostEvents Text Text Text UTCTime
 
 
-catalogColumns :: Projects.ProjectId -> Text -> [Column HostEventsVM]
-catalogColumns pid requestType =
-  [ col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "space-y-3"]
-  , col "Events" renderCatalogEventsCol & withAttrs [class_ "w-36 text-center"]
-  , col "Activity" renderCatalogChartCol & withAttrs [class_ "w-60"]
+catalogColumns :: Projects.ProjectId -> Text -> Text -> Text -> [Column HostEventsVM]
+catalogColumns pid requestType baseUrl period =
+  [ col "Dependency" (renderCatalogMainCol pid requestType) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
+  , col ("Events (" <> period <> ")") (\(HostEventsVM _ he _ _ _ _) -> eventsCountCell_ (fromIntegral he.eventCount)) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Last Seen" (\(HostEventsVM _ he _ _ _ currTime) -> lastSeenCell_ currTime he.last_seen) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Activity" (\(HostEventsVM _ he _ _ _ _) -> activityCell_ he.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "apiCatalogContainer" period)
   ]
 
 
-renderCatalogEventsCol :: HostEventsVM -> Html ()
-renderCatalogEventsCol (HostEventsVM _ he _ _) =
-  span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14 days"]
-    $ toHtml @String
-    $ fmt (commaizeF he.eventCount)
-
-
-renderCatalogChartCol :: HostEventsVM -> Html ()
-renderCatalogChartCol (HostEventsVM pid he _ _) =
-  div_ [class_ "w-56 h-12 px-3"]
-    $ Widget.widget_
-    $ (def :: Widget.Widget)
-      { Widget.standalone = Just True
-      , Widget.title = Just he.host
-      , Widget.wType = Widget.WTTimeseries
-      , Widget.showTooltip = Just False
-      , Widget.naked = Just True
-      , Widget.xAxis = Just (def{Widget.showAxisLabel = Just False})
-      , Widget.yAxis = Just (def{Widget.showOnlyMaxLabel = Just True})
-      , Widget.query = Just $ "attributes.http.host==\"" <> he.host <> "\" | summarize count(*) by bin_auto(timestamp)"
-      , Widget._projectId = Just pid
-      , Widget.hideLegend = Just True
-      }
-
-
 renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
-renderCatalogMainCol pid requestType (HostEventsVM _ he _ _) =
-  div_ [class_ "space-x-3"] do
-    a_ [class_ "inline-block font-bold space-x-2"] $ do
-      a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> requestType, class_ " hover:text-textWeak"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
-      a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> he.host <> "\"", class_ "text-textBrand hover:text-textWeak text-xs"] <> navTabAttrs) "View logs"
+renderCatalogMainCol pid requestType (HostEventsVM _ he _ _ _ _) =
+  div_ [class_ "flex items-center gap-2 min-w-0"] do
+    a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> requestType, class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
+    a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
 
 
 data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
@@ -163,8 +140,9 @@ endpointListGetH
   -> Maybe Text
   -> Maybe Text
   -> Maybe Text
+  -> Maybe Text
   -> ATAuthCtx (RespHeaders EndpointRequestStatsVM)
-endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
+endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM periodM hxRequestM hxBoostedM hxCurrentURL loadMoreM searchM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let (ackd, archived, currentFilterTab) = case filterTM of
@@ -177,6 +155,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
       page = fromMaybe 0 $ readMaybe (toString $ fromMaybe "" pageM)
       hostParam = hostM >>= \h -> if h == "" then Nothing else Just h
       currentSort = fromMaybe "-events" sortM
+      period = fromMaybe "24h" periodM
       -- Map new sort format to old format for DB query
       sortV = case currentSort of
         "-events" -> Just "events"
@@ -184,12 +163,12 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
         "-name" -> Just "name"
         "+name" -> Just "name"
         _ -> Just "events"
-  endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortV searchM page (fromMaybe "" requestTypeM)
+  endpointStats <- Endpoints.endpointRequestStatsByProject pid ackd archived hostParam sortV searchM page (fromMaybe "" requestTypeM) period
   inboxCount <- Endpoints.countEndpointInbox pid host (fromMaybe "Incoming" requestTypeM)
   freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
 
   let requestType = fromMaybe "Incoming" requestTypeM
-      baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={requestType}&host={host}&sort={currentSort}|]
+      baseUrl = [PyF.fmt|/p/{pid.toText}/endpoints?filter={currentFilterTab}&request_type={requestType}&host={host}&sort={currentSort}&period={period}|]
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -214,7 +193,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
           }
 
   currTime <- Time.currentTime
-  let endpReqVM = V.map (EnpReqStatsVM False currTime) endpointStats
+  let endpReqVM = V.map (EnpReqStatsVM False currTime period) endpointStats
       tableActions =
         TableHeaderActions
           { baseUrl
@@ -231,11 +210,11 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
   let endpointsTable =
         Table
           { config = def{elemID = "endpointsForm", containerId = Just "endpointsListContainer", addPadding = True, renderAsTable = True, bulkActionsInHeader = Just 0}
-          , columns = endpointColumns pid
+          , columns = endpointColumns pid baseUrl period
           , rows = endpReqVM
           , features =
               def
-                { rowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
+                { rowId = Just \(EnpReqStatsVM _ _ _ enp) -> enp.endpointHash
                 , rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
                 , bulkActions = [BulkAction{icon = Just "archive", title = "Archive", uri = "/p/" <> pid.toText <> "/endpoints/bulk_action/archive"}]
                 , search = Just (ServerSide baseUrl)
@@ -255,60 +234,53 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM hxRequestM 
                     Nothing -> "Endpoints"
                 }
           }
-  let endpRowId = Just \(EnpReqStatsVM _ _ enp) -> enp.endpointHash
+  let endpRowId = Just \(EnpReqStatsVM _ _ _ enp) -> enp.endpointHash
       endpRowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-  case (loadMoreM, searchM) of
-    (Just _, _) -> addRespHeaders $ EndpointsListRows $ TableRows{columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Nothing}
-    (_, Just _) -> addRespHeaders $ EndpointsListRows $ TableRows{columns = endpointColumns pid, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Nothing}
-    _ -> addRespHeaders $ EndpointsListPage $ PageCtx bwconf endpointsTable
+      rowsOnly = EndpointsListRows $ TableRows{columns = endpointColumns pid baseUrl period, rows = endpReqVM, emptyState = Nothing, renderAsTable = True, rowId = endpRowId, rowAttrs = endpRowAttrs, pagination = Nothing}
+  addRespHeaders $ if isJust loadMoreM || isJust searchM then rowsOnly else EndpointsListPage $ PageCtx bwconf endpointsTable
 
 
-data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Endpoints.EndpointRequestStats
+data EnpReqStatsVM = EnpReqStatsVM Bool UTCTime Text Endpoints.EndpointRequestStats
   deriving stock (Show)
 
 
-endpointColumns :: Projects.ProjectId -> [Column EnpReqStatsVM]
-endpointColumns pid =
-  [ col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "space-y-3"]
-  , col "Events" renderEndpointEventsCol & withAttrs [class_ "w-36 text-center"]
-  , col "Activity" renderEndpointChartCol & withAttrs [class_ "w-60"]
+endpointColumns :: Projects.ProjectId -> Text -> Text -> [Column EnpReqStatsVM]
+endpointColumns pid baseUrl period =
+  [ col "Endpoint" (renderEndpointMainCol pid) & withAttrs [class_ "min-w-0 max-w-0 w-full"]
+  , col ("Events (" <> period <> ")") (\(EnpReqStatsVM _ _ _ enp) -> eventsCountCell_ enp.totalRequests) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Last Seen" (\(EnpReqStatsVM _ currTime _ enp) -> lastSeenCell_ currTime enp.lastSeen) & withAttrs [class_ "w-24 max-md:hidden"]
+  , col "Activity" (\(EnpReqStatsVM _ _ _ enp) -> activityCell_ enp.activityBuckets) & withAttrs [class_ "w-40 max-md:hidden"] & withColHeaderExtra (periodToggle_ baseUrl "endpointsListContainer" period)
   ]
 
 
-renderEndpointEventsCol :: EnpReqStatsVM -> Html ()
-renderEndpointEventsCol (EnpReqStatsVM _ _ enp) =
-  span_ [class_ "tabular-nums text-xl", term "data-tippy-content" "Events for this Anomaly in the last 14days"]
-    $ toHtml @String
-    $ fmt
-    $ commaizeF enp.totalRequests
+-- Shared column cell renderers for both catalog and endpoint tables
+eventsCountCell_ :: Int -> Html ()
+eventsCountCell_ n =
+  span_ [class_ $ "tabular-nums font-medium " <> style] $ toHtml $ formatWithCommas (fromIntegral n)
+  where
+    style
+      | n >= 100 = "text-sm text-fillError-strong"
+      | n >= 10 = "text-sm text-fillWarning-strong"
+      | otherwise = "text-sm text-textStrong"
 
 
-renderEndpointChartCol :: EnpReqStatsVM -> Html ()
-renderEndpointChartCol (EnpReqStatsVM _ _ enp) =
-  div_ [class_ "w-56 h-12 px-3"]
-    $ Widget.widget_
-    $ (def :: Widget.Widget)
-      { Widget.standalone = Just True
-      , Widget.wType = Widget.WTTimeseries
-      , Widget.id = Just enp.endpointHash
-      , Widget.title = Just enp.endpointHash
-      , Widget.showTooltip = Just False
-      , Widget.naked = Just True
-      , Widget.xAxis = Just (def{showAxisLabel = Just False})
-      , Widget.yAxis = Just (def{showOnlyMaxLabel = Just True})
-      , Widget.query = Just $ "endpoint_hash==\"" <> enp.endpointHash <> "\" | summarize count(*) by bin(timestamp, 1h), status_code"
-      , Widget._projectId = Just enp.projectId
-      , Widget.hideLegend = Just True
-      }
+lastSeenCell_ :: UTCTime -> Maybe ZonedTime -> Html ()
+lastSeenCell_ currTime = \case
+  Just t -> span_ [class_ "text-xs text-textWeak"] $ toHtml $ compactTimeAgo $ toText $ prettyTimeAuto currTime $ zonedTimeToUTC t
+  Nothing -> span_ [class_ "text-textWeak text-xs"] "-"
+
+
+activityCell_ :: PGArray Int -> Html ()
+activityCell_ (PGArray buckets) = sparkline_ buckets
 
 
 renderEndpointMainCol :: Projects.ProjectId -> EnpReqStatsVM -> Html ()
-renderEndpointMainCol pid (EnpReqStatsVM _ _ enp) =
-  div_ [class_ "space-x-3"] do
-    a_ ([class_ "inline-block font-bold text-textError space-x-2", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
-      span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method, data_ "enp-urlMethod" enp.method] $ toHtml enp.method
-      span_ [class_ " inconsolata text-base text-textStrong", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
-    a_ ([class_ "text-textBrand  hover:text-textStrong", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] <> navTabAttrs) "View logs"
+renderEndpointMainCol pid (EnpReqStatsVM _ _ _ enp) =
+  div_ [class_ "flex items-center gap-2 min-w-0"] do
+    a_ ([class_ "inline-flex items-center gap-1.5 font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0", href_ ("/p/" <> pid.toText <> "/endpoints/details?var-endpointHash=" <> enp.endpointHash <> "&var-host=" <> enp.host)] <> navTabAttrs) $ do
+      span_ [class_ $ "endpoint endpoint-" <> T.toLower enp.method <> " shrink-0 !w-auto !p-0.5 !px-1.5 !m-0 !text-xs !rounded", data_ "enp-urlMethod" enp.method] $ toHtml enp.method
+      span_ [class_ "inconsolata text-sm truncate", data_ "enp-urlPath" enp.urlPath] $ toHtml $ if T.null enp.urlPath then "/" else T.take 150 enp.urlPath
+    a_ ([class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors", href_ ("/p/" <> pid.toText <> "/log_explorer?query=" <> "attributes.http.route==\"" <> enp.urlPath <> "\"")] <> navTabAttrs) "View logs"
 
 
 data EndpointRequestStatsVM
