@@ -42,17 +42,18 @@ import Servant.Server.Internal.Delayed (passToServer)
 import Web.Cookie (SetCookie)
 
 -- System and configuration imports
+
+import Data.OpenApi (OpenApi, info, title, version)
 import Deriving.Aeson qualified as DAE
 import Pages.Bots.Utils (verifyWidgetSignature)
 import Pages.CommandPalette qualified as CommandPalette
+import Servant.OpenApi (toOpenApi)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Exit (ExitCode (..))
 import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders)
-import Data.OpenApi (OpenApi, info, title, version)
-import Servant.OpenApi (toOpenApi)
 import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, renderError)
 import Web.Auth qualified as Auth
 
@@ -159,13 +160,30 @@ instance Servant.MimeRender JSON ByteString where
 type ApiV1Routes :: Type -> Type
 type role ApiV1Routes nominal
 data ApiV1Routes mode = ApiV1Routes
-  { eventsSearch :: mode :- "events" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to"
-      :> QPT "source" :> QueryParam "limit" Int :> Get '[JSON] Log.LogResult
-  , metricsQuery :: mode :- "metrics" :> QueryParam "query" Text :> QueryParam "data_type" Charts.DataType
-      :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> Get '[JSON] Charts.MetricsData
+  { eventsSearch
+      :: mode
+        :- "events"
+          :> QPT "query"
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> QPT "source"
+          :> QueryParam "limit" Int
+          :> Get '[JSON] Log.LogResult
+  , metricsQuery
+      :: mode
+        :- "metrics"
+          :> QueryParam "query" Text
+          :> QueryParam "data_type" Charts.DataType
+          :> QPT "since"
+          :> QPT "from"
+          :> QPT "to"
+          :> QPT "source"
+          :> Get '[JSON] Charts.MetricsData
   , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
   , monitorsGet :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
-  } deriving stock (Generic)
+  }
+  deriving stock (Generic)
 
 
 -- =============================================================================
@@ -478,19 +496,21 @@ server pool =
 
 -- API v1 server
 apiV1Server :: Projects.ProjectId -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
-apiV1Server pid = ApiV1Routes
-  { eventsSearch = \queryM sinceM fromM toM sourceM limitM ->
-      Log.queryEvents pid queryM sinceM fromM toM sourceM limitM
-  , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
-      Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
-  , schemaGet = pure Schema.telemetrySchema
-  , monitorsGet = Monitors.queryMonitorsAll pid
-  }
+apiV1Server pid =
+  ApiV1Routes
+    { eventsSearch = \queryM sinceM fromM toM sourceM limitM ->
+        Log.queryEvents pid queryM sinceM fromM toM sourceM limitM
+    , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
+        Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
+    , schemaGet = pure Schema.telemetrySchema
+    , monitorsGet = Monitors.queryMonitorsAll pid
+    }
 
 
 apiV1OpenApiSpec :: OpenApi
-apiV1OpenApiSpec = toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
-  & info .~ (mempty & title .~ "Monoscope API" & version .~ "1.0")
+apiV1OpenApiSpec =
+  toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
+    & info .~ (mempty & title .~ "Monoscope API" & version .~ "1.0")
 
 
 -- Cookie Protected server

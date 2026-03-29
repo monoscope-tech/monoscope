@@ -80,6 +80,7 @@ data MonitorStatus = MSNormal | MSWarning | MSAlerting
 
 instance ToSchema (CI.CI Text) where declareNamedSchema _ = declareNamedSchema (Proxy @Text)
 
+
 data MonitorAlertConfig = MonitorAlertConfig
   { title :: Text
   , severity :: Text

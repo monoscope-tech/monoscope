@@ -2,9 +2,9 @@
 
 module Pages.Charts.Types (MetricsData (..), MetricsStats (..), DataType (..)) where
 
+import Control.Lens ((?~))
 import Data.Aeson qualified as AE
 import Data.Default
-import Control.Lens ((?~))
 import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, type_)
 import Data.OpenApi qualified as OpenApi
 import Data.Semigroup (Max (Max))
@@ -60,9 +60,14 @@ data DataType = DTMetric | DTJson | DTFloat | DTText
 
 
 instance ToSchema DataType where
-  declareNamedSchema _ = pure $ NamedSchema (Just "DataType") $ mempty
-    & type_ ?~ OpenApi.OpenApiString
-    & enum_ ?~ [AE.toJSON @DataType v | v <- [minBound .. maxBound]]
+  declareNamedSchema _ =
+    pure
+      $ NamedSchema (Just "DataType")
+      $ mempty
+      & type_
+      ?~ OpenApi.OpenApiString
+        & enum_
+      ?~ [AE.toJSON @DataType v | v <- [minBound .. maxBound]]
 
 
 instance ToParamSchema DataType where

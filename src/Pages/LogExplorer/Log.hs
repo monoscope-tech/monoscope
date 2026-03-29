@@ -27,8 +27,8 @@ import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
-import Effectful.Log qualified as ELog
 import Effectful.Labeled (labeled)
+import Effectful.Log qualified as ELog
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -66,9 +66,9 @@ import Pkg.AI qualified as AI
 
 import BackgroundJobs qualified
 import Data.Map.Strict qualified as Map
+import Data.OpenApi qualified
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
-import Data.OpenApi qualified
 import Deriving.Aeson qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
@@ -507,16 +507,25 @@ buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resu
       colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") finalVecs
       queryResultCount = V.length requestVecs
       traces = buildTraceTree colIdxMap queryResultCount finalVecs
-  pure LogResult
-    { finalVecs, curatedColNames, colIdxMap, cursor = reqLastCreatedAtM
-    , nextLogsURL = "", resetLogsURL = "", recentLogsURL = ""
-    , serviceColors = colors, queryResultCount, resultCount = resultCount', traces
-    }
+  pure
+    LogResult
+      { finalVecs
+      , curatedColNames
+      , colIdxMap
+      , cursor = reqLastCreatedAtM
+      , nextLogsURL = ""
+      , resetLogsURL = ""
+      , recentLogsURL = ""
+      , serviceColors = colors
+      , queryResultCount
+      , resultCount = resultCount'
+      , traces
+      }
 
 
 -- | Standalone query function for the v1 API events endpoint.
 -- Returns 400 for parse errors, propagates DB errors instead of silently returning empty results.
-queryEvents :: (DB es, ELog.Log :> es, Time.Time :> es, Error Servant.ServerError :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Eff es LogResult
+queryEvents :: (DB es, ELog.Log :> es, Error Servant.ServerError :> es, Time.Time :> es) => Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Eff es LogResult
 queryEvents pid queryM sinceM fromM toM sourceM limitM = do
   now <- Time.currentTime
   let queryInput = fromMaybe "" queryM
@@ -591,11 +600,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let buildLogResult' tableData = do
         lr <- buildLogResult pid now sinceM fromM toM summaryCols tableData
         let lastFM = lr.cursor >>= textToUTC <&> toText . iso8601Show . addUTCTime (-0.001)
-        pure (lr :: LogResult)
-          { nextLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
-          , resetLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
-          , recentLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
-          }
+        pure
+          (lr :: LogResult)
+            { nextLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' lastFM sinceM fromM toM (Just "loadmore") sourceM False
+            , resetLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing Nothing Nothing Nothing Nothing sourceM False
+            , recentLogsURL = LogQueries.logExplorerUrlPath pid queryM' cols' Nothing sinceM fromM toM (Just "loadmore") sourceM True
+            }
 
   let fetchOrSkip = if shouldSkipLoad then pure $ Right (V.empty, ["timestamp", "summary", "duration"], 0) else fetchLogs
 
@@ -873,20 +883,28 @@ data LogResult = LogResult
   , traces :: [TraceTreeEntry]
   }
 
+
 -- Manual: field names differ from API JSON keys (e.g. finalVecs -> logsData, curatedColNames -> cols),
 -- and includes a computed "hasMore" field. Can't derive since the record is shared with HTML rendering.
 instance AE.ToJSON LogResult where
-  toJSON r = AE.object
-    [ "logsData" AE..= r.finalVecs, "cols" AE..= r.curatedColNames, "colIdxMap" AE..= r.colIdxMap
-    , "count" AE..= r.resultCount, "queryResultCount" AE..= r.queryResultCount
-    , "hasMore" AE..= (r.queryResultCount < r.resultCount), "traces" AE..= r.traces
-    , "serviceColors" AE..= r.serviceColors, "nextUrl" AE..= r.nextLogsURL
-    , "resetLogsUrl" AE..= r.resetLogsURL, "recentUrl" AE..= r.recentLogsURL
-    ]
+  toJSON r =
+    AE.object
+      [ "logsData" AE..= r.finalVecs
+      , "cols" AE..= r.curatedColNames
+      , "colIdxMap" AE..= r.colIdxMap
+      , "count" AE..= r.resultCount
+      , "queryResultCount" AE..= r.queryResultCount
+      , "hasMore" AE..= (r.queryResultCount < r.resultCount)
+      , "traces" AE..= r.traces
+      , "serviceColors" AE..= r.serviceColors
+      , "nextUrl" AE..= r.nextLogsURL
+      , "resetLogsUrl" AE..= r.resetLogsURL
+      , "recentUrl" AE..= r.recentLogsURL
+      ]
+
 
 instance Data.OpenApi.ToSchema LogResult where
   declareNamedSchema _ = pure $ Data.OpenApi.NamedSchema (Just "LogResult") mempty
-
 
 
 virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()
