@@ -539,7 +539,9 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM = do
     Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Query failed: " <> err}
     Right r -> do
       lr <- buildLogResult pid now sinceM fromM toM [] r
-      pure lr{logsData = V.take (fromMaybe 100 limitM) lr.logsData}
+      let limited = V.take (fromMaybe 100 limitM) lr.logsData
+          qrc = V.length limited
+      pure lr{logsData = limited, queryResultCount = qrc, hasMore = qrc < lr.count}
 
 
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
