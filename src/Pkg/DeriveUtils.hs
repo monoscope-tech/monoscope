@@ -49,7 +49,6 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift)
 import Effectful.PostgreSQL.Connection (WithConnection (..))
-import UnliftIO.Pool qualified as Pool
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
@@ -61,6 +60,7 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Text.Casing (fromSnake, quietSnake, toPascal)
+import UnliftIO.Pool qualified as Pool
 
 
 type DB es = (WithConnection :> es, IOE :> es)

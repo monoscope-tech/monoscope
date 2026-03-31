@@ -9,6 +9,7 @@ import Data.Conduit ((.|))
 import Data.Conduit.Combinators qualified as CC
 import Data.HashMap.Strict qualified as HM
 import Data.List (partition)
+import Data.OpenApi (ToSchema)
 import Data.Pool (Pool, withResource)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
@@ -28,7 +29,6 @@ import OddJobs.Job (createJob)
 import Pages.Settings (getMinioConnectInfo)
 import Pkg.Queue (publishJSONToKafka)
 import ProcessMessage (replaceNullChars)
-import Data.OpenApi (ToSchema)
 import Relude
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log

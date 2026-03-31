@@ -1,14 +1,13 @@
 module Pkg.Components.Widget (Widget (..), WidgetDataset (..), toWidgetDataset, widget_, Layout (..), WidgetType (..), TableColumn (..), RowClickAction (..), mapChatTypeToWidgetType, mapWidgetTypeToChartType, widgetToECharts, WidgetAxis (..), SummarizeBy (..), widgetPostH, renderTraceDataTable, renderTableWithDataAndParams, signWidgetUrl, widgetPngUrl, getSpanJson, encodeText) where
 
+import Codec.Compression.GZip qualified as GZip
 import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
-import Codec.Compression.GZip qualified as GZip
 import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
-import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import Data.Char (isDigit)
 import Data.Default
 import Data.Generics.Labels ()
@@ -45,6 +44,7 @@ import Text.Slugify (slugify)
 import Utils
 import Web.FormUrlEncoded (FromForm)
 import Web.HttpApiData (FromHttpApiData, parseQueryParam)
+import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 

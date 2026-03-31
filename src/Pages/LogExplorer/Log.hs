@@ -71,9 +71,9 @@ import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Deriving.Aeson qualified as DAE
 import Effectful.Ki qualified as Ki
+import OddJobs.Job (createJob)
 import System.Logging qualified as Log
 import UnliftIO.Exception (tryAny)
-import OddJobs.Job (createJob)
 
 
 data TraceTreeEntry = TraceTreeEntry

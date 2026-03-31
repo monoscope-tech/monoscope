@@ -29,6 +29,7 @@ import Control.Monad.Except qualified as T
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (FromJSON, ToJSON)
+import Data.Default (def)
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
@@ -50,7 +51,7 @@ import Effectful (
  )
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Pkg.DeriveUtils (runConnectionPool)
+import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Reader.Static qualified
@@ -58,22 +59,21 @@ import Effectful.Time (Time, currentTime, runTime)
 import Log (Logger)
 import Lucid (Html, renderBS, toHtml)
 import Lucid.Html5
-import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
+import Pkg.DeriveUtils (runConnectionPool)
 import Pkg.Mail (addConvertKitUser)
-import Data.Default (def)
 import Relude hiding (ask, asks)
 import Servant (Header, Headers, NoContent (..), addHeader)
 import Servant qualified
 import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
-import Effectful.Log (Log)
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial)
@@ -257,11 +257,13 @@ apiKeyAuthHandler :: Logger -> AuthContext -> ApiKeyAuthContext
 apiKeyAuthHandler logger env = mkAuthHandler \req -> do
   let mbAuth = L.lookup hAuthorization (requestHeaders req) <&> decodeUtf8
       runEffs :: Eff '[Log, PG.WithConnection, Effectful.Reader.Static.Reader AuthContext, IOE] a -> Handler a
-      runEffs act = liftIO $ act
-        & Logging.runLog (show env.config.environment) logger env.config.logLevel
-        & runConnectionPool env.pool
-        & Effectful.Reader.Static.runReader env
-        & runEff
+      runEffs act =
+        liftIO
+          $ act
+          & Logging.runLog (show env.config.environment) logger env.config.logLevel
+          & runConnectionPool env.pool
+          & Effectful.Reader.Static.runReader env
+          & runEff
   case mbAuth of
     Nothing -> T.throwError err401{errBody = "Missing Authorization header"}
     Just token -> do

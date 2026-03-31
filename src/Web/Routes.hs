@@ -58,7 +58,6 @@ import Web.Auth qualified as Auth
 
 import Codec.Compression.GZip qualified as GZip
 import Data.ByteString.Lazy qualified as LBS
-import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
@@ -69,6 +68,7 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
 import UnliftIO.Exception (handle)
+import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 -- Page imports
@@ -761,8 +761,9 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let fallback = fromMaybe "" widgetJsonM
   v <- case widgetZM of
-    Just z | Right bs <- B64URL.decodeBase64Untyped (encodeUtf8 z) ->
-      handle (\(_ :: SomeException) -> pure fallback) $ liftIO $ evaluateWHNF $ decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs
+    Just z
+      | Right bs <- B64URL.decodeBase64Untyped (encodeUtf8 z) ->
+          handle (\(_ :: SomeException) -> pure fallback) $ liftIO $ evaluateWHNF $ decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs
     _ -> pure fallback
   let width = clamp (100, 2000) $ fromMaybe 900 widthM
       height = clamp (100, 2000) $ fromMaybe 300 heightM
