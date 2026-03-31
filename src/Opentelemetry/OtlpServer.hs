@@ -82,7 +82,8 @@ import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.IO.Unsafe (unsafePerformIO)
 import System.Logging qualified as Log
-import System.Types (DB, runBackground)
+import System.Types (ATBackgroundCtx, DB, runBackground)
+import UnliftIO.Exception (tryAny)
 import Utils (b64ToJson, freeTierDailyMaxEvents, jsonToMap, nestedJsonFromDotNotation)
 import "base64" Data.ByteString.Base64 qualified as B64
 
@@ -1499,7 +1500,7 @@ traceServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
           resp = defMessage & TSF.partialSuccess .~ (defMessage & TSF.rejectedSpans .~ count & TSF.errorMessage .~ "Free tier daily event limit exceeded")
       sendFinalOutput call (resp, NoMetadata)
     else do
-      _ <- runBackground appLogger appCtx tp $ processTraceRequest apiKey req
+      grpcRunBackground appLogger appCtx tp "traces" $ processTraceRequest apiKey req
       sendFinalOutput call (defMessage, NoMetadata)
 
 
@@ -1516,7 +1517,7 @@ logsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
           resp = defMessage & LSF.partialSuccess .~ (defMessage & LSF.rejectedLogRecords .~ count & LSF.errorMessage .~ "Free tier daily event limit exceeded")
       sendFinalOutput call (resp, NoMetadata)
     else do
-      _ <- runBackground appLogger appCtx tp $ processLogsRequest apiKey req
+      grpcRunBackground appLogger appCtx tp "logs" $ processLogsRequest apiKey req
       sendFinalOutput call (defMessage, NoMetadata)
 
 
@@ -1533,8 +1534,20 @@ metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
           resp = defMessage & MSF.partialSuccess .~ (defMessage & MSF.rejectedDataPoints .~ count & MSF.errorMessage .~ "Free tier daily event limit exceeded")
       sendFinalOutput call (resp, NoMetadata)
     else do
-      _ <- runBackground appLogger appCtx tp $ processMetricsRequest apiKey req
+      grpcRunBackground appLogger appCtx tp "metrics" $ processMetricsRequest apiKey req
       sendFinalOutput call (defMessage, NoMetadata)
+
+
+-- | Run a background task for gRPC handlers, catching exceptions to prevent server crash.
+-- Transient DB errors were propagating up and crashing the entire process via waitAnyCancel.
+grpcRunBackground :: Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
+grpcRunBackground appLogger appCtx tp label task =
+  tryAny (runBackground appLogger appCtx tp task) >>= \case
+    Right _ -> pass
+    Left e ->
+      runLogT "monoscope" appLogger LogAttention
+        $ LogBase.logAttention "gRPC handler: caught exception"
+        $ AE.object ["error" AE..= show @Text e, "handler" AE..= label]
 
 
 services :: Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
