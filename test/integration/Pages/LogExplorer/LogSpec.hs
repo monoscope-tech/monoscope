@@ -29,9 +29,9 @@ spec = aroundAll withTestResources do
       case pg of
         Log.LogsGetJson r -> do
           -- For empty case
-          V.length r.finalVecs `shouldBe` 0
-          r.resultCount `shouldBe` 0
-          r.curatedColNames `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
+          V.length r.logsData `shouldBe` 0
+          r.count `shouldBe` 0
+          r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
 
     it "should return log items" \tr -> do
@@ -64,16 +64,16 @@ spec = aroundAll withTestResources do
       case pg of
         Log.LogsGetJson r -> do
           -- Verify we got results
-          V.length r.finalVecs `shouldBe` 202  -- Should return all 202 test messages (under the 500 limit)
-          r.resultCount `shouldSatisfy` (>= 202)  -- At least our 202 test messages (might include data from other tests)
+          V.length r.logsData `shouldBe` 202  -- Should return all 202 test messages (under the 500 limit)
+          r.count `shouldSatisfy` (>= 202)  -- At least our 202 test messages (might include data from other tests)
 
           -- Verify column structure
-          r.curatedColNames `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
+          r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
 
           -- Verify URLs are generated correctly
-          r.nextLogsURL `shouldNotBe` ""
-          r.resetLogsURL `shouldNotBe` ""
-          r.recentLogsURL `shouldNotBe` ""
+          r.nextUrl `shouldNotBe` ""
+          r.resetLogsUrl `shouldNotBe` ""
+          r.recentUrl `shouldNotBe` ""
         _ -> error "Expected JSON response but got something else"
 
     it "should handle query filters correctly" \tr -> do
@@ -99,8 +99,8 @@ spec = aroundAll withTestResources do
       case pg of
         Log.LogsGetJson r -> do
           -- Should only return entries matching the query
-          r.resultCount `shouldSatisfy` (> 0)
-          V.length r.finalVecs `shouldSatisfy` (> 0)
+          r.count `shouldSatisfy` (> 0)
+          V.length r.logsData `shouldSatisfy` (> 0)
         _ -> error "Expected JSON response but got something else"
 
     it "should paginate results correctly" \tr -> do
@@ -123,8 +123,8 @@ spec = aroundAll withTestResources do
 
       case pg1 of
         Log.LogsGetJson r -> do
-          V.length r.finalVecs `shouldSatisfy` (>= 200)  -- Should return at least all 200 test messages (under the 500 limit)
-          r.resultCount `shouldSatisfy` (>= 200)  -- At least our 200 test messages
+          V.length r.logsData `shouldSatisfy` (>= 200)  -- Should return at least all 200 test messages (under the 500 limit)
+          r.count `shouldSatisfy` (>= 200)  -- At least our 200 test messages
           -- With 500 limit, might not need pagination for 200 items
         _ -> error "Expected JSON response but got something else"
 
@@ -149,7 +149,7 @@ spec = aroundAll withTestResources do
       case pg of
         Log.LogsGetJson r -> do
           -- The system returns the requested columns plus default columns in a curated order
-          r.curatedColNames `shouldBe` ["id", "timestamp", "name", "duration", "service", "summary", "latency_breakdown"]
+          r.cols `shouldBe` ["id", "timestamp", "name", "duration", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
 
   describe "Query Error Handling" do
@@ -162,8 +162,8 @@ spec = aroundAll withTestResources do
       -- Invalid query should return 0 results (not silently ignored)
       case pg of
         Log.LogsGetJson r -> do
-          V.length r.finalVecs `shouldBe` 0
-          r.resultCount `shouldBe` 0
+          V.length r.logsData `shouldBe` 0
+          r.count `shouldBe` 0
         Log.LogsGetErrorSimple _ -> pass  -- Also acceptable
         _ -> error "Expected JSON response or error"
 
@@ -174,8 +174,8 @@ spec = aroundAll withTestResources do
       
       case pg of
         Log.LogsGetJson r -> do
-          V.length r.finalVecs `shouldBe` 0
-          r.resultCount `shouldBe` 0
+          V.length r.logsData `shouldBe` 0
+          r.count `shouldBe` 0
         Log.LogsGetErrorSimple _ -> pass
         _ -> error "Expected JSON response or error"
 
@@ -198,11 +198,11 @@ spec = aroundAll withTestResources do
 
       case pg1 of
         Log.LogsGetJson r -> do
-          V.length r.finalVecs `shouldBe` 500  -- API limits to 500 per page
-          r.resultCount `shouldSatisfy` (>= 1000)  -- At least our 1000 test messages
+          V.length r.logsData `shouldBe` 500  -- API limits to 500 per page
+          r.count `shouldSatisfy` (>= 1000)  -- At least our 1000 test messages
 
           -- Extract cursor timestamp from last item
-          let lastItemM = r.finalVecs V.!? (V.length r.finalVecs - 1)
+          let lastItemM = r.logsData V.!? (V.length r.logsData - 1)
           case lastItemM of
             Just lastItem -> do
               let timestampIdx = HashMap.lookup "timestamp" r.colIdxMap
@@ -235,8 +235,8 @@ spec = aroundAll withTestResources do
       
       case pg of
         Log.LogsGetJson r -> do
-          r.resultCount `shouldSatisfy` (>= 2)
-          V.length r.finalVecs `shouldSatisfy` (>= 2)
+          r.count `shouldSatisfy` (>= 2)
+          V.length r.logsData `shouldSatisfy` (>= 2)
         _ -> error "Expected JSON response but got something else"
 
   describe "Time Range Selection" do
@@ -269,8 +269,8 @@ spec = aroundAll withTestResources do
       case pg of
         Log.LogsGetJson r -> do
           -- Should only include messages within the time range
-          r.resultCount `shouldSatisfy` (>= 1)
-          V.length r.finalVecs `shouldSatisfy` (>= 1)
+          r.count `shouldSatisfy` (>= 1)
+          V.length r.logsData `shouldSatisfy` (>= 1)
         _ -> error "Expected JSON response but got something else"
 
     it "should handle 'since' parameter correctly" \tr -> do
@@ -299,8 +299,8 @@ spec = aroundAll withTestResources do
         Log.LogsGetJson r -> do
           -- In frozen time at 2025-01-01, "1H" means from 1 hour before to now
           -- Should include msgNow and msgHourBeforeMsg
-          r.resultCount `shouldSatisfy` (>= 2)
-          V.length r.finalVecs `shouldSatisfy` (>= 2)
+          r.count `shouldSatisfy` (>= 2)
+          V.length r.logsData `shouldSatisfy` (>= 2)
         _ -> error "Expected JSON response but got something else"
 
       -- Test "24H" - should get messages from last 24 hours
@@ -310,8 +310,8 @@ spec = aroundAll withTestResources do
       case pg2 of
         Log.LogsGetJson r -> do
           -- Should include msgNow and msgHourBeforeMsg, but NOT msgTwoDaysBeforeMsg
-          r.resultCount `shouldSatisfy` (>= 2)
-          V.length r.finalVecs `shouldSatisfy` (>= 2)
+          r.count `shouldSatisfy` (>= 2)
+          V.length r.logsData `shouldSatisfy` (>= 2)
         _ -> error "Expected JSON response but got something else"
 
     it "should handle missing time range (default behavior)" \tr -> do
@@ -321,7 +321,7 @@ spec = aroundAll withTestResources do
 
       case pg of
         Log.LogsGetJson r -> do
-          r.curatedColNames `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
+          r.cols `shouldBe` ["id", "timestamp", "service", "summary", "latency_breakdown"]
         _ -> error "Expected JSON response but got something else"
 
   describe "Trace Tree" do
@@ -337,7 +337,7 @@ spec = aroundAll withTestResources do
 
       case pg of
         Log.LogsGetJson r -> do
-          V.length r.finalVecs `shouldSatisfy` (>= 5)
+          V.length r.logsData `shouldSatisfy` (>= 5)
           length r.traces `shouldSatisfy` (> 0)
           forM_ r.traces \entry -> do
             entry.traceId `shouldNotBe` ""
@@ -363,7 +363,7 @@ spec = aroundAll withTestResources do
           let traceIdx = HashMap.lookup "trace_id" r.colIdxMap
           case traceIdx of
             Just idx -> do
-              let vecTraceIds = V.toList $ V.mapMaybe (\v -> case v V.!? idx of Just (AE.String t) -> Just t; _ -> Nothing) r.finalVecs
+              let vecTraceIds = V.toList $ V.mapMaybe (\v -> case v V.!? idx of Just (AE.String t) -> Just t; _ -> Nothing) r.logsData
               forM_ r.traces \entry -> vecTraceIds `shouldContain` [entry.traceId]
             Nothing -> pass -- trace_id column not projected, skip
         _ -> error "Expected JSON response"
@@ -384,7 +384,7 @@ spec = aroundAll withTestResources do
               idIdx = HashMap.lookup "id" r.colIdxMap
           case (lbIdx, idIdx) of
             (Just lbi, Just idi) -> do
-              let allSpanIds = V.toList $ V.mapMaybe (\v -> case v V.!? lbi of Just (AE.String t) -> Just t; _ -> case v V.!? idi of Just (AE.String t) -> Just t; _ -> Nothing) r.finalVecs
+              let allSpanIds = V.toList $ V.mapMaybe (\v -> case v V.!? lbi of Just (AE.String t) -> Just t; _ -> case v V.!? idi of Just (AE.String t) -> Just t; _ -> Nothing) r.logsData
               forM_ r.traces \(entry :: Log.TraceTreeEntry) -> do
                 -- Root should be a valid span ID
                 allSpanIds `shouldContain` [entry.root]

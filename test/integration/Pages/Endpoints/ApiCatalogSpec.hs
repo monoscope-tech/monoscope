@@ -40,7 +40,7 @@ import Utils (toXXHash)
 getEndpointStats :: TestResources -> Maybe Text -> Maybe Text -> IO (V.Vector ApiCatalog.EnpReqStatsVM)
 getEndpointStats tr filterParam hostM = do
   (_, resp) <- testServant tr $
-    ApiCatalog.endpointListGetH testPid Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+    ApiCatalog.endpointListGetH testPid Nothing Nothing filterParam hostM Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing
   case resp of
     ApiCatalog.EndpointsListPage (PageCtx _ tbl) -> pure tbl.rows
     _ -> error "Unexpected response from endpointListGetH"
@@ -87,7 +87,7 @@ spec = aroundAll withTestResources do
   describe "API Catalog and Endpoints" do
     it "returns empty list when no data exists" \tr -> do
       (_, catalogList) <- testServant tr $
-          ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing
+          ApiCatalog.apiCatalogH testPid Nothing Nothing Nothing Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 0
@@ -137,7 +137,7 @@ spec = aroundAll withTestResources do
 
     it "returns hosts list after processing messages" \tr -> do
       (_, catalogList) <- testServant tr $
-          ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing
+          ApiCatalog.apiCatalogH testPid Nothing Nothing (Just "Incoming") Nothing Nothing
       case catalogList of
         ApiCatalog.CatalogListPage (PageCtx _ tbl) ->
           length tbl.rows `shouldBe` 2
@@ -211,11 +211,11 @@ spec = aroundAll withTestResources do
       V.length activeEndpoints `shouldBe` 2
       
       -- Verify endpoint details
-      let enp1 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$> 
-            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/") activeEndpoints
-      let enp2 = (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c) <$> 
-            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ c) -> c.urlPath == "/api/v1/user/login") activeEndpoints
-      
+      let enp1 = (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c) <$>
+            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c.urlPath == "/") activeEndpoints
+      let enp2 = (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c) <$>
+            Unsafe.fromJust $ find (\(ApiCatalog.EnpReqStatsVM _ _ _ c) -> c.urlPath == "/api/v1/user/login") activeEndpoints
+
       enp1.endpointHash `shouldBe` toXXHash (testPid.toText <> "172.31.29.11" <> "GET" <> "/")
       enp2.endpointHash `shouldBe` toXXHash (testPid.toText <> "api.test.com" <> "POST" <> "/api/v1/user/login")
 
