@@ -122,11 +122,13 @@ spec = aroundAll withTestResources do
         url <- liftIO $ Eff.runEff $ Logging.runLog "test" tr.trLogger tr.trATCtx.config.logLevel $ Widget.widgetPngUrl secret baseUrl testPid widget Nothing Nothing Nothing
 
         url `shouldSatisfy` (not . T.null)
-        url `shouldSatisfy` T.isInfixOf "widgetJSON="
+        url `shouldSatisfy` T.isInfixOf "widgetZ="
         url `shouldSatisfy` T.isInfixOf "&sig="
 
       it "rejects URLs exceeding 8000 characters" \tr -> do
-        let hugeWidget = def{Widget.wType = Widget.WTTable, Widget.title = Just (T.replicate 10000 "x"), Widget.query = Just "service == \"api\""}
+        -- gzip compresses repeated chars well, so use unique numbered strings that resist compression
+        let incompressible = T.concat [show @Text i <> "abcdefg" | i <- [1 .. 3000 :: Int]]
+            hugeWidget = def{Widget.wType = Widget.WTTable, Widget.title = Just incompressible, Widget.query = Just incompressible}
             secret = tr.trATCtx.env.apiKeyEncryptionSecretKey
             baseUrl = tr.trATCtx.env.hostUrl
 

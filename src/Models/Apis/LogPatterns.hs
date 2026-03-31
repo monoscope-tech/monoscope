@@ -130,9 +130,9 @@ getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field
 
 -- | All pattern templates for a source field, used to seed Drain trees.
 -- Capped at 5000: the DrainTree's maxLogGroups=1000, so loading more is wasteful.
--- ORDER BY last_seen DESC keeps the most recently active patterns as seeds.
+-- ORDER BY last_seen_at DESC keeps the most recently active patterns as seeds.
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
-getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND canonical_id IS NULL ORDER BY last_seen DESC NULLS LAST LIMIT 5000|] (pid, sourceField)
+getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|] (pid, sourceField)
 
 
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
