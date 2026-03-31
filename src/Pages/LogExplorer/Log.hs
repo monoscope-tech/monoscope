@@ -71,6 +71,8 @@ import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Deriving.Aeson qualified as DAE
 import Effectful.Ki qualified as Ki
+import System.Logging qualified as Log
+import UnliftIO.Exception (tryAny)
 import OddJobs.Job (createJob)
 
 
@@ -619,25 +621,38 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         addRespHeaders $ LogsPatternJson totalPatterns (V.fromList patternRows)
       _ -> do
         tableAsVecE <- fetchOrSkip
+        whenLeft_ (void tableAsVecE) \e -> Log.logAttention "Log explorer JSON query failed" (show @Text e)
         case hush tableAsVecE of
           Just tableResult -> buildLogResult' tableResult >>= addRespHeaders . LogsGetJson
           Nothing -> buildLogResult' (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
     else do
       -- Full HTML path: parallelize independent DB queries
-      (tableAsVecE, queryLib, facetSummary, freeTierStatus, teams, patterns) <- Ki.scoped \scope -> do
+      (tableAsVecE, queryLibE, facetSummaryE, freeTierStatusE, teamsE, patternsE) <- Ki.scoped \scope -> do
         let aw = Ki.atomically . Ki.await
         t1 <- Ki.fork scope fetchOrSkip
-        t2 <- Ki.fork scope $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
-        t3 <- Ki.fork scope $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
-        t4 <- Ki.fork scope $ checkFreeTierStatus pid project.paymentPlan
-        t5 <- Ki.fork scope $ V.fromList <$> ManageMembers.getTeams pid
-        t6 <- Ki.fork scope $ case effectiveVizType of
+        t2 <- Ki.fork scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
+        t3 <- Ki.fork scope $ tryAny $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
+        t4 <- Ki.fork scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
+        t5 <- Ki.fork scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
+        t6 <- Ki.fork scope $ tryAny $ case effectiveVizType of
           Just "patterns" -> Just . second V.fromList <$> LogQueries.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
           _ -> pure Nothing
         (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
-      -- FIXME: we're silently ignoring parse errors and the likes.
+      -- Log errors from non-critical queries but continue with defaults
+      let logErr label res = whenLeft_ (void res) \e -> Log.logAttention ("Log explorer " <> label <> " failed") (show @Text e)
+      logErr "queryLib" queryLibE
+      logErr "facets" facetSummaryE
+      logErr "freeTierStatus" freeTierStatusE
+      logErr "teams" teamsE
+      logErr "patterns" patternsE
+
       let tableAsVecM = hush tableAsVecE
+          queryLib = fromRight [] queryLibE
+          facetSummary = join $ rightToMaybe facetSummaryE
+          freeTierStatus = fromRight def freeTierStatusE
+          teams = fromRight V.empty teamsE
+          patterns = join $ rightToMaybe patternsE
           (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
 
       -- Queue facet generation if no precomputed facets exist (new projects)

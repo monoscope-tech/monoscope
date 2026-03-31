@@ -83,6 +83,7 @@ apiGet cfg path params = do
         W.defaults
           & W.header "Accept" .~ ["application/json"]
           & addAuth cfg.apiKey
+          & addProjectId cfg.projectId
           & addParams params
   catch
     (Right . (^. responseBody) <$> getWith opts url)
@@ -108,6 +109,10 @@ withAPIResult cfg path params onSuccess =
 addAuth :: Maybe Text -> W.Options -> W.Options
 addAuth Nothing o = o
 addAuth (Just key) o = o & W.header "Authorization" .~ [encodeUtf8 ("Bearer " <> key)]
+
+addProjectId :: Maybe Text -> W.Options -> W.Options
+addProjectId Nothing o = o
+addProjectId (Just pid) o = o & W.header "X-Project-Id" .~ [encodeUtf8 pid]
 
 addParams :: [(Text, Text)] -> W.Options -> W.Options
 addParams ps o = foldl' (\acc (k, v) -> acc & Wreq.param k .~ [v]) o ps

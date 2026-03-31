@@ -72,7 +72,7 @@ resolveConfig = do
   let merged = mergeConfigs [global, projCfg]
   pure
     CLIConfig
-      { apiUrl = fromMaybe "https://app.monoscope.tech" $ (toText <$> envApiUrl) <|> merged.api_url
+      { apiUrl = fromMaybe "https://api.monoscope.tech" $ (toText <$> envApiUrl) <|> merged.api_url
       , apiKey = (toText <$> envApiKey) <|> merged.api_key <|> storedKey
       , projectId = (toText <$> envProject) <|> merged.project
       }

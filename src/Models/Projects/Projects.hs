@@ -106,7 +106,7 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, runConnectionPool)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
@@ -408,7 +408,7 @@ projectCacheById pid = do
 
 
 projectCacheByIdIO :: Pool Connection -> ProjectId -> IO (Maybe ProjectCache)
-projectCacheByIdIO pool pid = runEff $ PG.runWithConnectionPool pool $ runTime $ projectCacheById pid
+projectCacheByIdIO pool pid = runEff $ runConnectionPool pool $ runTime $ projectCacheById pid
 
 
 insertProject :: DB es => CreateProject -> Eff es ()

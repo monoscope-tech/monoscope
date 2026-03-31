@@ -40,14 +40,14 @@ import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled, runLabeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection, runWithConnectionPool)
+import Effectful.PostgreSQL (WithConnection)
+import Pkg.DeriveUtils (DB, runConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (DB)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
@@ -137,8 +137,8 @@ effToServantHandler env logger tp app =
     & Effectful.Reader.Static.runReader env
     & runUUID
     & runHTTPWreq
-    & runWithConnectionPool env.pool
-    & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)
+    & runConnectionPool env.pool
+    & runLabeled @"timefusion" (runConnectionPool env.timefusionPgPool)
     & runTime
     & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
@@ -156,8 +156,8 @@ effToServantHandlerTest env logger tp app =
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
     & runHTTPGolden "./tests/golden/"
-    & runWithConnectionPool env.pool
-    & runLabeled @"timefusion" (runWithConnectionPool env.timefusionPgPool)
+    & runConnectionPool env.pool
+    & runLabeled @"timefusion" (runConnectionPool env.timefusionPgPool)
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
     & Logging.runLog (show env.config.environment) logger env.config.logLevel
     & Tracing.runTracing tp
@@ -200,8 +200,8 @@ runBackground logger appCtx tp process =
   process
     & Data.Effectful.Notify.runNotifyProduction
     & Effectful.Reader.Static.runReader appCtx
-    & runWithConnectionPool appCtx.pool
-    & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
+    & runConnectionPool appCtx.pool
+    & runLabeled @"timefusion" (runConnectionPool appCtx.timefusionPgPool)
     & runTime
     & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
     & Tracing.runTracing tp

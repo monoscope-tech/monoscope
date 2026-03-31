@@ -4,8 +4,11 @@ import Control.Lens
 import Data.Aeson qualified as AE
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as AE.KeyMap
+import Codec.Compression.GZip qualified as GZip
+import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
+import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import Data.Char (isDigit)
 import Data.Default
 import Data.Generics.Labels ()
@@ -267,10 +270,10 @@ widgetPostH pid sinceM fromM toM widget = do
 widgetPngUrl :: Log :> es => Text -> Text -> Projects.ProjectId -> Widget -> Maybe Text -> Maybe Text -> Maybe Text -> Eff es Text
 widgetPngUrl secret hostUrl pid widget since fromM toM =
   let widgetJson = encodeText widget
-      encodedJson = toUriStr widgetJson
+      compressed = B64.extractBase64 $ B64URL.encodeBase64 $ toStrict $ GZip.compress $ encodeUtf8 widgetJson
       sig = signWidgetUrl secret pid widgetJson
       timeParams = mconcat $ catMaybes [("&since=" <>) . toUriStr <$> since, ("&from=" <>) . toUriStr <$> fromM, ("&to=" <>) . toUriStr <$> toM]
-      url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetJSON=" <> encodedJson <> timeParams <> "&sig=" <> sig
+      url = hostUrl <> "p/" <> pid.toText <> "/widget.png?widgetZ=" <> compressed <> timeParams <> "&sig=" <> sig
    in if T.length url > 8000 then Log.logAttention "Widget PNG URL too large" (AE.object ["projectId" AE..= pid, "urlLength" AE..= T.length url]) $> "" else pure url
 
 

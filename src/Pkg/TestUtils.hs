@@ -94,7 +94,6 @@ import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (runWithConnectionPool)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
@@ -114,7 +113,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..))
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), runConnectionPool)
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -417,7 +416,7 @@ testSessionHeader pool = do
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
       & runHTTPGolden "./tests/golden/"
-      & runWithConnectionPool pool
+      & runConnectionPool pool
       & runTime
       & runEff
       & liftIO
@@ -502,8 +501,8 @@ runTestBackgroundWithNotifications t logger appCtx process = do
     process
       & Data.Effectful.Notify.runNotifyTest notifRef
       & Effectful.Reader.Static.runReader appCtx
-      & runWithConnectionPool appCtx.pool
-      & runLabeled @"timefusion" (runWithConnectionPool appCtx.timefusionPgPool)
+      & runConnectionPool appCtx.pool
+      & runLabeled @"timefusion" (runConnectionPool appCtx.timefusionPgPool)
       & runFrozenTime t
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
@@ -548,7 +547,7 @@ runTestEffect pool logger tp action = do
   logLevel <- Logging.getLogLevelFromEnv
   action
     & runErrorNoCallStack @ServantS.ServerError
-    & runWithConnectionPool pool
+    & runConnectionPool pool
     & runTime
     & Logging.runLog "test" logger logLevel
     & Tracing.runTracing tp
@@ -689,7 +688,7 @@ runQueryEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError
     & Effectful.Reader.Static.runReader trATCtx
-    & runWithConnectionPool trATCtx.pool
+    & runConnectionPool trATCtx.pool
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
     & runEff
     <&> fromRightShow

@@ -111,12 +111,12 @@ runConfigInit = do
     inputForm
       tty
       "Monoscope Configuration"
-      [ ("api_url", "API URL", "https://app.monoscope.tech")
+      [ ("api_url", "API URL", "https://api.monoscope.tech")
       , ("token", "API token", "")
       , ("project", "Default project ID", "")
       ]
   let field k = fromMaybe "" $ Map.lookup k result
-      url = let v = field "api_url" in if T.null v then "https://app.monoscope.tech" else v
+      url = let v = field "api_url" in if T.null v then "https://api.monoscope.tech" else v
   setConfigValue CKApiUrl url
   let token = field "token"
   unless (T.null token) $ saveToken token

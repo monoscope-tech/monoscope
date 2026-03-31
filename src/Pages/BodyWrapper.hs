@@ -617,7 +617,7 @@ bodyWrapper bcfg child = do
       let name = maybe "" (\sess -> sess.persistentSession.user.getUser.firstName <> " " <> sess.persistentSession.user.getUser.lastName) bcfg.sessM
       let pidT = maybe "" (.id.toText) bcfg.currProject
       let pTitle = maybe "" (.title) bcfg.currProject
-      let telemetryProjectId = bcfg.config.telemetryProjectId
+      let telemetryApiKey = bcfg.config.telemetryApiKey
       let telemetryServiceName = bcfg.config.telemetryServiceName
       script_
         [text| window.addEventListener("load", (event) => {
@@ -627,14 +627,15 @@ bodyWrapper bcfg child = do
                   // echarts.connect('default');
                 });
       |]
-      -- Initialize Monoscope only when telemetryProjectId is available
-      when (bcfg.config.telemetryProjectId /= "" && bcfg.config.enableBrowserMonitoring)
+      -- Initialize Monoscope only when telemetryApiKey is available
+      when (bcfg.config.telemetryApiKey /= "" && bcfg.config.enableBrowserMonitoring)
         $ let enableReplay = bool "false" "true" bcfg.config.enableSessionReplay
            in script_
                 [text|
                   window.monoscope = new Monoscope({
-                    projectId: "${telemetryProjectId}",
+                    apiKey: "${telemetryApiKey}",
                     serviceName: "${telemetryServiceName}",
+                    debug: undefined,
                     sessionReplay: ${enableReplay},
                     user: {
                       email: ${email},

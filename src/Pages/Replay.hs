@@ -28,6 +28,7 @@ import OddJobs.Job (createJob)
 import Pages.Settings (getMinioConnectInfo)
 import Pkg.Queue (publishJSONToKafka)
 import ProcessMessage (replaceNullChars)
+import Data.OpenApi (ToSchema)
 import Relude
 import System.Config (AuthContext (config, jobsPool), EnvConfig (..))
 import System.Logging qualified as Log
@@ -42,7 +43,7 @@ data ReplayPost = ReplayPost
   , timestamp :: UTCTime
   }
   deriving (Generic, Show)
-  deriving anyclass (AE.FromJSON)
+  deriving anyclass (AE.FromJSON, ToSchema)
 
 
 data ReplayPost' = ReplayPost'

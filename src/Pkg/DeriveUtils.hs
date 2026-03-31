@@ -10,7 +10,9 @@ module Pkg.DeriveUtils (
   WrappedEnum (..),
   WrappedEnumSC (..),
   WrappedEnumShow (..),
+  addKeepaliveParams,
   connectPostgreSQL,
+  runConnectionPool,
   idToText,
   idFromText,
   unAesonText,
@@ -44,8 +46,10 @@ import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fr
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Effectful (IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
+import Effectful (Eff, IOE, type (:>))
+import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift)
+import Effectful.PostgreSQL.Connection (WithConnection (..))
+import UnliftIO.Pool qualified as Pool
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
@@ -244,6 +248,20 @@ data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "BS" BaselineState
+
+
+addKeepaliveParams :: ByteString -> ByteString
+addKeepaliveParams connStr =
+  let params = "keepalives=1&keepalives_idle=15&keepalives_interval=10&keepalives_count=3"
+      sep = if T.isInfixOf "?" (decodeUtf8 connStr) then "&" else "?"
+   in connStr <> sep <> params
+
+
+runConnectionPool :: (HasCallStack, IOE :> es) => Pool.Pool Connection -> Eff (WithConnection ': es) a -> Eff es a
+runConnectionPool pool = interpret $ \env -> \case
+  WithConnection f ->
+    localSeqUnlift env $ \unlift ->
+      Pool.withResource pool (unlift . f)
 
 
 connectPostgreSQL :: ByteString -> IO Connection

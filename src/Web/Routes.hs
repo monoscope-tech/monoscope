@@ -18,8 +18,6 @@ import Effectful.PostgreSQL qualified as PG
 
 -- Effectful imports
 import Data.Effectful.Notify qualified as Notify
-import Effectful (runPureEff)
-import Effectful.Error.Static (runErrorNoCallStack)
 import Effectful.Error.Static qualified as Error
 import Effectful.Reader.Static (runReader)
 import Effectful.Reader.Static qualified
@@ -29,7 +27,6 @@ import Effectful.Time qualified as Time
 -- Web and server imports
 import Log (Logger, UTCTime)
 import Lucid
-import Network.HTTP.Types (notFound404)
 import Network.Wai (Request, queryString)
 import Servant
 import Servant.HTML.Lucid (HTML)
@@ -54,12 +51,14 @@ import System.Logging qualified as Log
 import System.Process.Typed (byteStringInput, proc, readProcess, setStdin)
 import System.Timeout (timeout)
 import System.Types (ATAuthCtx, ATBaseCtx, HXRedirectDest, RespHeaders, TriggerEvents, XWidgetJSON, addRespHeaders)
-import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, renderError)
+import Web.Auth (APItoolkitAuthContext, ApiKeyAuthContext, apiKeyAuthHandler, authHandler, htmlServerError)
 import Web.Auth qualified as Auth
 
 -- Model imports
 
+import Codec.Compression.GZip qualified as GZip
 import Data.ByteString.Lazy qualified as LBS
+import "base64" Data.ByteString.Base64.URL qualified as B64URL
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Wreq qualified as Wreq
 import Data.Text qualified as T
@@ -182,6 +181,7 @@ data ApiV1Routes mode = ApiV1Routes
           :> Get '[JSON] Charts.MetricsData
   , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
   , monitorsGet :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
+  , rrwebPost :: mode :- "rrweb" :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   }
   deriving stock (Generic)
 
@@ -218,9 +218,8 @@ data Routes mode = Routes
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
   , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
-  , rrwebPost :: mode :- "rrweb" :> ProjectId :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+  , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
@@ -464,7 +463,6 @@ server pool =
     , stripeWebhook = Settings.stripeWebhookPostH
     , githubWebhook = GitSync.githubWebhookPostH
     , chartsDataShot = Charts.queryMetrics Nothing
-    , rrwebPost = Replay.replayPostH
     , avatarGet = avatarGetH
     , widgetPngGet = widgetPngGetH
     , proxyLanding = \path ->
@@ -504,6 +502,7 @@ apiV1Server pid =
         Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
     , schemaGet = pure Schema.telemetrySchema
     , monitorsGet = Monitors.queryMonitorsAll pid
+    , rrwebPost = Replay.replayPostH pid
     }
 
 
@@ -757,11 +756,15 @@ widgetGetH pid widgetJsonM sinceStr fromDStr toDStr allParams = do
 
 
 -- | Public endpoint for rendering widgets to PNG (for bot embeds). Requires valid HMAC signature.
-widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-widgetPngGetH pid widgetJsonM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
+widgetPngGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Int -> Maybe Text -> [(Text, Maybe Text)] -> ATBaseCtx (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
+widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM sigM allParams = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  let v = fromMaybe "" widgetJsonM
-      width = clamp (100, 2000) $ fromMaybe 900 widthM
+  let fallback = fromMaybe "" widgetJsonM
+  v <- case widgetZM of
+    Just z | Right bs <- B64URL.decodeBase64Untyped (encodeUtf8 z) ->
+      handle (\(_ :: SomeException) -> pure fallback) $ liftIO $ evaluateWHNF $ decodeUtf8 @Text $ toStrict $ GZip.decompress $ fromStrict bs
+    _ -> pure fallback
+  let width = clamp (100, 2000) $ fromMaybe 900 widthM
       height = clamp (100, 2000) $ fromMaybe 300 heightM
 
   Log.logInfo "widgetPngGetH: request" $ AE.object ["widgetJson_len" AE..= T.length v]
@@ -843,15 +846,11 @@ genAuthServerContext logger env = authHandler logger env :. apiKeyAuthHandler lo
 
 errorFormatters :: AuthContext -> Servant.ErrorFormatters
 errorFormatters env =
-  Servant.defaultErrorFormatters{Servant.notFoundErrorFormatter = notFoundPage env}
-
-
-notFoundPage :: AuthContext -> Servant.NotFoundErrorFormatter
-notFoundPage env _req =
-  let result = runPureEff $ runErrorNoCallStack $ renderError env notFound404
-   in case result of
-        Left err -> err
-        Right _ -> Servant.err404
+  Servant.defaultErrorFormatters
+    { Servant.notFoundErrorFormatter = \_ -> htmlServerError env.config 404
+    , Servant.bodyParserErrorFormatter = \_ _ _ -> htmlServerError env.config 400
+    , Servant.urlParseErrorFormatter = \_ _ _ -> htmlServerError env.config 400
+    }
 
 
 -- =============================================================================

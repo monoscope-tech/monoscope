@@ -128,7 +128,7 @@ data EnvConfig = EnvConfig
   , basicAuthEnabled :: Bool
   , basicAuthUsername :: Text
   , basicAuthPassword :: Text
-  , telemetryProjectId :: Text
+  , telemetryApiKey :: Text
   , telemetryServiceName :: Text
   , enableEventsTableUpdates :: Bool
   , enableDailyJobScheduling :: Bool
@@ -213,8 +213,8 @@ instance Default DeploymentEnv where
 
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
-  let createPgConnIO = PG.connectPostgreSQL $ encodeUtf8 config.databaseUrl
-  let createTimefusionPgConnIO = DeriveUtils.connectPostgreSQL $ encodeUtf8 config.timefusionPgUrl
+  let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
+  let createTimefusionPgConnIO = DeriveUtils.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.timefusionPgUrl
   when config.migrateAndInitializeOnStart $ liftIO do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization
@@ -222,12 +222,12 @@ configToEnv config = do
     migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
     blueMessage ("migration result " <> show migrationRes)
     pass
-  pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50 & setNumStripes (Just 5))
-  jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close (60 * 2) 50 & setNumStripes (Just 4))
-  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close (60 * 2) 25 & setNumStripes (Just 4))
-  projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0) -- :: m (Cache Projects.ProjectId Projects.ProjectCache) -- 30*60secs or 30 minutes TTL
+  pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 50 & setNumStripes (Just 5))
+  jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 50 & setNumStripes (Just 4))
+  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 25 & setNumStripes (Just 4))
+  projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   projectKeyCache <- liftIO $ newCache Nothing
-  logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
+  logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   pure
     AuthContext
       { pool

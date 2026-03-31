@@ -11,6 +11,8 @@ module Web.Auth (
   APItoolkitAuthContext,
   authorizeUserAndPersist,
   renderError,
+  errorPageHtml,
+  htmlServerError,
   ClientMetadata (..),
   clientMetadataH,
   DeviceCodeResponse (..),
@@ -48,14 +50,15 @@ import Effectful (
  )
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
-import Effectful.PostgreSQL (runWithConnectionPool)
+import Pkg.DeriveUtils (runConnectionPool)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, currentTime, runTime)
 import Log (Logger)
-import Lucid (Html, toHtml)
+import Lucid (Html, renderBS, toHtml)
 import Lucid.Html5
+import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects (craftSessionCookie, emptySessionCookie)
 import Models.Projects.Projects qualified as Projects
@@ -63,12 +66,14 @@ import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pkg.Mail (addConvertKitUser)
+import Data.Default (def)
 import Relude hiding (ask, asks)
 import Servant (Header, Headers, NoContent (..), addHeader)
 import Servant qualified
 import Servant.Server (Handler, ServerError (..), err302, err401)
 import Servant.Server.Experimental.Auth (AuthHandler, mkAuthHandler)
 import System.Config (AuthContext (..), EnvConfig (..))
+import Effectful.Log (Log)
 import System.Logging qualified as Logging
 import System.Types (ATAuthCtx, ATBaseCtx, DB, RespHeaders, addRespHeaders)
 import Utils (escapedQueryPartial)
@@ -99,7 +104,7 @@ authHandler logger env =
   mkAuthHandler \request ->
     handler request
       & Logging.runLog (show env.config.environment) logger env.config.logLevel
-      & runWithConnectionPool env.pool
+      & runConnectionPool env.pool
       & runHTTPWreq
       & runUUID
       & runTime
@@ -251,19 +256,30 @@ resolveApiKeyProject bearerToken =
 apiKeyAuthHandler :: Logger -> AuthContext -> ApiKeyAuthContext
 apiKeyAuthHandler logger env = mkAuthHandler \req -> do
   let mbAuth = L.lookup hAuthorization (requestHeaders req) <&> decodeUtf8
+      runEffs :: Eff '[Log, PG.WithConnection, Effectful.Reader.Static.Reader AuthContext, IOE] a -> Handler a
+      runEffs act = liftIO $ act
+        & Logging.runLog (show env.config.environment) logger env.config.logLevel
+        & runConnectionPool env.pool
+        & Effectful.Reader.Static.runReader env
+        & runEff
   case mbAuth of
     Nothing -> T.throwError err401{errBody = "Missing Authorization header"}
     Just token -> do
-      result <-
-        resolveApiKeyProject token
-          & Logging.runLog (show env.config.environment) logger env.config.logLevel
-          & runWithConnectionPool env.pool
-          & Effectful.Reader.Static.runReader env
-          & runEff
-          & liftIO
+      result <- runEffs $ resolveApiKeyProject token
       case result of
-        Nothing -> T.throwError err401{errBody = "Invalid API key"}
         Just pid -> pure pid
+        Nothing -> do
+          -- Fallback for CLI clients that authenticate with session token + X-Project-Id
+          let rawToken = T.replace "Bearer " "" token
+              mbSessionId = Projects.PersistentSessionId <$> UUID.fromText rawToken
+              mbProjectId = Projects.projectIdFromText . decodeUtf8 =<< L.lookup "X-Project-Id" (requestHeaders req)
+          case (mbSessionId, mbProjectId) of
+            (Just sessId, Just pid) -> do
+              mbSession <- runEffs $ Projects.getPersistentSession sessId
+              case mbSession of
+                Just sess | V.any (\p -> p.id == pid) sess.projects.getProjects -> pure pid
+                _ -> T.throwError err401{errBody = "Invalid session or project access denied"}
+            _ -> T.throwError err401{errBody = "Invalid API key"}
 
 
 logoutH :: ATBaseCtx (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
@@ -377,7 +393,37 @@ authorizeUserAndPersist convertkitApiKeyM firstName lastName picture email = do
 
 
 renderError :: forall (es :: [Effect]) (a :: Type). Error ServerError :> es => AuthContext -> Status -> Eff es a
-renderError _env status = throwError $ ServerError{errHTTPCode = statusCode status, errBody = "error page: " <> show @LByteString status, errReasonPhrase = "", errHeaders = []}
+renderError env status = throwError $ htmlServerError env.config (statusCode status)
+
+
+htmlServerError :: EnvConfig -> Int -> ServerError
+htmlServerError envCfg code = ServerError{errHTTPCode = code, errBody = errorPageHtml envCfg code, errReasonPhrase = "", errHeaders = [("Content-Type", "text/html")]}
+
+
+errorPageHtml :: EnvConfig -> Int -> LByteString
+errorPageHtml envCfg code = renderBS $ bodyWrapper def{pageTitle = title <> " — Monoscope", config = envCfg} do
+  div_ [class_ "flex flex-col items-center justify-center min-h-[60vh] text-center gap-4 px-4"] do
+    div_ [class_ "text-6xl opacity-30"] icon
+    h1_ [class_ "text-7xl font-bold text-textWeak"] $ toHtml (show @Text code)
+    h2_ [class_ "text-2xl font-semibold"] $ toHtml title
+    p_ [class_ "text-textWeak max-w-md"] $ toHtml desc
+    div_ [class_ "flex gap-3 mt-4"] do
+      button_ [class_ "btn btn-outline", onclick_ "history.back()"] "Go Back"
+      a_ [href_ "/", class_ "btn btn-primary"] "Home"
+  where
+    (icon, title, desc) = errorInfo code
+
+
+errorInfo :: Int -> (Html (), Text, Text)
+errorInfo = \case
+  400 -> ("🚫", "Bad Request", "The request could not be understood. Please check and try again.")
+  401 -> ("🔒", "Unauthorized", "You need to be logged in to access this page.")
+  403 -> ("⛔", "Forbidden", "You don't have permission to access this resource.")
+  404 -> ("🔍", "Not Found", "The page you're looking for doesn't exist or has been moved.")
+  500 -> ("💥", "Internal Server Error", "Something went wrong on our end. Please try again later.")
+  502 -> ("🌐", "Bad Gateway", "We're having trouble connecting. Please try again shortly.")
+  503 -> ("🔧", "Service Unavailable", "We're temporarily offline for maintenance. Please try again soon.")
+  c -> ("⚠️", "Error " <> show c, "An unexpected error occurred.")
 
 
 data ClientMetadata = ClientMetadata

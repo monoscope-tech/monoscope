@@ -222,6 +222,7 @@ library:
     - regex
     - resource-pool
     - resourcet
+    - unliftio-pool
     - scientific
     - servant
     - servant-htmx
