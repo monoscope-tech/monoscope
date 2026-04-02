@@ -5,28 +5,22 @@
 // When updating this logic, also update chartshot/colorMapping.ts to keep server-side
 // chart rendering consistent with browser rendering.
 
-// Theme colors ordered for maximum hue separation: any 3 consecutive are visually distinct
+// Service/generic colors: cool/neutral hues only.
+// Warm colors (red, orange, amber, yellow) are reserved for severity/error semantics.
+// Ordered for maximum hue separation: any 3 consecutive are visually distinct.
 const THEME_COLORS = [
   '#60a5fa', // Blue-400
-  '#f87171', // Red-400
-  '#4ade80', // Green-400
-  '#fbbf24', // Amber-400
+  '#34d399', // Emerald-400
   '#c084fc', // Purple-400
   '#2dd4bf', // Teal-400
-  '#fb923c', // Orange-400
-  '#38bdf8', // Sky-400
-  '#fb7185', // Rose-400
-  '#a3e635', // Lime-400
   '#818cf8', // Indigo-400
-  '#facc15', // Yellow-400
-  '#f472b6', // Pink-400
-  '#34d399', // Emerald-400
+  '#a3e635', // Lime-400
+  '#38bdf8', // Sky-400
+  '#e879f9', // Fuchsia-400
+  '#4ade80', // Green-400
   '#a78bfa', // Violet-400
   '#22d3ee', // Cyan-400
-  '#e879f9', // Fuchsia-400
-  '#fc8452', // Dark orange
-  '#1A74A8', // Deep blue
-  '#ee6666'  // Classic red
+  '#94a3b8', // Slate-400
 ];
 
 // HTTP Status Code Colors
@@ -76,13 +70,14 @@ const PERCENTILE_COLORS: Record<string, string> = {
   'min': '#91cc75',  // Green - minimum/best
 };
 
-// Log Level / Error Pattern Colors
+// Log Level / Error Pattern Colors (hardcoded fallbacks for server-side rendering).
+// Browser callers should use resolveLogLevelColors() for CSS-token-aware colors.
 const LOG_LEVEL_COLORS: Record<string, string> = {
   'error': '#ee6666',
   'fail': '#ee6666',
   'failed': '#ee6666',
-  'exception': '#e062ae',
-  'critical': '#e062ae',
+  'exception': '#ee6666',
+  'critical': '#ee6666',
   'warning': '#fac858',
   'warn': '#fac858',
   'success': '#91cc75',
@@ -91,6 +86,49 @@ const LOG_LEVEL_COLORS: Record<string, string> = {
   'debug': '#9a60b4',
   'trace': '#e7bcf3',
 };
+
+// CSS token → log level mapping for runtime resolution from the design system.
+// Maps semantic CSS custom properties to the log level keys they should override.
+const LOG_LEVEL_TOKEN_MAP: Record<string, string[]> = {
+  '--color-fillError-strong': ['error', 'fail', 'failed', 'exception', 'critical'],
+  '--color-fillWarning-strong': ['warning', 'warn'],
+  '--color-fillSuccess-strong': ['success', 'ok'],
+  '--color-fillInformation-strong': ['info'],
+};
+
+let _resolvedLogLevelColors: Record<string, string> | null = null;
+
+// Resolve log level colors from CSS custom properties (browser only).
+// Caches on first call. Call invalidateLogLevelColors() on theme change.
+export function resolveLogLevelColors(): Record<string, string> {
+  if (_resolvedLogLevelColors) return _resolvedLogLevelColors;
+  if (typeof document === 'undefined') return LOG_LEVEL_COLORS;
+  const cs = getComputedStyle(document.body);
+  const resolved = { ...LOG_LEVEL_COLORS };
+  for (const [token, keys] of Object.entries(LOG_LEVEL_TOKEN_MAP)) {
+    const raw = cs.getPropertyValue(token).trim();
+    if (!raw) continue;
+    const hex = _toHex(raw);
+    if (hex) for (const k of keys) resolved[k] = hex;
+  }
+  _resolvedLogLevelColors = resolved;
+  return resolved;
+}
+
+export function invalidateLogLevelColors(): void { _resolvedLogLevelColors = null; }
+
+// Minimal oklch/rgb → hex converter using a canvas pixel read
+function _toHex(cssColor: string): string {
+  if (typeof document === 'undefined') return '';
+  if (!_hexCanvas) { _hexCanvas = document.createElement('canvas'); _hexCanvas.width = 1; _hexCanvas.height = 1; _hexCtx = _hexCanvas.getContext('2d', { willReadFrequently: true })!; }
+  _hexCtx!.clearRect(0, 0, 1, 1);
+  _hexCtx!.fillStyle = cssColor;
+  _hexCtx!.fillRect(0, 0, 1, 1);
+  const [r, g, b] = _hexCtx!.getImageData(0, 0, 1, 1).data;
+  return '#' + [r, g, b].map(c => c.toString(16).padStart(2, '0')).join('');
+}
+let _hexCanvas: HTMLCanvasElement | null = null;
+let _hexCtx: CanvasRenderingContext2D | null = null;
 
 // Simple hash function for deterministic color selection
 function hashString(str: string): number {
@@ -139,32 +177,26 @@ export function getPercentileColor(percentile: string): string {
 
 // Get color for log levels and error patterns
 export function getLogLevelColor(text: string): string {
+  const colors = resolveLogLevelColors();
   const normalized = text.toLowerCase().trim();
-  
-  // Check for exact matches first
-  if (LOG_LEVEL_COLORS[normalized]) {
-    return LOG_LEVEL_COLORS[normalized];
+
+  if (colors[normalized]) return colors[normalized];
+
+  for (const [pattern, color] of Object.entries(colors)) {
+    if (normalized.includes(pattern)) return color;
   }
-  
-  // Check if text contains any of the patterns
-  for (const [pattern, color] of Object.entries(LOG_LEVEL_COLORS)) {
-    if (normalized.includes(pattern)) {
-      return color;
-    }
-  }
-  
-  // Default to hash-based color
+
   return THEME_COLORS[hashString(text) % THEME_COLORS.length];
 }
 
 // Main function to get deterministic color for any series
 export function getSeriesColor(value: string, context?: 'status' | 'percentile' | 'service' | 'log'): string {
-  // Handle null and undefined values with neutral gray
+  // Handle null and undefined values with visible but muted blue-gray
   if (value && value.toLowerCase() === 'unset') {
-    return '#94a3b8'; // Slate-400 - desaturated blue-gray for unset status
+    return '#7c8db5'; // Visible desaturated blue — muted but clearly present on dark backgrounds
   }
   if (value && ['null', 'undefined', 'unknown'].includes(value.toLowerCase())) {
-    return '#9ca3af'; // Gray-400 - neutral color for missing data
+    return '#8892a4'; // Slightly warmer gray — distinct from UNSET
   }
   
   // Handle empty values - use default color
@@ -208,25 +240,20 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
   return THEME_COLORS[hashString(value) % THEME_COLORS.length];
 }
 
-// Tailwind to hex color mapping (ECharts theme colors for consistency across app)
+// Tailwind class to hex mapping for service colors (cool/neutral hues only)
 export const TAILWIND_TO_HEX: Record<string, string> = {
-  'bg-red-400': '#f87171',
-  'bg-amber-400': '#fbbf24',
-  'bg-orange-400': '#fb923c',
-  'bg-yellow-400': '#facc15',
-  'bg-lime-400': '#a3e635',
-  'bg-green-400': '#4ade80',
-  'bg-teal-400': '#2dd4bf',
-  'bg-cyan-400': '#22d3ee',
   'bg-blue-400': '#60a5fa',
-  'bg-purple-400': '#c084fc',
-  'bg-violet-400': '#a78bfa',
-  'bg-pink-400': '#f472b6',
-  'bg-rose-400': '#fb7185',
   'bg-emerald-400': '#34d399',
-  'bg-fuchsia-400': '#e879f9',
+  'bg-purple-400': '#c084fc',
+  'bg-teal-400': '#2dd4bf',
   'bg-indigo-400': '#818cf8',
+  'bg-lime-400': '#a3e635',
   'bg-sky-400': '#38bdf8',
+  'bg-fuchsia-400': '#e879f9',
+  'bg-green-400': '#4ade80',
+  'bg-violet-400': '#a78bfa',
+  'bg-cyan-400': '#22d3ee',
+  'bg-slate-400': '#94a3b8',
   'bg-gray-400': '#9ca3af',
   'bg-gray-500': '#6b7280',
 };

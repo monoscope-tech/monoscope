@@ -525,24 +525,21 @@ checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
 serviceColors :: V.Vector Text
 serviceColors =
   V.fromList
-    -- Ordered for maximum hue separation: any 3 consecutive colors are visually distinct
+    -- 12 cool/neutral hues only — warm colors (red, rose, orange, amber, yellow)
+    -- are reserved for severity/error semantics to avoid false alarm signals.
+    -- Ordered for maximum hue separation: any 3 consecutive are visually distinct.
     [ "bg-blue-400" -- blue
-    , "bg-red-400" -- red
-    , "bg-green-400" -- green
-    , "bg-amber-400" -- amber
+    , "bg-emerald-400" -- emerald
     , "bg-purple-400" -- purple
     , "bg-teal-400" -- teal
-    , "bg-orange-400" -- orange
-    , "bg-sky-400" -- sky
-    , "bg-rose-400" -- rose
-    , "bg-lime-400" -- lime
     , "bg-indigo-400" -- indigo
-    , "bg-yellow-400" -- yellow
-    , "bg-pink-400" -- pink
-    , "bg-emerald-400" -- emerald
+    , "bg-lime-400" -- lime
+    , "bg-sky-400" -- sky
+    , "bg-fuchsia-400" -- fuchsia
+    , "bg-green-400" -- green
     , "bg-violet-400" -- violet
     , "bg-cyan-400" -- cyan
-    , "bg-fuchsia-400" -- fuchsia
+    , "bg-slate-400" -- slate
     ]
 
 
@@ -554,30 +551,23 @@ getServiceColors = V.foldl' assign HM.empty
        in HM.insert service (serviceColors V.! colorIdx) colors
 
 
--- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS
+-- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS.
+-- Cool/neutral hues only; warm colors reserved for severity/error semantics.
 themeColorsHex :: V.Vector Text
 themeColorsHex =
   V.fromList
-    [ "#1A74A8"
-    , "#91cc75"
-    , "#fac858"
-    , "#ee6666"
-    , "#73c0de"
-    , "#3ba272"
-    , "#fc8452"
-    , "#9a60b4"
-    , "#c71585"
-    , "#37a2da"
-    , "#32c5e9"
-    , "#20b2aa"
-    , "#228b22"
-    , "#ff8c00"
-    , "#ff6347"
-    , "#dc143c"
-    , "#8b008b"
-    , "#4b0082"
-    , "#6a5acd"
-    , "#4169e1"
+    [ "#60a5fa" -- Blue-400
+    , "#34d399" -- Emerald-400
+    , "#c084fc" -- Purple-400
+    , "#2dd4bf" -- Teal-400
+    , "#818cf8" -- Indigo-400
+    , "#a3e635" -- Lime-400
+    , "#38bdf8" -- Sky-400
+    , "#e879f9" -- Fuchsia-400
+    , "#4ade80" -- Green-400
+    , "#a78bfa" -- Violet-400
+    , "#22d3ee" -- Cyan-400
+    , "#94a3b8" -- Slate-400
     ]
 
 
@@ -590,7 +580,8 @@ percentileNames = HS.fromList ["median", "max", "min", "q1", "q3"]
 getSeriesColorHex :: Text -> Text
 getSeriesColorHex name
   | T.null name = themeColorsHex V.! 0
-  | HS.member (T.toLower name) nullishNames = "#9ca3af"
+  | T.toLower name == "unset" = "#7c8db5"
+  | HS.member (T.toLower name) nullishNames = "#8892a4"
   | isStatusCode name = statusCodeColorHex (fromMaybe 0 $ readMaybe $ toString name)
   | isPercentile name = percentileColorHex name
   | otherwise = themeColorsHex V.! hashTextToIndex name
