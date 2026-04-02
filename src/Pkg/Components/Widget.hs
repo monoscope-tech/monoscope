@@ -1042,10 +1042,18 @@ createSeries :: WidgetType -> Int -> Text -> AE.Value
 createSeries widgetType colIdx name =
   let isStat = widgetType == WTTimeseriesStat
       seriesColor = getSeriesColorHex name
-      gradientStyle = AE.object ["color" AE..= AE.object
-        [ "type" AE..= ("linear" :: Text), "x" AE..= (0 :: Int), "y" AE..= (0 :: Int), "x2" AE..= (0 :: Int), "y2" AE..= (1 :: Int)
-        , "colorStops" AE..= ([AE.object ["offset" AE..= (0 :: Int), "color" AE..= seriesColor], AE.object ["offset" AE..= (1 :: Int), "color" AE..= ("rgba(0,0,0,0)" :: Text)]] :: [AE.Value])
-        ]]
+      gradientStyle =
+        AE.object
+          [ "color"
+              AE..= AE.object
+                [ "type" AE..= ("linear" :: Text)
+                , "x" AE..= (0 :: Int)
+                , "y" AE..= (0 :: Int)
+                , "x2" AE..= (0 :: Int)
+                , "y2" AE..= (1 :: Int)
+                , "colorStops" AE..= ([AE.object ["offset" AE..= (0 :: Int), "color" AE..= seriesColor], AE.object ["offset" AE..= (1 :: Int), "color" AE..= ("rgba(0,0,0,0)" :: Text)]] :: [AE.Value])
+                ]
+          ]
    in AE.object
         [ "name" AE..= name
         , "type" AE..= mapWidgetTypeToChartType widgetType

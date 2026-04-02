@@ -65,16 +65,16 @@ import Pages.Monitors qualified as AlertUI
 import Pkg.AI qualified as AI
 
 import BackgroundJobs qualified
-import Data.Map.Strict qualified as Map
 import Control.Lens ((.~), (?~))
+import Data.Map.Strict qualified as Map
 import Data.OpenApi (NamedSchema (..), OpenApiItems (..), OpenApiType (..), Referenced (..), ToSchema (..))
 import Data.OpenApi qualified as OA
-import Pkg.DeriveUtils (SnakeSchema (..))
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Deriving.Aeson qualified as DAE
 import Effectful.Ki qualified as Ki
 import OddJobs.Job (createJob)
+import Pkg.DeriveUtils (SnakeSchema (..))
 import System.Logging qualified as Log
 import UnliftIO.Exception (tryAny)
 
@@ -912,23 +912,26 @@ instance ToSchema LogResult where
     let prop t = Inline $ mempty & OA.type_ ?~ t
         propDesc t d = Inline $ mempty & OA.type_ ?~ t & OA.description ?~ d
         arrOf ref = Inline $ mempty & OA.type_ ?~ OpenApiArray & OA.items ?~ OpenApiItemsObject ref
-    pure $ NamedSchema (Just "LogResult") $ mempty
-      & OA.type_ ?~ OpenApiObject
-      & OA.properties .~
-        fromList
-          [ ("logsData", propDesc OpenApiArray "Array of row arrays, each row is an array of values")
-          , ("cols", arrOf (Inline $ mempty & OA.type_ ?~ OpenApiString))
-          , ("colIdxMap", propDesc OpenApiObject "Column name to index mapping")
-          , ("cursor", prop OpenApiString)
-          , ("nextUrl", prop OpenApiString)
-          , ("resetLogsUrl", prop OpenApiString)
-          , ("recentUrl", prop OpenApiString)
-          , ("serviceColors", propDesc OpenApiObject "Service name to color hex mapping")
-          , ("count", prop OpenApiInteger)
-          , ("queryResultCount", prop OpenApiInteger)
-          , ("hasMore", prop OpenApiBoolean)
-          , ("traces", arrOf traceRef)
-          ]
+    pure
+      $ NamedSchema (Just "LogResult")
+      $ mempty
+      & OA.type_
+      ?~ OpenApiObject
+        & OA.properties
+      .~ fromList
+        [ ("logsData", propDesc OpenApiArray "Array of row arrays, each row is an array of values")
+        , ("cols", arrOf (Inline $ mempty & OA.type_ ?~ OpenApiString))
+        , ("colIdxMap", propDesc OpenApiObject "Column name to index mapping")
+        , ("cursor", prop OpenApiString)
+        , ("nextUrl", prop OpenApiString)
+        , ("resetLogsUrl", prop OpenApiString)
+        , ("recentUrl", prop OpenApiString)
+        , ("serviceColors", propDesc OpenApiObject "Service name to color hex mapping")
+        , ("count", prop OpenApiInteger)
+        , ("queryResultCount", prop OpenApiInteger)
+        , ("hasMore", prop OpenApiBoolean)
+        , ("traces", arrOf traceRef)
+        ]
 
 
 virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()

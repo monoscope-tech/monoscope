@@ -351,8 +351,8 @@ expandedItemView pid item aptSp leftM rightM = do
         unless isAlert $ button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onclick_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
         tabBtn "px-4 py-1.5" "meta-content" "Process"
         unless (isLog || null spanErrors) $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5", onclick_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
-            "Errors"
-            div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
+          "Errors"
+          div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
         unless isLog $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5", onclick_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null (unAesonTextMaybe item.events)
