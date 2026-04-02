@@ -132,7 +132,6 @@ metricsQueryParser =
     <*> optional (strOption (long "since" <> metavar "DURATION"))
     <*> optional (strOption (long "from" <> metavar "TIMESTAMP"))
     <*> optional (strOption (long "to" <> metavar "TIMESTAMP"))
-    <*> optional (strOption (long "step" <> metavar "DURATION" <> help "Resolution step"))
     <*> optional (strOption (long "assert" <> metavar "CONDITION" <> help "Assert condition (e.g. '< 0.01')"))
 
 metricsChartParser :: Parser MetricsChartOpts

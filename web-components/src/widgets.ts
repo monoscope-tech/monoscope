@@ -151,10 +151,26 @@ const sharedThemeObserver = new MutationObserver((mutations) => {
 });
 sharedThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
 
+// Convert any CSS color (including oklch) to hex for ECharts.
+// Modern browsers keep oklch in fillStyle, so we render a pixel and read back RGB.
+const _colorCanvas = document.createElement('canvas');
+_colorCanvas.width = 1; _colorCanvas.height = 1;
+const _colorCtx = _colorCanvas.getContext('2d', { willReadFrequently: true })!;
+export const toEChartsColor = (cssColor: string): string => {
+  if (!cssColor) return '';
+  _colorCtx.clearRect(0, 0, 1, 1);
+  _colorCtx.fillStyle = cssColor;
+  _colorCtx.fillRect(0, 0, 1, 1);
+  const [r, g, b, a] = _colorCtx.getImageData(0, 0, 1, 1).data;
+  return a < 255
+    ? `rgba(${r},${g},${b},${(a / 255).toFixed(2)})`
+    : '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+};
+
 // Read chart-related CSS tokens from the design system
-const getChartStyles = () => {
+export const getChartStyles = () => {
   const cs = getComputedStyle(document.body);
-  const get = (prop: string) => cs.getPropertyValue(prop).trim();
+  const get = (prop: string) => toEChartsColor(cs.getPropertyValue(prop).trim());
   return {
     textColor: get('--color-textWeak'),
     tooltipBg: get('--color-bgRaised'),
@@ -164,6 +180,7 @@ const getChartStyles = () => {
     chartMask: get('--color-chartMask'),
     errorColor: get('--color-textError'),
     warningColor: get('--color-textWarning'),
+    brandColor: get('--color-fillBrand-strong'),
   };
 };
 
@@ -192,12 +209,10 @@ const hideNoDataOverlay = (chartId: string) => {
 
 
 const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt: any) => {
-  // For timeseries_stat widgets with generic column names, use the default blue color
-  // This ensures stat widgets (total requests, etc.) show in blue as expected
+  // For timeseries_stat widgets with generic column names, use the brand color token
   const isGenericStatColumn = widgetData.widgetType === 'timeseries_stat' &&
     (name === 'value' || name.startsWith('count') || name === '' || !name);
-  // ECharts' modifyAlpha can't parse oklch colors from getComputedStyle, so use hex fallback
-  const paletteColor = isGenericStatColumn ? '#1A74A8' : getSeriesColor(name);
+  const paletteColor = isGenericStatColumn ? getChartStyles().brandColor : getSeriesColor(name);
 
   const gradientColor = new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, 1) },
@@ -505,7 +520,7 @@ const chartWidget = (widgetData: WidGetData) => {
   if (!opt.dataset.source && chartEl) {
     chart.showLoading({
       text: 'Loading...',
-      color: '#1A74A8',
+      color: styles.brandColor,
       textColor: styles.tooltipTextColor,
       maskColor: styles.chartMask,
       zlevel: 0,

@@ -88,7 +88,7 @@
   --color-bgBrand: oklch(56.7% 0.239 261);
 
   /* Chart colors */
-  --color-chart-default: #1A74A8;
+  --color-chart-default: oklch(49.3% 0.088 241);
   --color-chartBg: oklch(97.7% 0.014 236 / 0.4);
   --color-chartMask: oklch(100% 0 0 / 0.8);
 
@@ -284,11 +284,11 @@
     transition: none !important;
   }
 
-  /* Minimum tap target size for accessibility */
+  /* Minimum tap target size for accessibility (WCAG 2.5.8 AA: 24px) */
   .tap-target {
     position: relative;
-    min-width: 22px;
-    min-height: 22px;
+    min-width: 24px;
+    min-height: 24px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1047,7 +1047,7 @@ body, :host {
     @apply inline-flex items-center justify-center rounded-md  px-2 py-0.5 text-xs font-medium w-fit whitespace-nowrap shrink-0 gap-1 text-textWeak;
   }
   .tab-not-active {
-    --tab-color: var(--fallback-bc, oklch(var(--bc) / 0.5));
+    --tab-color: var(--color-textWeak);
     --tab-bg: transparent;
     --tab-border-color: transparent;
     border-color: var(--tab-border-color);
@@ -1108,20 +1108,21 @@ body, :host {
 
   /* Skeleton loader styles */
   .skeleton-shimmer {
+    --skeleton-highlight: color-mix(in oklch, var(--color-fillBrand-strong) 10%, transparent);
     background: linear-gradient(
       90deg,
       var(--color-fillWeak) 0%,
       var(--color-fillWeak) 40%,
-      var(--skeleton-highlight, rgba(26, 116, 168, 0.1)) 50%,
+      var(--skeleton-highlight) 50%,
       var(--color-fillWeak) 60%,
       var(--color-fillWeak) 100%
     );
     background-size: 200% 100%;
     animation: shimmer 2s ease-in-out infinite;
   }
-  
+
   [data-theme="dark"] .skeleton-shimmer {
-    --skeleton-highlight: rgba(26, 116, 168, 0.2);
+    --skeleton-highlight: color-mix(in oklch, var(--color-fillBrand-strong) 20%, transparent);
   }
 
   .skeleton-wave {
@@ -1129,7 +1130,7 @@ body, :host {
   }
 
   .skeleton-glow {
-    box-shadow: 0 0 10px rgba(26, 116, 168, 0.1);
+    box-shadow: 0 0 10px color-mix(in oklch, var(--color-fillBrand-strong) 10%, transparent);
   }
 
   /* Table skeleton - CSS grid with single shimmer overlay (no per-cell DOM) */
@@ -1165,7 +1166,7 @@ body, :host {
       90deg,
       transparent 0%,
       transparent 40%,
-      var(--skeleton-highlight, rgba(26, 116, 168, 0.15)) 50%,
+      var(--skeleton-highlight, color-mix(in oklch, var(--color-fillBrand-strong) 15%, transparent)) 50%,
       transparent 60%,
       transparent 100%
     );
@@ -1330,13 +1331,10 @@ body, :host {
 
 @utility tab {
   --tab-bg: var(--color-bgOverlay);
+  --tab-color: var(--color-textWeak);
+  color: var(--color-textWeak);
   @apply h-auto! leading-none;
   padding-block: calc(var(--spacing) * 1.5);
-
-  /*
-  .tabs-outline .tab {
-    @apply !text-slate-800 font-medium;
-  }*/
 }
 @utility inconsolata {
   font-family: 'JetBrains Mono', monospace;

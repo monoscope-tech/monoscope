@@ -66,7 +66,10 @@ import Pkg.AI qualified as AI
 
 import BackgroundJobs qualified
 import Data.Map.Strict qualified as Map
-import Data.OpenApi qualified
+import Control.Lens ((.~), (?~))
+import Data.OpenApi (NamedSchema (..), OpenApiItems (..), OpenApiType (..), Referenced (..), ToSchema (..))
+import Data.OpenApi qualified as OA
+import Pkg.DeriveUtils (SnakeSchema (..))
 import Data.Pool (withResource)
 import Data.Scientific (toBoundedInteger)
 import Deriving.Aeson qualified as DAE
@@ -86,6 +89,7 @@ data TraceTreeEntry = TraceTreeEntry
   }
   deriving stock (Generic, Show)
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] TraceTreeEntry
+  deriving (ToSchema) via SnakeSchema TraceTreeEntry
 
 
 -- Internal type for span info extraction
@@ -212,7 +216,7 @@ buildTraceTree colIdxMap queryResultCount rows = sortWith (Down . (.startTime)) 
 
 rowCountDisplay_ :: Text -> Text -> Text -> Html ()
 rowCountDisplay_ suffix countText suffixText =
-  div_ [] do
+  div_ [Aria.live_ "polite", Aria.atomic_ "true"] do
     span_ [class_ "text-textStrong", id_ $ "row-count-display" <> dashSuffix] $ toHtml countText
     span_ [class_ "text-textStrong", id_ $ "row-count-suffix" <> dashSuffix] $ toHtml suffixText
   where
@@ -381,7 +385,7 @@ renderFacets facetSummary = do
       div_ [class_ "facet-section-group group/section block contain-[layout_style]"] do
         input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
         -- Section header - use label to toggle checkbox
-        label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName, Aria.expanded_ (if collapsed then "false" else "true"), [__|on change from previous <input/> if previous <input/>.checked set @aria-expanded to 'true' else set @aria-expanded to 'false'|]] do
+        label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", role_ "button", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName, Aria.expanded_ (if collapsed then "false" else "true"), [__|on change from previous <input/> if the checked of previous <input/> set @aria-expanded to 'true' else set @aria-expanded to 'false'|]] do
           faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform -rotate-90"
           span_ [class_ "font-medium text-sm"] (toHtml sectionName)
 
@@ -457,11 +461,11 @@ renderFacets facetSummary = do
                       hiddenCount = length hiddenValues
                       -- Helper function to render a facet value item
                       renderFacetValue (FacetValue val count) =
-                        label_ [class_ "facet-item flex items-center justify-between py-0.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
+                        label_ [class_ "facet-item flex items-center justify-between py-0.5 max-md:py-1.5 px-1 hover:bg-fillWeak rounded cursor-pointer will-change-[background-color]"] do
                           div_ [class_ "flex items-center gap-2 min-w-0 flex-1"] do
                             input_
                               [ type_ "checkbox"
-                              , class_ "checkbox checkbox-xs"
+                              , class_ "checkbox checkbox-xs max-md:checkbox-sm"
                               , name_ key
                               , onclick_ $ "filterByFacet('" <> T.replace "___" "." key <> "', '" <> val <> "')"
                               , term "data-tippy-content" (T.replace "___" "." key <> " == \"" <> val <> "\"")
@@ -663,11 +667,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
       -- Build preload URL using the same function that builds the JSON URLs
       let preloadUrl = T.replace "\"" "%22" $ LogQueries.logExplorerUrlPath pid queryM' cols' (formatUTC <$> cursorM') sinceM fromM toM Nothing sourceM False
-          -- Also preload the chart data request
-          chartDataUrl = "/chart_data?pid=" <> pid.toText <> "&query=summarize+count%28*%29+by+bin_auto%28timestamp%29%2C+coalesce%28status_code%2C+level%29"
           headContent = Just $ do
             script_ [text|window.logDataPromise = fetch("$preloadUrl", {headers: {Accept: "application/json"}, credentials: "include"}).then(r => r.json());|]
-            link_ [rel_ "preload", href_ chartDataUrl, term "as" "fetch"]
 
       let bwconf =
             (def :: BWConfig)
@@ -679,17 +680,17 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , config = authCtx.config
               , headContent = headContent
               , pageActions = Just $ div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
-                  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
+                  label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs", role_ "switch", Aria.label_ "Stream live data", [__|on change from #streamLiveData if #streamLiveData.checked set @aria-checked to 'true' else set @aria-checked to 'false'|], term "aria-checked" "false"] do
                     input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "pause live data stream", Aria.label_ "Pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "stream live data", Aria.label_ "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "Pause live stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
                   Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
                   Components.refreshButton_
-              , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
+              , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center", role_ "tablist"] do
                   a_
-                    ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong", term "aria-current" "page"] <> navTabAttrs)
+                    ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong", term "aria-current" "page", term "aria-selected" "true"] <> navTabAttrs)
                     "Events"
-                  a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] <> navTabAttrs) "Metrics"
+                  a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! ", term "aria-selected" "false"] <> navTabAttrs) "Metrics"
               }
 
       case tableAsVecM of
@@ -905,8 +906,29 @@ data LogResult = LogResult
   deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] LogResult
 
 
-instance Data.OpenApi.ToSchema LogResult where
-  declareNamedSchema _ = pure $ Data.OpenApi.NamedSchema (Just "LogResult") mempty
+instance ToSchema LogResult where
+  declareNamedSchema _ = do
+    traceRef <- OA.declareSchemaRef (Proxy @TraceTreeEntry)
+    let prop t = Inline $ mempty & OA.type_ ?~ t
+        propDesc t d = Inline $ mempty & OA.type_ ?~ t & OA.description ?~ d
+        arrOf ref = Inline $ mempty & OA.type_ ?~ OpenApiArray & OA.items ?~ OpenApiItemsObject ref
+    pure $ NamedSchema (Just "LogResult") $ mempty
+      & OA.type_ ?~ OpenApiObject
+      & OA.properties .~
+        fromList
+          [ ("logsData", propDesc OpenApiArray "Array of row arrays, each row is an array of values")
+          , ("cols", arrOf (Inline $ mempty & OA.type_ ?~ OpenApiString))
+          , ("colIdxMap", propDesc OpenApiObject "Column name to index mapping")
+          , ("cursor", prop OpenApiString)
+          , ("nextUrl", prop OpenApiString)
+          , ("resetLogsUrl", prop OpenApiString)
+          , ("recentUrl", prop OpenApiString)
+          , ("serviceColors", propDesc OpenApiObject "Service name to color hex mapping")
+          , ("count", prop OpenApiInteger)
+          , ("queryResultCount", prop OpenApiInteger)
+          , ("hasMore", prop OpenApiBoolean)
+          , ("traces", arrOf traceRef)
+          ]
 
 
 virtualTable :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Html ()

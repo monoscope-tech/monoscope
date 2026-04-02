@@ -99,27 +99,21 @@ export class QueryBuilderComponent extends LitElement {
     setTimeout(() => {
       const addGroupByBtn = this.querySelector('#add-group-by-btn');
       if (addGroupByBtn) {
-        console.log('Found add group by button, adding direct event listener');
         addGroupByBtn.addEventListener('pointerdown', () => {
-          console.log('Group by button clicked directly');
           this.addGroupByField();
         });
       }
 
       const addAggBtn = this.querySelector('#add-agg-btn');
       if (addAggBtn) {
-        console.log('Found add agg button, adding direct event listener');
         addAggBtn.addEventListener('pointerdown', () => {
-          console.log('Agg button clicked directly');
           this.addAggregation();
         });
       }
 
       const addSortBtn = this.querySelector('#add-sort-btn');
       if (addSortBtn) {
-        console.log('Found add sort button, adding direct event listener');
         addSortBtn.addEventListener('pointerdown', () => {
-          console.log('Sort button clicked directly');
           this.addSortField();
         });
       }
@@ -231,7 +225,6 @@ export class QueryBuilderComponent extends LitElement {
       // Get raw schema data to include nested fields
       const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema());
       const fields = this.extractAllFields(schemaData);
-      console.log('Loaded initial fields:', fields.length);
 
       // Update fields options array
       this.fieldsOptions = fields;
@@ -299,7 +292,6 @@ export class QueryBuilderComponent extends LitElement {
     }
 
     // Log fields count
-    console.log(`Extracted ${fields.length} fields with prefix: ${prefix || 'root'}`);
     return fields;
   }
 
@@ -309,7 +301,6 @@ export class QueryBuilderComponent extends LitElement {
    */
   public async refreshFieldSuggestions(path: string = ''): Promise<void> {
     try {
-      console.log('Refreshing field suggestions for path:', path || 'root');
 
       // Get raw schema data
       const schemaData = schemaManager.getSchemaData(schemaManager.getDefaultSchema());
@@ -492,13 +483,6 @@ export class QueryBuilderComponent extends LitElement {
    * Update the query in the editor
    */
   private updateQuery(): void {
-    console.log('Updating query with:', {
-      groupByFields: this.groupByFields,
-      aggregations: this.aggregations,
-      sortFields: this.sortFields,
-      limitValue: this.limitValue,
-    });
-
     const queryEditor = document.querySelector(this.queryEditorSelector) as any;
     if (!queryEditor?.editor) {
       console.error('Query editor not found or missing editor instance');
@@ -602,7 +586,6 @@ export class QueryBuilderComponent extends LitElement {
    */
   public addGroupByField(): void {
     // Debug logging
-    console.log('Adding group by field:', this.newGroupByField);
 
     // Make sure we have a non-empty field that's not already in the list
     if (this.newGroupByField?.trim()) {
@@ -664,7 +647,6 @@ export class QueryBuilderComponent extends LitElement {
         this.updateQuery();
 
         // Directly render the updated group by fields
-        console.log('Group by fields now:', this.groupByFields);
       } catch (error) {
         console.error('Error adding group by field:', error);
       }
@@ -786,7 +768,6 @@ export class QueryBuilderComponent extends LitElement {
       if (this.fieldsOptions.length === 0) {
         // If fields aren't loaded yet, try loading them again
         this.initializeFields().then(() => {
-          console.log(`Fields loaded after selecting ${func}, count:`, this.fieldsOptions.length);
           this.requestUpdate();
         });
       }
@@ -820,7 +801,6 @@ export class QueryBuilderComponent extends LitElement {
     if (this.showFieldsColumn) {
       if (this.fieldsOptions.length === 0) {
         // Try to load fields if they're not available
-        console.log('Field options are empty, trying to load them');
         this.initializeFields().then(() => {
           this.filterFieldsBySearchTerm(searchTerm);
           this.requestUpdate();
@@ -842,7 +822,6 @@ export class QueryBuilderComponent extends LitElement {
 
     if (this.fieldsOptions.length === 0) {
       // Try to load fields if they're not available
-      console.log('Field options are empty, trying to load them');
       this.initializeFields().then(() => {
         this.filterGroupByFieldsBySearchTerm(searchTerm);
         this.requestUpdate();
@@ -861,9 +840,6 @@ export class QueryBuilderComponent extends LitElement {
     this.filteredGroupByFields = this.fieldsOptions.filter(
       (field) => field.value.toLowerCase().includes(searchTerm) || field.label.toLowerCase().includes(searchTerm)
     );
-    console.log(
-      `Filtered group by fields by "${searchTerm}": found ${this.filteredGroupByFields.length} matches out of ${this.fieldsOptions.length} total fields`
-    );
   }
 
   /**
@@ -872,9 +848,6 @@ export class QueryBuilderComponent extends LitElement {
   private filterFieldsBySearchTerm(searchTerm: string): void {
     this.filteredFields = this.fieldsOptions.filter(
       (field) => field.value.toLowerCase().includes(searchTerm) || field.label.toLowerCase().includes(searchTerm)
-    );
-    console.log(
-      `Filtered fields by "${searchTerm}": found ${this.filteredFields.length} matches out of ${this.fieldsOptions.length} total fields`
     );
   }
 
@@ -975,7 +948,6 @@ export class QueryBuilderComponent extends LitElement {
    */
   public addSortField(): void {
     // Debug logging
-    console.log('Adding sort field:', this.newSortField, this.newSortDirection);
 
     if (this.newSortField?.trim()) {
       // Check if this field is already being sorted

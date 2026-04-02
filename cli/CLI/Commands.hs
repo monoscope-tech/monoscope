@@ -235,11 +235,9 @@ runEventsTail cfg opts kindOverride = do
   forever $ do
     let params =
           catMaybes
-            [ Just ("query", "")
+            [ Just ("query", foldFiltersIntoQuery "" opts.service opts.level)
             , Just ("since", "10s")
             , ("source",) <$> (opts.kind <|> kindOverride)
-            , ("service",) <$> opts.service
-            , ("level",) <$> opts.level
             ]
     apiGet cfg "/api/v1/events" params >>= \case
       Left err -> printError (show err)
@@ -262,14 +260,12 @@ runEventsTail cfg opts kindOverride = do
 
 runEventsContext :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsContextOpts -> Maybe Text -> OutputMode -> Eff es ()
 runEventsContext cfg opts kindOverride mode = do
-  let win = fromMaybe "5m" opts.window
-      params =
+  let params =
         catMaybes
-          [ Just ("query", "")
+          [ Just ("query", foldFiltersIntoQuery "" opts.service Nothing)
           , Just ("from", opts.timestamp)
-          , Just ("window", win)
+          , Just ("since", fromMaybe "5m" opts.window)
           , ("source",) <$> (opts.kind <|> kindOverride)
-          , ("service",) <$> opts.service
           ]
   withAPIResult cfg "/api/v1/events" params $ \val -> case mode of
     OutputJSON -> renderJSON val
@@ -278,15 +274,34 @@ runEventsContext cfg opts kindOverride mode = do
 buildSearchParams :: EventsSearchOpts -> [(Text, Text)]
 buildSearchParams opts =
   catMaybes
-    [ Just ("query", opts.query)
+    [ Just ("query", foldFiltersIntoQuery opts.query opts.service opts.level)
     , ("since",) <$> opts.since
     , ("from",) <$> opts.from
     , ("to",) <$> opts.to
     , ("source",) <$> opts.kind
-    , ("service",) <$> opts.service
-    , ("level",) <$> opts.level
     , ("limit",) . show <$> opts.limit
     ]
+
+-- | Fold --service/--level CLI flags into a KQL query string.
+--
+-- >>> foldFiltersIntoQuery "" Nothing Nothing
+-- ""
+-- >>> foldFiltersIntoQuery "error" Nothing Nothing
+-- "error"
+-- >>> foldFiltersIntoQuery "" (Just "web") Nothing
+-- "resource.service.name:web"
+-- >>> foldFiltersIntoQuery "" Nothing (Just "warn")
+-- "level:warn"
+-- >>> foldFiltersIntoQuery "timeout" (Just "web") (Just "error")
+-- "resource.service.name:web level:error timeout"
+-- >>> foldFiltersIntoQuery "" (Just "my app") Nothing
+-- "resource.service.name:\"my app\""
+foldFiltersIntoQuery :: Text -> Maybe Text -> Maybe Text -> Text
+foldFiltersIntoQuery query mService mLevel =
+  let quote v = if T.any (\c -> c == ' ' || c == '"') v then "\"" <> T.replace "\"" "\\\"" v <> "\"" else v
+      filters = catMaybes [("resource.service.name:" <>) . quote <$> mService, ("level:" <>) . quote <$> mLevel]
+      prefix = T.intercalate " " filters
+   in if T.null prefix then query else if T.null query then prefix else prefix <> " " <> query
 
 renderEventsTable :: (IOE :> es) => AE.Value -> Maybe Text -> Eff es ()
 renderEventsTable val mFields = case val of
@@ -337,7 +352,6 @@ data MetricsQueryOpts = MetricsQueryOpts
   , since :: Maybe Text
   , from :: Maybe Text
   , to :: Maybe Text
-  , step :: Maybe Text
   , assert :: Maybe Text
   }
   deriving stock (Show)
@@ -353,7 +367,7 @@ data MetricsChartOpts = MetricsChartOpts
 
 runMetricsQuery :: (HTTP :> es, IOE :> es) => CLIConfig -> MetricsQueryOpts -> OutputMode -> Eff es ()
 runMetricsQuery cfg opts mode = do
-  let params = metricsParams opts.expression opts.since opts.from opts.to opts.step
+  let params = metricsParams opts.expression opts.since opts.from opts.to
   withAPIResult cfg "/api/v1/metrics" params $ \val -> do
     case mode of
       OutputJSON -> renderJSON val
@@ -363,7 +377,7 @@ runMetricsQuery cfg opts mode = do
 runMetricsChart :: (HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> Eff es ()
 runMetricsChart cfg opts = do
   let run = do
-        let params = metricsParams opts.expression opts.since opts.from opts.to Nothing
+        let params = metricsParams opts.expression opts.since opts.from opts.to
         withAPIResult cfg "/api/v1/metrics" params renderSparkline
   case opts.watch of
     Nothing -> run
@@ -372,14 +386,13 @@ runMetricsChart cfg opts = do
       run
       threadDelay (parseDurationMs interval * 1000)
 
-metricsParams :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)]
-metricsParams expr mSince mFrom mTo mStep =
+metricsParams :: Text -> Maybe Text -> Maybe Text -> Maybe Text -> [(Text, Text)]
+metricsParams expr mSince mFrom mTo =
   catMaybes
     [ Just ("query", expr)
     , ("since",) <$> (mSince <|> Just "1h")
     , ("from",) <$> mFrom
     , ("to",) <$> mTo
-    , ("step",) <$> mStep
     ]
 
 renderMetricsTable :: (IOE :> es) => AE.Value -> Eff es ()

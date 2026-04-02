@@ -1014,7 +1014,6 @@ export class QueryEditorComponent extends LitElement {
       case 'timeseries_line': // Line chart
         // If query already has the correct format for timeseries, don't change it
         if (hasSummarize && hasBinFunction) {
-          console.log(`Query already has bin/bin_auto function, keeping as is: "${currentQuery}"`);
           return;
         }
 
@@ -1213,7 +1212,7 @@ export class QueryEditorComponent extends LitElement {
       cursorBlinking: 'solid',
       smoothScrolling: false,
       // PERF: Aggressive optimizations for instant typing
-      accessibilitySupport: 'off',
+      accessibilitySupport: 'auto',
       matchBrackets: 'never',
       links: false,
       contextmenu: false,
@@ -1825,7 +1824,7 @@ export class QueryEditorComponent extends LitElement {
             @pointerdown=${() => this.editor?.focus()}
           >
             Filter logs and events. Press <span class="kbd">/</span> to search or <span class="kbd">?</span>
-            to ask in Natural language.
+            to ask in natural language.
           </div>
         </div>
         <div class="p-1">

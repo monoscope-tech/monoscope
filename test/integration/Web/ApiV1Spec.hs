@@ -30,6 +30,15 @@ spec = aroundAll withTestResources do
         (apiV1OpenApiSpec ^. info . title) `shouldBe` "Monoscope API"
         (apiV1OpenApiSpec ^. info . version) `shouldBe` "1.0"
 
+      it "has server base path and security definitions" $ \_tr -> do
+        (specJson ^? key "servers" . _Array) `shouldSatisfy` \case
+          Just arr -> not (null arr)
+          Nothing -> False
+        (specJson ^? key "components" . key "securitySchemes" . key "BearerAuth") `shouldSatisfy` isJust
+        (specJson ^? key "security" . _Array) `shouldSatisfy` \case
+          Just arr -> not (null arr)
+          Nothing -> False
+
       it "declares all expected endpoint paths" $ \_tr -> do
         (specJson ^? key "paths" . key "/events") `shouldSatisfy` isJust
         (specJson ^? key "paths" . key "/metrics") `shouldSatisfy` isJust
@@ -40,6 +49,10 @@ spec = aroundAll withTestResources do
         let schemas = specJson ^? key "components" . key "schemas" . _Object
         schemas `shouldSatisfy` isJust
         (specJson ^? key "components" . key "schemas" . key "LogResult") `shouldSatisfy` isJust
+        (specJson ^? key "components" . key "schemas" . key "LogResult" . key "properties" . _Object) `shouldSatisfy` \case
+          Just obj -> not (null obj)
+          Nothing -> False
+        (specJson ^? key "components" . key "schemas" . key "TraceTreeEntry") `shouldSatisfy` isJust
         (specJson ^? key "components" . key "schemas" . key "MetricsData") `shouldSatisfy` isJust
         (specJson ^? key "components" . key "schemas" . key "Schema") `shouldSatisfy` isJust
         (specJson ^? key "components" . key "schemas" . key "QueryMonitor") `shouldSatisfy` isJust

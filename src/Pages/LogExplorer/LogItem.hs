@@ -48,7 +48,7 @@ getServiceName rs = case Map.lookup "service" (fromMaybe Map.empty rs) of
 
 
 getServiceColor :: Text -> HashMap Text Text -> Text
-getServiceColor s serviceColors = fromMaybe "bg-black" $ HM.lookup s serviceColors
+getServiceColor s serviceColors = fromMaybe "bg-fillNeutral-strong" $ HM.lookup s serviceColors
 
 
 getRequestDetails :: Maybe (Map Text AE.Value) -> Maybe (Text, Text, Text, Int)
@@ -211,7 +211,7 @@ expandedItemView pid item aptSp leftM rightM = do
     div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
     unless isLog $ htmxOverlayIndicator_ "loading-span-list"
     htmxOverlayIndicator_ "details_indicator"
-    div_ [class_ "flex flex-col gap-4 bg-fillWeaker py-2  px-2"] $ do
+    div_ [class_ "flex flex-col gap-4 bg-fillWeaker py-2 px-2"] $ do
       div_ [class_ "flex justify-between items-center"] do
         div_ [class_ "flex items-center gap-4"] $ do
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else if isAlert then "Alert" else "Trace Span"
@@ -286,7 +286,7 @@ expandedItemView pid item aptSp leftM rightM = do
         spanBadge pid "context___trace_id" ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
       div_ [class_ "flex flex-wrap gap-3 items-center text-textBrand font-medium text-xs"] do
         whenJust (atMapText "session.id" (unAesonTextMaybe item.attributes)) \v ->
-          button_ [class_ "cursor-pointer flex items-center gap-1", term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onpointerdown_ "filterByField(event, 'Eq')"] do
+          button_ [class_ "cursor-pointer flex items-center gap-1", term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onclick_ "filterByField(event, 'Eq')"] do
             "Filter by session"
             faSprite_ "filter" "regular" "w-3 h-3"
 
@@ -295,7 +295,7 @@ expandedItemView pid item aptSp leftM rightM = do
             let json = decodeUtf8 $ AE.encode $ AE.toJSON item
             button_
               [ class_ "cursor-pointer flex items-center gap-1"
-              , term "onpointerdown" "window.buildCurlRequest(event)"
+              , onclick_ "window.buildCurlRequest(event)"
               , term "data-reqjson" json
               ]
               do
@@ -344,20 +344,19 @@ expandedItemView pid item aptSp leftM rightM = do
             Just ("HTTP", _, _, _) -> True
             _ -> False
           borderClass = "border-b-strokeWeak"
+      let tabBtn cls target label = button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " " <> cls, onclick_ $ "navigatable(this, '#" <> target <> "', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] label
       div_ [class_ "flex", [__|on click halt|]] $ do
-        when ((isLog || isAlert) && isJust item.body)
-          $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#body-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] "Body"
-        when isHttp $ button_ [class_ $ "http-tab cursor-pointer  border-b-2 " <> borderClass <> " px-4 py-1.5 t-tab-active", onpointerdown_ $ "navigatable(this, '#request-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Request"
-        unless isAlert $ button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onpointerdown_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
-        button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#meta-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Process"
-        unless (isLog || null spanErrors)
-          $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
+        when ((isLog || isAlert) && isJust item.body) $ tabBtn "px-4 py-1.5 t-tab-active" "body-content" "Body"
+        when isHttp $ tabBtn "px-4 py-1.5 t-tab-active" "request-content" "Request"
+        unless isAlert $ button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onclick_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
+        tabBtn "px-4 py-1.5" "meta-content" "Process"
+        unless (isLog || null spanErrors) $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5", onclick_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
             "Errors"
             div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
-        unless isLog $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5 ", onpointerdown_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] $ do
+        unless isLog $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5", onclick_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null (unAesonTextMaybe item.events)
-        button_ [class_ $ "http-tab cursor-pointer border-b-2 whitespace-nowrap " <> borderClass <> " px-4 py-1.5", onpointerdown_ $ "navigatable(this, '#m-raw-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Raw data"
+        tabBtn "px-4 py-1.5 whitespace-nowrap" "m-raw-content" "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
       div_ [class_ "my-4 py-2 text-textWeak"] $ do
@@ -383,11 +382,12 @@ expandedItemView pid item aptSp leftM rightM = do
               div_ [id_ "http-content-container", class_ "flex flex-col gap-3 mt-2"] do
                 div_ [class_ "bg-fillWeaker w-max rounded-lg border border-strokeWeak justify-start items-start inline-flex"] do
                   div_ [class_ "justify-start items-start flex text-sm"] do
-                    button_ [onpointerdown_ "navigatable(this, '#res_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak t-tab-box-active"] "Res Body"
-                    button_ [onpointerdown_ "navigatable(this, '#req_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Req Body"
-                    button_ [onpointerdown_ "navigatable(this, '#hed_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Headers"
-                    button_ [onpointerdown_ "navigatable(this, '#par_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Params"
-                    button_ [onpointerdown_ "navigatable(this, '#raw_content', '#http-content-container', 't-tab-box-active')", class_ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak"] "Request Details"
+                    let httpTab target label cls = button_ [onclick_ $ "navigatable(this, '#" <> target <> "', '#http-content-container', 't-tab-box-active')", class_ $ "http cursor-pointer a-tab px-3 py-1 rounded-lg text-textWeak" <> cls] label
+                    httpTab "res_content" "Res Body" " t-tab-box-active"
+                    httpTab "req_content" "Req Body" ""
+                    httpTab "hed_content" "Headers" ""
+                    httpTab "par_content" "Params" ""
+                    httpTab "raw_content" "Request Details" ""
                 div_ [] do
                   div_ [id_ "raw_content", class_ "hidden a-tab-content http"] do
                     jsonValueToHtmlTree (AE.toJSON cSp) Nothing
@@ -439,7 +439,7 @@ renderErrors errs =
     $ forM_ errs
     $ \err -> do
       let (tye, message, stacktrace) = getErrorDetails err
-      div_ [class_ "w-full max-w-2xl mx-auto  border border-border rounded-lg shadow-sm"] $ do
+      div_ [class_ "w-full max-w-2xl mx-auto border border-strokeWeak rounded-lg shadow-sm"] $ do
         -- Card Header
         div_ [class_ "p-3 pb-3"] do
           div_ [class_ "text-textError font-semibold mb-2"] $ toHtml tye
@@ -447,11 +447,11 @@ renderErrors errs =
             div_ [class_ "flex-1 min-w-0"] $ do
               h3_ [class_ "text-base text-balance text-sm leading-tight"] $ toHtml message
         div_ [class_ "px-3 pb-6 space-y-4"] $ do
-          div_ [class_ "border-b border-border "] $ do
+          div_ [class_ "border-b border-strokeWeak"] $ do
             button_ [class_ "w-full flex justify-between items-center py-2 text-sm font-medium text-left rounded"] "Stack Trace"
             div_ [id_ "stackTraceContent", class_ "rounded bg-fillWeak p-2"]
-              $ div_ [class_ "bg-muted p-3 rounded-md max-h-64 overflow-y-auto mb-4"]
-              $ pre_ [class_ "text-xs monospace whitespace-pre-wrap text-muted-foreground"]
+              $ div_ [class_ "bg-fillWeak p-3 rounded-md max-h-64 overflow-y-auto mb-4"]
+              $ pre_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak"]
               $ toHtml stacktrace
 
 

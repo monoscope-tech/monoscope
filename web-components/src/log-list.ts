@@ -33,7 +33,12 @@ import {
   renderSparkline,
 } from './log-list-utils';
 import { expandSince, expandFromToRange, parseChartZoom } from './time-range-utils';
+import { toEChartsColor } from './widgets';
 import { unsafeHTML } from 'lit/directives/unsafe-html.js';
+
+// Convert CSS token to hex for ECharts (which can't parse oklch)
+const cssTokenToHex = (token: string): string =>
+  toEChartsColor(getComputedStyle(document.body).getPropertyValue(token).trim());
 
 // TypeScript declarations for global functions
 declare global {
@@ -239,13 +244,13 @@ export class LogList extends LitElement {
       if (this.liveStreamInterval) clearInterval(this.liveStreamInterval);
     });
 
-    // Mouse events for resizing
+    // Pointer events for resizing (supports mouse + touch)
     this.handleMouseUp = () => {
       this.resizeTarget = null;
       document.body.style.userSelect = 'auto';
     };
-    window.addEventListener('mouseup', this.handleMouseUp);
-    window.addEventListener('mousemove', this.boundHandleResize);
+    window.addEventListener('pointerup', this.handleMouseUp);
+    window.addEventListener('pointermove', this.boundHandleResize);
 
     // Chart initialization - use polling instead of 'load' event which
     // never re-fires on HTMX morph navigation.
@@ -644,9 +649,9 @@ export class LogList extends LitElement {
     }
 
     // Clean up event listeners
-    window.removeEventListener('mousemove', this.boundHandleResize);
+    window.removeEventListener('pointermove', this.boundHandleResize);
     if (this.handleMouseUp) {
-      window.removeEventListener('mouseup', this.handleMouseUp);
+      window.removeEventListener('pointerup', this.handleMouseUp);
     }
     ['submit', 'add-query'].forEach((ev) => window.removeEventListener(ev, this.debouncedRefetchLogs));
     document.removeEventListener('submit', this.handleFormSubmit);
@@ -1086,8 +1091,8 @@ export class LogList extends LitElement {
             {
               markArea: {
                 itemStyle: {
-                  color: 'oklch(48% 0.205 265 / 0.2)',
-                  borderColor: 'oklch(48% 0.205 265)',
+                  color: (window as any).echarts.color.modifyAlpha(cssTokenToHex('--color-fillBrand-strong'), 0.2),
+                  borderColor: cssTokenToHex('--color-fillBrand-strong'),
                   borderWidth: 1,
                   borderType: 'dashed',
                 },
@@ -1122,7 +1127,7 @@ export class LogList extends LitElement {
       <style>
         @keyframes fadeBg {
           0% {
-            background-color: rgba(26, 116, 168, 0.15);
+            background-color: var(--color-strokeBrand-weak);
           }
           100% {
             background-color: transparent;
@@ -1198,16 +1203,20 @@ export class LogList extends LitElement {
         style="min-height: 500px; overflow-anchor: none;"
       >
         ${!isPatterns && this.recentDataToBeAdded.length > 0 && !this.flipDirection
-          ? html` <div class="sticky top-[30px] z-50 flex justify-center">
+          ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
               <button
                 class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm"
                 @pointerdown=${this.handleRecentClick}
+                aria-label="${this.recentDataToBeAdded.length} new events, click to load"
               >
                 ${this.recentDataToBeAdded.length} new
               </button>
             </div>`
           : nothing}
         <table
+          role="grid"
+          aria-label="${isPatterns ? 'Log patterns' : 'Log events'}"
+          aria-rowcount=${this.totalCount || -1}
           class="table-fixed ${isPatterns || this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
           style=${Object.entries(
             this.logsColumns.reduce((acc, column) => {
@@ -1273,6 +1282,7 @@ export class LogList extends LitElement {
                   this.handleRecentConcatenation();
                 }}
                 data-tip="Scroll to bottom"
+                aria-label=${this.recentDataToBeAdded.length > 0 ? `Scroll to bottom (${this.recentDataToBeAdded.length} new events)` : 'Scroll to bottom'}
                 class=${clsx(
                   'absolute tooltip tooltip-left right-8 bottom-2 group z-50 text-textInverse-strong flex justify-center items-center rounded-full shadow-lg h-10 w-10 transition-all duration-300 hover:shadow-xl hover:scale-110',
                   this.recentDataToBeAdded.length > 0
@@ -1441,7 +1451,7 @@ export class LogList extends LitElement {
           <span class="text-sm tabular-nums text-textStrong w-10 shrink-0 text-right">${formatPatternCount(count)}</span>
           ${mergedCount > 0 ? html`<span class="text-[10px] tabular-nums text-textWeak shrink-0" title="${mergedCount} similar patterns merged">+${mergedCount}</span>` : ''}
           <div class="w-12 shrink-0 h-2 bg-strokeWeak/40 rounded-sm overflow-hidden">
-            <div class="h-full bg-[#7ab8d0] rounded-sm" style="width:${pct}%"></div>
+            <div class="h-full bg-fillBrand-strong rounded-sm" style="width:${pct}%"></div>
           </div>
         </div>`;
       case 'volume':
@@ -1576,6 +1586,8 @@ export class LogList extends LitElement {
                           e.preventDefault();
                           this.expandTrace(traceId, id);
                         }}
+                        aria-expanded=${expanded}
+                        aria-label="${expanded ? 'Collapse' : 'Expand'} trace (${children} ${children === 1 ? 'span' : 'spans'})"
                         class=${`hover:border-strokeBrand-strong rounded-sm ml-1 cursor-pointer shrink-0 w-8 px-1 flex justify-center gap-[2px] text-xs items-center h-5 ${errClas}`}
                       >
                         ${expanded ? faSprite('minus', 'regular', 'w-3 h-1 shrink-0') : faSprite('plus', 'regular', 'w-3 h-3 shrink-0')}
@@ -1621,7 +1633,7 @@ export class LogList extends LitElement {
       null,
       this.isLoading || this.isLoadingMore
         ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Expand time range to see more events'),
+        : this.createLoadButton('Show earlier events'),
       this.isLoading || this.isLoadingMore ? undefined : expandTimeRange
     );
   };
@@ -1694,7 +1706,7 @@ export class LogList extends LitElement {
         ? html`<p class="h-5 leading-5 m-0">Live streaming latest data...</p>`
         : this.isFetchingRecent
         ? html`<div class="loading loading-dots loading-md h-5"></div>`
-        : this.createLoadButton('Check for recent data'),
+        : this.createLoadButton('Load newer events'),
       this.isLiveStreaming || this.isFetchingRecent ? undefined : fetchRecent
     );
   };
@@ -1812,6 +1824,8 @@ export class LogList extends LitElement {
         <button
           class="font-medium text-base py-1 cursor-pointer"
           data-tippy-content=${title}
+          aria-label="${title.split('•').reverse()[0]} column options"
+          aria-haspopup="true"
           popovertarget=${`col-dropdown-${column}`}
           style=${`anchor-name: --col-dropdown-${column}`}
         >
@@ -1837,10 +1851,11 @@ export class LogList extends LitElement {
           </li>
         </ul>
         <div
-          @mousedown=${(event: any) => {
+          @pointerdown=${(event: any) => {
             this.resizeTarget = column;
             this.mouseState = { x: event.clientX };
             document.body.style.userSelect = 'none';
+            (event.target as HTMLElement).setPointerCapture?.(event.pointerId);
           }}
           class="w-3 text-textWeak text-right select-none hover:text-textBrand overflow-hidden font-bold absolute right-0 top-1/2 -translate-y-1/2 h-4 cursor-ew-resize"
         >
@@ -1891,6 +1906,8 @@ export class LogList extends LitElement {
     const viewButton = (view: 'tree' | 'list', icon: string, label: string) =>
       html` <button
         @pointerdown=${() => this.changeView(view)}
+        aria-pressed=${this.view === view}
+        aria-label="${label} view"
         class=${`flex items-center cursor-pointer justify-center gap-1 px-2 py-1 text-xs rounded ${
           this.view === view ? 'bg-fillWeak text-textStrong' : 'text-textWeak hover:bg-fillWeaker'
         }`}
@@ -1911,6 +1928,8 @@ export class LogList extends LitElement {
           <button
             tabindex="0"
             role="button"
+            aria-label="Log display options"
+            aria-haspopup="true"
             class=${`flex cursor-pointer items-center justify-center gap-1 px-2 py-1 text-xs rounded text-textWeak hover:text-textStrong focus:bg-fillBrand-strong focus:text-white focus:fill-white`}
           >
             ${faSprite('gear', 'regular', `h-3 w-3`)}
@@ -2166,17 +2185,17 @@ function spanLatencyBreakdown({
         <!-- Full width boundary markers at the start and end -->
         <div
           class="absolute top-0 h-full border-l-2 border-strokeBrand-strong pointer-events-none"
-          style="left:0; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)"
+          style="left:0; box-shadow: 0 0 4px var(--color-strokeBrand-weak)"
         ></div>
         <div
           class="absolute top-0 h-full border-r-2 border-strokeBrand-strong pointer-events-none"
-          style=${`left:${barWidth - 2}px; box-shadow: 0 0 4px rgba(26, 116, 168, 0.3)`}
+          style=${`left:${barWidth - 2}px; box-shadow: 0 0 4px var(--color-strokeBrand-weak)`}
         ></div>
 
         <!-- Horizontal line representing the full timeline -->
         <div
           class="absolute top-1/2 -translate-y-1/2 h-[1px] bg-strokeBrand-strong pointer-events-none"
-          style=${`width:${barWidth}px; left:0; box-shadow: 0 0 2px rgba(26, 116, 168, 0.2)`}
+          style=${`width:${barWidth}px; left:0; box-shadow: 0 0 2px var(--color-strokeBrand-weak)`}
         ></div>
       </div>
     </div>`;
@@ -2234,8 +2253,8 @@ function loadingSkeleton(cols: number) {
 }
 
 function emptyState(cols: number) {
-  let title = `No Events found`;
-  let subText = `You're either not sending events to Monoscope yet or no results matched your query/filter`;
+  let title = `No events found`;
+  let subText = `No results matched your query, or this project hasn't received any events yet.`;
   return html`
     <tr class="w-full flex justify-center">
       <td colspan=${String(cols)} class="w-full mx-auto">

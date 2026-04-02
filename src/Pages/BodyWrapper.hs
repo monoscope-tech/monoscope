@@ -131,12 +131,14 @@ data BWConfig = BWConfig
 
 bodyWrapper :: BWConfig -> Html () -> Html ()
 bodyWrapper bcfg child = do
-  doctypehtml_ do
+  doctype_
+  html_ [lang_ "en"] do
     head_
       do
         title_ $ toHtml bcfg.pageTitle
         meta_ [charset_ "UTF-8"]
         meta_ [name_ "viewport", content_ "width=device-width, initial-scale=1.0"]
+        meta_ [name_ "description", content_ $ "Monoscope — " <> bcfg.pageTitle]
         meta_ [httpEquiv_ "X-UA-Compatible", content_ "ie=edge"]
         meta_ [name_ "htmx-config", content_ [text|{"selfRequestsOnly":false}|]]
         -- favicon items
@@ -180,28 +182,25 @@ bodyWrapper bcfg child = do
         -- Include optional head content from the page
         whenJust bcfg.headContent id
 
-        script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js")] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js")] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js")] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ "https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js"] ("" :: Text)
+        script_ [src_ "https://cdn.jsdelivr.net/npm/htmx.org@2.0.8/dist/htmx.min.js", defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/main.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/multi-swap.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/preload.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/json-enc-2.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/response-targets.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/deps/htmx/idiomorph-ext.min.js"), defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js")] ("" :: Text)
-
-        script_ [src_ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js")] ("" :: Text)
-
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_web0_9_5.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/_hyperscript_template.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/tagify/tagify.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/echarts/echarts.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/roma-echarts.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/notyf3.min.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/lit/lit-html.js"), type_ "module", defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/gridstack/gridstack-all.js"), defer_ "true"] ("" :: Text)
+        script_ [src_ $(hashAssetFile "/public/assets/deps/easepick/bundle.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/luxon.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/popper2_11_4.min.js"), defer_ "true"] ("" :: Text)
         script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/tippy6_3_7.umd.min.js"), defer_ "true"] ("" :: Text)
-        -- script_ [src_ $(hashAssetFile "/public/assets/js/thirdparty/instantpage5_1_0.js"), type_ "module", defer_ "true"] ("" :: Text)
-        script_ [src_ $(hashAssetFile "/public/assets/js/main.js")] ("" :: Text)
 
         when bcfg.config.enableBrowserMonitoring $ script_ [src_ "https://unpkg.com/@monoscopetech/browser@latest/dist/monoscope.min.js"] ("" :: Text)
 
@@ -462,7 +461,7 @@ bodyWrapper bcfg child = do
       div_ [id_ "htmx-progress", class_ "htmx-progress"] ""
       case bcfg.sessM of
         Nothing -> do
-          section_ [class_ "flex flex-col grow  h-screen overflow-y-hidden"]
+          main_ [class_ "flex flex-col grow  h-screen overflow-y-hidden", id_ "main-content"]
             $ section_
               [class_ "flex-1 overflow-y-auto"]
               child
@@ -496,7 +495,7 @@ bodyWrapper bcfg child = do
                     if bcfg.isSettingsPage || bcfg.hideNavbar
                       then whenJust bcfg.currProject paletteTriggerFloating
                       else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
-                    section_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
+                    main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
                       if bcfg.isSettingsPage
                         then maybe child (\p -> settingsWrapper p.id bcfg.pageTitle child) bcfg.currProject
@@ -693,10 +692,10 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
     div_ [class_ "pt-3.5 pb-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
       -- Expanded: full logo
       a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex", Aria.label_ "Home"] do
-        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg"]
-        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg"]
+        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg", alt_ "Monoscope"]
+        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg", alt_ "Monoscope"]
       -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
-      label_ [term "for" "sidenav-toggle", class_ "max-md:hidden cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] flex items-center", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
+      label_ [term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] flex items-center", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
         faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
       label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     div_ [class_ "mt-4 dropdown block"] do
@@ -782,10 +781,10 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         , role_ "button"
         , class_ "flex items-center gap-2 py-2 px-1 rounded-lg hover:bg-fillWeak cursor-pointer w-full justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start"
         , Aria.haspopup_ "true"
-        , Aria.label_ $ "User menu for " <> userIdentifier
+        , Aria.label_ $ userIdentifier <> ", user menu"
         ]
         do
-          img_ [class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ avatarUrl, term "data-tippy-placement" "right", term "data-tippy-content" userIdentifier]
+          img_ [class_ "w-8 h-8 rounded-full bg-fillPress shrink-0", src_ avatarUrl, alt_ userIdentifier, term "data-tippy-placement" "right", term "data-tippy-content" userIdentifier]
           span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1 overflow-hidden flex-1"] do
             span_ [class_ "truncate text-sm"] $ toHtml userIdentifier
             faSprite_ "chevron-down" "regular" "w-3 h-3 text-textWeak shrink-0 ml-auto transition-transform duration-150 rotate-180 group-focus-within/user:rotate-0"
@@ -845,7 +844,7 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
         case pageTitleSuffixModalId of
           Just modalId -> label_ [class_ "font-normal text-xl p-1 leading-none text-textWeak cursor-pointer hover:bg-fillWeak rounded-md", Lucid.for_ modalId, id_ "pageTitleSuffixText"] $ toHtml suffix
           Nothing -> span_ [class_ "font-normal text-xl p-1 leading-none text-textWeak", id_ "pageTitleSuffixText"] $ toHtml suffix
-      whenJust docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
+      whenJust docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, Aria.label_ "Open Documentation", term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust pageActionsM)]
     div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> maybe " max-md:hidden" (const "") pageActionsM] do
       -- Command palette trigger

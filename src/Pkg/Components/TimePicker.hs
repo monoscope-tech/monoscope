@@ -147,7 +147,7 @@ timepicker_ submitForm currentRange targetIdM = do
       faSprite_ "calendar" "regular" "h-4 w-4 text-iconNeutral"
       let attrs = maybe [] (\(s, e) -> [term "data-start" s, term "data-end" e]) currentRange
       span_ (attrs ++ [class_ "inline-block leading-none", id_ $ targetPr <> "-currentRange"]) $ toHtml (maybe "1H" (\(s, e) -> s <> if T.null e then "" else " - " <> e) currentRange)
-      span_ [id_ "offsetIndicator", class_ "text-[10px] opacity-50 max-md:hidden"] "UTC+00"
+      span_ [id_ "offsetIndicator", class_ "text-[10px] text-textWeak max-md:hidden"] "UTC+00"
       faSprite_ "chevron-down" "regular" "h-3 w-3"
 
   -- DaisyUI popover content
@@ -171,8 +171,8 @@ timepicker_ submitForm currentRange targetIdM = do
               onClickHandler =
                 [text|on click call window.updateTimePicker({since: @data-value}, {targetPr: '${targetPr}', label: @data-title}) then $action then call $popoverId.hidePopover()|]
               timePickerLink val title =
-                li_ $ a_
-                  [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2"
+                li_ $ button_
+                  [ class_ "flex items-center justify-between hover:bg-fillWeak rounded-lg px-3 py-2 w-full text-left"
                   , term "data-value" val
                   , term "data-title" val
                   , termRaw "_" onClickHandler
@@ -181,8 +181,9 @@ timepicker_ submitForm currentRange targetIdM = do
                     span_ [class_ "text-sm"] $ toHtml title
                     span_ [class_ "text-xs text-textWeak"] $ toHtml val
           mapM_ (uncurry timePickerLink) timePickerItems
-          li_ $ a_
-            [ term "_" [text| on click toggle .hidden on #$targetPr-timepickerSidebar |]
+          li_ $ button_
+            [ class_ "w-full text-left"
+            , term "_" [text| on click toggle .hidden on #$targetPr-timepickerSidebar |]
             ]
             do
               faSprite_ "calendar" "regular" "h-4 w-4 mr-2 text-iconNeutral"
@@ -199,18 +200,23 @@ timepicker_ submitForm currentRange targetIdM = do
           [text|
       (function() {
         var formatDateLocal = (date) => new Date(date).toLocaleString();
-        document.addEventListener('DOMContentLoaded', ()=> {
-          const offsetStr = getUTCOffset(); 
-          document.getElementById('offsetIndicator').innerText = offsetStr;
+        // Initialize display once main.js (deferred) has loaded getUTCOffset
+        function initTimeDisplay() {
+          if (typeof getUTCOffset === 'undefined') { setTimeout(initTimeDisplay, 50); return; }
+          const offsetEl = document.getElementById('offsetIndicator');
+          if (offsetEl) offsetEl.innerText = getUTCOffset();
           const range = document.getElementById("$targetPr-currentRange");
+          if (!range) return;
           const start = range.dataset.start;
           const end = range.dataset.end;
           if(start && end) {
               range.innerText = `$${formatDateLocal(start)} - $${formatDateLocal(end)}`
             }
-        })
-        console.log("Initializing timepicker for $targetPr-startTime");
-        if(!window["$targetPr-picker"]) {
+        }
+        initTimeDisplay();
+        function initEasepick() {
+          if (typeof easepick === 'undefined') { setTimeout(initEasepick, 100); return; }
+          if (window["$targetPr-picker"]) return;
           window["$targetPr-picker"] = new easepick.create({
           element: '#$targetPr-startTime',
           css: ['https://cdn.jsdelivr.net/npm/@easepick/bundle@1.2.0/dist/index.css'],
@@ -236,7 +242,8 @@ timepicker_ submitForm currentRange targetIdM = do
             });
           },
         });
-          }
+        }
+        initEasepick();
       })()
     |]
 
@@ -273,7 +280,7 @@ refreshButton_ = do
       $ faSprite_ "arrows-rotate" "regular" "w-3.5 h-3.5 text-iconNeutral"
     div_ [class_ "dropdown dropdown-end leading-none join-item border-y border-r border-strokeWeak rounded-r-lg shadow-xs group/rf"] do
       div_ [class_ "cursor-pointer py-2 px-3 max-md:px-2 flex gap-1.5 max-md:gap-1 items-center leading-none text-sm", tabindex_ "0", data_ "tippy-content" "Auto-refresh interval"] do
-        span_ [class_ "auto-refresh-span text-textWeak max-md:hidden"] "Off"
+        span_ [class_ "auto-refresh-span text-textWeak max-md:hidden", Aria.label_ "Auto-refresh interval"] "Off"
         faSprite_ "chevron-down" "regular" "w-3 h-3 text-iconNeutral"
 
       ul_ [class_ "dropdown-content menu p-2 shadow-lg bg-bgRaised rounded-box z-[1] mt-2 min-w-40", tabindex_ "0"] do

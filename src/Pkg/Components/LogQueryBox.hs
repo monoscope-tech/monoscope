@@ -67,7 +67,7 @@ logQueryBox_ config = do
     , [__|on htmx:afterRequest set #saveQueryMdl.dataset.pendingQuery to null|]
     ]
     do
-      strong_ "Please input a title for your query"
+      strong_ "Name your query"
       input_ [type_ "hidden", value_ "", name_ "queryLibId", id_ "queryLibId"]
       input_ [class_ "input input-md", placeholder_ "query title", name_ "queryTitle"]
       button_ [type_ "submit", class_ "btn btn-primary cursor-pointer"] "Save"
@@ -113,7 +113,7 @@ logQueryBox_ config = do
             faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
             input_
               [ class_ "border-0 w-full flex-1 p-1 no-focus-ring peer"
-              , placeholder_ "Ask. Eg: Logs with errors. Hit Enter to submit"
+              , placeholder_ "e.g. Show me logs with errors from the last hour"
               , id_ "ai-search-input"
               , required_ "required"
               , name_ "input"
@@ -146,7 +146,7 @@ logQueryBox_ config = do
                      else
                        if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
                          then
-                           send errorToast(value:['Could not understand your query. Please try rephrasing it or use a more specific request.']) to <body/>
+                           send errorToast(value:['Could not understand your query. Try rephrasing or being more specific.']) to <body/>
                        end
                      end|]
               ]
@@ -158,7 +158,7 @@ logQueryBox_ config = do
               do
                 faSprite_ "arrow-right" "regular" "h-4 w-4"
                 "Submit"
-            label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse APItoolkit AI without losing your query"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
+            label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse AI search"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
           div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
             unless (isJust config.targetWidgetPreview)
@@ -180,6 +180,7 @@ logQueryBox_ config = do
                   [ class_ "ml-1 select select-sm w-full max-w-xs h-full bg-bgBase border-strokeStrong"
                   , name_ "target-spans"
                   , id_ "spans-toggle"
+                  , Aria.label_ "Target span type"
                   , onchange_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
                   ]
                   do
@@ -195,6 +196,7 @@ logQueryBox_ config = do
             button_
               [ type_ "submit"
               , class_ "leading-none rounded-lg px-3 py-1 cursor-pointer !h-auto btn btn-primary"
+              , Aria.label_ "Run query"
               , onpointerdown_ "this.form.dispatchEvent(new Event('submit', {bubbles: true}))"
               ]
               do
@@ -246,7 +248,7 @@ logQueryBox_ config = do
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
           -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
           fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 group-has-[.default-chart:checked]/pg:block"] do
-            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart"] >> span_ [class_ "text-xs"] "hide timeline"
+            input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart"] >> span_ [class_ "text-xs"] "Hide timeline"
             script_ "if(window.innerWidth<768){const c=document.currentScript.parentElement.querySelector('.toggle-chart');if(c)c.checked=true;}"
 
         whenJust config.mobileExtra
@@ -267,7 +269,7 @@ logQueryBox_ config = do
           ]
           do
             fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
-              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "hide timeline"
+              input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "Hide timeline"
             fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
               input_
                 $ [ type_ "checkbox"
@@ -284,7 +286,7 @@ logQueryBox_ config = do
                   |]
                   ]
                 <> [checked_ | config.alert]
-              span_ "create monitor"
+              span_ "Create monitor"
 
   -- Include initialization code for the query editor
   queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType
@@ -293,7 +295,7 @@ logQueryBox_ config = do
 -- | Helper for visualizing the data with different chart types
 visualizationTabs_ :: Maybe Text -> Bool -> Maybe Text -> Bool -> Html ()
 visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
-  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "tablist"] do
+  div_ [class_ "tabs tabs-box tabs-outline tabs-xs bg-fillWeak p-1 rounded-lg", id_ "visualizationTabs", role_ "radiogroup", Aria.label_ "Visualization type"] do
     -- Use vizTypeM if provided, otherwise default to timeseries for alerts or logs otherwise
     let defaultVizType = fromMaybe (if alert then "timeseries" else "logs") vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
@@ -370,8 +372,8 @@ queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id
       when (label == "Saved")
         $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-10", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-3", term "data-tippy-content" "My Queries"] $ faSprite_ "user" "regular" "w-3.5 h-3.5"
-          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-3", term "data-tippy-content" "All team Queries"] $ faSprite_ "users" "regular" "w-3.5 h-3.5"
+          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-3", term "data-tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3.5 h-3.5"
+          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-3", term "data-tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3.5 h-3.5"
 
 
 -- | Visualization types used across the application
@@ -410,7 +412,7 @@ queryLibItem_ isRecent qli =
         code_ [class_ "queryText text-xs block whitespace-pre-wrap break-words opacity-75"] $ toHtml qli.queryText
 
       -- Actions (simplified, shown on hover)
-      div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 flex gap-1"] do
+      div_ [class_ "query-actions absolute top-0 right-3 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-within:opacity-100 flex gap-1"] do
         button_
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"

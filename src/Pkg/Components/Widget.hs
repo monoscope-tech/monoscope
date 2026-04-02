@@ -1041,13 +1041,17 @@ createSeriesFromHeaders wType = zipWith (createSeries wType) [1 ..]
 createSeries :: WidgetType -> Int -> Text -> AE.Value
 createSeries widgetType colIdx name =
   let isStat = widgetType == WTTimeseriesStat
-      gradientStyle = AE.object ["color" AE..= AE.object ["type" AE..= ("linear" :: Text), "x" AE..= (0 :: Int), "y" AE..= (0 :: Int), "x2" AE..= (0 :: Int), "y2" AE..= (1 :: Int)]]
+      seriesColor = getSeriesColorHex name
+      gradientStyle = AE.object ["color" AE..= AE.object
+        [ "type" AE..= ("linear" :: Text), "x" AE..= (0 :: Int), "y" AE..= (0 :: Int), "x2" AE..= (0 :: Int), "y2" AE..= (1 :: Int)
+        , "colorStops" AE..= ([AE.object ["offset" AE..= (0 :: Int), "color" AE..= seriesColor], AE.object ["offset" AE..= (1 :: Int), "color" AE..= ("rgba(0,0,0,0)" :: Text)]] :: [AE.Value])
+        ]]
    in AE.object
         [ "name" AE..= name
         , "type" AE..= mapWidgetTypeToChartType widgetType
         , "stack" AE..= ("Stack" :: Text)
         , "encode" AE..= AE.object ["x" AE..= (0 :: Int), "y" AE..= colIdx]
-        , "itemStyle" AE..= AE.object ["color" AE..= getSeriesColorHex name]
+        , "itemStyle" AE..= AE.object ["color" AE..= seriesColor]
         , "showBackground" AE..= not isStat
         , "backgroundStyle" AE..= AE.object ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
         , "areaStyle" AE..= if isStat then gradientStyle else AE.Null

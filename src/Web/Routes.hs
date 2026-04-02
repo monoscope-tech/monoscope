@@ -40,7 +40,8 @@ import Web.Cookie (SetCookie)
 
 -- System and configuration imports
 
-import Data.OpenApi (OpenApi, info, title, version)
+import Data.OpenApi (OpenApi, SecurityDefinitions (..), SecurityScheme (..), SecuritySchemeType (..), components, description, info, security, securitySchemes, servers, title, version)
+import Data.OpenApi qualified as OA
 import Deriving.Aeson qualified as DAE
 import Pages.Bots.Utils (verifyWidgetSignature)
 import Pages.CommandPalette qualified as CommandPalette
@@ -509,7 +510,10 @@ apiV1Server pid =
 apiV1OpenApiSpec :: OpenApi
 apiV1OpenApiSpec =
   toOpenApi (Proxy @(NamedRoutes ApiV1Routes))
-    & info .~ (mempty & title .~ "Monoscope API" & version .~ "1.0")
+    & info .~ (mempty & title .~ "Monoscope API" & version .~ "1.0" & description ?~ "Observability API for querying logs, traces, and metrics. Requires a Bearer API key and X-Project-Id header.")
+    & servers .~ [OA.Server "/api/v1" Nothing mempty]
+    & components . securitySchemes .~ SecurityDefinitions (fromList [("BearerAuth", SecurityScheme (SecuritySchemeApiKey (OA.ApiKeyParams "Authorization" OA.ApiKeyHeader)) Nothing)])
+    & security .~ [OA.SecurityRequirement (fromList [("BearerAuth", [])])]
 
 
 -- Cookie Protected server

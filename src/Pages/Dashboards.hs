@@ -470,8 +470,12 @@ dashboardPage_ pid dashId dash dashVM allParams = do
           });
         }
 
-        // Initialize grids on page load
-        initializeGrids();
+        // Initialize grids on page load (wait for deferred GridStack)
+        function waitForGridStack() {
+          if (typeof GridStack === 'undefined') { setTimeout(waitForGridStack, 50); return; }
+          initializeGrids();
+        }
+        waitForGridStack();
 
         // Re-initialize grids after htmx settles new tab content
         document.body.addEventListener('htmx:afterSettle', function(e) {
