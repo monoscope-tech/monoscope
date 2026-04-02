@@ -2,7 +2,6 @@ module Pages.Monitors (
   alertSingleGetH,
   convertToQueryMonitor,
   alertSingleToggleActiveH,
-  alertListGetH,
   alertUpsertPostH,
   alertTeamDeleteH,
   AlertUpsertForm (..),
@@ -221,13 +220,6 @@ alertUpsertPostH pid form = do
   addRespHeaders $ AlertNoContent ""
 
 
-alertListGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders Alert)
-alertListGetH pid = do
-  _ <- Projects.sessionAndProject pid
-  monitors <- V.fromList <$> Monitors.queryMonitorsAll pid
-  addRespHeaders $ AlertListGet monitors
-
-
 alertSingleToggleActiveH :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATAuthCtx (RespHeaders Alert)
 alertSingleToggleActiveH pid monitorId = do
   _ <- Projects.sessionAndProject pid
@@ -244,15 +236,13 @@ alertSingleGetH pid monitorId = do
 
 
 data Alert
-  = AlertListGet (V.Vector Monitors.QueryMonitor)
-  | AlertSingle Projects.ProjectId (Maybe Monitors.QueryMonitor)
+  = AlertSingle Projects.ProjectId (Maybe Monitors.QueryMonitor)
   | AlertNoContent Text
   | AlertRedirect Text
   | AlertPage (PageCtx (Html ()))
 
 
 instance ToHtml Alert where
-  toHtml (AlertListGet monitors) = toHtml $ queryMonitors_ monitors
   toHtml (AlertSingle pid monitor) = toHtml $ alertSingleComp pid monitor
   toHtml (AlertNoContent msg) = toHtml msg
   toHtml (AlertRedirect url) = script_ $ "window.location.href = '" <> url <> "';"

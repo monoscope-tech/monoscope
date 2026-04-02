@@ -103,7 +103,6 @@ import Pages.Telemetry qualified as Metrics
 import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
-import Pkg.EmailTemplates qualified as ET
 
 
 -- =============================================================================
@@ -218,14 +217,10 @@ data Routes mode = Routes
   , lemonWebhook :: mode :- "webhook" :> "lemon-squeezy" :> Header "X-Signature" Text :> ReqBody '[JSON] Settings.WebhookData :> Post '[HTML] (Html ())
   , stripeWebhook :: mode :- "webhook" :> "stripe" :> Header "Stripe-Signature" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[HTML] (Html ())
   , githubWebhook :: mode :- "webhook" :> "github" :> Header "X-Hub-Signature-256" Text :> Header "X-GitHub-Event" Text :> ReqBody '[RawJSON] BS.ByteString :> Post '[JSON] AE.Value
-  , chartsDataShot :: mode :- "chart_data_shot" :> QueryParam "data_type" Charts.DataType :> QueryParam "pid" Projects.ProjectId :> QPT "query" :> QPT "query_sql" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "source" :> AllQueryParams :> Get '[JSON] Charts.MetricsData
   , avatarGet :: mode :- "api" :> "avatar" :> Capture "user_id" Projects.UserId :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
   , widgetPngGet :: mode :- "p" :> ProjectId :> "widget.png" :> QPT "widgetJSON" :> QPT "widgetZ" :> QPT "since" :> QPT "from" :> QPT "to" :> QueryParam "width" Int :> QueryParam "height" Int :> QPT "sig" :> AllQueryParams :> Get '[OctetStream] (Headers '[Header "Cache-Control" Text, Header "Content-Type" Text] LBS.ByteString)
-  , proxyLanding :: mode :- "proxy" :> CaptureAll "path" Text :> Get '[PlainText] (RespHeaders Text)
   , deviceCode :: mode :- "api" :> "device" :> "code" :> Post '[JSON] Auth.DeviceCodeResponse
   , deviceToken :: mode :- "api" :> "device" :> "token" :> QPT "device_code" :> Post '[JSON] Auth.DeviceTokenResponse
-  , emailPreviewList :: mode :- "dev" :> "emails" :> Get '[HTML] (Html ())
-  , emailPreview :: mode :- "dev" :> "emails" :> Capture "template" Text :> Get '[HTML] (Html ())
   , apiV1 :: mode :- "api" :> "v1" :> AuthProtect "api-key-auth" :> NamedRoutes ApiV1Routes
   , apiV1OpenApi :: mode :- "api" :> "v1" :> "openapi.json" :> Get '[JSON] OpenApi
   }
@@ -463,18 +458,10 @@ server pool =
     , lemonWebhook = Settings.webhookPostH
     , stripeWebhook = Settings.stripeWebhookPostH
     , githubWebhook = GitSync.githubWebhookPostH
-    , chartsDataShot = Charts.queryMetrics Nothing
     , avatarGet = avatarGetH
     , widgetPngGet = widgetPngGetH
-    , proxyLanding = \path ->
-        Onboarding.proxyLandingH path
-          & State.evalState @TriggerEvents Map.empty
-          & State.evalState @HXRedirectDest Nothing
-          & State.evalState @XWidgetJSON Nothing
     , deviceCode = Auth.deviceCodeH
     , deviceToken = Auth.deviceTokenH
-    , emailPreviewList = emailPreviewListH
-    , emailPreview = emailPreviewH
     , apiV1 = apiV1Server
     , apiV1OpenApi = pure apiV1OpenApiSpec
     , cookieProtected = \sessionWithCookies ->
@@ -797,46 +784,6 @@ widgetPngGetH pid widgetJsonM widgetZM sinceStr fromDStr toDStr widthM heightM s
 
 
 -- flamegraph GET handler
-
--- =============================================================================
--- Email Preview Handlers (dev only)
--- =============================================================================
-
-emailTemplateNames :: [Text]
-emailTemplateNames = ["project-invite", "project-created", "project-deleted", "weekly-report", "runtime-errors", "anomaly-endpoint"]
-
-
-guardDevOnly :: ATBaseCtx ()
-guardDevOnly = do
-  ctx <- Effectful.Reader.Static.ask @AuthContext
-  unless (T.toUpper ctx.config.environment == "DEV") $ Error.throwError err404
-
-
-emailPreviewListH :: ATBaseCtx (Html ())
-emailPreviewListH = do
-  guardDevOnly
-  pure $ ET.emailWrapper "Email Templates" do
-    ET.emailBody do
-      h1_ "Email Template Previews"
-      p_ "Click a template to preview:"
-      ul_ $ forM_ emailTemplateNames \name ->
-        li_ [style_ "margin: 8px 0;"] $ a_ [href_ $ "/dev/emails/" <> name] $ toHtml name
-
-
-emailPreviewH :: Text -> ATBaseCtx (Html ())
-emailPreviewH templateName = do
-  guardDevOnly
-  let (subject, content) = case templateName of
-        "project-invite" -> ET.sampleProjectInvite
-        "project-created" -> ET.sampleProjectCreated
-        "project-deleted" -> ET.sampleProjectDeleted
-        "weekly-report" -> ET.sampleWeeklyReport "https://placehold.co/600x200?text=Events+Chart" "https://placehold.co/600x200?text=Errors+Chart"
-        "runtime-errors" -> ET.sampleRuntimeErrors
-        "anomaly-endpoint" -> ET.sampleAnomalyEndpoint
-        "issue-assigned" -> ET.sampleIssueAssigned
-        _ -> ("Unknown", p_ "Template not found")
-  pure $ ET.emailWrapper subject content
-
 
 -- =============================================================================
 -- Authentication and error handling

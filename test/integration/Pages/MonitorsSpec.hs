@@ -1,6 +1,5 @@
 module Pages.MonitorsSpec (spec) where
 
-import Data.Vector qualified as V
 import Models.Apis.Monitors
 import Test.Hspec
 
@@ -56,31 +55,12 @@ alertForm =
 spec :: Spec
 spec = aroundAll withTestResources do
   describe "Check Alerts" do
-    it "should return an empty list" \tr -> do
-      (_, pg) <-
-        testServant tr $ Alerts.alertListGetH testPid
-      case pg of
-        Alerts.AlertListGet monitors -> do
-          length monitors `shouldBe` 0
-        _ -> fail "unexpected response"
-
     it "should insert an alert" \tr -> do
       (_, pg) <-
         testServant tr $ Alerts.alertUpsertPostH testPid alertForm
       case pg of
         Alerts.AlertNoContent d -> do
           d `shouldBe` ""
-        _ -> fail "unexpected response"
-    it "should return a list with the inserted alert" \tr -> do
-      (_, pg) <-
-        testServant tr $ Alerts.alertListGetH testPid
-      case pg of
-        Alerts.AlertListGet monitors -> do
-          length monitors `shouldBe` 1
-          let alert = V.head monitors
-          alert.warningThreshold `shouldBe` Nothing
-          alert.alertThreshold `shouldBe` 1
-          alert.id `shouldBe` QueryMonitorId alertId
         _ -> fail "unexpected response"
     it "should get single alert" \tr -> do
       (_, pg) <-

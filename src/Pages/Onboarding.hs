@@ -9,7 +9,6 @@ module Pages.Onboarding (
   checkIntegrationGet,
   onboardingStepSkipped,
   dismissChecklistH,
-  proxyLandingH,
   DiscordForm (..),
   NotifChannelForm (..),
   OnboardingInfoForm (..),
@@ -21,13 +20,10 @@ module Pages.Onboarding (
   OnboardingPhoneEmailsPost (..),
 ) where
 
-import Control.Lens qualified as L
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Data.Effectful.Wreq (HTTP)
-import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, toList)
@@ -1005,16 +1001,3 @@ universalIndicator =
     loadingIndicator_ LdLG LdDots
 
 
--- | Proxy handler for fetching documentation from monoscope.tech
--- This bypasses CORS restrictions by fetching the content server-side
-proxyLandingH :: (HTTP :> es, State.State HXRedirectDest :> es, State.State TriggerEvents :> es, State.State XWidgetJSON :> es) => [Text] -> Eff es (RespHeaders Text)
-proxyLandingH path = do
-  let baseUrl = "https://monoscope.tech/"
-      fullUrl = baseUrl <> T.intercalate "/" path
-
-  response <- W.get (toString fullUrl)
-
-  let content = fromMaybe "" $ response L.^? W.responseBody
-      textContent = decodeUtf8 content
-      textContent' = T.replace "href=\"/" "href=\"https://monoscope.tech/" textContent
-  addRespHeaders textContent'
