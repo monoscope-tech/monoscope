@@ -701,7 +701,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     div_ [class_ "mt-4 dropdown block"] do
       a_
-        [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-xl cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-3 group-has-[#sidenav-toggle:checked]/pg:px-3 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
+        [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2.5 group-has-[#sidenav-toggle:checked]/pg:px-2.5 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
         , tabindex_ "0"
         , Aria.haspopup_ "listbox"
         , Aria.label_ $ "Switch project, current: " <> project.title
@@ -715,6 +715,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
     let mainNavActiveStyles = "[&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand"
     nav_ [id_ "main-sidenav", class_ $ "mt-5 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') if p is h or p.startsWith(h + '/') add .active to link else remove .active from link end end|]] do
+      let navLinkCls activeCls = "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
       menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
         let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
         let activeCls = if isActive then " active" else ""
@@ -722,7 +723,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
           ( [ href_ mUrl
             , term "data-tippy-placement" "right"
             , term "data-tippy-content" mTitle
-            , class_ $ "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
+            , class_ $ navLinkCls activeCls
             ]
               <> navTabAttrs
           )
@@ -730,6 +731,29 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
             span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
       onboardingChecklist_ project
+      div_ [class_ "border-t border-strokeWeak my-2"] ""
+      let settingsActive = if pageTitle == "Settings" then " active" else ""
+      a_
+        ( [ href_ $ "/p/" <> project.id.toText <> "/settings"
+          , term "data-tippy-placement" "right"
+          , term "data-tippy-content" "Settings"
+          , class_ $ navLinkCls settingsActive
+          ]
+            <> navTabAttrs
+        )
+        do
+          faSprite_ "gear" "regular" "nav-icon w-4 h-4 shrink-0"
+          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Settings"
+      a_
+        [ href_ "https://monoscope.tech/docs/"
+        , target_ "blank"
+        , term "data-tippy-placement" "right"
+        , term "data-tippy-content" "Documentation"
+        , class_ $ navLinkCls ""
+        ]
+        do
+          faSprite_ "circle-question" "regular" "nav-icon w-4 h-4 shrink-0"
+          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Documentation"
 
   div_ [class_ "py-4 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
     let currUser = sess.persistentSession.user.getUser
@@ -769,14 +793,6 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         div_ [class_ "px-3 py-2 text-sm"] do
           div_ [class_ "font-medium text-textStrong truncate"] $ toHtml userIdentifier
           div_ [class_ "text-textWeak text-xs truncate"] $ toHtml $ CI.original currUser.email
-        div_ [class_ "divider my-0"] ""
-        li_ [] $ a_ [href_ $ "/p/" <> project.id.toText <> "/settings", class_ "flex items-center gap-2"] do
-          faSprite_ "gear" "regular" "w-4 h-4"
-          "Settings"
-        li_ [] $ a_ [href_ "https://monoscope.tech/docs/", target_ "blank", class_ "flex items-center gap-2"] do
-          faSprite_ "circle-question" "regular" "w-4 h-4"
-          "Documentation"
-          faSprite_ "arrow-up-right-from-square" "regular" "w-3 h-3 text-textWeak ml-auto"
         div_ [class_ "divider my-0"] ""
         li_ [] $ a_ [href_ "/logout", class_ "flex items-center gap-2 text-textError", [__| on click js posthog.reset(); end |]] do
           faSprite_ "arrow-right-from-bracket" "regular" "w-4 h-4"
