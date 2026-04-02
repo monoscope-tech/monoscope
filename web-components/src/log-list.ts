@@ -84,6 +84,7 @@ export class LogList extends LitElement {
   @state() private isLoading: boolean = false;
   @state() private isFetchingRecent: boolean = false;
   @state() private isLoadingMore: boolean = false;
+  @state() private fetchError: string | null = null;
   @state() private fetchedNew: boolean = false;
   @state() private visibleItems: EventLine[] = [];
   @state() private virtualListItems: VirtualListItem[] = [];
@@ -794,6 +795,7 @@ export class LogList extends LitElement {
 
     try {
       const { tree, meta } = await this.workerFetch(url);
+      this.fetchError = null;
 
       // Handle results
       if (tree.length === 0) {
@@ -870,7 +872,13 @@ export class LogList extends LitElement {
       }
     } catch (error) {
       console.error(error);
-      this.showErrorToast(error instanceof Error ? error.message : 'Network error');
+      const msg = error instanceof Error ? error.message : 'Network error';
+      // Show inline error when initial load fails (no data yet), toast otherwise
+      if (this.spanListTree.length === 0) {
+        this.fetchError = msg;
+      } else {
+        this.showErrorToast(msg);
+      }
     } finally {
       this.isLoading = false;
       this.isFetchingRecent = false;
@@ -1639,6 +1647,12 @@ export class LogList extends LitElement {
   };
 
   renderLoadMoreButton = () => {
+    if (this.fetchError && this.spanListTree.length === 0) {
+      return errorState(this.logsColumns.length, this.fetchError, () => {
+        this.fetchError = null;
+        this.fetchData(this.buildJsonUrl(), true);
+      });
+    }
     if (this.spanListTree.length === 0 && !this.isLoading && !this.hasMore && !this.flipDirection) {
       return emptyState(this.logsColumns.length);
     }
@@ -2249,6 +2263,23 @@ function loadingSkeleton(cols: number) {
       </tr>
       ${map(Array(10), (_, rowIdx) => skeletonRow(rowIdx, actualCols))}
     </tbody>
+  `;
+}
+
+function errorState(cols: number, message: string, onRetry: () => void) {
+  return html`
+    <tr class="w-full flex justify-center">
+      <td colspan=${String(cols)} class="w-full mx-auto">
+        <div class="max-w-full mx-auto my-8 text-center p-5 sm:py-10 sm:px-24 flex flex-col gap-3 items-center">
+          ${faSprite('circle-exclamation', 'regular', 'h-10 w-10 stroke-strokeError fill-fillError-strong opacity-70')}
+          <h2 class="text-lg text-textStrong font-semibold">Failed to load events</h2>
+          <p class="text-sm text-textWeak max-w-sm">${message}</p>
+          <button class="btn btn-sm btn-ghost border border-strokeWeak mt-1" @click=${onRetry}>
+            ${faSprite('arrow-rotate-right', 'regular', 'h-3.5 w-3.5')} Retry
+          </button>
+        </div>
+      </td>
+    </tr>
   `;
 }
 

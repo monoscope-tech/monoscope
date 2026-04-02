@@ -180,25 +180,62 @@ data ApiItemDetailed
 instance ToHtml ApiItemDetailed where
   toHtml (SpanItemExpanded pid spn aptSpan) = toHtml $ expandedItemView pid spn aptSpan Nothing Nothing
   toHtml (LogItemExpanded pid req) = toHtml $ expandedItemView pid req Nothing Nothing Nothing
-  toHtml (ItemDetailedNotFound message) = div_ [] $ toHtml message
+  toHtml (ItemDetailedNotFound message) = div_ [class_ "flex flex-col items-center justify-center gap-3 py-12 px-4 text-center"] do
+    faSprite_ "circle-exclamation" "regular" "w-8 h-8 text-iconNeutral opacity-60"
+    h3_ [class_ "text-sm font-semibold text-textStrong"] "Record not found"
+    p_ [class_ "text-xs text-textWeak max-w-xs"] $ toHtml message
+    button_
+      [ class_ "btn btn-sm btn-ghost text-xs"
+      , Aria.label_ "Close details panel"
+      , closePanelScript
+      ]
+      "Close"
   toHtmlRaw = toHtml
 
 
 spanBadge :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
 spanBadge pid path val key = do
   div_
-    [ class_ "relative"
+    [ class_ "relative min-w-0"
     , term "data-field-path" path
     , term "data-field-value" $ "\"" <> T.dropAround isSpace (fromMaybe val (viaNonEmpty last (T.splitOn ":" val))) <> "\""
     ]
     do
       button_
-        [ class_ "relative cursor-pointer flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1"
-        , term "data-tippy-content" key
+        [ class_ "relative cursor-pointer flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak text-xs rounded-lg whitespace-nowrap px-2 py-1 max-w-64"
+        , term "data-tippy-content" $ key <> ": " <> val
         , [__|install LogItemMenuable|]
         ]
         $ do
-          span_ [] $ toHtml val
+          span_ [class_ "truncate"] $ toHtml val
+
+
+-- Hyperscript to close the detail panel and clean up URL state
+closePanelScript :: Attribute
+closePanelScript =
+  [__|on click add .hidden to #trace_expanded_view
+      then put '0px' into #log_details_container.style.width
+      then put '100%' into #logs_list_container.style.width
+      then add .hidden to #resizer-details_width-wrapper
+      then add .opacity-0 to #resizer-details_width-wrapper
+      then add .pointer-events-none to #resizer-details_width-wrapper
+      then remove .details-open from #log_details_container
+      then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+      then call updateUrlState('details_width', '', 'delete')
+      then call updateUrlState('target_event', '0px', 'delete')
+      then call updateUrlState('showTrace', '', 'delete')
+      |]
+
+
+-- Mobile-only variant: no resizer/trace cleanup needed
+closePanelMobileScript :: Attribute
+closePanelMobileScript =
+  [__|on click remove .details-open from #log_details_container
+      then put '0px' into #log_details_container.style.width
+      then put '100%' into #logs_list_container.style.width
+      then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
+      then call updateUrlState('target_event', '0px', 'delete')
+      |]
 
 
 -- Unified view for both logs and spans
@@ -207,42 +244,39 @@ expandedItemView pid item aptSp leftM rightM = do
   let isLog = item.kind == Just "log"
       isAlert = item.kind == Just "alert"
       reqDetails = if isLog then Nothing else getRequestDetails (unAesonTextMaybe item.attributes)
-  div_ [class_ $ "w-full pl-2 pb-2 relative" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
-    div_ [class_ "flex justify-between items-center", id_ "copy_share_link"] pass
+  -- Mobile-only sticky back button (visible only on small screens when detail panel is full-screen)
+  div_ [class_ "hidden max-md:flex sticky top-0 z-10 bg-bgBase border-b border-strokeWeak px-3 py-2.5 items-center"] do
+    button_
+      [ class_ "cursor-pointer flex items-center gap-1.5 text-sm font-medium text-textBrand"
+      , Aria.label_ "Close details"
+      , closePanelMobileScript
+      ]
+      do
+        faSprite_ "chevron-left" "regular" "w-3.5 h-3.5"
+        "Back to logs"
+  div_ [class_ $ "w-full pl-3 pr-1 pb-2 relative border-l border-strokeWeak max-md:border-l-0 max-md:px-0" <> if isLog then " flex flex-col gap-2" else " pb-[50px]"] $ do
+    div_ [id_ "copy_share_link"] pass
     unless isLog $ htmxOverlayIndicator_ "loading-span-list"
     htmxOverlayIndicator_ "details_indicator"
-    div_ [class_ "flex flex-col gap-4 bg-fillWeaker py-2 px-2"] $ do
+    div_ [class_ "flex flex-col gap-3 bg-fillWeaker py-3 px-3"] $ do
       div_ [class_ "flex justify-between items-center"] do
-        div_ [class_ "flex items-center gap-4"] $ do
-          h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else if isAlert then "Alert" else "Trace Span"
-        div_ [class_ "flex gap-4 items-center"] $ do
+        h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else if isAlert then "Alert" else "Trace Span"
+        div_ [class_ "flex gap-3 items-center"] $ do
           dateTime (if isLog then item.timestamp else item.start_time) Nothing
-          div_ [class_ "flex gap-2 items-center"] do
-            button_
-              [ class_ "cursor-pointer detail-close-btn"
-              , Aria.label_ "Close item details"
-              , [__|on click add .hidden to #trace_expanded_view
-            then put '0px' into  #log_details_container.style.width
-            then put '100%' into #logs_list_container.style.width
-            then add .hidden to #resizer-details_width-wrapper
-            then add .opacity-0 to #resizer-details_width-wrapper
-            then add .pointer-events-none to #resizer-details_width-wrapper
-            then remove .details-open from #log_details_container
-            then remove .bg-fillBrand-strong from <.item-row.bg-fillBrand-strong/>
-            then call updateUrlState('details_width', '', 'delete')
-            then call updateUrlState('target_event', '0px', 'delete')
-            then call updateUrlState('showTrace', '', 'delete')
-            |]
-              ]
-              do
-                faSprite_ "xmark" "regular" "w-3 h-3 text-iconBrand"
-    div_ [class_ "flex flex-col gap-4"] do
+          button_
+            [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
+            , Aria.label_ "Close item details"
+            , closePanelScript
+            ]
+            do
+              faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
+    div_ [class_ "flex flex-col gap-3"] do
       if isLog
-        then div_ [class_ "flex items-center gap-4"] do
+        then div_ [class_ "flex items-center gap-3"] do
           let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) item.severity
               cls = getSeverityColor svTxt
           span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
-          h4_ [class_ "text-textStrong truncate "] $ toHtml $ case unAesonTextMaybe item.body of
+          h4_ [class_ "text-textStrong truncate"] $ toHtml $ case unAesonTextMaybe item.body of
             Just (AE.String x) -> x
             Just (AE.Object v) -> case extractMessageFromLog (AE.Object v) of
               Just v' -> v'
@@ -250,12 +284,12 @@ expandedItemView pid item aptSp leftM rightM = do
             _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
         else
           if isAlert
-            then div_ [class_ "flex items-center gap-4"] do
+            then div_ [class_ "flex items-center gap-3"] do
               h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
               div_ [class_ "flex flex-wrap items-center gap-2"] do
                 let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
                 span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
-            else div_ [class_ "flex items-center gap-4 text-sm font-medium text-textStrong"] $ do
+            else div_ [class_ "flex items-center gap-3 text-sm font-medium text-textStrong"] $ do
               case reqDetails of
                 Just req -> do
                   div_ [class_ "flex flex-wrap items-center gap-2"] do
@@ -277,86 +311,86 @@ expandedItemView pid item aptSp leftM rightM = do
                 Nothing -> do
                   h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
 
-      div_ [class_ "flex gap-2 flex-wrap"] $ do
+      div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ do
         unless (isLog || isAlert) $ do
           spanBadge pid "duration" (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
           spanBadge pid "kind" (fromMaybe "" item.kind) "Span Kind"
         spanBadge pid "resource___service___name" (getServiceName (unAesonTextMaybe item.resource)) "Service"
         spanBadge pid "context___span_id" ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
         spanBadge pid "context___trace_id" ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
-      div_ [class_ "flex flex-wrap gap-3 items-center text-textBrand font-medium text-xs"] do
+      let actBtn = [class_ "cursor-pointer flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md border border-strokeWeak bg-fillWeakerer hover:bg-fillWeaker transition-colors text-textBrand"]
+      div_ [class_ "flex flex-wrap gap-2 items-center"] do
         whenJust (atMapText "session.id" (unAesonTextMaybe item.attributes)) \v ->
-          button_ [class_ "cursor-pointer flex items-center gap-1", term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onclick_ "filterByField(event, 'Eq')"] do
-            "Filter by session"
+          button_ (actBtn <> [term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onclick_ "filterByField(event, 'Eq')"]) do
             faSprite_ "filter" "regular" "w-3 h-3"
+            "Filter by session"
 
         unless isLog $ whenJust reqDetails $ \case
           ("HTTP", _, _, _) -> do
             let json = decodeUtf8 $ AE.encode $ AE.toJSON item
-            button_
-              [ class_ "cursor-pointer flex items-center gap-1"
-              , onclick_ "window.buildCurlRequest(event)"
-              , term "data-reqjson" json
-              ]
-              do
-                "Copy request as curl"
-                faSprite_ "copy" "regular" "w-3 h-3"
+            button_ (actBtn <> [onclick_ "window.buildCurlRequest(event)", term "data-reqjson" json]) do
+              faSprite_ "copy" "regular" "w-3 h-3"
+              "Copy as curl"
           _ -> pass
         let createdAt = formatUTC item.timestamp
         whenJust item.context $ \ctx -> do
           whenJust ctx.trace_id $ \trId -> do
             let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
             button_
-              [ class_ $ "cursor-pointer flex items-end gap-1" <> if isLog then " cursor-pointer" else ""
-              , term
-                  "_"
-                  [text|on click remove .hidden from #trace_expanded_view
+              ( actBtn
+                  <> [ term
+                        "_"
+                        [text|on click remove .hidden from #trace_expanded_view
                             then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")
                             then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
                             then fetch $tracePath
                             then set #trace_expanded_view.innerHTML to it
                             then htmx.process(#trace_expanded_view)
                             then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
-              ]
+                     ]
+              )
               do
-                "View parent trace"
-                faSprite_ "cross-hair" "regular" "w-4 h-4"
+                faSprite_ "cross-hair" "regular" "w-3 h-3"
+                "View trace"
         let item_id = item.id
         let eventType = if isLog then "log" else "span"
         let monitorId = fromMaybe "" item.parent_id
-        when isAlert $ a_ [class_ "cursor-pointer flex items-center gap-2", href_ $ "/p/" <> pid.toText <> "/monitors/" <> monitorId <> "/overview"] do
-          "View alert"
+        when isAlert $ a_ (actBtn <> [href_ $ "/p/" <> pid.toText <> "/monitors/" <> monitorId <> "/overview"]) do
           faSprite_ "bell" "regular" "w-3 h-3"
+          "View alert"
         button_
-          [ class_ "cursor-pointer flex items-center gap-2"
-          , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> item_id <> "/" <> createdAt <> "?event_type=" <> eventType
-          , hxSwap_ "innerHTML"
-          , hxTarget_ "#copy_share_link"
-          ]
+          ( actBtn
+              <> [ hxPost_ $ "/p/" <> pid.toText <> "/share/" <> item_id <> "/" <> createdAt <> "?event_type=" <> eventType
+                 , hxSwap_ "innerHTML"
+                 , hxTarget_ "#copy_share_link"
+                 ]
+          )
           do
-            "Generate shareable link"
             faSprite_ "link-simple" "regular" "w-3 h-3"
+            "Share link"
 
     let tabContainerId = if isLog then "log-tabs-container" else "span-tabs-container"
-    div_ [class_ $ "w-full " <> if isLog then "mt-4" else "mt-8", id_ tabContainerId] do
+    div_ [class_ "w-full mt-4", id_ tabContainerId] do
       let spanErrors = if isLog then [] else getSpanErrors $ fromMaybe AE.Null (unAesonTextMaybe item.events)
           isHttp = case reqDetails of
             Just ("HTTP", _, _, _) -> True
             _ -> False
           borderClass = "border-b-strokeWeak"
-      let tabBtn cls target label = button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " " <> cls, onclick_ $ "navigatable(this, '#" <> target <> "', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] label
+      let tabCls extra = "http-tab cursor-pointer border-b-2 " <> borderClass <> " px-4 py-1.5 text-sm " <> extra
+          tabBtn cls target label = button_ [class_ $ tabCls cls, onclick_ $ "navigatable(this, '#" <> target <> "', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] label
       div_ [class_ "flex", [__|on click halt|]] $ do
-        when ((isLog || isAlert) && isJust item.body) $ tabBtn "px-4 py-1.5 t-tab-active" "body-content" "Body"
-        when isHttp $ tabBtn "px-4 py-1.5 t-tab-active" "request-content" "Request"
-        unless isAlert $ button_ [class_ $ "cursor-pointer http-tab border-b-2 " <> borderClass <> " px-4 py-1.5 " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else "", onclick_ $ "navigatable(this, '#att-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] "Attributes"
-        tabBtn "px-4 py-1.5" "meta-content" "Process"
-        unless (isLog || null spanErrors) $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 nowrap px-4 py-1.5", onclick_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
+        when ((isLog || isAlert) && isJust item.body) $ tabBtn "t-tab-active" "body-content" "Body"
+        when isHttp $ tabBtn "t-tab-active" "request-content" "Request"
+        let attActive = if (isLog && isNothing item.body) || (not isLog && not isHttp) then "t-tab-active" else ""
+        unless isAlert $ tabBtn attActive "att-content" "Attributes"
+        tabBtn "" "meta-content" "Process"
+        unless (isLog || null spanErrors) $ button_ [class_ $ tabCls "flex items-center gap-1", onclick_ $ "navigatable(this, '#errors-content', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] do
           "Errors"
           div_ [class_ "badge badge-error badge-sm"] $ show $ length spanErrors
-        unless isLog $ button_ [class_ $ "http-tab cursor-pointer border-b-2 " <> borderClass <> " flex items-center gap-1 px-4 py-1.5", onclick_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] $ do
+        unless isLog $ button_ [class_ $ tabCls "flex items-center gap-1", onclick_ $ "navigatable(this, '#logs-content', '#" <> tabContainerId <> "', 't-tab-active','http')"] $ do
           "Logs"
           div_ [class_ "badge badge-ghost badge-sm"] $ show $ numberOfEvents $ fromMaybe AE.Null (unAesonTextMaybe item.events)
-        tabBtn "px-4 py-1.5 whitespace-nowrap" "m-raw-content" "Raw data"
+        tabBtn "whitespace-nowrap" "m-raw-content" "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
       div_ [class_ "my-4 py-2 text-textWeak"] $ do
@@ -439,20 +473,17 @@ renderErrors errs =
     $ forM_ errs
     $ \err -> do
       let (tye, message, stacktrace) = getErrorDetails err
-      div_ [class_ "w-full max-w-2xl mx-auto border border-strokeWeak rounded-lg shadow-sm"] $ do
-        -- Card Header
-        div_ [class_ "p-3 pb-3"] do
-          div_ [class_ "text-textError font-semibold mb-2"] $ toHtml tye
-          div_ [class_ "flex items-start justify-between gap-4"] do
-            div_ [class_ "flex-1 min-w-0"] $ do
-              h3_ [class_ "text-base text-balance text-sm leading-tight"] $ toHtml message
-        div_ [class_ "px-3 pb-6 space-y-4"] $ do
-          div_ [class_ "border-b border-strokeWeak"] $ do
-            button_ [class_ "w-full flex justify-between items-center py-2 text-sm font-medium text-left rounded"] "Stack Trace"
-            div_ [id_ "stackTraceContent", class_ "rounded bg-fillWeak p-2"]
-              $ div_ [class_ "bg-fillWeak p-3 rounded-md max-h-64 overflow-y-auto mb-4"]
-              $ pre_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak"]
-              $ toHtml stacktrace
+      div_ [class_ "w-full border border-strokeWeak rounded-lg"] $ do
+        div_ [class_ "p-3"] do
+          div_ [class_ "text-textError font-semibold text-sm mb-1"] $ toHtml tye
+          p_ [class_ "text-sm leading-snug text-textWeak"] $ toHtml message
+        unless (T.null stacktrace) $ details_ [class_ "group/st border-t border-strokeWeak"] do
+          summary_ [class_ "cursor-pointer select-none flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong"] do
+            faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
+            "Stack Trace"
+          div_ [class_ "px-3 pb-3"]
+            $ pre_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak bg-fillWeak rounded-md p-3 max-h-64 overflow-y-auto"]
+            $ toHtml stacktrace
 
 
 numberOfEvents :: AE.Value -> Int
