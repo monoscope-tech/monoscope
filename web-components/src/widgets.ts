@@ -1,11 +1,8 @@
 'use strict';
 import { params } from './main';
 import { getSeriesColor } from './colorMapping';
-const DEFAULT_BACKGROUND_STYLE = { color: 'rgba(240,248,255, 0.4)' };
-const DARK_BACKGROUND_STYLE = { color: 'rgba(30, 38, 52, 0.18)' };
 const INITIAL_FETCH_INTERVAL = 5000;
 const $ = (id: string) => document.getElementById(id);
-const DEFAULT_PALETTE = ['#1A74A8', '#067A57CC', '#EE6666', '#FAC858', '#73C0DE', '#3BA272', '#FC8452', '#9A60B4', '#ea7ccc'];
 
 // --- Concurrency limiter for fetch requests (max 3 in-flight) ---
 const MAX_CONCURRENT_FETCHES = 4;
@@ -154,6 +151,22 @@ const sharedThemeObserver = new MutationObserver((mutations) => {
 });
 sharedThemeObserver.observe(document.body, { attributes: true, attributeFilter: ['data-theme'] });
 
+// Read chart-related CSS tokens from the design system
+const getChartStyles = () => {
+  const cs = getComputedStyle(document.body);
+  const get = (prop: string) => cs.getPropertyValue(prop).trim();
+  return {
+    textColor: get('--color-textWeak'),
+    tooltipBg: get('--color-bgRaised'),
+    tooltipTextColor: get('--color-textStrong'),
+    tooltipBorderColor: get('--color-borderWeak'),
+    chartBg: get('--color-chartBg'),
+    chartMask: get('--color-chartMask'),
+    errorColor: get('--color-textError'),
+    warningColor: get('--color-textWarning'),
+  };
+};
+
 const showNoDataOverlay = (chartId: string, message?: string) => {
   const el = $(`${chartId}`);
   if (!el) return;
@@ -183,15 +196,16 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
   // This ensures stat widgets (total requests, etc.) show in blue as expected
   const isGenericStatColumn = widgetData.widgetType === 'timeseries_stat' &&
     (name === 'value' || name.startsWith('count') || name === '' || !name);
-  const paletteColor = isGenericStatColumn ? DEFAULT_PALETTE[0] : getSeriesColor(name);
+  // ECharts' modifyAlpha can't parse oklch colors from getComputedStyle, so use hex fallback
+  const paletteColor = isGenericStatColumn ? '#1A74A8' : getSeriesColor(name);
 
   const gradientColor = new (window as any).echarts.graphic.LinearGradient(0, 0, 0, 1, [
     { offset: 0, color: (window as any).echarts.color.modifyAlpha(paletteColor, 1) },
     { offset: 1, color: (window as any).echarts.color.modifyAlpha(paletteColor, 0) },
   ]);
 
-  const isDarkMode = document.body.getAttribute('data-theme') === 'dark';
-  const backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
+  const { chartBg } = getChartStyles();
+  const backgroundStyle = { color: chartBg };
 
   const seriesOpt: any = {
     type: widgetData.chartType,
@@ -211,7 +225,7 @@ const createSeriesConfig = (widgetData: WidGetData, name: string, i: number, opt
   if (widgetData.chartType === 'line') {
     seriesOpt.lineStyle = { color: paletteColor };
     // For line charts in dark mode, override the symbol to avoid white centers
-    if (isDarkMode) {
+    if (document.body.getAttribute('data-theme') === 'dark') {
       seriesOpt.symbol = 'circle'; // Use filled circle instead of empty circle
       seriesOpt.symbolSize = 4;
     }
@@ -455,14 +469,7 @@ const chartWidget = (widgetData: WidGetData) => {
 
   (window as any)[`${chartType}Chart`] = chart;
 
-  // Read computed styles once (shared across all charts via cache)
-  const computedStyle = getComputedStyle(document.body);
-  const styles = {
-    textColor: computedStyle.getPropertyValue('--color-textWeak').trim(),
-    tooltipBg: computedStyle.getPropertyValue('--color-bgRaised').trim(),
-    tooltipTextColor: computedStyle.getPropertyValue('--color-textStrong').trim(),
-    tooltipBorderColor: computedStyle.getPropertyValue('--color-borderWeak').trim(),
-  };
+  const styles = getChartStyles();
 
   if (styles.textColor) {
     opt.legend = opt.legend || {};
@@ -470,14 +477,14 @@ const chartWidget = (widgetData: WidGetData) => {
   }
   opt.tooltip = {
     ...opt.tooltip,
-    backgroundColor: styles.tooltipBg || (isDarkMode ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)'),
-    textStyle: { ...opt.tooltip?.textStyle, color: styles.tooltipTextColor || (isDarkMode ? '#e0e0e0' : '#333') },
-    borderColor: styles.tooltipBorderColor || (isDarkMode ? '#555' : '#ccc'),
+    backgroundColor: styles.tooltipBg,
+    textStyle: { ...opt.tooltip?.textStyle, color: styles.tooltipTextColor },
+    borderColor: styles.tooltipBorderColor,
     borderWidth: 1,
   };
   opt.backgroundColor = 'transparent';
   if (opt.series?.[0]?.backgroundStyle) {
-    opt.series[0].backgroundStyle = isDarkMode ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
+    opt.series[0].backgroundStyle = { color: styles.chartBg };
   }
 
   chart.setOption(updateChartConfiguration(widgetData, opt, opt.dataset.source));
@@ -498,9 +505,9 @@ const chartWidget = (widgetData: WidGetData) => {
   if (!opt.dataset.source && chartEl) {
     chart.showLoading({
       text: 'Loading...',
-      color: isDarkMode ? '#3B82F6' : '#1A74A8',
-      textColor: isDarkMode ? '#e0e0e0' : '#333',
-      maskColor: isDarkMode ? 'rgba(25, 30, 42, 0.85)' : 'rgba(255, 255, 255, 0.8)',
+      color: '#1A74A8',
+      textColor: styles.tooltipTextColor,
+      maskColor: styles.chartMask,
       zlevel: 0,
     });
     new IntersectionObserver(
@@ -531,21 +538,22 @@ const chartWidget = (widgetData: WidGetData) => {
   });
 
   // Register with shared theme observer instead of per-widget MutationObserver
-  const onThemeChange: ThemeCallback = (isDark, styles) => {
-    if (styles.textColor) {
+  const onThemeChange: ThemeCallback = (_isDark, _cbStyles) => {
+    const freshStyles = getChartStyles();
+    if (freshStyles.textColor) {
       opt.legend = opt.legend || {};
-      opt.legend.textStyle = { ...opt.legend.textStyle, color: styles.textColor };
+      opt.legend.textStyle = { ...opt.legend.textStyle, color: freshStyles.textColor };
     }
     opt.tooltip = {
       ...opt.tooltip,
-      backgroundColor: styles.tooltipBg || (isDark ? 'rgba(50, 50, 50, 0.9)' : 'rgba(255, 255, 255, 0.9)'),
-      textStyle: { ...opt.tooltip?.textStyle, color: styles.tooltipTextColor || (isDark ? '#e0e0e0' : '#333') },
-      borderColor: styles.tooltipBorderColor || (isDark ? '#555' : '#ccc'),
+      backgroundColor: freshStyles.tooltipBg,
+      textStyle: { ...opt.tooltip?.textStyle, color: freshStyles.tooltipTextColor },
+      borderColor: freshStyles.tooltipBorderColor,
       borderWidth: 1,
     };
     opt.backgroundColor = 'transparent';
     opt.series?.forEach((s: any) => {
-      if (s.backgroundStyle) s.backgroundStyle = isDark ? DARK_BACKGROUND_STYLE : DEFAULT_BACKGROUND_STYLE;
+      if (s.backgroundStyle) s.backgroundStyle = { color: freshStyles.chartBg };
     });
     chart.setOption(opt, false);
   };
@@ -827,22 +835,22 @@ document.addEventListener('click', (e) => {
   } catch { /* ignore malformed data attributes */ }
 });
 
-// Threshold line configurations
-const THRESHOLDS = {
-  alert: { color: '#dc2626', formatter: 'Alert: {c}' },
-  warning: { color: '#f59e0b', formatter: 'Warning: {c}' },
-} as const;
-
-// Create threshold markLines for ECharts
-export const createThresholdMarkLines = (thresholds: Record<string, number>) =>
-  Object.entries(thresholds)
+// Create threshold markLines for ECharts (reads semantic colors from CSS tokens)
+export const createThresholdMarkLines = (thresholds: Record<string, number>) => {
+  const styles = getChartStyles();
+  const thresholdStyles: Record<string, { color: string; formatter: string }> = {
+    alert: { color: styles.errorColor, formatter: 'Alert: {c}' },
+    warning: { color: styles.warningColor, formatter: 'Warning: {c}' },
+  };
+  return Object.entries(thresholds)
     .filter(([_, value]) => !isNaN(value))
     .map(([type, value]) => ({
       yAxis: value,
       name: type,
-      label: { formatter: THRESHOLDS[type as keyof typeof THRESHOLDS]?.formatter || `${type}: {c}`, position: 'end' },
-      lineStyle: { color: THRESHOLDS[type as keyof typeof THRESHOLDS]?.color || '#999', width: 2, type: 'dashed' },
+      label: { formatter: thresholdStyles[type]?.formatter || `${type}: {c}`, position: 'end' },
+      lineStyle: { color: thresholdStyles[type]?.color || styles.textColor, width: 2, type: 'dashed' },
     }));
+};
 
 // Apply thresholds to a chart
 export const applyThresholds = (chart: any, thresholds: Record<string, number>) => {

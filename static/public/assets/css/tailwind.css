@@ -87,8 +87,10 @@
   --color-bgSunken: oklch(97.7% 0.006 247);
   --color-bgBrand: oklch(56.7% 0.239 261);
 
-  /* Chart default blue (echarts THEME_COLORS[0]) */
+  /* Chart colors */
   --color-chart-default: #1A74A8;
+  --color-chartBg: oklch(97.7% 0.014 236 / 0.4);
+  --color-chartMask: oklch(100% 0 0 / 0.8);
 
   /* Fill colors */
   --color-fillBrand-strong: oklch(56.7% 0.239 261);
@@ -1790,6 +1792,10 @@ code, pre, .code, .monospace {
     --color-bgSunken: oklch(8% 0.003 260);
     --color-bgBrand: oklch(60% 0.18 265);
 
+    /* Chart colors — dark theme */
+    --color-chartBg: oklch(22% 0.015 260 / 0.18);
+    --color-chartMask: oklch(15% 0.01 260 / 0.85);
+
     /* Fill colors — dark theme */
     --color-fillBrand-strong: oklch(60% 0.18 265);
     --color-fillBrand-weak: oklch(60% 0.18 265 / 0.15);
@@ -1819,15 +1825,15 @@ code, pre, .code, .monospace {
 
     /* Icon colors — dark theme */
     --color-iconBrand: oklch(72% 0.15 265 / 0.9);
-    --color-iconDisabled: rgba(255 255 255 / 0.12);
-    --color-iconError: rgba(255 156 156 / 0.8);
-    --color-iconInformation: rgba(126 192 229 / 0.8);
-    --color-iconInverse: rgba(10 10 15 / 0.45);
-    --color-iconInverseDisabled: rgba(15 15 20 / 0.1);
-    --color-iconInverse-strong: rgba(10 10 15 / 0.88);
-    --color-iconNeutral: rgba(255 255 255 / 0.55);
-    --color-iconSuccess: rgba(119 199 175 / 0.8);
-    --color-iconWarning: rgba(224 190 112 / 0.8);
+    --color-iconDisabled: oklch(100% 0 0 / 0.12);
+    --color-iconError: oklch(77.2% 0.126 21 / 0.8);
+    --color-iconInformation: oklch(78% 0.095 241 / 0.8);
+    --color-iconInverse: oklch(10% 0.005 260 / 0.45);
+    --color-iconInverseDisabled: oklch(10% 0.005 260 / 0.1);
+    --color-iconInverse-strong: oklch(10% 0.005 260 / 0.88);
+    --color-iconNeutral: oklch(100% 0 0 / 0.55);
+    --color-iconSuccess: oklch(78% 0.088 162 / 0.8);
+    --color-iconWarning: oklch(79.5% 0.106 92 / 0.8);
 
     /* Stroke colors — dark theme */
     --color-strokeBrand-strong: oklch(72% 0.15 265 / 0.5);
@@ -1860,7 +1866,7 @@ code, pre, .code, .monospace {
     --color-textStrong: oklch(90% 0.005 260);
     --color-textSuccess: oklch(78% 0.088 162);
     --color-textWarning: oklch(79.5% 0.106 92);
-    --color-textWeak: oklch(62% 0.005 260);
+    --color-textWeak: oklch(67% 0.005 260);
 
     /* Dark mode shadow scale — deeper for contrast on dark surfaces */
     --shadow-xs: 0 1px 2px -1px rgba(0 0 0 / 0.2);
@@ -1871,7 +1877,7 @@ code, pre, .code, .monospace {
 
     /* Update fallback colors for dark mode */
     --fallback-b2: rgba(255 255 255 / 0.06);
-    --tab-color: oklch(62% 0.005 260);
+    --tab-color: oklch(67% 0.005 260);
     --fallback-pc: oklch(92% 0.005 260);
     --fallback-bc: rgba(255 255 255 / 0.55);
   }

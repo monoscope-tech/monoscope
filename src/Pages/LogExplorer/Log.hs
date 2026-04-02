@@ -381,7 +381,7 @@ renderFacets facetSummary = do
       div_ [class_ "facet-section-group group/section block contain-[layout_style]"] do
         input_ $ [type_ "checkbox", class_ "hidden peer", id_ $ "toggle-" <> T.replace " " "-" sectionName] ++ [checked_ | not collapsed]
         -- Section header - use label to toggle checkbox
-        label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName] do
+        label_ [class_ "p-2 bg-fillWeak rounded-lg cursor-pointer flex gap-2 items-center peer-checked:[&>svg]:rotate-0", Lucid.for_ $ "toggle-" <> T.replace " " "-" sectionName, Aria.expanded_ (if collapsed then "false" else "true"), [__|on change from previous <input/> if previous <input/>.checked set @aria-expanded to 'true' else set @aria-expanded to 'false'|]] do
           faSprite_ "chevron-down" "regular" "w-3 h-3 transition-transform -rotate-90"
           span_ [class_ "font-medium text-sm"] (toHtml sectionName)
 
@@ -400,7 +400,7 @@ renderFacets facetSummary = do
 
                   -- Dropdown menu for actions
                   div_ [class_ "dropdown dropdown-end contain-[layout_style]", onclick_ "event.stopPropagation()"] do
-                    a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded"] do
+                    a_ [tabindex_ "0", class_ "cursor-pointer p-2 hover:bg-fillWeak rounded", Aria.label_ "Facet options", role_ "button"] do
                       faSprite_ "ellipsis-vertical" "regular" "w-3 h-3"
                     ul_ [tabindex_ "0", class_ "dropdown-content z-10 menu p-2 shadow-sm bg-bgRaised rounded-box w-52"] do
                       li_
@@ -681,13 +681,13 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
               , pageActions = Just $ div_ [class_ "flex gap-2 max-md:gap-1 items-center"] do
                   label_ [class_ "cursor-pointer border border-strokeWeak rounded-lg flex shadow-xs"] do
                     input_ [type_ "checkbox", id_ "streamLiveData", class_ "hidden"]
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
-                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:flex hidden py-1 px-2 items-center", data_ "tippy-content" "pause live data stream", Aria.label_ "Pause live data stream"] $ faSprite_ "pause" "solid" "h-4 w-4 text-iconNeutral"
+                    span_ [class_ "group-has-[#streamLiveData:checked]/pg:hidden flex py-1 px-2 items-center", data_ "tippy-content" "stream live data", Aria.label_ "Stream live data"] $ faSprite_ "play" "regular" "h-4 w-4 text-iconNeutral"
                   Components.timepicker_ (Just "log_explorer_form") currentRange Nothing
                   Components.refreshButton_
               , navTabs = Just $ div_ [class_ "tabs tabs-box tabs-outline items-center"] do
                   a_
-                    ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong"] <> navTabAttrs)
+                    ([href_ $ "/p/" <> pid.toText <> "/log_explorer", role_ "tab", class_ "tab h-auto! tab-active text-textStrong", term "aria-current" "page"] <> navTabAttrs)
                     "Events"
                   a_ ([href_ $ "/p/" <> pid.toText <> "/metrics", role_ "tab", class_ "tab h-auto! "] <> navTabAttrs) "Metrics"
               }
@@ -940,7 +940,7 @@ apiLogsPage page = do
       do
         div_ [class_ "relative ml-auto w-full", style_ ""] do
           div_ [class_ "flex justify-end  w-full p-4 "]
-            $ button_ [class_ "cursor-pointer", [__|on click add .hidden to #expand-log-modal|]]
+            $ button_ [class_ "cursor-pointer", Aria.label_ "Close log details", [__|on click add .hidden to #expand-log-modal|]]
             $ faSprite_ "xmark" "regular" "h-8"
           form_
             [ hxPost_ $ "/p/" <> page.pid.toText <> "/share/"
