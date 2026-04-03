@@ -94,7 +94,7 @@ import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, unAesonTextMaybe)
 import Relude hiding (ask)
 import System.Config (AuthContext)
 import System.Config qualified as SysConfig
@@ -860,7 +860,7 @@ instance ToRow OtelLogsAndSpans where
       -- Helper functions for severity fields
       parseSeverityText sev = do
         s <- sev
-        cleanNullBytes . toText . drop 2 . show <$> s.severity_text
+        cleanNullBytes . toText . encodeEnumSC @"SL" <$> s.severity_text
 
       parseSeverityNumber = fmap (show . severity_number)
 

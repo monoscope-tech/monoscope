@@ -9,6 +9,7 @@ module Pkg.DeriveUtils (
   UUIDId (..),
   WrappedEnum (..),
   WrappedEnumSC (..),
+  encodeEnumSC,
   WrappedEnumShow (..),
   addKeepaliveParams,
   connectPostgreSQL,
