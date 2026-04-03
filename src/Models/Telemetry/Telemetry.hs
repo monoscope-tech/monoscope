@@ -860,7 +860,7 @@ instance ToRow OtelLogsAndSpans where
       -- Helper functions for severity fields
       parseSeverityText sev = do
         s <- sev
-        cleanNullBytes . show <$> s.severity_text
+        cleanNullBytes . toText . drop 2 . show <$> s.severity_text
 
       parseSeverityNumber = fmap (show . severity_number)
 
