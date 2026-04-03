@@ -102,7 +102,8 @@ spanDisplayLabel attrs
 -- | Draggable column resize divider. Parameters: CSS variable name, min%, max%, resize event, extra CSS classes.
 resizeDivider_ :: Text -> Int -> Int -> Text -> Text -> Html ()
 resizeDivider_ cssVar minPct maxPct resizeEvt extraCls =
-  let minT = show minPct; maxT = show maxPct
+  let minT = show minPct
+      maxT = show maxPct
       qVar = "'" <> cssVar <> "'"
       script =
         [text|on pointerdown(clientX)
