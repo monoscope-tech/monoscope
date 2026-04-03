@@ -40,6 +40,7 @@ module Utils (
   toUriStr,
   toXXHash,
   getServiceColors,
+  serviceFillColor,
   getGrpcStatusColor,
   -- Hex color mapping for ECharts server-side rendering
   themeColorsHex,
@@ -525,21 +526,16 @@ checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
 serviceColors :: V.Vector Text
 serviceColors =
   V.fromList
-    -- 12 cool/neutral hues only — warm colors (red, rose, orange, amber, yellow)
-    -- are reserved for severity/error semantics to avoid false alarm signals.
-    -- Ordered for maximum hue separation: any 3 consecutive are visually distinct.
-    [ "bg-blue-400" -- blue
-    , "bg-emerald-400" -- emerald
-    , "bg-purple-400" -- purple
-    , "bg-teal-400" -- teal
-    , "bg-indigo-400" -- indigo
-    , "bg-lime-400" -- lime
-    , "bg-sky-400" -- sky
-    , "bg-fuchsia-400" -- fuchsia
-    , "bg-green-400" -- green
-    , "bg-violet-400" -- violet
-    , "bg-cyan-400" -- cyan
-    , "bg-slate-400" -- slate
+    -- 8 cool/neutral hues — warm colors reserved for severity/error semantics.
+    -- Uses hue + lightness variation (300/400/500) for max perceptual distance.
+    [ "bg-blue-400" -- blue (medium)
+    , "bg-emerald-400" -- emerald (medium)
+    , "bg-purple-400" -- purple (medium)
+    , "bg-cyan-300" -- cyan (light)
+    , "bg-indigo-500" -- indigo (dark)
+    , "bg-fuchsia-300" -- fuchsia (light)
+    , "bg-teal-500" -- teal (dark)
+    , "bg-slate-400" -- slate (neutral)
     ]
 
 
@@ -552,21 +548,17 @@ getServiceColors = V.foldl' assign HM.empty
 
 
 -- | Theme colors (hex) for ECharts - matches colorMapping.ts THEME_COLORS.
--- Cool/neutral hues only; warm colors reserved for severity/error semantics.
+-- 8 cool/neutral hues with lightness variation; warm colors reserved for severity.
 themeColorsHex :: V.Vector Text
 themeColorsHex =
   V.fromList
     [ "#60a5fa" -- Blue-400
     , "#34d399" -- Emerald-400
     , "#c084fc" -- Purple-400
-    , "#2dd4bf" -- Teal-400
-    , "#818cf8" -- Indigo-400
-    , "#a3e635" -- Lime-400
-    , "#38bdf8" -- Sky-400
-    , "#e879f9" -- Fuchsia-400
-    , "#4ade80" -- Green-400
-    , "#a78bfa" -- Violet-400
-    , "#22d3ee" -- Cyan-400
+    , "#67e8f9" -- Cyan-300
+    , "#6366f1" -- Indigo-500
+    , "#f0abfc" -- Fuchsia-300
+    , "#14b8a6" -- Teal-500
     , "#94a3b8" -- Slate-400
     ]
 
@@ -581,7 +573,7 @@ getSeriesColorHex :: Text -> Text
 getSeriesColorHex name
   | T.null name = themeColorsHex V.! 0
   | T.toLower name == "unset" = "#7c8db5"
-  | HS.member (T.toLower name) nullishNames = "#8892a4"
+  | HS.member (T.toLower name) nullishNames = "#9ca3af"
   | isStatusCode name = statusCodeColorHex (fromMaybe 0 $ readMaybe $ toString name)
   | isPercentile name = percentileColorHex name
   | otherwise = themeColorsHex V.! hashTextToIndex name
@@ -836,6 +828,11 @@ extractMessageFromLog (AE.Object obj) =
       Just val -> Just (toText $ show val)
       Nothing -> Nothing
 extractMessageFromLog _ = Nothing
+
+
+-- | Get service color class by hashing the service name (matches getServiceColors logic)
+serviceFillColor :: Text -> Text
+serviceFillColor name = serviceColors V.! (fromIntegral (xxHash (encodeUtf8 name)) `mod` V.length serviceColors)
 
 
 -- | Get fill color from status code text (first char: "2xx", "3xx", etc.)

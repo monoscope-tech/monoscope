@@ -5,21 +5,17 @@
 // When updating this logic, also update chartshot/colorMapping.ts to keep server-side
 // chart rendering consistent with browser rendering.
 
-// Service/generic colors: cool/neutral hues only.
+// Service/generic colors: 8 cool/neutral hues with lightness variation (300/400/500).
 // Warm colors (red, orange, amber, yellow) are reserved for severity/error semantics.
-// Ordered for maximum hue separation: any 3 consecutive are visually distinct.
+// Hue + lightness separation ensures any 3 consecutive are visually distinct.
 const THEME_COLORS = [
   '#60a5fa', // Blue-400
   '#34d399', // Emerald-400
   '#c084fc', // Purple-400
-  '#2dd4bf', // Teal-400
-  '#818cf8', // Indigo-400
-  '#a3e635', // Lime-400
-  '#38bdf8', // Sky-400
-  '#e879f9', // Fuchsia-400
-  '#4ade80', // Green-400
-  '#a78bfa', // Violet-400
-  '#22d3ee', // Cyan-400
+  '#67e8f9', // Cyan-300
+  '#6366f1', // Indigo-500
+  '#f0abfc', // Fuchsia-300
+  '#14b8a6', // Teal-500
   '#94a3b8', // Slate-400
 ];
 
@@ -196,7 +192,7 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
     return '#7c8db5'; // Visible desaturated blue — muted but clearly present on dark backgrounds
   }
   if (value && ['null', 'undefined', 'unknown'].includes(value.toLowerCase())) {
-    return '#8892a4'; // Slightly warmer gray — distinct from UNSET
+    return '#9ca3af'; // Gray-400 — neutral, WCAG-safe contrast on dark backgrounds
   }
   
   // Handle empty values - use default color
@@ -240,22 +236,17 @@ export function getSeriesColor(value: string, context?: 'status' | 'percentile' 
   return THEME_COLORS[hashString(value) % THEME_COLORS.length];
 }
 
-// Tailwind class to hex mapping for service colors (cool/neutral hues only)
+// Tailwind class to hex mapping for service colors (cool/neutral hues with lightness variation)
 export const TAILWIND_TO_HEX: Record<string, string> = {
   'bg-blue-400': '#60a5fa',
   'bg-emerald-400': '#34d399',
   'bg-purple-400': '#c084fc',
-  'bg-teal-400': '#2dd4bf',
-  'bg-indigo-400': '#818cf8',
-  'bg-lime-400': '#a3e635',
-  'bg-sky-400': '#38bdf8',
-  'bg-fuchsia-400': '#e879f9',
-  'bg-green-400': '#4ade80',
-  'bg-violet-400': '#a78bfa',
-  'bg-cyan-400': '#22d3ee',
+  'bg-cyan-300': '#67e8f9',
+  'bg-indigo-500': '#6366f1',
+  'bg-fuchsia-300': '#f0abfc',
+  'bg-teal-500': '#14b8a6',
   'bg-slate-400': '#94a3b8',
-  'bg-gray-400': '#9ca3af',
-  'bg-gray-500': '#6b7280',
+  'bg-gray-500': '#9ca3af',
 };
 
 // Convert hex to HSL

@@ -53,7 +53,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, statusFillColorText)
+import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -251,7 +251,7 @@ renderFacets facetSummary = do
               "UNSET" -> "bg-fillWeak"
               _ -> "bg-fillStrong"
           )
-        , ("resource___service___name", "Service", const "")
+        , ("resource___service___name", "Service", serviceFillColor)
         , ("name", "Operation Name", const "")
         , ("kind", "Kind", const "")
         , ("resource___service___version", "Service Version", const "")

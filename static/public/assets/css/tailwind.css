@@ -1419,7 +1419,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-2xx {
-  @apply bg-green-100 text-green-700 dark:bg-green-900/20 dark:text-green-300;
+  @apply bg-fillWeaker text-textWeak dark:bg-fillWeaker dark:text-textWeak;
 }
 
 @utility badge-success {
@@ -1467,7 +1467,7 @@ code, pre, .code, .monospace {
 }
 
 @utility badge-info {
-  @apply bg-fillInformation-weak text-textInformation;
+  @apply bg-fillWeaker text-textWeak;
 }
 
 @utility badge-warning {
