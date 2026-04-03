@@ -82,9 +82,56 @@ data SpanMin = SpanMin
   , startTime :: Integer
   , endTime :: Maybe Integer
   , timestamp :: UTCTime
+  , attributes :: Maybe (Map Text AE.Value)
   }
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
+
+
+-- | Extract a human-readable label from span attributes (db query, http route, rpc method)
+spanDisplayLabel :: Maybe (Map Text AE.Value) -> Maybe Text
+spanDisplayLabel attrs
+  | isJust (Telemetry.atMapText "db.system.name" attrs <|> Telemetry.atMapText "db.system" attrs) =
+      T.take 200 <$> (Telemetry.atMapText "db.query.text" attrs <|> Telemetry.atMapText "db.statement" attrs)
+  | otherwise =
+      Telemetry.atMapText "http.route" attrs
+        <|> Telemetry.atMapText "url.path" attrs
+        <|> ((\m s -> m <> " " <> s) <$> Telemetry.atMapText "rpc.method" attrs <*> Telemetry.atMapText "rpc.service" attrs)
+
+
+-- | Draggable column resize divider. Parameters: CSS variable name, min%, max%, resize event, extra CSS classes.
+resizeDivider_ :: Text -> Int -> Int -> Text -> Text -> Html ()
+resizeDivider_ cssVar minPct maxPct resizeEvt extraCls =
+  let minT = show minPct; maxT = show maxPct
+      qVar = "'" <> cssVar <> "'"
+      script =
+        [text|on pointerdown(clientX)
+          set container to the closest parent <div[style*=$qVar]/>
+          if no container exit end
+          trigger setPointerCapture(pointerId: event.pointerId) on me
+          set document.body.style.userSelect to 'none'
+          set document.body.style.cursor to 'col-resize'
+          repeat until event pointerup from document
+            wait for pointermove(clientX) or pointerup from document
+            if the event's type is 'pointerup' exit end
+            set rect to container.getBoundingClientRect()
+            set pct to ((clientX - rect.left) / rect.width) * 100
+            if pct < $minT set pct to $minT end
+            if pct > $maxT set pct to $maxT end
+            call container.style.setProperty($qVar, pct + '%')
+            send $resizeEvt to window
+          end
+          set document.body.style.userSelect to ''
+          set document.body.style.cursor to ''
+        |]
+   in div_
+        [ class_ $ "absolute top-0 bottom-0 w-2 cursor-col-resize z-20 flex justify-center group " <> extraCls
+        , style_ $ "left:calc(var(" <> cssVar <> ") - 4px)"
+        , makeAttribute "_" script
+        ]
+        $ div_ [class_ "w-px h-full bg-strokeWeak group-hover:bg-fillBrand-strong group-active:bg-fillBrand-strong transition-colors pointer-events-none relative"] do
+          div_ [class_ "absolute top-1/2 -translate-y-1/2 -translate-x-[3px] w-2 h-6 flex flex-col justify-center gap-px opacity-0 group-hover:opacity-100 transition-opacity"] do
+            forM_ [1 :: Int .. 3] \_ -> div_ [class_ "w-full h-px bg-fillBrand-strong rounded-full"] pass
 
 
 data SpanTree = SpanTree
@@ -628,9 +675,9 @@ tracePage pid traceItem spanRecords = do
                       faSprite_ "chevron-down" "regular" "h-3 w-3"
               button_ [class_ "btn border border-strokeWeak bg-fillWeaker h-9 hidden", id_ "reset-zoom-btn"] "Reset Zoom"
           div_ [role_ "tabpanel", class_ "a-tab-content w-full", id_ "flame_graph"] do
-            div_ [class_ "flex max-md:flex-col gap-2 w-full pt-2"] do
+            div_ [class_ "flex max-md:flex-col gap-2 w-full pt-2 relative", style_ "--tl-left:65%", id_ $ "timeline-layout-" <> traceItem.traceId] do
               div_
-                [ class_ "md:w-[65%] w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
+                [ class_ "md:w-[var(--tl-left)] w-full group px-2 pt-4 border relative flex flex-col rounded-lg overflow-hidden"
                 , id_ $ "flame-graph-container-" <> traceItem.traceId
                 ]
                 do
@@ -640,8 +687,8 @@ tracePage pid traceItem spanRecords = do
                     div_ [class_ "relative h-full"] do
                       div_ [class_ "text-xs top-[-18px] absolute -translate-x-1/2 whitespace-nowrap", id_ $ "line-time-" <> traceItem.traceId] "2 ms"
                       div_ [class_ "h-[calc(100%-24px)] mt-[24px] w-[1px] bg-strokeWeak"] pass
-
-              div_ [class_ "border rounded-lg md:w-[35%] w-full overflow-x-hidden"] do
+              resizeDivider_ "--tl-left" 30 85 "resize" "max-md:hidden top-2"
+              div_ [class_ "border rounded-lg md:w-[calc(100%-var(--tl-left)-8px)] w-full overflow-x-hidden"] do
                 h3_ [class_ "w-full flex px-3 py-2 font-medium justify-between items-center text-xs text-textWeak border-b"] do
                   span_ [] "Services"
                   span_ [] "Exec Time %"
@@ -663,32 +710,7 @@ tracePage pid traceItem spanRecords = do
 
           div_ [role_ "tabpanel", class_ "a-tab-content pt-2 hidden", id_ "water_fall"] do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-y-auto overflow-x-hidden relative", style_ "--wf-left:35%", id_ $ "waterfall-container-" <> traceItem.traceId] do
-              div_
-                [ class_ "absolute top-0 bottom-0 w-2 cursor-col-resize z-20 flex justify-center waterfall-divider group"
-                , style_ "left:calc(var(--wf-left) - 4px)"
-                , [__|on pointerdown(clientX)
-                     set container to the closest parent <div[style*='--wf-left']/>
-                     if no container exit end
-                     trigger setPointerCapture(pointerId: event.pointerId) on me
-                     set document.body.style.userSelect to 'none'
-                     set document.body.style.cursor to 'col-resize'
-                     repeat until event pointerup from document
-                       wait for pointermove(clientX) or pointerup from document
-                       if the event's type is 'pointerup' exit end
-                       set rect to container.getBoundingClientRect()
-                       set pct to ((clientX - rect.left) / rect.width) * 100
-                       if pct < 15 set pct to 15 end
-                       if pct > 70 set pct to 70 end
-                       call container.style.setProperty('--wf-left', pct + '%')
-                       send waterfallResize to window
-                     end
-                     set document.body.style.userSelect to ''
-                     set document.body.style.cursor to ''
-                   |]
-                ]
-                $ div_ [class_ "w-px h-full bg-strokeWeak group-hover:bg-fillBrand-strong group-active:bg-fillBrand-strong transition-colors pointer-events-none relative"] do
-                  div_ [class_ "absolute top-1/2 -translate-y-1/2 -translate-x-[3px] w-2 h-6 flex flex-col justify-center gap-px opacity-0 group-hover:opacity-100 transition-opacity"] do
-                    forM_ [1 :: Int .. 3] \_ -> div_ [class_ "w-full h-px bg-fillBrand-strong rounded-full"] pass
+              resizeDivider_ "--wf-left" 15 70 "waterfallResize" "waterfall-divider"
               div_ [class_ "h-full top-0 absolute z-30 hidden pointer-events-none", id_ $ "wf-time-indicator-" <> traceItem.traceId] do
                 div_ [class_ "relative h-full"] do
                   div_ [class_ "text-xs top-1 absolute -translate-x-1/2 whitespace-nowrap bg-bgOverlay px-1 rounded text-textStrong", id_ $ "wf-time-label-" <> traceItem.traceId] ""
@@ -857,6 +879,7 @@ buildSpanTree spans =
                     , endTime = adjEnd
                     , hasErrors = spanHasErrors sp
                     , timestamp = sp.timestamp
+                    , attributes = sp.attributes
                     }
              in SpanTree rec (buildTree spanMap (Just sp.spanId) (adjStart, adjStart + adjDur))
           | sp <- spans'
@@ -894,9 +917,11 @@ buildSpanTree_ pid sp trId level scol = do
               ]
               do faSprite_ "chevron-right" "regular" "h-3 w-3 text-textWeak rotate-90"
           unless hasChildren $ div_ [class_ "w-4 shrink-0"] pass
-          div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol] pass
-          span_ [class_ "text-xs font-medium text-textStrong truncate"] $ toHtml sp.spanRecord.serviceName
-          span_ [class_ "text-xs text-textWeak truncate"] $ toHtml sp.spanRecord.spanName
+          let label = fromMaybe sp.spanRecord.spanName (spanDisplayLabel sp.spanRecord.attributes)
+              tip = sp.spanRecord.serviceName <> " — " <> label
+          div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol, title_ sp.spanRecord.serviceName] pass
+          span_ [class_ "text-xs font-medium text-textStrong truncate max-w-20", title_ tip] $ toHtml sp.spanRecord.serviceName
+          span_ [class_ "text-xs text-textWeak truncate", title_ tip] $ toHtml label
         div_
           [ class_ "h-full relative grow min-w-0"
           , id_ $ "waterfall-bar-" <> sp.spanRecord.spanId
