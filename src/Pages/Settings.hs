@@ -90,7 +90,7 @@ import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import UnliftIO.Exception (try)
+import UnliftIO.Exception (catch, throwIO)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64.URL qualified as B64
@@ -787,19 +787,19 @@ stripeRequest apiKey endpoint =
   Wreq.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
 
 
--- Catch wreq HTTP exceptions and log them
+-- Catch wreq HTTP exceptions, log them, and re-throw so callers see the failure
 tryStripe :: IO (Maybe a) -> IO (Maybe a)
 tryStripe action =
-  try action >>= \case
-    Right r -> pure r
-    Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e) $> Nothing
+  action `catch` \(e :: SomeException) -> do
+    putTextLn ("Stripe API error: " <> show e)
+    throwIO e
 
 
 tryStripe_ :: IO a -> IO ()
 tryStripe_ action =
-  try (void action) >>= \case
-    Right () -> pass
-    Left (e :: SomeException) -> putTextLn ("Stripe API error: " <> show e)
+  void action `catch` \(e :: SomeException) -> do
+    putTextLn ("Stripe API error: " <> show e)
+    throwIO e
 
 
 createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)

@@ -107,7 +107,7 @@ runServer appLogger env tp = do
     liftIO
       $ sequenceA
       $ catMaybes
-        [ Just $ async $ runSettings warpSettings wrappedServer
+        [ Just $ async $ runSettings warpSettings wrappedServer -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , Just $ async $ supervise logExc "background-jobs" bgJobWorker
         , Just $ async $ supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp
@@ -137,18 +137,19 @@ shutdownMonoscope env =
     Pool.destroyAllResources env.timefusionPgPool
 
 
-logException :: Text -> LogBase.Logger -> LogLevel -> Safe.SomeException -> IO ()
-logException envTxt logger logLevel exception =
+logException :: Text -> LogBase.Logger -> LogLevel -> Text -> Text -> IO ()
+logException envTxt logger logLevel name msg =
   runLogT envTxt logger logLevel
-    $ LogBase.logAttention "Service thread crashed" (show @Text exception)
+    $ LogBase.logAttention ("Service thread " <> name) msg
 
 
--- | Supervisor: restarts a service thread on crash after a 1s delay.
-supervise :: (Safe.SomeException -> IO ()) -> Text -> IO () -> IO ()
+-- | Supervisor: restarts a service on crash with 1s delay. Re-throws async exceptions for clean shutdown.
+supervise :: (Text -> Text -> IO ()) -> Text -> IO () -> IO ()
 supervise logExc name action = forever $ do
   Safe.tryAny action >>= \case
-    Right () -> putTextLn $ name <> " exited, restarting"
-    Left e -> logExc e
+    Right () -> logExc name "exited cleanly, restarting"
+    Left e | Safe.isAsyncException e -> Safe.throwIO e
+    Left e -> logExc name ("crashed: " <> show @Text e)
   threadDelay 1_000_000
 
 
