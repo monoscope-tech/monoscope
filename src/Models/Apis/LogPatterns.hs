@@ -45,6 +45,7 @@ import Database.PostgreSQL.Entity.Types qualified as DAT
 import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.) (..))
 
 import Data.Map.Strict qualified as Map
+import Data.Text qualified as T
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -55,7 +56,6 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
-import Data.Text qualified as T
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (truncateHour)
