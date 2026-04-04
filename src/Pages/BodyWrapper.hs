@@ -693,7 +693,8 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
     let paletteUrl = "/p/" <> project.id.toText <> "/command-palette"
-        searchScript = [__|on click
+        searchScript =
+          [__|on click
               if <.cmd-palette-backdrop/> exists
                 remove <.cmd-palette-backdrop/>
               else
@@ -750,8 +751,11 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
                 ( [ href_ mUrl
                   , class_ $ navLinkCls activeCls
                   ]
-                    <> if hasFlyout then [] else [term "data-tippy-placement" "right", term "data-tippy-content" mTitle]
-                    <> navTabAttrs
+                    <> if hasFlyout
+                      then []
+                      else
+                        [term "data-tippy-placement" "right", term "data-tippy-content" mTitle]
+                          <> navTabAttrs
                 )
                 do
                   faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
