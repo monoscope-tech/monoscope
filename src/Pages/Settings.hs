@@ -36,6 +36,7 @@ module Pages.Settings (
   cancelStripeSubscription,
   reportUsageToStripe,
   cancelLemonSqueezySubscription,
+  lemonSqueezyOpts,
   verifyStripeSignature,
 ) where
 

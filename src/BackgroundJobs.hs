@@ -94,7 +94,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
-import UnliftIO.Exception (bracket, catch, try)
+import UnliftIO.Exception (bracket, catch, throwIO, try)
 import Utils (formatUTC, freeTierDailyMaxEvents, replaceAllFormats, toXXHash)
 
 
@@ -174,12 +174,13 @@ jobsRunner logger authCtx tp job = Relude.when authCtx.config.enableBackgroundJo
         -- Execute the job
         result <- try $ processBackgroundJob authCtx bgJob
 
-        -- Set span status based on result
+        -- Set span status based on result, then re-throw so odd-jobs sees the failure
         case result of
           Left (e :: SomeException) -> do
             Log.logAttention "Background job failed" (show e)
             addEvent sp "job.failed" [("error", OA.toAttribute $ toText $ show e)]
             setStatus sp (Error $ toText $ show e)
+            throwIO e
           Right _ -> do
             addEvent sp "job.completed" []
             setStatus sp Ok
@@ -366,22 +367,24 @@ processBackgroundJob authCtx bgJob =
     DailyReports pid -> sendReportForProject pid DailyReport
     WeeklyReports pid -> sendReportForProject pid WeeklyReport
     ReportUsage pid -> whenJustM (Projects.projectById pid) \project -> do
-      Log.logTrace "Reporting usage for project" ("project_id", pid.toText)
+      let provider = Projects.billingProvider project.subId
+      Log.logInfo "Reporting usage" ("project_id", pid.toText, "plan", project.paymentPlan, "provider", show provider)
       Relude.when (project.paymentPlan /= "Free" && project.paymentPlan /= "ONBOARDING") $ whenJust (mfilter (not . T.null) project.firstSubItemId) \fSubId -> do
         currentTime <- liftIO getZonedTime
         totalToReport <- Telemetry.getTotalEventsToReport pid project.usageLastReported
         totalMetricsCount <- Telemetry.getTotalMetricsCount pid project.usageLastReported
-        Log.logTrace "Total events to report" ("events_count", totalToReport + totalMetricsCount)
         let totalUsage = totalToReport + totalMetricsCount
+        Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "metrics", totalMetricsCount, "total", totalUsage)
         Relude.when (totalUsage > 0) do
-          case Projects.billingProvider project.subId of
+          case provider of
             Projects.StripeProvider -> whenJust (mfilter (not . T.null) project.orderId) \custId ->
               liftIO $ Settings.reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" totalUsage
             Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
-            Projects.NoBillingProvider -> pass
-          void $ Projects.addDailyUsageReport pid totalUsage
-          void $ Projects.updateUsageLastReported pid currentTime
-      Log.logTrace "Completed usage report for project" ("project_id", pid.toText)
+            Projects.NoBillingProvider -> Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan)
+          Relude.when (provider /= Projects.NoBillingProvider) do
+            void $ Projects.addDailyUsageReport pid totalUsage
+            void $ Projects.updateUsageLastReported pid currentTime
+            Log.logInfo "Usage reported successfully" ("project_id", pid.toText, "total", totalUsage)
     CleanupDemoProject -> do
       let pid = UUIDId UUID.nil
       void $ PG.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
@@ -1223,10 +1226,10 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
           "data": {"type": "usage-records","attributes": {"quantity": #{quantity},"action": "increment"},
                      "relationships": {"subscription-item": {"data": {"type": "subscription-items","id": #{subItemId}}}}
                   }}|]
-
-  let hds = defaults & (header "Authorization" .~ ["Bearer " <> encodeUtf8 @Text @ByteString apiKey]) & (header "Content-Type" .~ ["application/vnd.api+json"])
-  _ <- postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
-  pass
+      hds = Settings.lemonSqueezyOpts apiKey & (header "Accept" .~ ["application/vnd.api+json"])
+  try @SomeException (void $ postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData) >>= \case
+    Right () -> pass
+    Left e -> putTextLn ("LemonSqueezy usage report failed for sub_item " <> subItemId <> ": " <> show e) >> throwIO e
 
 
 -- | Send notifications for a query monitor status change (inline, no separate job)
