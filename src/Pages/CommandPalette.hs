@@ -172,8 +172,8 @@ renderPalette pid recents issues monitors dashboards = do
               span_ [class_ "cmd-log-label truncate flex-1"] "Search logs for: \"\""
               badge_ "Logs"
           -- Actions
-          cmdItem pidTxt "direct" "monitors/new" [] [] "plus" "Create monitor" "Action"
-          cmdItem pidTxt "direct" "dashboards/new" [] [] "plus" "Create dashboard" "Action"
+          cmdItem pidTxt "direct" "log_explorer#create-alert-toggle" [] [] "plus" "Create monitor" "Action"
+          cmdItem pidTxt "direct" "dashboards?new=true" [] [] "plus" "Create dashboard" "Action"
           a_
             [ class_ "cmd-item flex items-center gap-2 px-3 py-2 rounded text-sm cursor-pointer transition-colors"
             , data_ "search" "switch project"

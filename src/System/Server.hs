@@ -2,6 +2,7 @@ module System.Server (runMonoscope) where
 
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
+import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
@@ -15,7 +16,7 @@ import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200)
 import Network.Wai
-import Network.Wai.Handler.Warp (defaultSettings, runSettings, setOnException, setPort)
+import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdownTimeout, setOnException, setPort)
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
@@ -73,6 +74,7 @@ runServer appLogger env tp = do
   let warpSettings =
         defaultSettings
           & setPort env.config.port
+          & setGracefulShutdownTimeout (Just 30)
           & setOnException \_ exception ->
             runLogT "monoscope" appLogger LogAttention
               $ LogBase.logAttention "Unhandled exception"
@@ -100,17 +102,17 @@ runServer appLogger env tp = do
           -- . loggingMiddleware
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
-  let exceptionLogger = logException env.config.environment appLogger env.config.logLevel
+  let logExc = logException env.config.environment appLogger env.config.logLevel
   asyncs <-
     liftIO
       $ sequenceA
       $ catMaybes
         [ Just $ async $ runSettings warpSettings wrappedServer
-        , guard env.config.enablePubsubService $> async (Safe.withException (Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages) exceptionLogger)
-        , Just $ async $ Safe.withException bgJobWorker exceptionLogger
-        , Just $ async $ Safe.withException (OtlpServer.runServer appLogger env tp) exceptionLogger
-        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (Safe.withException (Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList) exceptionLogger)
-        , guard env.config.enableReplayService $> async (Safe.withException (Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents) exceptionLogger)
+        , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
+        , Just $ async $ supervise logExc "background-jobs" bgJobWorker
+        , Just $ async $ supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp
+        , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList)
+        , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents)
         ]
   void $ liftIO $ waitAnyCancel asyncs
 
@@ -138,7 +140,16 @@ shutdownMonoscope env =
 logException :: Text -> LogBase.Logger -> LogLevel -> Safe.SomeException -> IO ()
 logException envTxt logger logLevel exception =
   runLogT envTxt logger logLevel
-    $ LogBase.logAttention "odd-jobs runner crashed " (show @Text exception)
+    $ LogBase.logAttention "Service thread crashed" (show @Text exception)
+
+
+-- | Supervisor: restarts a service thread on crash after a 1s delay.
+supervise :: (Safe.SomeException -> IO ()) -> Text -> IO () -> IO ()
+supervise logExc name action = forever $ do
+  Safe.tryAny action >>= \case
+    Right () -> putTextLn $ name <> " exited, restarting"
+    Left e -> logExc e
+  threadDelay 1_000_000
 
 
 heartbeatMiddleware :: Middleware

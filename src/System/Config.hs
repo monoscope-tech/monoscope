@@ -222,9 +222,9 @@ configToEnv config = do
     migrationRes <- Migrations.runMigration conn Migrations.defaultOptions $ Migrations.MigrationDirectory (toString config.migrationsDir :: FilePath)
     blueMessage ("migration result " <> show migrationRes)
     pass
-  pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 50 & setNumStripes (Just 5))
-  jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 50 & setNumStripes (Just 4))
-  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 25 & setNumStripes (Just 4))
+  pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 20 & setNumStripes (Just 4))
+  jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
+  timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   projectKeyCache <- liftIO $ newCache Nothing
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)

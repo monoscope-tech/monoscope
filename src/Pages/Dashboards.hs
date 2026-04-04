@@ -82,7 +82,7 @@ import Network.HTTP.Types.URI qualified as URI
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper
 import Pages.Charts.Charts qualified as Charts
-import Pages.Components (FieldCfg (..), FieldSize (..), formField_, tagInput_)
+import Pages.Components (FieldCfg (..), FieldSize (..), ModalCfg (..), formField_, tagInput_)
 import Pages.Components qualified as Components
 import Pages.GitSync qualified as GitSyncPage
 import Pages.LogExplorer.LogItem (getServiceName)
@@ -1447,6 +1447,7 @@ data DashboardsGetD = DashboardsGetD
   , availableTags :: [Text]
   , copyMode :: Maybe (Text, Dashboards.DashboardId) -- (widgetId, sourceDashboardId) for copy-to-dashboard mode
   , dashTemplates :: [Dashboards.Dashboard]
+  , showNew :: Bool
   }
   deriving (Generic)
 data DashboardsGet
@@ -1507,7 +1508,7 @@ starButton_ pid dashId isStarred = do
 
 dashboardsGet_ :: DashboardsGetD -> Html ()
 dashboardsGet_ dg = do
-  unless dg.embedded $ Components.modal_ "newDashboardMdl" "" $ form_
+  unless dg.embedded $ Components.modalWith_ "newDashboardMdl" def{autoOpen = dg.showNew} Nothing $ form_
     [ class_ "flex  h-[90vh] gap-4 group/md"
     , hxPost_ ""
     , hxVals_ "js:{ teams: window.getTagValues('#teamHandlesInput') }"
@@ -1673,8 +1674,8 @@ activeFilters_ pid baseUrl filters = div_ [class_ "flex items-center gap-2 mb-4"
     "Clear all"
 
 
-dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
-dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters = do
+dashboardsGetH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> Maybe UUID.UUID -> Maybe Text -> DashboardFilters -> ATAuthCtx (RespHeaders DashboardsGet)
+dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM newM filters = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
 
@@ -1706,7 +1707,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters =
   templates <- getDashboardTemplates appCtx.config.liveReloadDashboards
   if embedded || isTeamView
     then -- For embedded/team mode, use a minimal BWConfig that will still work with ToHtml instance
-      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode, dashTemplates = templates}
+      addRespHeaders $ DashboardsGetSlim DashboardsGetD{dashboards, projectId = pid, embedded, hideActions = isTeamView, teams, tableActions = Nothing, filters, availableTags, copyMode, dashTemplates = templates, showNew = False}
     else do
       freeTierStatus <- checkFreeTierStatus pid project.paymentPlan
       let bwconf =
@@ -1733,7 +1734,7 @@ dashboardsGetH pid sortM embeddedM teamIdM copyWidgetIdM sourceDashIdM filters =
                 , activeFilters = [("Tags", filters.tag) | not (null filters.tag)]
                 , headerExtra = Nothing
                 }
-      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags, copyMode, dashTemplates = templates})
+      addRespHeaders $ DashboardsGet (PageCtx bwconf $ DashboardsGetD{dashboards, projectId = pid, embedded = False, hideActions = False, teams, tableActions, filters, availableTags, copyMode, dashTemplates = templates, showNew = isJust newM})
 
 
 data DashboardRes = DashboardNoContent | DashboardPostError Text | DashboardRenameSuccess Text
