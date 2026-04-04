@@ -55,6 +55,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
+import Data.Text qualified as T
 import Relude hiding (id)
 import System.Types (DB)
 import Utils (truncateHour)
@@ -232,8 +233,10 @@ upsertLogPatternBatch ups = do
           log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
   |]
-    (map (:. Only now) $ dedup ups)
+    (map (:. Only now) $ map cap $ dedup ups)
   where
+    maxTextLen = 32000
+    cap u = u{logPattern = T.take maxTextLen u.logPattern, sampleMessage = T.take maxTextLen <$> u.sampleMessage} :: UpsertPattern
     dedup = Map.elems . foldl' merge Map.empty
     merge acc u = Map.insertWith mergeUp (u.projectId, u.sourceField, u.hash) u acc
     mergeUp new old = old{eventCount = old.eventCount + new.eventCount, sampleMessage = old.sampleMessage <|> new.sampleMessage, serviceName = old.serviceName <|> new.serviceName, logLevel = old.logLevel <|> new.logLevel, traceId = old.traceId <|> new.traceId}
