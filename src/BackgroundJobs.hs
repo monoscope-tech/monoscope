@@ -1227,9 +1227,10 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
                      "relationships": {"subscription-item": {"data": {"type": "subscription-items","id": #{subItemId}}}}
                   }}|]
       hds = Settings.lemonSqueezyOpts apiKey & (header "Accept" .~ ["application/vnd.api+json"])
-  try @SomeException (void $ postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData) >>= \case
-    Right () -> pass
-    Left e -> putTextLn ("LemonSqueezy usage report failed for sub_item " <> subItemId <> ": " <> show e) >> throwIO e
+  void (postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData)
+    `catch` \(e :: SomeException) -> do
+      putTextLn ("LemonSqueezy usage report failed for sub_item " <> subItemId <> ": " <> show e)
+      throwIO e
 
 
 -- | Send notifications for a query monitor status change (inline, no separate job)
