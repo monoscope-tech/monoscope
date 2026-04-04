@@ -290,7 +290,7 @@ apiKeysPage pid apiKeys = do
 
 
 apiMainContent :: Projects.ProjectId -> V.Vector ProjectApiKeys.ProjectApiKey -> Maybe (ProjectApiKeys.ProjectApiKey, Text) -> Html ()
-apiMainContent pid apiKeys newKeyM = section_ [id_ "main-content"] do
+apiMainContent pid apiKeys newKeyM = section_ [] do
   copyNewApiKey newKeyM False
   let activeKeys = V.filter (\x -> x.active) apiKeys
       revokedKeys = V.filter (\x -> not x.active) apiKeys
@@ -695,7 +695,7 @@ manageBillingGetH pid from = do
 
 
 billingPage :: Projects.ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Text -> Bool -> Bool -> Projects.BillingProvider -> Html ()
-billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled provider = div_ [id_ "main-content"] do
+billingPage pid reqs amount last_reported lemonUrl critical paymentPlan enableFreetier basicAuthEnabled provider = div_ [] do
   let pidTxt = pid.toText
       isFree = paymentPlan == "Free"
       planPrice

@@ -493,7 +493,10 @@ bodyWrapper bcfg child = do
                       (currUser.email == "hello@monoscope.tech")
                       loginBanner
                     if bcfg.isSettingsPage || bcfg.hideNavbar
-                      then whenJust bcfg.currProject paletteTriggerFloating
+                      then do
+                        -- Empty navbar anchor so OOB morph can remove non-settings navbar
+                        nav_ [id_ "main-navbar", class_ "hidden"] ""
+                        whenJust bcfg.currProject paletteTriggerFloating
                       else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
@@ -732,17 +735,28 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
       onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
       let settingsActive = if pageTitle == "Settings" then " active" else ""
-      a_
-        ( [ href_ $ "/p/" <> project.id.toText <> "/settings"
-          , term "data-tippy-placement" "right"
-          , term "data-tippy-content" "Settings"
-          , class_ $ navLinkCls settingsActive
-          ]
-            <> navTabAttrs
-        )
-        do
-          faSprite_ "gear" "regular" "nav-icon w-4 h-4 shrink-0"
-          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Settings"
+      div_ [class_ "relative group/settings"] do
+        a_
+          ( [ href_ $ "/p/" <> project.id.toText <> "/settings"
+            , class_ $ navLinkCls settingsActive
+            ]
+              <> navTabAttrs
+          )
+          do
+            faSprite_ "gear" "regular" "nav-icon w-4 h-4 shrink-0"
+            span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Settings"
+            span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
+        div_ [class_ "invisible opacity-0 group-hover/settings:visible group-hover/settings:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"] do
+          forM_ (navBottomList project.id.toText) $ \(iconName, linkText, link) ->
+            a_
+              ( [ href_ link
+                , class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"
+                ]
+                  <> navTabAttrs
+              )
+              do
+                faSprite_ iconName "regular" "shrink-0 h-3.5 w-3.5"
+                span_ [] (toHtml linkText)
       a_
         [ href_ "https://monoscope.tech/docs/"
         , target_ "blank"
