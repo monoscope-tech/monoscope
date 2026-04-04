@@ -718,45 +718,39 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
     let mainNavActiveStyles = "[&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand"
     nav_ [id_ "main-sidenav", class_ $ "mt-5 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') if p is h or p.startsWith(h + '/') add .active to link else remove .active from link end end|]] do
       let navLinkCls activeCls = "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
-      menu project.id & mapM_ \(mTitle, mUrl, fIcon) -> do
-        let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
-        let activeCls = if isActive then " active" else ""
-        a_
-          ( [ href_ mUrl
-            , term "data-tippy-placement" "right"
-            , term "data-tippy-content" mTitle
-            , class_ $ navLinkCls activeCls
-            ]
-              <> navTabAttrs
-          )
-          do
-            faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
-            span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
-      onboardingChecklist_ project
-      div_ [class_ "border-t border-strokeWeak my-2"] ""
-      let settingsActive = if pageTitle == "Settings" then " active" else ""
-      div_ [class_ "relative group/settings"] do
-        a_
-          ( [ href_ $ "/p/" <> project.id.toText <> "/settings"
-            , class_ $ navLinkCls settingsActive
-            ]
-              <> navTabAttrs
-          )
-          do
-            faSprite_ "gear" "regular" "nav-icon w-4 h-4 shrink-0"
-            span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Settings"
-            span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
-        div_ [class_ "invisible opacity-0 group-hover/settings:visible group-hover/settings:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"] do
-          forM_ (navBottomList project.id.toText) $ \(iconName, linkText, link) ->
+      let pidTxt = project.id.toText
+          flyoutCls = "invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"
+          flyoutLink (linkText, link) =
             a_
               ( [ href_ link
                 , class_ "flex gap-2.5 items-center px-3 py-2 text-sm text-textWeak hover:bg-fillWeak hover:text-textStrong whitespace-nowrap"
                 ]
                   <> navTabAttrs
               )
-              do
-                faSprite_ iconName "regular" "shrink-0 h-3.5 w-3.5"
-                span_ [] (toHtml linkText)
+              $ span_ [] (toHtml linkText)
+          renderNavItem mTitle mUrl fIcon flyoutItems = do
+            let isActive = maybe (pageTitle == mTitle) (== mTitle) menuItem
+                activeCls = if isActive then " active" else ""
+                hasFlyout = not (null flyoutItems)
+            (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
+              a_
+                ( [ href_ mUrl
+                  , term "data-tippy-placement" "right"
+                  , term "data-tippy-content" mTitle
+                  , class_ $ navLinkCls activeCls
+                  ]
+                    <> navTabAttrs
+                )
+                do
+                  faSprite_ fIcon "regular" "nav-icon w-4 h-4 shrink-0"
+                  span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
+                  when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
+              when hasFlyout $ div_ [class_ flyoutCls] $ mapM_ flyoutLink flyoutItems
+      menu project.id & mapM_ \(mTitle, mUrl, fIcon) ->
+        renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)
+      onboardingChecklist_ project
+      div_ [class_ "border-t border-strokeWeak my-2"] ""
+      renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear" (map (\(_, t, l) -> (t, l)) $ navBottomList pidTxt)
       a_
         [ href_ "https://monoscope.tech/docs/"
         , target_ "blank"
@@ -957,6 +951,17 @@ navBottomList pidTxt =
   , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/settings/integrations")
   , ("dollar", "Billing", "/p/" <> pidTxt <> "/manage_billing")
   ]
+
+
+navFlyoutItems :: Text -> Text -> [(Text, Text)]
+navFlyoutItems pidTxt = \case
+  "Explorer" -> [("Events", p "/log_explorer"), ("Metrics", p "/metrics")]
+  "API Catalog" -> [("Incoming", p "/api_catalog?request_type=Incoming"), ("Outgoing", p "/api_catalog?request_type=Outgoing")]
+  "Issues" -> [("Inbox", p "/issues?filter=Inbox"), ("Acknowledged", p "/issues?filter=Acknowledged"), ("Archived", p "/issues?filter=Archived")]
+  "Monitors" -> [("Active", p "/monitors?filter=Active"), ("Inactive", p "/monitors?filter=Inactive")]
+  _ -> []
+  where
+    p path = "/p/" <> pidTxt <> path
 
 
 settingsContentTarget :: Text
