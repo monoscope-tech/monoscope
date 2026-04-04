@@ -692,11 +692,24 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
-    div_ [class_ "pt-3.5 pb-5 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center"] do
-      -- Expanded: full logo
-      a_ [href_ "/", class_ "relative h-6 flex-1 hidden group-has-[#sidenav-toggle:checked]/pg:inline-flex", Aria.label_ "Home"] do
-        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:block dark:hidden", src_ "/public/assets/svgs/logo_black.svg", alt_ "Monoscope"]
-        img_ [class_ "h-7 absolute inset-0 hidden group-has-[#sidenav-toggle:checked]/pg:dark:block", src_ "/public/assets/svgs/logo_white.svg", alt_ "Monoscope"]
+    let paletteUrl = "/p/" <> project.id.toText <> "/command-palette"
+        searchScript = [__|on click
+              if <.cmd-palette-backdrop/> exists
+                remove <.cmd-palette-backdrop/>
+              else
+                set :url to my.dataset.paletteUrl
+                fetch `${:url}` then put the result at start of <body/>
+              end
+            end|]
+    div_ [class_ "pt-3.5 pb-3 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center gap-2"] do
+      -- Expanded: search input trigger
+      button_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-2 px-3 py-1.5 flex-1 rounded-lg border border-strokeWeak text-textWeak text-sm hover:border-strokeStrong hover:bg-fillWeak transition-colors cursor-pointer", data_ "palette-url" paletteUrl, searchScript] do
+        faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 shrink-0"
+        span_ [class_ "flex-1 text-left"] "Search..."
+        kbd_ [class_ "kbd kbd-xs"] "\x2318K"
+      -- Collapsed: search icon
+      button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center py-2 rounded-lg hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", data_ "palette-url" paletteUrl, searchScript, term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
+        faSprite_ "magnifying-glass" "regular" "w-4 h-4"
       -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
       label_ [term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] flex items-center", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
         faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
@@ -735,10 +748,9 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             (if hasFlyout then div_ [class_ "relative group/flyout"] else id) do
               a_
                 ( [ href_ mUrl
-                  , term "data-tippy-placement" "right"
-                  , term "data-tippy-content" mTitle
                   , class_ $ navLinkCls activeCls
                   ]
+                    <> if hasFlyout then [] else [term "data-tippy-placement" "right", term "data-tippy-content" mTitle]
                     <> navTabAttrs
                 )
                 do
@@ -746,8 +758,11 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
                   span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] $ toHtml mTitle
                   when hasFlyout $ span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block ml-auto text-textWeak"] $ faSprite_ "chevron-right" "regular" "w-3 h-3"
               when hasFlyout $ div_ [class_ flyoutCls] $ mapM_ flyoutLink flyoutItems
-      menu project.id & mapM_ \(mTitle, mUrl, fIcon) ->
-        renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)
+      let items = menu project.id
+          (primary, secondary) = splitAt 2 items
+      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) primary
+      div_ [class_ "border-t border-strokeWeak/50 my-1.5 mx-2"] ""
+      mapM_ (\(mTitle, mUrl, fIcon) -> renderNavItem mTitle mUrl fIcon (navFlyoutItems pidTxt mTitle)) secondary
       onboardingChecklist_ project
       div_ [class_ "border-t border-strokeWeak my-2"] ""
       renderNavItem "Settings" ("/p/" <> pidTxt <> "/settings") "gear" (map (\(_, t, l) -> (t, l)) $ navBottomList pidTxt)
