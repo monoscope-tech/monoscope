@@ -338,12 +338,22 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do
-      let dropLast v = V.take (V.length v - 1) v
-          count = fromMaybe 0 $ do
-            firstRow <- logItemsV V.!? 0
-            AE.Number n <- firstRow V.!? (V.length firstRow - 1)
-            pure $ round n
-      pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count)
+      let limit = fromMaybe defaultQueryLimit queryComponents.takeLimit
+      if queryComponents.hasCountOver
+        then do
+          let dropLast v = V.take (V.length v - 1) v
+              count = fromMaybe 0 $ do
+                firstRow <- logItemsV V.!? 0
+                AE.Number n <- firstRow V.!? (V.length firstRow - 1)
+                pure $ round n
+          pure $ Right (V.map dropLast logItemsV, queryComponents.toColNames, count)
+        else do
+          -- No count(*) OVER(): use overflow row to detect hasMore
+          let hasOverflow = V.length logItemsV > limit
+              rows = if hasOverflow then V.take limit logItemsV else logItemsV
+              -- Signal hasMore by returning count > rows length
+              count = if hasOverflow then V.length rows + 1 else V.length rows
+          pure $ Right (rows, queryComponents.toColNames, count)
 
 
 selectChildSpansAndLogs :: (DB es, Time.Time :> es) => Projects.ProjectId -> [Text] -> V.Vector Text -> (Maybe UTCTime, Maybe UTCTime) -> V.Vector Text -> Eff es [V.Vector AE.Value]

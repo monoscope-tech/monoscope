@@ -11,6 +11,7 @@ import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Pages.CommandPalette qualified as CommandPalette
 import Pages.Components qualified as Components
 import Pkg.DeriveUtils (hashAssetFile)
 import PyF
@@ -469,21 +470,9 @@ bodyWrapper bcfg child = do
           let currUser = sess.persistentSession.user.getUser
               sideNav' = bcfg.currProject & maybe "" \project -> sideNav sess project (fromMaybe bcfg.pageTitle bcfg.prePageTitle) bcfg.menuItem
            in do
-                -- Command palette global shortcut (Cmd+K / Ctrl+K)
+                -- Command palette (shell rendered inline, dynamic items lazy-loaded)
                 whenJust bcfg.currProject \p ->
-                  span_
-                    [ data_ "palette-url" ("/p/" <> p.id.toText <> "/command-palette")
-                    , [__|on keydown[key=='k' and (metaKey or ctrlKey)] from window
-                    halt the event
-                    if <.cmd-palette-backdrop/> exists
-                      remove <.cmd-palette-backdrop/>
-                    else
-                      set :url to my.dataset.paletteUrl
-                      fetch `${:url}` then put the result at start of <body/>
-                    end
-                  end|]
-                    ]
-                    ""
+                  CommandPalette.paletteShell_ p.id
                 -- Mobile nav toggle (CSS-only sidebar control, only rendered when sidebar exists)
                 input_ [type_ "checkbox", class_ "hidden", id_ "mobile-nav-toggle", [__|on load if window.innerWidth < 768 then set #sidenav-toggle.checked to true|]]
                 section_ [class_ "flex flex-row grow-0 h-screen overflow-hidden"] do
@@ -496,7 +485,10 @@ bodyWrapper bcfg child = do
                       then do
                         -- Empty navbar anchor so OOB morph can remove non-settings navbar
                         nav_ [id_ "main-navbar", class_ "hidden"] ""
-                        whenJust bcfg.currProject paletteTriggerFloating
+                        whenJust bcfg.currProject \_ ->
+                          button_ [class_ "fixed top-4 right-4 btn btn-sm btn-ghost bg-base-200 gap-1.5 text-textWeak z-50", [__|on click send paletteToggle to #cmd-palette-global|]] do
+                            faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
+                            kbd_ [class_ "kbd kbd-xs"] "\x2318K"
                       else navbar bcfg.currProject (maybe [] (\p -> menu p.id) bcfg.currProject) currUser bcfg.prePageTitle bcfg.pageTitle bcfg.pageTitleSuffix bcfg.pageTitleModalId bcfg.pageTitleSuffixModalId bcfg.docsLink bcfg.navTabs bcfg.pageActions
                     main_ [id_ "main-content", class_ "overflow-y-auto h-full grow"] do
                       whenJust bcfg.currProject (\p -> freeTierUsageBanner p.id.toText bcfg.freeTierStatus)
@@ -696,7 +688,7 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
     div_ [class_ "pt-3.5 flex flex-col group-has-[#sidenav-toggle:checked]/pg:flex-row items-center gap-1 group-has-[#sidenav-toggle:checked]/pg:gap-2 group/ctx"] do
       div_ [class_ "dropdown block group-has-[#sidenav-toggle:checked]/pg:flex-1 group-has-[#sidenav-toggle:checked]/pg:min-w-0"] do
         a_
-          [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2.5 group-has-[#sidenav-toggle:checked]/pg:px-2.5 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
+          [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2 group-has-[#sidenav-toggle:checked]/pg:px-2 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
           , tabindex_ "0"
           , Aria.haspopup_ "listbox"
           , Aria.label_ $ "Switch project, current: " <> project.title
@@ -713,24 +705,15 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
       label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
     -- Search
-    let paletteUrl = "/p/" <> project.id.toText <> "/command-palette"
-        searchScript =
-          [__|on click
-              if <.cmd-palette-backdrop/> exists
-                remove <.cmd-palette-backdrop/>
-              else
-                set :url to my.dataset.paletteUrl
-                fetch `${:url}` then put the result at start of <body/>
-              end
-            end|]
+    let searchScript = [__|on click send paletteToggle to #cmd-palette-global|]
     div_ [class_ "mt-3 pb-3 flex items-center justify-center"] do
       -- Expanded: search input trigger
-      button_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-2 px-3 py-1.5 flex-1 rounded-lg border border-strokeWeak text-textWeak text-sm hover:border-strokeStrong hover:bg-fillWeak transition-colors cursor-pointer", data_ "palette-url" paletteUrl, searchScript] do
+      button_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-2 px-3 py-1.5 flex-1 rounded-lg border border-strokeWeak text-textWeak text-sm hover:border-strokeStrong hover:bg-fillWeak transition-colors cursor-pointer", searchScript] do
         faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 shrink-0"
         span_ [class_ "flex-1 text-left"] "Search..."
         kbd_ [class_ "kbd kbd-xs"] "\x2318K"
       -- Collapsed: search icon
-      button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", data_ "palette-url" paletteUrl, searchScript, Aria.label_ "Search", term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
+      button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", searchScript, Aria.label_ "Search", term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4"
     let mainNavActiveStyles = "[&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand"
     nav_ [id_ "main-sidenav", class_ $ "mt-2 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') if p is h or p.startsWith(h + '/') add .active to link else remove .active from link end end|]] do
@@ -831,26 +814,6 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
 
 -- mapM_ renderNavBottomItem $ navBottomList project.id.toText
 
--- | Floating command palette trigger for pages without navbar (settings, etc.)
-paletteTriggerFloating :: Projects.Project -> Html ()
-paletteTriggerFloating p =
-  button_
-    [ class_ "fixed top-14 right-4 btn btn-sm btn-ghost bg-base-200 gap-1.5 text-textWeak z-50"
-    , data_ "palette-url" ("/p/" <> p.id.toText <> "/command-palette")
-    , [__|on click
-          if <.cmd-palette-backdrop/> exists
-            remove <.cmd-palette-backdrop/>
-          else
-            set :url to my.dataset.paletteUrl
-            fetch `${:url}` then put the result at start of <body/>
-          end
-        end|]
-    ]
-    do
-      faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
-      kbd_ [class_ "kbd kbd-xs"] "\x2318K"
-
-
 navbar :: Maybe Projects.Project -> [(Text, Text, Text)] -> Projects.User -> Maybe Text -> Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe (Html ()) -> Maybe (Html ()) -> Html ()
 navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleMonadId pageTitleSuffixModalId docsLink tabsM pageActionsM =
   nav_ [id_ "main-navbar", class_ "w-full max-md:px-2 max-md:py-1.5 px-4 py-2 flex flex-row flex-wrap border-strokeWeak items-center"] do
@@ -878,24 +841,6 @@ navbar projectM menuL currUser prePageTitle pageTitle pageTitleSuffix pageTitleM
       whenJust docsLink \link -> a_ [class_ "max-md:hidden text-iconBrand -mt-1", href_ link, Aria.label_ "Open Documentation", term "data-tippy-placement" "right", term "data-tippy-content" "Open Documentation"] $ faSprite_ "circle-question" "regular" "w-4 h-4"
     whenJust tabsM $ div_ [class_ $ bool "" "max-md:order-last max-md:w-full max-md:pt-1" (isJust pageActionsM)]
     div_ [class_ $ "flex-1 flex items-center justify-end gap-2 text-sm" <> maybe " max-md:hidden" (const "") pageActionsM] do
-      -- Command palette trigger
-      whenJust projectM \p ->
-        button_
-          [ id_ "cmd-palette-trigger"
-          , class_ "btn btn-ghost btn-sm gap-1.5 text-textWeak max-md:hidden"
-          , data_ "palette-url" ("/p/" <> p.id.toText <> "/command-palette")
-          , [__|on click
-                if <.cmd-palette-backdrop/> exists
-                  remove <.cmd-palette-backdrop/>
-                else
-                  set :url to my.dataset.paletteUrl
-                  fetch `${:url}` then put the result at start of <body/>
-                end
-              end|]
-          ]
-          do
-            faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5"
-            kbd_ [class_ "kbd kbd-xs"] "\x2318K"
       whenJust pageActionsM id
 
 

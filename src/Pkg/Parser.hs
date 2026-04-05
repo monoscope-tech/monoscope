@@ -1,5 +1,5 @@
 -- Parser implemented with help and code from: https://markkarpov.com/tutorial/megaparsec.html
-module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList) where
+module Pkg.Parser (queryASTToComponents, parseQueryToComponents, getProcessedColumns, fixedUTCTime, parseQuery, sectionsToComponents, defSqlQueryCfg, defPid, SqlQueryCfg (..), QueryComponents (..), NormalizedQuery (..), normalizeQuery, buildDateRange, buildGroupBy, buildOrderBy, buildLimit, buildWhereCondition, listToColNames, pSource, parseQueryToAST, ToQueryText (..), calculateAutoBinWidth, replacePlaceholders, variablePresets, variablePresetsKQL, constantToSQLList, constantToKQLList, defaultQueryLimit) where
 
 import Control.Error (hush)
 import Data.Default (Default (def))
@@ -27,7 +27,8 @@ data QueryComponents = QueryComponents
   , extendSelect :: [Text] -- extend: appends to default columns
   , aggregations :: [Text] -- Summarize aggregations (separate from extended columns in select)
   , finalColumns :: [Text]
-  , finalSqlQuery :: Text -- includes count(*) OVER() as last column
+  , finalSqlQuery :: Text
+  , hasCountOver :: Bool -- True if finalSqlQuery includes count(*) OVER() as last column
   , finalAlertQuery :: Maybe Text
   , finalSummarizeQuery :: Maybe Text -- For summarize query commands
   , sortFields :: Maybe [SortField] -- Fields to sort by
@@ -96,13 +97,17 @@ buildOrderBy qc =
             | otherwise -> "ORDER BY " <> timestampCol <> " desc"
 
 
+defaultQueryLimit :: Int
+defaultQueryLimit = 500
+
+
 -- | Build LIMIT clause with defaults
 buildLimit :: QueryComponents -> Text
 buildLimit qc = case qc.takeLimit of
-  Just limit -> "limit " <> toText (show limit)
+  Just limit -> "limit " <> show limit
   Nothing -> case qc.finalSummarizeQuery of
     Just _ -> "" -- No limit for summarize queries
-    Nothing -> "limit 500"
+    Nothing -> "limit " <> show defaultQueryLimit
 
 
 -- | Build WHERE condition from raw clause
@@ -250,39 +255,53 @@ sqlFromQueryComponents sqlCfg qc =
     -- Build complete WHERE clause for data queries
     buildWhere = T.intercalate " and " $ filter (not . T.null) ["project_id='" <> nq.nqProjectId <> "'", dateRangeStr, "(" <> whereCondition <> ")"]
 
-    -- All queries include count(*) OVER() as last column for total count
     countOver = "count(*) OVER() as _total_count" :: Text
-    finalSqlQuery = case sqlCfg.targetSpansM of
+    -- Standard data queries skip count(*) OVER() and use LIMIT+1 to detect hasMore
+    overflowLimitClause = case qc.takeLimit of
+      Just limit -> "limit " <> show (limit + 1)
+      Nothing -> "limit " <> show (defaultQueryLimit + 1)
+    (finalSqlQuery, countOverIncluded) = case sqlCfg.targetSpansM of
       Just "service-entry-spans" ->
-        [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
+        ( [fmt|WITH ranked_spans AS (SELECT *, resource->'service'->>'name' AS service_name,
                 ROW_NUMBER() OVER (PARTITION BY trace_id, resource->'service'->>'name' ORDER BY start_time) AS rn
                 FROM otel_logs_and_spans where {buildWhere}
                 {groupByClause}
                 )
                SELECT {selectClause}, {countOver} FROM ranked_spans
                   WHERE rn = 1 {sortOrder} {limitClause} |]
+        , True
+        )
       _ ->
         case qc.finalSummarizeQuery of
           Just binInterval ->
             let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-                -- Use aggregations if available (from summarize), otherwise fall back to select
                 cols = if null qc.aggregations then qc.select else qc.aggregations
                 selectCols = T.intercalate "," $ filter (not . T.isInfixOf "time_bucket") cols
-                -- Only add comma separator if there are select columns
                 selectPart = if T.null selectCols then "" else selectCols <> ", "
-             in [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectPart}{countOver}
+             in ( [fmt|SELECT extract(epoch from {timeBucketExpr})::integer, {selectPart}{countOver}
                    FROM {fromTable}
                    WHERE {buildWhere}
                    GROUP BY {timeBucketExpr}
                    ORDER BY {timeBucketExpr} DESC
                    {limitClause} |]
+                , True
+                )
           Nothing ->
-            -- For non-bin summarize queries with aggregations, use aggregations instead of default columns
             let useAggregations = not (null qc.aggregations) && not (null qc.groupByClause)
                 selectPart = if useAggregations then T.intercalate "," qc.aggregations else selectClause
-             in [fmt|SELECT {selectPart}, {countOver} FROM {fromTable}
-                 WHERE {buildWhere}
-                 {groupByClause} {sortOrder} {limitClause} |]
+             in if useAggregations
+                  then
+                    ( [fmt|SELECT {selectPart}, {countOver} FROM {fromTable}
+                       WHERE {buildWhere}
+                       {groupByClause} {sortOrder} {limitClause} |]
+                    , True
+                    )
+                  else
+                    ( [fmt|SELECT {selectPart} FROM {fromTable}
+                       WHERE {buildWhere}
+                       {groupByClause} {sortOrder} {overflowLimitClause} |]
+                    , False
+                    )
 
     -- Generate the summarize query depending on bin functions and data type
     -- Percentiles info is extracted directly from AST in applySectionToComponent
@@ -363,6 +382,7 @@ sqlFromQueryComponents sqlCfg qc =
     , qc
         { finalColumns = listToColNames nq.nqSelectCols
         , finalSqlQuery = finalSqlQuery
+        , hasCountOver = countOverIncluded
         , whereClause = Just whereCondition
         , finalSummarizeQuery = Just summarizeQuery
         , finalAlertQuery = Just alertQuery

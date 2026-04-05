@@ -504,10 +504,15 @@ buildLogResult pid now sinceM fromM toM summaryCols (requestVecs, colNames, resu
   let colIdxMap = listToIndexHashMap colNames
       reqLastCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? (V.length requestVecs - 1))
       reqFirstCreatedAtM = (\r -> lookupVecTextByKey r colIdxMap "timestamp") =<< (requestVecs V.!? 0)
-      traceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
       alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") requestVecs
       (fromDD, toDD, _) = Components.parseTimeRange now (Components.TimePicker sinceM reqLastCreatedAtM reqFirstCreatedAtM)
-  childSpansList <- LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
+  childSpansList <-
+    if V.length requestVecs > 100
+      then pure [] -- Skip expensive child span fetch for large result sets; traces load lazily on detail view
+      else do
+        let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") requestVecs
+            traceIds = V.fromList $ take 50 $ nubOrd $ V.toList allTraceIds
+        LogQueries.selectChildSpansAndLogs pid summaryCols traceIds (fromDD, toDD) alreadyLoadedIds
   let logsData = requestVecs <> V.fromList childSpansList
       cols = nubOrd $ curateCols summaryCols colNames
       colors = getServiceColors $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "span_name") logsData
@@ -553,9 +558,6 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM = do
 apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
 apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM = do
   (sess, project) <- Projects.sessionAndProject pid
-  unless (V.elem "explored_logs" project.onboardingStepsCompleted)
-    $ void
-    $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = ? AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |] (Only pid)
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let queryInput = maybeToMonoid queryM'
@@ -565,8 +567,14 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       | not (T.null (T.strip queryInput)) && null ast -> addErrorToast "Error Parsing Query" (Just "Invalid query syntax") $> ([], True)
       | otherwise -> pure (ast, False)
   let queryText = toQText queryAST
+      isJsonReq = jsonM == Just "true"
 
-  unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
+  -- Fire-and-forget: onboarding + query history (skip on JSON fast path since HTML path already does it)
+  unless isJsonReq do
+    unless (V.elem "explored_logs" project.onboardingStepsCompleted)
+      $ void
+      $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = ? AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |] (Only pid)
+    unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
     if (isJust . keepNonEmpty) queryLibItemID && (isJust . keepNonEmpty) queryLibItemTitle
@@ -978,7 +986,7 @@ apiLogsPage page = do
               input_ [type_ "hidden", value_ "", name_ "reqId", id_ "req_id_input"]
               input_ [type_ "hidden", value_ "", name_ "reqCreatedAt", id_ "req_created_at_input"]
     let countText = prettyPrintCount page.queryResultCount
-        suffixText = bool (" of " <> prettyPrintCount page.resultCount <> " rows") " rows" (page.queryResultCount >= page.resultCount)
+        suffixText = if page.queryResultCount >= page.resultCount then " rows" else "+ rows"
     div_ [class_ "w-full"] do
       logQueryBox_
         LogQueryBoxConfig

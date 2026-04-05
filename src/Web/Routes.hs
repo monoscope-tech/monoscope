@@ -296,7 +296,7 @@ data CookieProtectedRoutes mode = CookieProtectedRoutes
   , githubAppRepos :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "repos" :> QueryParam "installationId" Int64 :> Get '[HTML] (RespHeaders (Html ()))
   , githubAppSelectRepo :: mode :- "p" :> ProjectId :> "settings" :> "git-sync" :> "select" :> ReqBody '[FormUrlEncoded] GitSync.RepoSelectForm :> Post '[HTML] (RespHeaders (Html ()))
   , -- Command palette
-    commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ()))
+    commandPaletteGet :: mode :- "p" :> ProjectId :> "command-palette" :> Get '[HTML] (RespHeaders (Html ())) -- dynamic items only
   , commandPaletteRecentPost :: mode :- "p" :> ProjectId :> "command-palette" :> "recents" :> ReqBody '[FormUrlEncoded] CommandPalette.RecentForm :> Post '[HTML] (RespHeaders NoContent)
   , -- Device auth
     deviceApprove :: mode :- "device" :> QPT "code" :> QPT "action" :> Get '[HTML] (RespHeaders (Html ()))
@@ -575,7 +575,7 @@ cookieProtectedServer =
       endpointListGet = ApiCatalog.endpointListGetH
     , apiCatalogGet = ApiCatalog.apiCatalogH
     , -- Command palette
-      commandPaletteGet = CommandPalette.commandPaletteH
+      commandPaletteGet = CommandPalette.commandPaletteItemsH
     , commandPaletteRecentPost = CommandPalette.commandPaletteRecentPostH
     , -- Device auth
       deviceApprove = Auth.deviceApproveH

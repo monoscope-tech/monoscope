@@ -1,4 +1,4 @@
-module Pages.CommandPalette (commandPaletteH, commandPaletteRecentPostH, RecentForm (..)) where
+module Pages.CommandPalette (paletteShell_, commandPaletteItemsH, commandPaletteRecentPostH, RecentForm (..)) where
 
 import Data.Text qualified as T
 import Data.UUID (UUID)
@@ -7,6 +7,7 @@ import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Lucid
+import Lucid.Htmx
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (DB)
@@ -37,12 +38,13 @@ data RecentForm = RecentForm {label :: Text, url :: Text, itemType :: Text}
   deriving anyclass (FromForm)
 
 
-commandPaletteH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
-commandPaletteH pid = do
+-- | Returns dynamic palette items (recents, dashboards, issues, monitors) loaded lazily.
+commandPaletteItemsH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
+commandPaletteItemsH pid = do
   sess <- Projects.getSession
   let userId = sess.user.id
   (recents, issues, monitors, dashboards) <- fetchPaletteData pid userId
-  addRespHeaders $ renderPalette pid recents issues monitors dashboards
+  addRespHeaders $ renderDynamicItems pid recents issues monitors dashboards
 
 
 commandPaletteRecentPostH :: Projects.ProjectId -> RecentForm -> ATAuthCtx (RespHeaders NoContent)
@@ -106,16 +108,20 @@ recordRecent pid userId form = do
 
 -- Rendering
 
-renderPalette :: Projects.ProjectId -> [PaletteRecent] -> [PaletteIssue] -> [PaletteItem] -> [PaletteItem] -> Html ()
-renderPalette pid recents issues monitors dashboards = do
+-- | Palette shell rendered inline in the page (hidden). Shown via Cmd+K or search button click.
+paletteShell_ :: Projects.ProjectId -> Html ()
+paletteShell_ pid = do
   let pidTxt = pid.toText
       directPages = [("log_explorer", "explore", "Log Explorer"), ("api_catalog", "swap", "API Catalog"), ("reports", "chart-simple", "Reports"), ("settings", "gear", "Settings")] :: [(Text, Text, Text)]
-  -- Backdrop
+  -- Global palette functions + Cmd+K listener (must be on a visible element)
+  span_ [id_ "cmd-palette-global", paletteGlobalScript] ""
+  -- Backdrop (hidden by default, shown on Cmd+K / search click)
   div_
-    [ class_ "cmd-palette-backdrop fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40"
+    [ id_ "cmd-palette-backdrop"
+    , class_ "cmd-palette-backdrop hidden fixed inset-0 flex flex-col items-center pt-[15vh] bg-black/40"
     , style_ "z-index:99999"
-    , [__|on click if event.target is me remove me end
-          on htmx:beforeRequest from <body/> remove me end|]
+    , [__|on click if event.target is me add .hidden to me end
+          on htmx:beforeRequest from <body/> add .hidden to me end|]
     ]
     do
       -- Header
@@ -138,25 +144,10 @@ renderPalette pid recents issues monitors dashboards = do
           faSprite_ "chevron-left" "regular" "w-3 h-3"
           span_ [class_ "cmd-breadcrumb-label"] ""
         -- Results container
-        div_ [id_ "cmd-palette-results", class_ "max-h-80 overflow-y-auto p-1", [__|init set :f to the first <a.cmd-item:not([style*='display: none'])/> in me then if :f add .active to :f|]] do
-          -- Recents
-          unless (null recents)
-            $ div_ [class_ "cmd-section cmd-palette-recents"]
-            $ forM_ recents (recentItem pidTxt)
-          -- Category: Dashboards
-          categoryItem pidTxt "dashboards" "dashboard" "Dashboards" (length dashboards + 1)
-          cmdItem pidTxt "child" "dashboards" [] [data_ "cmd-category" "dashboards", style_ "display:none"] "dashboard" "All Dashboards" "Page"
-          forM_ dashboards \d ->
-            cmdItem pidTxt "child" ("dashboards/" <> show d.id) [] [data_ "cmd-category" "dashboards", style_ "display:none"] "dashboard" (if T.null d.title then "Untitled Dashboard" else d.title) "Dashboard"
-          -- Category: Issues
-          categoryItem pidTxt "issues" "bug" "Issues" (length issues)
-          forM_ issues \i ->
-            cmdItem pidTxt "child" ("issues/" <> show i.id) [] [data_ "cmd-category" "issues", style_ "display:none"] "bug" i.title "Issue"
-          -- Category: Monitors
-          categoryItem pidTxt "monitors" "list-check" "Monitors" (length monitors)
-          forM_ monitors \m ->
-            cmdItem pidTxt "child" ("monitors?highlight=" <> show m.id) [] [data_ "cmd-category" "monitors", style_ "display:none"] "list-check" m.title "Monitor"
-          -- Direct page links
+        div_ [id_ "cmd-palette-results", class_ "max-h-80 overflow-y-auto p-1"] do
+          -- Lazy-loaded dynamic items placeholder
+          div_ [id_ "cmd-palette-dynamic", hxGet_ ("/p/" <> pidTxt <> "/command-palette"), hxTrigger_ "palette:open from:body", hxSwap_ "outerHTML", class_ "text-center text-xs text-textWeak py-2"] "Loading..."
+          -- Direct page links (static, always present)
           forM_ directPages \(path, icon, label) ->
             cmdItem pidTxt "direct" path [] [] icon label "Page"
           -- Logs shortcut
@@ -189,8 +180,7 @@ renderPalette pid recents issues monitors dashboards = do
             , data_ "search" "copy current url"
             , data_ "cmd-type" "direct"
             , data_ "action" "copy-url"
-            , [__|on click js navigator.clipboard.writeText(window.location.href); end
-                  then set :bd to closest .cmd-palette-backdrop then remove :bd|]
+            , [__|on click js navigator.clipboard.writeText(window.location.href); end then add .hidden to #cmd-palette-backdrop|]
             ]
             do
               faSprite_ "copy" "regular" "w-3.5 h-3.5 text-textWeak shrink-0"
@@ -226,10 +216,62 @@ renderPalette pid recents issues monitors dashboards = do
         div_ [class_ "flex items-center gap-1.5"] $ "Close" >> kbd_ [class_ "kbd kbd-xs"] "esc"
 
 
--- Hyperscript init that registers JS drill functions on window
-drillInitScript :: Attribute
-drillInitScript =
-  [__|on click halt the event's bubbling end
+-- | Dynamic items fragment — loaded lazily into the shell
+renderDynamicItems :: Projects.ProjectId -> [PaletteRecent] -> [PaletteIssue] -> [PaletteItem] -> [PaletteItem] -> Html ()
+renderDynamicItems pid recents issues monitors dashboards = do
+  let pidTxt = pid.toText
+  div_
+    [ id_ "cmd-palette-dynamic"
+    , [__|init
+      set :palette to closest .cmd-palette
+      set :counter to the first <.cmd-palette-count/>
+      if :counter then
+        set :total to (<a.cmd-item/> in :palette).length
+        set :counter.dataset.total to :total
+        put `${:total} items` into :counter
+      end
+      for item in <a.cmd-item/> in :palette remove .active from item end
+      set :f to the first <a.cmd-item:not([style*='display: none']):not([style*='display:none'])/> in :palette
+      if :f then add .active to :f end
+    |]
+    ]
+    do
+      -- Recents
+      unless (null recents)
+        $ div_ [class_ "cmd-section cmd-palette-recents"]
+        $ forM_ recents (recentItem pidTxt)
+      -- Category: Dashboards
+      categoryItem pidTxt "dashboards" "dashboard" "Dashboards" (length dashboards + 1)
+      cmdItem pidTxt "child" "dashboards" [] [data_ "cmd-category" "dashboards", style_ "display:none"] "dashboard" "All Dashboards" "Page"
+      forM_ dashboards \d ->
+        cmdItem pidTxt "child" ("dashboards/" <> show d.id) [] [data_ "cmd-category" "dashboards", style_ "display:none"] "dashboard" (if T.null d.title then "Untitled Dashboard" else d.title) "Dashboard"
+      -- Category: Issues
+      categoryItem pidTxt "issues" "bug" "Issues" (length issues)
+      forM_ issues \i ->
+        cmdItem pidTxt "child" ("issues/" <> show i.id) [] [data_ "cmd-category" "issues", style_ "display:none"] "bug" i.title "Issue"
+      -- Category: Monitors
+      categoryItem pidTxt "monitors" "list-check" "Monitors" (length monitors)
+      forM_ monitors \m ->
+        cmdItem pidTxt "child" ("monitors?highlight=" <> show m.id) [] [data_ "cmd-category" "monitors", style_ "display:none"] "list-check" m.title "Monitor"
+
+
+-- | Global Cmd+K listener + drill helpers — on a visible element so init runs
+paletteGlobalScript :: Attribute
+paletteGlobalScript =
+  [__|on keydown[key=='k' and (metaKey or ctrlKey)] from window
+      halt the event
+      send paletteToggle to me
+    end
+    on paletteToggle
+      if #cmd-palette-backdrop.classList.contains('hidden')
+        remove .hidden from #cmd-palette-backdrop
+        set #cmd-palette-input.value to ''
+        call #cmd-palette-input.focus()
+        send palette:open to <body/>
+      else
+        add .hidden to #cmd-palette-backdrop
+      end
+    end
     init js
       window.goBackToRoot = function(palette) {
         palette.dataset.currentCategory = '';
@@ -263,22 +305,19 @@ drillInitScript =
         var first = palette.querySelector('a.cmd-item[data-cmd-category="' + category + '"]:not([style*="display: none"]):not([style*="display:none"])');
         if (first) first.classList.add('active');
       };
-      // Compute item count client-side
-      var counter = document.querySelector('.cmd-palette-count');
-      if (counter) {
-        var total = document.querySelectorAll('a.cmd-item').length;
-        counter.dataset.total = total;
-        counter.textContent = total + ' items';
-      }
     end
   |]
+
+
+-- | Prevents click events from bubbling through the palette panel
+drillInitScript :: Attribute
+drillInitScript = [__|on click halt the event's bubbling end|]
 
 
 -- Hyperscript for input filtering + keyboard nav
 filterScript :: Attribute
 filterScript =
-  [__|init focus() me end
-    on input
+  [__|on input
       set :q to my value.toLowerCase()
       set :palette to closest .cmd-palette
       set :cat to :palette.dataset.currentCategory
@@ -358,8 +397,7 @@ filterScript =
         call goBackToRoot(:palette)
         set me.placeholder to 'Search pages, issues, actions…'
       else
-        set :bd to closest .cmd-palette-backdrop
-        remove :bd
+        add .hidden to #cmd-palette-backdrop
       end
     end
     on keydown[key=='Enter']
