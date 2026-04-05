@@ -406,6 +406,7 @@ queryLibraryDropdown_ queryLibSaved queryLibRecent =
 hidePopoverJS :: Text
 hidePopoverJS = "document.getElementById('queryLibraryPopover')?.hidePopover()"
 
+
 applyQueryJS :: Text -> Text
 applyQueryJS q = "document.getElementById('ai-search-chkbox').checked=false; document.getElementById('filterElement')?.handleAddQuery(" <> decodeUtf8 (AE.encode q) <> ", true)"
 
