@@ -55,14 +55,15 @@ data LogQueryBoxConfig = LogQueryBoxConfig
 -- This component provides a unified interface for querying logs and visualizing data
 logQueryBox_ :: LogQueryBoxConfig -> Html ()
 logQueryBox_ config = do
+  let noActiveQuery = isNothing config.query || config.query == Just ""
   modal_ "saveQueryMdl" "" $ form_
     [ class_ "flex flex-col p-3 gap-3"
     , id_ "saveQueryForm"
     , hxGet_ $ "/p/" <> config.pid.toText <> "/log_explorer?layout=SaveQuery"
     , hxVals_ "js:{query: document.getElementById('saveQueryMdl').dataset.pendingQuery || window.getQueryFromEditor()}"
-    , hxTarget_ "#queryLibraryParentEl"
+    , hxTarget_ "#queryLibraryContent"
     , hxSwap_ "outerHTML"
-    , hxSelect_ "#queryLibraryParentEl"
+    , hxSelect_ "#queryLibraryContent"
     , hxPushUrl_ "false"
     , [__|on htmx:afterRequest set #saveQueryMdl.dataset.pendingQuery to null|]
     ]
@@ -87,7 +88,7 @@ logQueryBox_ config = do
                   on keydown[key=='Space' and shiftKey] from document set #ai-search-chkbox.checked to true
                   |]
               ]
-            <> [checked_ | isJust config.targetWidgetPreview]
+            <> [checked_ | isJust config.targetWidgetPreview || noActiveQuery]
           script_
             [text|
             document.addEventListener('keydown', function(e) {
@@ -113,7 +114,7 @@ logQueryBox_ config = do
             faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
             input_
               [ class_ "border-0 w-full flex-1 p-1 no-focus-ring peer"
-              , placeholder_ "e.g. Show me logs with errors from the last hour"
+              , placeholder_ "Describe what you're looking for — e.g. \"errors in payment service last hour\""
               , id_ "ai-search-input"
               , required_ "required"
               , name_ "input"
@@ -135,7 +136,7 @@ logQueryBox_ config = do
                        then
                          call JSON.parse(event.detail.xhr.responseText) set :result to it
                          if :result.time_range then call window.updateTimePicker(:result.time_range) end
-                         if :result.query then call #filterElement.handleAddQuery(:result.query, true)
+                         if :result.query then call #filterElement.handleAddQuery(:result.query, true) then set #ai-search-chkbox.checked to false
                          else if :result.time_range then trigger submit on #log_explorer_form end
                          if :result.visualization_type
                            then
@@ -146,7 +147,7 @@ logQueryBox_ config = do
                      else
                        if event.detail.xhr.responseText and event.detail.xhr.responseText.includes('INVALID_QUERY_ERROR')
                          then
-                           send errorToast(value:['Could not understand your query. Try rephrasing or being more specific.']) to <body/>
+                           send errorToast(value:['Could not generate a query. Try being more specific, e.g. "show errors from payment-service in the last 2 hours"']) to <body/>
                        end
                      end|]
               ]
@@ -161,9 +162,6 @@ logQueryBox_ config = do
             label_ [Lucid.for_ "ai-search-chkbox", class_ "cursor-pointer p-1", data_ "tippy-content" "Collapse AI search"] $ faSprite_ "arrows-minimize" "regular" "h-4 w-4 inline-block text-iconBrand"
 
           div_ [class_ "w-full flex flex-1 gap-2 justify-between items-stretch min-w-0 max-md:flex-wrap"] do
-            unless (isJust config.targetWidgetPreview)
-              $ queryLibrary_ config.pid config.queryLibSaved config.queryLibRecent
-
             div_ [id_ "queryBuilder", class_ "w-full flex-1 flex items-center min-w-0 min-h-[38px]"]
               $ termRaw
                 "query-editor"
@@ -201,6 +199,9 @@ logQueryBox_ config = do
               ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
+      -- Inline parse error display (populated by JS when query parsing fails)
+      div_ [class_ "hidden text-xs text-textError px-2 py-1 bg-fillError-weak rounded", id_ "query-parse-error"] ""
+
       div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
@@ -246,6 +247,8 @@ logQueryBox_ config = do
                 option_ [value_ f] ""
           span_ [class_ "text-textDisabled mx-2 text-xs max-md:hidden"] "|"
           termRaw "query-builder" [term "query-editor-selector" "#filterElement"] ("" :: Text)
+          unless (isJust config.targetWidgetPreview)
+            $ popularSearchChips_ config.pid config.queryLibSaved config.queryLibRecent noActiveQuery
           -- Mobile-only hide timeline, inside the viz tabs row so it stays on the same line
           fieldset_ [class_ "fieldset md:hidden ml-auto"] $ label_ [class_ "label space-x-1 group-has-[.default-chart:checked]/pg:block"] do
             input_ [type_ "checkbox", class_ "checkbox checkbox-xs rounded-sm toggle-chart"] >> span_ [class_ "text-xs"] "Hide timeline"
@@ -336,30 +339,54 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
           span_ [] $ toHtml label
 
 
--- | Query library component for saved and recent queries
+-- | HTMX partial response wrapper — hxSelect extracts #queryLibraryContent from the rendered popover
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id_ "queryLibraryParentEl"] do
-  summary_
-    [class_ "cursor-pointer relative text-textWeak rounded-lg border border-strokeStrong h-full flex gap-2 items-center px-2 mb-2 select-none list-none"]
-    (toHtml "Presets" >> faSprite_ "chevron-down" "regular" "w-3 h-3")
-  div_ [class_ "dropdown-content z-20 mt-2"] $ div_ [class_ "tabs tabs-box tabs-md tabs-outline items-center bg-fillWeak p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
-    tabPanel_ "Saved" (queryLibraryContent_ "Saved" queryLibSaved)
-    tabPanel_ "Recent" (queryLibraryContent_ "Recent" queryLibRecent)
+queryLibrary_ _pid queryLibSaved queryLibRecent = queryLibraryDropdown_ queryLibSaved queryLibRecent
+
+
+-- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
+queryLibraryDropdown_ :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
+queryLibraryDropdown_ queryLibSaved queryLibRecent =
+  div_
+    [ id_ "queryLibraryPopover"
+    , term "popover" "auto"
+    , class_ "bg-bgBase rounded-xl border border-strokeWeak shadow-lg w-[480px] max-w-[90vw] overflow-hidden z-50 mt-1"
+    , style_ "inset: unset; top: anchor(bottom); right: anchor(right); position-try-fallbacks: flip-block, flip-inline; position-anchor: --querylib-anchor"
+    ]
+    do
+      div_ [id_ "queryLibraryContent"]
+        $ div_ [class_ "tabs tabs-box tabs-sm tabs-outline items-center p-0 h-full", role_ "tablist", id_ "queryLibraryTabListEl"] do
+          tabPanel_ "Popular" True popularQueriesContent_
+          tabPanel_ "Saved" False (queryLibraryContent_ "Saved" queryLibSaved)
+          tabPanel_ "Recent" False (queryLibraryContent_ "Recent" queryLibRecent)
   where
-    tabPanel_ :: Text -> Html () -> Html ()
-    tabPanel_ label content = do
-      input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | label == "Saved"]
-      div_ [role_ "tabpanel", class_ "tab-content bg-bgBase shadow-lg rounded-box h-full max-h-[60dvh] w-[40vw] overflow-y-auto"] content
+    tabPanel_ :: Text -> Bool -> Html () -> Html ()
+    tabPanel_ label isDefault content = do
+      input_ $ [type_ "radio", name_ "querylib", role_ "tab", class_ "tab", Aria.label_ label] <> [checked_ | isDefault]
+      div_ [role_ "tabpanel", class_ "tab-content max-h-[60dvh] overflow-y-auto"] content
 
     queryLibraryContent_ :: Text -> V.Vector Projects.QueryLibItem -> Html ()
     queryLibraryContent_ label items = do
       searchBar_ label
       div_ [class_ $ "divide-y divide-strokeWeak dataLibContent" <> label] $ V.forM_ items (queryLibItem_ (label == "Recent"))
 
+    popularQueriesContent_ :: Html ()
+    popularQueriesContent_ =
+      div_ [class_ "divide-y divide-strokeWeak"]
+        $ forM_ popularQueries \(query, label, desc) ->
+          div_
+            [ class_ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer transition-colors"
+            , onclick_ $ applyQueryJS query <> "; " <> hidePopoverJS
+            ]
+            do
+              div_ [class_ "text-sm text-textStrong"] $ toHtml label
+              code_ [class_ "text-xs text-textWeak line-clamp-2 break-all block mt-0.5"] $ toHtml query
+              whenJust desc \d -> small_ [class_ "text-xs text-textDisabled mt-0.5 block"] $ toHtml d
+
     searchBar_ :: Text -> Html ()
-    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 p-3 bg-bgBase z-20"] do
-      label_ [class_ "input input-md flex items-center gap-2 flex-1"] do
-        faSprite_ "magnifying-glass" "regular" "h-4 w-4 opacity-70"
+    searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-3 py-2 bg-bgBase border-b border-strokeWeak z-20"] do
+      label_ [class_ "input input-sm flex items-center gap-2 flex-1"] do
+        faSprite_ "magnifying-glass" "regular" "h-3.5 w-3.5 opacity-70"
         input_
           [ type_ "text"
           , class_ "grow"
@@ -370,10 +397,31 @@ queryLibrary_ pid queryLibSaved queryLibRecent = details_ [class_ "dropdown", id
                  else show <.query-item/> in .{@data-filterParent} when its textContent.toLowerCase() contains my value.toLowerCase()|]
           ]
       when (label == "Saved")
-        $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-10", role_ "tablist"] do
+        $ label_ [class_ "tabs tabs-sm tabs-box tabs-outline bg-fillWeak text-textInverse-weak shrink items-center h-8", role_ "tablist"] do
           input_ [class_ "hidden", type_ "checkbox", id_ "queryLibraryGroup"]
-          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-3", term "data-tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3.5 h-3.5"
-          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-3", term "data-tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3.5 h-3.5"
+          div_ [role_ "tab", class_ "tab h-full bg-fillWeaker group-has-[#queryLibraryGroup:checked]/pg:bg-transparent px-2", term "data-tippy-content" "My queries"] $ faSprite_ "user" "regular" "w-3 h-3"
+          div_ [role_ "tab", class_ "tab h-full group-has-[#queryLibraryGroup:checked]/pg:bg-fillWeaker px-2", term "data-tippy-content" "All team queries"] $ faSprite_ "users" "regular" "w-3 h-3"
+
+
+hidePopoverJS :: Text
+hidePopoverJS = "document.getElementById('queryLibraryPopover')?.hidePopover()"
+
+applyQueryJS :: Text -> Text
+applyQueryJS q = "document.getElementById('ai-search-chkbox').checked=false; document.getElementById('filterElement')?.handleAddQuery(" <> decodeUtf8 (AE.encode q) <> ", true)"
+
+
+popularQueries :: [(Text, Text, Maybe Text)]
+popularQueries =
+  [ ("level == \"ERROR\"", "Show errors", Nothing)
+  , ("attributes.http.response.status_code >= 500", "HTTP 5xx responses", Nothing)
+  , ("duration > 1000000000", "Slow requests (>1s)", Nothing)
+  , ("attributes.exception.type != null", "Exceptions", Nothing)
+  , ("attributes.error.type != null", "Error types", Nothing)
+  , ("kind == \"span\" AND duration > 5000000000", "Slow spans (>5s)", Nothing)
+  , ("status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource.service.name", "Errors by service", Just "Bar chart — error rate per service over time")
+  , ("| summarize count(*) by bin_auto(timestamp), level", "Volume by level", Just "Bar chart — log volume breakdown")
+  , ("| summarize percentiles(duration, 50, 90, 99) by bin_auto(timestamp)", "Latency percentiles", Just "Line chart — p50/p90/p99 over time")
+  ]
 
 
 -- | Visualization types used across the application
@@ -396,14 +444,14 @@ visTypes =
 queryLibItem_ :: Bool -> Projects.QueryLibItem -> Html ()
 queryLibItem_ isRecent qli =
   div_
-    [ class_ $ "query-item p-3 hover:bg-fillWeaker cursor-pointer group relative " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"
+    [ class_ $ "query-item px-3 py-2 hover:bg-fillWeak cursor-pointer group relative transition-colors " <> if qli.byMe then "" else "hidden group-has-[#queryLibraryGroup:checked]/pg:block"
     , term "data-query" qli.queryText
     , term "data-query-id" qli.id.toText
     , term "data-pid" qli.projectId.toText
     ]
     do
       -- Main content area
-      div_ [class_ "pr-8", onclick_ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query))"] do
+      div_ [class_ "pr-8", onclick_ $ "document.getElementById('filterElement').handleAddQuery(JSON.parse(this.closest('.query-item').dataset.query)); " <> hidePopoverJS] do
         div_ [class_ "flex items-baseline gap-2 mb-1"] do
           whenJust qli.title (\title -> span_ [class_ "font-medium text-sm"] $ toHtml title <> " •")
           small_ [class_ "text-textWeak text-xs whitespace-nowrap"]
@@ -417,7 +465,7 @@ queryLibItem_ isRecent qli =
           [ type_ "button"
           , class_ "p-1 hover:bg-fillWeak rounded cursor-pointer"
           , term "data-tippy-content" "Run this query"
-          , onclick_ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true)"
+          , onclick_ $ "event.preventDefault(); document.getElementById('filterElement').handleAddQuery(this.closest('.query-item').dataset.query, true); " <> hidePopoverJS
           ]
           $ faSprite_ "play" "regular" "h-3 w-3"
         button_
@@ -445,12 +493,46 @@ queryLibItem_ isRecent qli =
               , term "data-tippy-content" "Delete query"
               , hxGet_ $ "/p/" <> qli.projectId.toText <> "/log_explorer?layout=DeleteQuery&queryLibId=" <> qli.id.toText
               , hxVals_ "js:{query:window.getQueryFromEditor()}"
-              , hxTarget_ "#queryLibraryParentEl"
+              , hxTarget_ "#queryLibraryContent"
               , hxSwap_ "outerHTML"
-              , hxSelect_ "#queryLibraryParentEl"
+              , hxSelect_ "#queryLibraryContent"
               , hxPushUrl_ "false"
               ]
             $ faSprite_ "trash" "regular" "h-3 w-3"
+
+
+-- | Popular search chips + query library dropdown, unified as one component.
+-- When no query is active, shows "Try:" chips inline. "more" opens the full library dropdown.
+popularSearchChips_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Bool -> Html ()
+popularSearchChips_ _pid queryLibSaved queryLibRecent showChips =
+  div_ [class_ "max-md:hidden group-has-[.ai-search:checked]/fltr:hidden inline-flex gap-1.5 text-xs items-center", id_ "queryLibraryParentEl"] do
+    when showChips
+      $ span_
+        [ class_ "inline-flex gap-1.5 items-center"
+        , id_ "popular-search-chips"
+        , [__|on update-query from window if event.detail.value.trim() is not '' add .hidden to me else remove .hidden from me|]
+        ]
+        do
+          span_ [class_ "text-textDisabled"] "Try:"
+          forM_ defaultChips \(q, l) ->
+            button_
+              [ type_ "button"
+              , class_ "px-2 py-0.5 rounded-md bg-fillWeaker border border-strokeWeak hover:border-strokeBrand-weak hover:bg-fillBrand-weak text-textWeak hover:text-textBrand cursor-pointer transition-colors"
+              , onclick_ $ applyQueryJS q
+              ]
+              $ toHtml l
+    button_
+      [ type_ "button"
+      , class_ "px-1.5 py-0.5 text-textBrand hover:underline cursor-pointer inline-flex items-center gap-1"
+      , term "popovertarget" "queryLibraryPopover"
+      , style_ "anchor-name: --querylib-anchor"
+      ]
+      do
+        "Library"
+        faSprite_ "chevron-down" "regular" "w-2.5 h-2.5"
+    queryLibraryDropdown_ queryLibSaved queryLibRecent
+  where
+    defaultChips = [(q, l) | (q, l, _) <- take 3 popularQueries]
 
 
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
@@ -508,4 +590,22 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
         editor.setPopularSearches($popularQueriesJson);
       }
     })();
+
+    // Inline parse error: intercept errorToast events for query errors and show inline
+    window.showQueryParseError = function(msg) {
+      const el = document.getElementById('query-parse-error');
+      if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+    };
+    window.clearQueryParseError = function() {
+      const el = document.getElementById('query-parse-error');
+      if (el) { el.textContent = ''; el.classList.add('hidden'); }
+    };
+    // Clear inline error when query changes
+    window.addEventListener('update-query', () => window.clearQueryParseError());
+    // Listen for server-sent parse error events (via HX-Trigger header)
+    document.body.addEventListener('showParseError', (e) => {
+      const detail = e.detail;
+      const msg = Array.isArray(detail) ? detail[0] : (detail?.value || detail || 'Invalid query syntax');
+      window.showQueryParseError(msg);
+    });
     |]

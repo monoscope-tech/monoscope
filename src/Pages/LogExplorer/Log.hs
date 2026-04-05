@@ -561,10 +561,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let queryInput = maybeToMonoid queryM'
+  let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], True)
   (queryAST, hadParseError) <- case parseQueryToAST queryInput of
-    Left err -> addErrorToast "Error Parsing Query" (Just err) $> ([], True)
+    Left err -> parseError err
     Right ast
-      | not (T.null (T.strip queryInput)) && null ast -> addErrorToast "Error Parsing Query" (Just "Invalid query syntax") $> ([], True)
+      | not (T.null (T.strip queryInput)) && null ast -> parseError "Invalid query syntax"
       | otherwise -> pure (ast, False)
   let queryText = toQText queryAST
       isJsonReq = jsonM == Just "true"

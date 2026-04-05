@@ -1820,23 +1820,24 @@ export class QueryEditorComponent extends LitElement {
         <div class="relative overflow-x-hidden w-full flex-1">
           <div id="editor-container" class="w-full"></div>
           <div
-            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-textWeak f/nont-mono text-sm leading-[18px] pt-1.5 pl-0 hidden cursor-text"
+            class="placeholder-overlay absolute top-0 left-0 right-0 bottom-0 pointer-events-auto z-[1] text-textWeak text-sm leading-[18px] pt-1.5 pl-0 hidden cursor-text"
             @pointerdown=${() => this.editor?.focus()}
           >
-            Filter logs and events. Press <span class="kbd">/</span> to search or <span class="kbd">?</span>
-            to ask in natural language.
+            <span class="opacity-60">level == "ERROR"</span>
+            <span class="mx-1 opacity-30">·</span>
+            <span class="opacity-40">Press <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeWeak rounded text-xs">/</kbd> to focus</span>
           </div>
         </div>
         <div class="p-1">
           <label
             class="px-3 py-0.5 h-full inline-flex gap-2 items-center cursor-pointer border border-strokeBrand-strong text-textBrand hover:border-strokeBrand-weak rounded-sm group-has-[.ai-search:checked]/fltr:hidden"
-            data-tippy-content="Write queries in natural language with Monoscope AI"
+            data-tippy-content="Search in plain English — describe what you're looking for"
             for="ai-search-chkbox"
           >
             <svg class="inline-block icon h-4 w-4 text-iconBrand ">
               <use href="/public/assets/svgs/fa-sprites/regular.svg#sparkles"></use>
             </svg>
-            ask
+            AI search
           </label>
         </div>
         ${dropdownTemplate}
