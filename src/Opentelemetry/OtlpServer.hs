@@ -478,7 +478,6 @@ migrateElasticsearchPathParts keyVals =
 -- == HTTP method _OTHER migration
 -- >>> migrateHttpSemanticConventions [("http.method", AE.String "_OTHER"), ("http.request.method_original", AE.String "PROPFIND")]
 -- [("http.request.method",String "PROPFIND")]
-
 fieldMappingsMap :: HM.HashMap Text Text
 fieldMappingsMap =
   HM.fromList
@@ -774,7 +773,8 @@ filterEmptyEvents x =
 -- | Convert ScopeLogs to OtelLogsAndSpans
 convertScopeLogsToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertScopeLogsToOtelLogs fallbackTime pid resourceM resourceLogs =
-  filter filterEmptyEvents
+  filter
+    filterEmptyEvents
     [ otelLog
     | scopeLog <- resourceLogs ^. PLF.scopeLogs
     , let scope = Just $ scopeLog ^. PLF.scope
@@ -878,7 +878,8 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
 -- | Convert ScopeSpans to OtelLogsAndSpansF
 convertScopeSpansToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
 convertScopeSpansToOtelLogs fallbackTime pid resourceM resourceSpans =
-  filter filterEmptyEvents
+  filter
+    filterEmptyEvents
     [ otelLog
     | scopeSpan <- resourceSpans ^. PTF.scopeSpans
     , let scope = Just $ scopeSpan ^. PTF.scope
@@ -947,7 +948,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                                      in if evTimeNano >= minValidTimestampNanos && evTimeNano /= 0
                                           then nanosecondsToUTC evTimeNano
                                           else fallbackTime
-                          , "event_attributes" AE..= keyValueToJSON ( ev ^. PTF.attributes)
+                          , "event_attributes" AE..= keyValueToJSON (ev ^. PTF.attributes)
                           , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
                           ]
                     )
@@ -967,7 +968,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                         AE.object
                           [ "link_span_id" AE..= byteStringToHexText (link ^. PTF.spanId)
                           , "link_trace_id" AE..= byteStringToHexText (link ^. PTF.traceId)
-                          , "link_attributes" AE..= keyValueToJSON ( link ^. PTF.attributes)
+                          , "link_attributes" AE..= keyValueToJSON (link ^. PTF.attributes)
                           , "link_dropped_attributes_count" AE..= (link ^. PTF.droppedAttributesCount)
                           , "link_flags" AE..= (link ^. PTF.traceState)
                           ]
@@ -1130,7 +1131,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
         AE.object
           [ "name" AE..= (scope ^. PCF.name)
           , "version" AE..= (scope ^. PCF.version)
-          , "attributes" AE..= keyValueToJSON ( scope ^. PCF.attributes)
+          , "attributes" AE..= keyValueToJSON (scope ^. PCF.attributes)
           ]
       Nothing -> AE.Null
     !metaJSON = case scopeM of
