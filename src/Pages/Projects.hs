@@ -1312,7 +1312,7 @@ projectSettingsGetH pid = do
         (def :: BWConfig)
           { sessM = Just sess
           , currProject = Just project
-          , pageTitle = "General"
+          , pageTitle = "Project"
           , isSettingsPage = True
           , config = appCtx.config
           }

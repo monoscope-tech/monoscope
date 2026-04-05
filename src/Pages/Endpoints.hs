@@ -230,7 +230,7 @@ endpointListGetH pid pageM layoutM filterTM hostM requestTypeM sortM periodM hxR
                         , destination = Right "https://monoscope.tech/docs/sdks/"
                         }
                 , header = Just $ div_ [class_ "mb-4"] $ case hostM of
-                    Just h -> span_ [] "Endpoints for dependency: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)
+                    Just h -> span_ [] "Endpoints for: " >> span_ [class_ "text-textBrand font-bold"] (toHtml h)
                     Nothing -> "Endpoints"
                 }
           }

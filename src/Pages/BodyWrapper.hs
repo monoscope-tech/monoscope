@@ -692,6 +692,27 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
   label_ [term "for" "sidenav-toggle", class_ "max-md:hidden absolute right-0 top-0 bottom-0 w-1 border-r border-strokeWeak cursor-e-resize group-has-[#sidenav-toggle:checked]/pg:cursor-w-resize hover:border-strokeBrand-strong hover:w-1 transition-colors z-10", Aria.label_ "Toggle sidebar"] ""
   div_ [class_ "px-2 group-has-[#sidenav-toggle:checked]/pg:px-3"] do
     input_ ([type_ "checkbox", class_ "hidden", id_ "sidenav-toggle", [__|on change call setCookie("isSidebarClosed", `${me.checked}`) then send "toggle-sidebar" to <body/>|]] <> [checked_ | sess.isSidebarClosed])
+    -- Project picker + Toggle (context + sidebar control)
+    div_ [class_ "pt-3.5 flex flex-col group-has-[#sidenav-toggle:checked]/pg:flex-row items-center gap-1 group-has-[#sidenav-toggle:checked]/pg:gap-2 group/ctx"] do
+      div_ [class_ "dropdown block group-has-[#sidenav-toggle:checked]/pg:flex-1 group-has-[#sidenav-toggle:checked]/pg:min-w-0"] do
+        a_
+          [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2.5 group-has-[#sidenav-toggle:checked]/pg:px-2.5 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
+          , tabindex_ "0"
+          , Aria.haspopup_ "listbox"
+          , Aria.label_ $ "Switch project, current: " <> project.title
+          , term "data-tippy-placement" "right"
+          , term "data-tippy-content" $ project.title <> " — Switch project"
+          ]
+          do
+            span_ [class_ "w-8 h-8 group-has-[#sidenav-toggle:checked]/pg:w-6 group-has-[#sidenav-toggle:checked]/pg:h-6 rounded-lg group-has-[#sidenav-toggle:checked]/pg:rounded-md bg-fillBrand-weak text-textBrand text-sm group-has-[#sidenav-toggle:checked]/pg:text-xs font-semibold flex items-center justify-center shrink-0"] $ toHtml $ T.take 1 project.title
+            span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
+            span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
+        div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
+      -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
+      label_ [term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-textWeaker hover:text-textWeak flex items-center justify-center group-has-[#sidenav-toggle:checked]/pg:text-strokeStrong transition-colors duration-150", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", term "data-tippy-placement" "right", term "data-tippy-content" "Expand sidebar", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
+        faSprite_ "side-chevron-left-in-box" "regular" "h-3.5 w-3.5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0 group-has-[#sidenav-toggle:checked]/pg:h-5 group-has-[#sidenav-toggle:checked]/pg:w-5"
+      label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
+    -- Search
     let paletteUrl = "/p/" <> project.id.toText <> "/command-palette"
         searchScript =
           [__|on click
@@ -702,35 +723,17 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
                 fetch `${:url}` then put the result at start of <body/>
               end
             end|]
-    div_ [class_ "pt-3.5 pb-3 flex justify-center group-has-[#sidenav-toggle:checked]/pg:justify-between items-center gap-2"] do
+    div_ [class_ "mt-3 pb-3 flex items-center justify-center"] do
       -- Expanded: search input trigger
       button_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-2 px-3 py-1.5 flex-1 rounded-lg border border-strokeWeak text-textWeak text-sm hover:border-strokeStrong hover:bg-fillWeak transition-colors cursor-pointer", data_ "palette-url" paletteUrl, searchScript] do
         faSprite_ "magnifying-glass" "regular" "w-3.5 h-3.5 shrink-0"
         span_ [class_ "flex-1 text-left"] "Search..."
         kbd_ [class_ "kbd kbd-xs"] "\x2318K"
       -- Collapsed: search icon
-      button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center py-2 rounded-lg hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", data_ "palette-url" paletteUrl, searchScript, term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
+      button_ [class_ "group-has-[#sidenav-toggle:checked]/pg:hidden flex items-center justify-center p-2 rounded-lg border border-strokeWeak hover:border-strokeStrong hover:bg-fillWeak text-textWeak cursor-pointer transition-colors", data_ "palette-url" paletteUrl, searchScript, Aria.label_ "Search", term "data-tippy-placement" "right", term "data-tippy-content" "Search (\x2318K)"] do
         faSprite_ "magnifying-glass" "regular" "w-4 h-4"
-      -- Toggle sidebar (desktop: toggles sidenav-toggle, mobile: closes mobile-nav-toggle)
-      label_ [term "for" "sidenav-toggle", role_ "button", class_ "max-md:hidden cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] flex items-center", Aria.label_ "Toggle sidebar", Aria.expanded_ (if sess.isSidebarClosed then "false" else "true"), Aria.controls_ "side-nav-menu", [__|on change from #sidenav-toggle if #sidenav-toggle.checked set @aria-expanded to 'false' else set @aria-expanded to 'true'|]] do
-        faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 rotate-180 group-has-[#sidenav-toggle:checked]/pg:rotate-0"
-      label_ [term "for" "mobile-nav-toggle", class_ "md:!hidden max-md:flex cursor-pointer text-strokeStrong min-w-[22px] min-h-[22px] items-center", Aria.label_ "Close menu"] $ faSprite_ "side-chevron-left-in-box" "regular" "h-5 w-5 pointer-events-none"
-    div_ [class_ "mt-4 dropdown block"] do
-      a_
-        [ class_ "flex flex-row text-textStrong hover:bg-fillWeak gap-2 items-center rounded-lg cursor-pointer py-2 justify-center group-has-[#sidenav-toggle:checked]/pg:py-2.5 group-has-[#sidenav-toggle:checked]/pg:px-2.5 group-has-[#sidenav-toggle:checked]/pg:border group-has-[#sidenav-toggle:checked]/pg:border-strokeWeak group-has-[#sidenav-toggle:checked]/pg:bg-fillWeaker transition-colors duration-100"
-        , tabindex_ "0"
-        , Aria.haspopup_ "listbox"
-        , Aria.label_ $ "Switch project, current: " <> project.title
-        , term "data-tippy-placement" "right"
-        , term "data-tippy-content" $ project.title <> " — Switch project"
-        ]
-        do
-          span_ [class_ "w-8 h-8 group-has-[#sidenav-toggle:checked]/pg:w-6 group-has-[#sidenav-toggle:checked]/pg:h-6 rounded-lg group-has-[#sidenav-toggle:checked]/pg:rounded-md bg-fillBrand-weak text-textBrand text-sm group-has-[#sidenav-toggle:checked]/pg:text-xs font-semibold flex items-center justify-center shrink-0"] $ toHtml $ T.take 1 project.title
-          span_ [class_ "grow hidden group-has-[#sidenav-toggle:checked]/pg:block overflow-x-hidden whitespace-nowrap truncate"] $ toHtml project.title
-          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex shrink-0"] $ faSprite_ "angles-up-down" "regular" "w-4 text-textWeak"
-      div_ [tabindex_ "0", class_ "dropdown-content z-40 group-has-[#sidenav-toggle:not(:checked)]/pg:left-full group-has-[#sidenav-toggle:not(:checked)]/pg:top-0 group-has-[#sidenav-toggle:not(:checked)]/pg:ml-2", role_ "listbox"] $ projectsDropDown project (Projects.getProjects $ Projects.projects sess.persistentSession)
     let mainNavActiveStyles = "[&_.main-nav-link.active]:bg-fillBrand-weak [&_.main-nav-link.active]:text-textStrong [&_.main-nav-link.active]:font-medium [&_.main-nav-link.active]:border-l-strokeBrand-strong [&_.main-nav-link.active]:border-y-transparent [&_.main-nav-link.active]:border-r-transparent [&_.main-nav-link.active_.nav-icon]:text-textBrand"
-    nav_ [id_ "main-sidenav", class_ $ "mt-5 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') if p is h or p.startsWith(h + '/') add .active to link else remove .active from link end end|]] do
+    nav_ [id_ "main-sidenav", class_ $ "mt-2 flex flex-col gap-1 text-textWeak " <> mainNavActiveStyles, [__|on click set #mobile-nav-toggle.checked to false end on htmx:pushedIntoHistory from window or popstate from window settle then set p to window.location.pathname then for link in .main-nav-link set h to link.getAttribute('href') if p is h or p.startsWith(h + '/') add .active to link else remove .active from link end end|]] do
       let navLinkCls activeCls = "main-nav-link relative group-has-[#sidenav-toggle:checked]/pg:px-4 gap-3 py-2 flex no-wrap shrink-0 justify-center group-has-[#sidenav-toggle:checked]/pg:justify-start items-center rounded-lg overflow-x-hidden overflow-y-hidden hover:bg-fillWeak hover:text-textStrong transition-colors duration-100" <> activeCls
       let pidTxt = project.id.toText
           flyoutCls = "invisible opacity-0 group-hover/flyout:visible group-hover/flyout:opacity-100 absolute left-full top-0 ml-1 z-50 min-w-44 bg-bgRaised border border-strokeWeak rounded-lg shadow-md py-1.5 transition-all duration-150"
@@ -774,14 +777,16 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
         [ href_ "https://monoscope.tech/docs/"
         , target_ "blank"
         , term "data-tippy-placement" "right"
-        , term "data-tippy-content" "Documentation"
+        , term "data-tippy-content" "Docs"
         , class_ $ navLinkCls ""
         ]
         do
           faSprite_ "circle-question" "regular" "nav-icon w-4 h-4 shrink-0"
-          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:block whitespace-nowrap truncate"] "Documentation"
+          span_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex items-center gap-1.5 whitespace-nowrap truncate"] do
+            "Docs"
+            faSprite_ "arrow-up-right" "regular" "w-3 h-3 text-textWeaker"
 
-  div_ [class_ "py-4 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
+  div_ [class_ "py-2.5 px-2 group-has-[#sidenav-toggle:checked]/pg:px-3 border-t border-strokeWeak flex flex-col gap-1"] do
     let currUser = sess.persistentSession.user.getUser
         userIdentifier =
           if currUser.firstName /= "" || currUser.lastName /= ""
@@ -789,7 +794,6 @@ sideNav sess project pageTitle menuItem = aside_ [class_ "relative bg-fillWeaker
             else CI.original currUser.email
         avatarUrl = "/api/avatar/" <> currUser.id.toText
 
-    -- Dark mode toggle
     -- Dark mode toggle
     -- Expanded: sun + toggle + moon
     label_ [class_ "hidden group-has-[#sidenav-toggle:checked]/pg:flex cursor-pointer gap-2 items-center px-2 py-2 rounded-lg hover:bg-fillWeak transition-colors duration-100", Aria.label_ "Toggle dark mode"] do
@@ -964,7 +968,7 @@ settingsWrapper pid current pageHtml = do
 
 navBottomList :: Text -> [(Text, Text, Text)]
 navBottomList pidTxt =
-  [ ("gear", "General", "/p/" <> pidTxt <> "/settings")
+  [ ("gear", "Project", "/p/" <> pidTxt <> "/settings")
   , ("key", "API Keys", "/p/" <> pidTxt <> "/apis")
   , ("users", "Team", "/p/" <> pidTxt <> "/manage_members")
   , ("arrows-turn-right", "Integrations", "/p/" <> pidTxt <> "/settings/integrations")
