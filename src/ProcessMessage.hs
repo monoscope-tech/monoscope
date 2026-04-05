@@ -847,7 +847,7 @@ valueToFormatStr val = checkFormats formatChecks
 -- ("/api/v1/items",False)
 --
 -- >>> let (url, _, hasDyn) = ensureUrlParams "/users/12345/orders/67890" in (url, hasDyn)
--- ("/users/{param}/orders/{param_1}",True)
+-- ("/users/{number}/orders/{number_1}",True)
 --
 -- >>> let (url, _, hasDyn) = ensureUrlParams "/events/2023-01-15/report" in (url, hasDyn)
 -- ("/events/{date}/report",True)
