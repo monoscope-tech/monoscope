@@ -168,19 +168,19 @@ processMessages msgs attrs = do
         let pid = UUIDId msg.projectId
         case HM.lookup pid projectCaches of
           Just cache ->
-            -- Check if project has exceeded daily limit for free tier
             let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
                 !isFreeTier = cache.paymentPlan == "Free"
                 !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
              in if hasExceededLimit
-                  then pure Nothing -- Discard events for projects that exceeded limits
+                  then pure Nothing
                   else do
                     spanId <- UUID.genUUID
                     trId <- UUID.toText <$> UUID.genUUID
-                    pure $ Just $ convertRequestMessageToSpan msg (spanId, trId)
+                    let !span' = convertRequestMessageToSpan msg (spanId, trId)
+                    pure $! Just span'
           Nothing -> pure Nothing
 
-      let spanVec = V.fromList spans
+      let !spanVec = V.fromList spans
       unless (V.null spanVec)
         $ Telemetry.bulkInsertOtelLogsAndSpansTF (V.catMaybes spanVec)
 
@@ -298,7 +298,7 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
       !respHeadersFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseHeader projectId endpointHash) respHeaderFields
       !reqBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCRequestBody projectId endpointHash) reqBodyFields
       !respBodyFieldsDTO = V.map (fieldsToFieldDTO Fields.FCResponseBody projectId endpointHash) respBodyFields
-      !fieldsDTO = pathParamsFieldsDTO <> queryParamsFieldsDTO <> reqHeadersFieldsDTO <> respHeadersFieldsDTO <> reqBodyFieldsDTO <> respBodyFieldsDTO
+      !fieldsDTO = V.concat [pathParamsFieldsDTO, queryParamsFieldsDTO, reqHeadersFieldsDTO, respHeadersFieldsDTO, reqBodyFieldsDTO, respBodyFieldsDTO]
 
       !(!fields, !formats) = V.unzip fieldsDTO
       !fieldHashes = sortVector $ V.map (.hash) fields
@@ -363,22 +363,17 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
 
       -- Collect hashes to update span with
       !hashes =
-        V.fromList
-          $ catMaybes
-            [ Just endpointHash
-            , if isJust shape then Just shapeHash else Nothing
-            ]
-          <> V.toList fieldHashes
+        V.cons endpointHash (if isJust shape then V.cons shapeHash fieldHashes else fieldHashes)
    in (endpoint, shape, fields', formats', hashes)
   where
     -- Helper function to extract headers from nested attribute structure
     extractHeaders :: Text -> AE.Value -> Maybe AE.Value
     extractHeaders prefix obj = case obj of
       AE.Object keyMap ->
-        let headerPairs = [(T.drop (T.length prefix + 1) (AEK.toText k), v) | (k, v) <- AEKM.toList keyMap, T.isPrefixOf (prefix <> ".") (AEK.toText k)]
-         in if null headerPairs
-              then Nothing
-              else Just $ AE.Object $ AEKM.fromList [(AEK.fromText k, v) | (k, v) <- headerPairs]
+        let !prefixDot = prefix <> "."
+            !prefixDotLen = T.length prefixDot
+            headerPairs = [(AEK.fromText (T.drop prefixDotLen (AEK.toText k)), v) | (k, v) <- AEKM.toList keyMap, T.isPrefixOf prefixDot (AEK.toText k)]
+         in if null headerPairs then Nothing else Just $ AE.Object $ AEKM.fromList headerPairs
       _ -> Nothing
 
 
@@ -628,23 +623,20 @@ sortVector vec = runST $ do
 --
 -- FIXME: value To Fields should use the redact fields list to actually redact fields
 valueToFields :: AE.Value -> V.Vector (Text, V.Vector AE.Value)
-valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToFields' value ("", V.empty)
+valueToFields value = dedupFields $ removeBlacklistedFields $ V.fromList $ valueToFields' value "" []
   where
-    valueToFields' :: AE.Value -> (Text, V.Vector (Text, AE.Value)) -> (Text, V.Vector (Text, AE.Value))
-    valueToFields' (AE.Object v) (!prefix, !acc) =
-      HM.foldlWithKey' folder (prefix, acc) (AEKM.toHashMapText v)
+    valueToFields' :: AE.Value -> Text -> [(Text, AE.Value)] -> [(Text, AE.Value)]
+    valueToFields' (AE.Object v) !prefix !acc =
+      HM.foldlWithKey' folder acc (AEKM.toHashMapText v)
       where
-        folder (!akkT, !akkL) k val =
-          let newPrefix = if T.null akkT then normalizeKey k else akkT <> "." <> normalizeKey k
-              (_, newAkkL) = valueToFields' val (newPrefix, akkL)
-           in (akkT, newAkkL)
-    valueToFields' (AE.Array v) (!prefix, !acc) =
-      V.foldl' folder (prefix, acc) v
+        folder !akkL k val =
+          let !newPrefix = if T.null prefix then normalizeKey k else prefix <> "." <> normalizeKey k
+           in valueToFields' val newPrefix akkL
+    valueToFields' (AE.Array v) !prefix !acc =
+      V.foldl' folder acc v
       where
-        folder (!akkT, !akkL) val =
-          let (_, newAkkL) = valueToFields' val (akkT <> "[*]", akkL)
-           in (akkT, newAkkL)
-    valueToFields' v (!prefix, !acc) = (prefix, V.cons (prefix, v) acc)
+        folder !akkL val = valueToFields' val (prefix <> "[*]") akkL
+    valueToFields' v !prefix !acc = (prefix, v) : acc
 
     normalizeKey :: Text -> Text
     normalizeKey k =
@@ -666,18 +658,12 @@ valueToFields value = dedupFields $ removeBlacklistedFields $ snd $ valueToField
 -- [(".menu.[*].b",[String "abc"]),(".menu.[*].a",[Number 123.0,String "xyz"])]
 dedupFields :: V.Vector (Text, AE.Value) -> V.Vector (Text, V.Vector AE.Value)
 dedupFields fields = runST $ do
-  -- Create a mutable hash table
-  hashTable <- HT.newSized (V.length fields) :: ST s (HT.HashTable s Text (V.Vector AE.Value))
-
-  -- Populate the hash table
+  hashTable <- HT.newSized (V.length fields) :: ST s (HT.HashTable s Text [AE.Value])
   forM_ fields $ \(k, v) -> do
     existing <- HT.lookup hashTable k
-    let newVec = v `V.cons` fromMaybe V.empty existing
-    HT.insert hashTable k newVec
-
-  -- Convert the hash table to a list of immutable vectors
+    HT.insert hashTable k (v : fromMaybe [] existing)
   pairs <- HTC.toList hashTable
-  V.thaw (V.fromList pairs) >>= V.freeze
+  pure $! V.fromList [(k, V.fromList vs) | (k, vs) <- pairs]
 
 
 -- >>> removeBlacklistedFields [(".menu.password",String "xyz"),(".authorization",String "abc")]
@@ -851,11 +837,29 @@ valueToFormatStr val = checkFormats formatChecks
     formatChecks = commonFormatPatterns
 
 
+-- | Detect dynamic URL segments and replace them with named parameters.
+--
+-- >>> let (url, _, hasDyn) = ensureUrlParams "/users/550e8400-e29b-41d4-a716-446655440000/posts" in (url, hasDyn)
+-- ("/users/{uuid}/posts",True)
+--
+-- >>> let (url, _, hasDyn) = ensureUrlParams "/api/v1/items" in (url, hasDyn)
+-- ("/api/v1/items",False)
+--
+-- >>> let (url, _, hasDyn) = ensureUrlParams "/users/12345/orders/67890" in (url, hasDyn)
+-- ("/users/{param}/orders/{param_1}",True)
+--
+-- >>> let (url, _, hasDyn) = ensureUrlParams "/events/2023-01-15/report" in (url, hasDyn)
+-- ("/events/{date}/report",True)
+--
+-- >>> let (url, _, hasDyn) = ensureUrlParams "" in (url, hasDyn)
+-- ("",False)
 ensureUrlParams :: Text -> (Text, AE.Value, Bool)
 ensureUrlParams "" = ("", AE.object [], False)
 ensureUrlParams url = (parsedUrl, pathParams, hasDyn)
   where
-    (segs, vals) = parseUrlSegments (T.splitOn "/" url) ([], [])
+    (segsR, valsR) = parseUrlSegments (T.splitOn "/" url) ([], [])
+    segs = reverse segsR
+    vals = reverse valsR
     parsedUrl = T.intercalate "/" segs
     dynSegs = filter (T.isPrefixOf "{") segs
     hasDyn = not (null dynSegs)
@@ -866,10 +870,10 @@ parseUrlSegments :: [Text] -> ([Text], [Text]) -> ([Text], [Text])
 parseUrlSegments [] parsed = parsed
 parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
   Nothing
-    | isUrlIdLike x -> parseUrlSegments xs (addNewSegment segs "param", vals ++ [x])
-    | otherwise -> parseUrlSegments xs (segs ++ [x], vals)
+    | isUrlIdLike x -> parseUrlSegments xs (addNewSegment segs "param", x : vals)
+    | otherwise -> parseUrlSegments xs (x : segs, vals)
   Just v
-    | v == "{uuid}" -> parseUrlSegments xs (addNewSegment segs "uuid", vals ++ [x])
+    | v == "{uuid}" -> parseUrlSegments xs (addNewSegment segs "uuid", x : vals)
     | v
         `elem` [ "{mm/dd/yyyy}"
                , "{mm-dd-yyyy}"
@@ -882,19 +886,17 @@ parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
                , "{YYYYMMDD}"
                , "{YYYY-MM-DDThh:mm:ss.sTZD}"
                ] ->
-        parseUrlSegments xs (addNewSegment segs "date", vals ++ [x])
-    | v `elem` ["{ip}", "{ipv6}"] -> parseUrlSegments xs (addNewSegment segs "ip_address", vals ++ [x])
-    | v `elem` ["{integer}", "{float}", "{hex}"] -> parseUrlSegments xs (addNewSegment segs "number", vals ++ [x])
-    | otherwise -> parseUrlSegments xs (addNewSegment segs "param", vals ++ [x])
+        parseUrlSegments xs (addNewSegment segs "date", x : vals)
+    | v `elem` ["{ip}", "{ipv6}"] -> parseUrlSegments xs (addNewSegment segs "ip_address", x : vals)
+    | v `elem` ["{integer}", "{float}", "{hex}"] -> parseUrlSegments xs (addNewSegment segs "number", x : vals)
+    | otherwise -> parseUrlSegments xs (addNewSegment segs "param", x : vals)
 
 
 addNewSegment :: [Text] -> Text -> [Text]
-addNewSegment segs seg = newSegs
-  where
-    catFilter = filter (T.isPrefixOf ("{" <> seg)) segs
-    pos = length catFilter
-    newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
-    newSegs = segs ++ [newSeg]
+addNewSegment segs seg =
+  let pos = length $ filter (T.isPrefixOf ("{" <> seg)) segs
+      newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
+   in newSeg : segs
 
 
 buildPathParams :: [Text] -> [Text] -> AE.Value -> AE.Value

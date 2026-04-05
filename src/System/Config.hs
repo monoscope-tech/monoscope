@@ -226,7 +226,7 @@ configToEnv config = do
   jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
-  projectKeyCache <- liftIO $ newCache Nothing
+  projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   pure
     AuthContext

@@ -29,8 +29,8 @@ import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HS
 import Data.List qualified as L
-import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
 import Data.ProtoLens.Encoding (decodeMessage)
 import Data.Scientific (fromFloatDigits)
@@ -177,7 +177,7 @@ getSpanAttributeValue !attribute = V.mapMaybe (\rs -> getAttr attribute (resourc
   where
     getSpanAttr rs =
       let spans = V.fromList (rs ^. PTF.scopeSpans) >>= (\s -> V.fromList (s ^. PTF.spans))
-       in listToMaybe $ V.toList $ V.mapMaybe (getAttr attribute . V.fromList . (^. PTF.attributes)) spans
+       in V.mapMaybe (getAttr attribute . V.fromList . (^. PTF.attributes)) spans V.!? 0
     resourceAttributes rs = V.fromList $ rs ^. PTF.resource . PRF.attributes
 
 
@@ -192,7 +192,7 @@ getLogAttributeValue !attribute = V.mapMaybe (\rl -> getAttr attribute (resource
   where
     getLogAttr rl =
       let logs = V.fromList (rl ^. PLF.scopeLogs) >>= (\s -> V.fromList (s ^. PLF.logRecords))
-       in listToMaybe $ V.toList $ V.mapMaybe (getAttr attribute . V.fromList . (^. PLF.attributes)) logs
+       in V.mapMaybe (getAttr attribute . V.fromList . (^. PLF.attributes)) logs V.!? 0
     resourceAttributes rl = V.fromList $ rl ^. PLF.resource . PRF.attributes
 
 
@@ -203,14 +203,14 @@ getLogApiKey = V.mapMaybe (\rl -> getApiKeyAttr (V.fromList $ rl ^. PLF.resource
 
 -- | Extract metric attribute values
 getMetricAttributeValue :: Text -> V.Vector PM.ResourceMetrics -> Maybe Text
-getMetricAttributeValue !attribute !rms = listToMaybe $ V.toList $ V.mapMaybe getResourceAttr rms
+getMetricAttributeValue !attribute !rms = V.mapMaybe getResourceAttr rms V.!? 0
   where
     getResourceAttr rm = getAttr attribute (V.fromList $ rm ^. PMF.resource . PRF.attributes)
 
 
 -- | Extract project API key from resource metrics, checking all supported key locations
 getMetricApiKey :: V.Vector PM.ResourceMetrics -> Maybe Text
-getMetricApiKey !rms = listToMaybe $ V.toList $ V.mapMaybe (\rm -> getApiKeyAttr (V.fromList $ rm ^. PMF.resource . PRF.attributes)) rms
+getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (V.fromList $ rm ^. PMF.resource . PRF.attributes)) rms V.!? 0
 
 
 -- | Process a list of messages
@@ -257,7 +257,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                 let !rls = V.fromList $ req ^. PLF.resourceLogs
                     !pkeys = getLogApiKey rls
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
-                 in V.force $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
+                 in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
             (checkpoint "processList:logs:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
         Just "org.opentelemetry.otlp.traces.v1" ->
@@ -269,10 +269,10 @@ processList msgs !attrs = checkpoint "processList" $ do
             (\req -> getSpanApiKey (V.fromList $ req ^. PTF.resourceSpans))
             (\req -> V.toList $ V.catMaybes $ Projects.projectIdFromText <$> getSpanAttributeValue "at-project-id" (V.fromList $ req ^. PTF.resourceSpans))
             ( \ft caches keyToId req ->
-                let !rss = V.force $ V.fromList $ req ^. PTF.resourceSpans
+                let !rss = V.fromList $ req ^. PTF.resourceSpans
                     !pkeys = getSpanApiKey rss
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
-                 in V.force $ V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
+                 in V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
             (checkpoint "processList:traces:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
         Just "org.opentelemetry.otlp.metrics.v1" ->
@@ -310,10 +310,9 @@ processBatchPipeline
 processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds convert dbInsert =
   checkpoint (cp "") $ do
     processingStartTime <- liftIO getCurrentTime
-    let !msgsCount = length msgs
-        !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
-        !allProjectKeys = V.force $ V.concat [extractKeys req | (_, Right req) <- decodedMsgs]
-        !uniqueProjectKeys = V.force $ V.fromList $ L.nub $ V.toList allProjectKeys
+    let !decodedMsgs = [(ackId, decodeMessage msg :: Either String req) | (ackId, msg) <- msgs]
+        !allProjectKeys = V.concat [extractKeys req | (_, Right req) <- decodedMsgs]
+        !uniqueProjectKeys = V.fromList $ toList $ HS.fromList $ V.toList allProjectKeys
         !atIds = concatMap extractIds [req | (_, Right req) <- decodedMsgs]
 
     (!keyToIdMap, !projectCachesMap) <-
@@ -322,7 +321,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
         else do
           projectIdsAndKeys <- checkpoint (cp ":getProjectIds") $ ProjectApiKeys.projectIdsByProjectApiKeys uniqueProjectKeys
           let !keyToId = HM.fromList $ V.toList projectIdsAndKeys
-              !projectIds = L.nub $ atIds <> HM.elems keyToId
+              !projectIds = toList $ HS.fromList $ atIds <> HM.elems keyToId
           projectCaches <- checkpoint (cp ":getProjectCaches") $ do
             caches <- liftIO $ do
               cachePairs <- forM projectIds \pid ->
@@ -333,23 +332,19 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
             pure $ HM.fromList caches
           pure (keyToId, projectCaches)
 
-    let !chunkSize = max 10 (msgsCount `div` 4)
-        !chunks = chunksOf chunkSize (zip [0 ..] decodedMsgs)
-        processChunk chunk =
+    let !processedMsgs =
           [ case decodeResult of
               Left _ -> (ackId, V.empty)
-              Right req -> (ackId, convert fallbackTime projectCachesMap keyToIdMap req)
-          | (_, (ackId, decodeResult)) <- chunk
+              Right req -> let !out = convert fallbackTime projectCachesMap keyToIdMap req in (ackId, out)
+          | (ackId, decodeResult) <- decodedMsgs
           ]
-
-    let !chunkedResults = map processChunk chunks
 
     forM_ [(idx, err) | (idx, (_, Left err)) <- zip [0 ..] decodedMsgs] \(idx, err) ->
       recordProtoError label err (snd $ msgs L.!! idx) Log.logAttention
 
-    let !results = V.fromList $ concat chunkedResults
+    let !results = V.fromList processedMsgs
         (!ackIds, !outputVectors) = V.unzip results
-        !allOutput = V.force $ V.concatMap Relude.id outputVectors
+        !allOutput = V.concatMap Relude.id outputVectors
 
     processingEndTime <- liftIO getCurrentTime
     let processingDuration = diffUTCTime processingEndTime processingStartTime
@@ -749,11 +744,11 @@ normalizeSeverityLevel txt = fst <$> Map.lookup (T.toUpper txt) severityMap
 -- | Convert ResourceLogs to OtelLogsAndSpans
 convertResourceLogsToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertResourceLogsToOtelLogs !fallbackTime !projectCaches !pids resourceLogs =
-  let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getLogApiKey (V.singleton resourceLogs)
+  let projectKey = fromMaybe "" $ (V.!? 0) $ getLogApiKey (V.singleton resourceLogs)
       projectId = case find (\(k, _) -> k == projectKey) pids of
         Just (_, v) -> Just v
         Nothing ->
-          let pidText = fromMaybe "" $ listToMaybe $ V.toList $ getLogAttributeValue "at-project-id" (V.singleton resourceLogs)
+          let pidText = fromMaybe "" $ (V.!? 0) $ getLogAttributeValue "at-project-id" (V.singleton resourceLogs)
               uId = UUID.fromText pidText
            in ((Just . UUIDId) =<< uId)
    in case projectId of
@@ -863,12 +858,12 @@ convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans
     $ V.toList
     $ V.map
       ( \rs ->
-          let projectKey = fromMaybe "" $ listToMaybe $ V.toList $ getSpanApiKey (V.singleton rs)
+          let projectKey = fromMaybe "" $ (V.!? 0) $ getSpanApiKey (V.singleton rs)
               projectId =
                 case find (\(k, _) -> k == projectKey && k /= "") pids of
                   Just (_, v) -> Just v
                   Nothing ->
-                    case listToMaybe $ V.toList $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
+                    case (V.!? 0) $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
                       Just pidText | Just uid <- UUID.fromText pidText -> Just (UUIDId uid)
                       -- Fallback to header auth when span has no project attributes
                       _ | not (V.null pids) -> Just (snd $ V.head pids)
@@ -1106,7 +1101,7 @@ convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourc
           !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
        in if hasExceededLimit
             then [] -- Discard metrics for projects that exceeded limits
-            else join $ V.toList $ V.map (convertResourceMetricToMetricRecords fallbackTime pid) resourceMetrics
+            else V.toList $ V.concatMap (V.fromList . convertResourceMetricToMetricRecords fallbackTime pid) resourceMetrics
     Nothing -> [] -- No cache found, discard
 
 
@@ -1121,7 +1116,7 @@ convertResourceMetricToMetricRecords fallbackTime pid resourceMetric =
           ( \sm ->
               let scope = Just $ sm ^. PMF.scope
                   metrics = V.fromList $ sm ^. PMF.metrics
-               in join $ V.toList $ V.map (convertMetricToMetricRecords fallbackTime pid resourceM scope) metrics
+               in V.toList $ V.concatMap (V.fromList . convertMetricToMetricRecords fallbackTime pid resourceM scope) metrics
           )
           scopeMetrics
 
@@ -1276,7 +1271,7 @@ processTraceRequest metadataApiKey req = do
   -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
   when (not (V.null allApiKeys) || not (V.null atIds)) $ do
     projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-    let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+    let allProjectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
     when (null allProjectIds)
       $ liftIO
       $ throwIO
@@ -1295,7 +1290,7 @@ processTraceRequest metadataApiKey req = do
       $ ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
   -- Fetch project caches for limit checking
   projectCaches <- checkpoint "processList:traces:getProjectCaches" $ do
-    let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+    let projectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
 
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
@@ -1347,7 +1342,7 @@ processLogsRequest metadataApiKey req = do
   -- Verify authentication: if project keys or IDs are present, they must resolve to valid projects
   when (not (V.null allApiKeys) || not (V.null atIds)) $ do
     projectIdsAndKeys <- ProjectApiKeys.projectIdsByProjectApiKeys allApiKeys
-    let allProjectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+    let allProjectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
     when (null allProjectIds)
       $ liftIO
       $ throwIO
@@ -1365,7 +1360,7 @@ processLogsRequest metadataApiKey req = do
 
   -- Fetch project caches using cache pattern
   projectCaches <- checkpoint "processList:logs:getProjectCaches" $ do
-    let projectIds = L.nub $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
+    let projectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
         mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
@@ -1373,7 +1368,7 @@ processLogsRequest metadataApiKey req = do
       pure (pid, cache)
     pure $ HM.fromList caches
 
-  let !logs = join $ V.toList $ V.map (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
+  let !logs = V.toList $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
 
   Log.logTrace
     "Logs: Converted resource logs to OtelLogs"

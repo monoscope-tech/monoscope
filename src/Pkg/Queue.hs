@@ -58,8 +58,8 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         let subscription = "projects/past-3/subscriptions/" <> topic <> "-sub"
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
         let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
-        let msgsB64 =
-              messages & map \msg -> do
+        let !validMsgs = catMaybes
+              $ messages & map \msg -> do
                 ackId <- msg.ackId
                 b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
                 Just (ackId, b64Msg)
@@ -73,18 +73,19 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
                 $ withSpan
                   "pubsub.process_batch"
                   [ ("topic", OA.toAttribute topic)
-                  , ("message_count", OA.toAttribute (length (catMaybes msgsB64)))
+                  , ("message_count", OA.toAttribute (length validMsgs))
                   , ("subscription", OA.toAttribute subscription)
                   , ("ce-type", OA.toAttribute (fromMaybe "" ceType))
                   ]
                 $ \sp -> do
                   addEvent sp "batch.started" []
-                  result <- try $ fn (catMaybes msgsB64) (maybeToMonoid firstAttrs)
+                  result <- try $ fn validMsgs (maybeToMonoid firstAttrs)
                   case result of
                     Left (e :: SomeException) -> do
-                      addEvent sp "batch.failed" [("error", OA.toAttribute $ toText $ show e)]
-                      setStatus sp (Error $ toText $ show e)
-                      throwIO e -- Re-throw so outer tryAny catches it
+                      let !errText = toText $ show e
+                      addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
+                      setStatus sp (Error errText)
+                      throwIO e
                     Right ids -> do
                       addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
                       setStatus sp Ok
@@ -92,17 +93,16 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
             )
             >>= \case
               Left e -> do
+                let !errText = toText $ show e
                 liftIO
                   $ runLogT "monoscope" appLogger LogAttention
-                  $ LogBase.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= show e, "message_count" AE..= length (catMaybes msgsB64), "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
+                  $ LogBase.logAttention "pubsubService: CAUGHT EXCEPTION - Error processing messages" (AE.object ["error" AE..= errText, "message_count" AE..= length validMsgs, "first_attrs" AE..= firstAttrs, "checkpoint" AE..= ("pubsubService:exception" :: String)])
 
-                -- Send to dead letter queue unless it's an unrecoverable error
                 unless (isUnrecoverableError e)
                   $ liftIO
-                  $ publishToDeadLetterQueue appCtx (catMaybes msgsB64) (maybeToMonoid firstAttrs) (toText $ show e)
+                  $ publishToDeadLetterQueue appCtx validMsgs (maybeToMonoid firstAttrs) errText
 
-                -- Always return all message IDs so they're acknowledged
-                pure $ map fst $ catMaybes msgsB64
+                pure $ map fst validMsgs
               Right ids -> pure ids
 
         let acknowlegReq = PubSub.newAcknowledgeRequest & field @"ackIds" L..~ Just msgIds
@@ -237,9 +237,10 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
                       result <- try $ fn allRecords attributes
                       case result of
                         Left (e :: SomeException) -> do
-                          addEvent sp "batch.failed" [("error", OA.toAttribute $ toText $ show e)]
-                          setStatus sp (Error $ toText $ show e)
-                          throwIO e -- Re-throw so outer tryAny catches it
+                          let !errText = toText $ show e
+                          addEvent sp "batch.failed" [("error", OA.toAttribute errText)]
+                          setStatus sp (Error errText)
+                          throwIO e
                         Right ids -> do
                           addEvent sp "batch.completed" [("processed_count", OA.toAttribute (length ids))]
                           setStatus sp Ok
@@ -247,15 +248,14 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
                 )
                 >>= \case
                   Left e -> do
+                    let !errText = toText $ show e
                     runLogT "monoscope" appLogger LogAttention
-                      $ LogBase.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= show e, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
+                      $ LogBase.logAttention "kafkaService: CAUGHT EXCEPTION - Error processing Kafka messages" (AE.object ["error" AE..= errText, "topic" AE..= topic, "ce-type" AE..= ceType, "record_count" AE..= length allRecords, "attributes" AE..= attributes, "checkpoint" AE..= ("kafkaService:exception" :: String)])
 
-                    -- Send to dead letter queue unless it's an unrecoverable error
                     unless (isUnrecoverableError e)
                       $ liftIO
-                      $ publishToDeadLetterQueue appCtx allRecords attributes (toText $ show e)
+                      $ publishToDeadLetterQueue appCtx allRecords attributes errText
 
-                    -- Always return all message IDs so they're acknowledged
                     pure $ map fst allRecords
                   Right ids -> pure ids
 
@@ -268,10 +268,7 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
 
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
-    consumerRecordHeadersToHashMap record = HM.fromList $ map headerToTuple (K.headersToList record.crHeaders)
-      where
-        headerToTuple :: (ByteString, ByteString) -> (Text, Text)
-        headerToTuple (key, value) = (fromString $ BC.unpack key, fromString $ BC.unpack value)
+    consumerRecordHeadersToHashMap record = HM.fromList $ map (\(k, v) -> (decodeUtf8 k, decodeUtf8 v)) (K.headersToList record.crHeaders)
 
     consumerProps :: EnvConfig -> Text -> K.ConsumerProperties
     consumerProps cfg clientId =
