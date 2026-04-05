@@ -106,32 +106,34 @@ instance ParseMetadata OtlpRequestMetadata where
 
 
 -- | Global error counters for common parsing errors (wire type, UTF-8, etc)
-wireTypeErrorsRef :: IORef (HM.HashMap Text (Int, AE.Value))
+-- Second element tracks dropped categories when map is at capacity
+wireTypeErrorsRef :: IORef (HM.HashMap Text (Int, AE.Value), Int)
 {-# NOINLINE wireTypeErrorsRef #-}
-wireTypeErrorsRef = unsafePerformIO $ newIORef HM.empty
+wireTypeErrorsRef = unsafePerformIO $ newIORef (HM.empty, 0)
 
 
 -- | Initialize periodic error logging
 initPeriodicErrorLogging :: Logger -> IO ()
 initPeriodicErrorLogging logger = void $ forkIO $ forever $ do
   threadDelay (60 * 1000000) -- 60 seconds
-  errors <- atomicModifyIORef' wireTypeErrorsRef (HM.empty,)
+  (errors, dropped) <- atomicModifyIORef' wireTypeErrorsRef ((HM.empty, 0),)
   unless (HM.null errors) $ do
     let totalErrors = sum $ map fst $ HM.elems errors
         errorDetails =
           AE.object
-            [ "period_seconds" AE..= (60 :: Int)
-            , "total_errors" AE..= totalErrors
-            , "error_types"
-                AE..= AE.object
-                  [ AEK.fromText k
-                      AE..= AE.object
-                        [ "count" AE..= count
-                        , "example" AE..= example
-                        ]
-                  | (k, (count, example)) <- HM.toList errors
-                  ]
-            ]
+            $ [ "period_seconds" AE..= (60 :: Int)
+              , "total_errors" AE..= totalErrors
+              , "error_types"
+                  AE..= AE.object
+                    [ AEK.fromText k
+                        AE..= AE.object
+                          [ "count" AE..= count
+                          , "example" AE..= example
+                          ]
+                    | (k, (count, example)) <- HM.toList errors
+                    ]
+              ]
+            ++ ["dropped_categories" AE..= dropped | dropped > 0]
     runLogT "monoscope" logger LogAttention
       $ LogBase.logAttention "Wire type errors summary" errorDetails
 
@@ -150,21 +152,21 @@ projectSecretKeys :: [Text]
 projectSecretKeys = ["at-project-key", "at-project-id", "x-api-key"]
 
 
--- | Extract a string attribute by key from a KeyValue vector
-getAttr :: Text -> V.Vector PC.KeyValue -> Maybe Text
-getAttr !key kvs = (^. PCF.value . PCF.stringValue) <$> V.find ((== key) . (^. PCF.key)) kvs
+-- | Extract a string attribute by key from a KeyValue list
+getAttr :: Text -> [PC.KeyValue] -> Maybe Text
+getAttr !key kvs = (^. PCF.value . PCF.stringValue) <$> find ((== key) . (^. PCF.key)) kvs
 
 
 -- | Extract a string from inside a kvlist attribute (e.g. x-api-key inside grpc.metadata)
-getNestedAttr :: Text -> Text -> V.Vector PC.KeyValue -> Maybe Text
+getNestedAttr :: Text -> Text -> [PC.KeyValue] -> Maybe Text
 getNestedAttr !outerKey !innerKey kvs = do
-  kv <- V.find ((== outerKey) . (^. PCF.key)) kvs
+  kv <- find ((== outerKey) . (^. PCF.key)) kvs
   PC.AnyValue'KvlistValue kvl <- kv ^. PCF.value . PCF.maybe'value
   (^. PCF.value . PCF.stringValue) <$> find ((== innerKey) . (^. PCF.key)) (kvl ^. PCF.values)
 
 
 -- | Extract API key from attributes, checking at-project-key, x-api-key, then x-api-key inside grpc.metadata/http.headers
-getApiKeyAttr :: V.Vector PC.KeyValue -> Maybe Text
+getApiKeyAttr :: [PC.KeyValue] -> Maybe Text
 getApiKeyAttr kvs =
   getAttr "at-project-key" kvs
     <|> getAttr "x-api-key" kvs
@@ -173,44 +175,37 @@ getApiKeyAttr kvs =
 
 
 getSpanAttributeValue :: Text -> V.Vector PT.ResourceSpans -> V.Vector Text
-getSpanAttributeValue !attribute = V.mapMaybe (\rs -> getAttr attribute (resourceAttributes rs) <|> getSpanAttr rs)
+getSpanAttributeValue !attribute = V.mapMaybe (\rs -> getAttr attribute (rs ^. PTF.resource . PRF.attributes) <|> getSpanAttr rs)
   where
     getSpanAttr rs =
       let spans = V.fromList (rs ^. PTF.scopeSpans) >>= (\s -> V.fromList (s ^. PTF.spans))
-       in V.mapMaybe (getAttr attribute . V.fromList . (^. PTF.attributes)) spans V.!? 0
-    resourceAttributes rs = V.fromList $ rs ^. PTF.resource . PRF.attributes
+       in V.mapMaybe (getAttr attribute . (^. PTF.attributes)) spans V.!? 0
 
 
--- | Extract project API keys from resource spans, checking all supported key locations
 getSpanApiKey :: V.Vector PT.ResourceSpans -> V.Vector Text
-getSpanApiKey = V.mapMaybe (\rs -> getApiKeyAttr (V.fromList $ rs ^. PTF.resource . PRF.attributes))
+getSpanApiKey = V.mapMaybe (\rs -> getApiKeyAttr (rs ^. PTF.resource . PRF.attributes))
 
 
--- | Extract attribute values from resource logs
 getLogAttributeValue :: Text -> V.Vector PL.ResourceLogs -> V.Vector Text
-getLogAttributeValue !attribute = V.mapMaybe (\rl -> getAttr attribute (resourceAttributes rl) <|> getLogAttr rl)
+getLogAttributeValue !attribute = V.mapMaybe (\rl -> getAttr attribute (rl ^. PLF.resource . PRF.attributes) <|> getLogAttr rl)
   where
     getLogAttr rl =
       let logs = V.fromList (rl ^. PLF.scopeLogs) >>= (\s -> V.fromList (s ^. PLF.logRecords))
-       in V.mapMaybe (getAttr attribute . V.fromList . (^. PLF.attributes)) logs V.!? 0
-    resourceAttributes rl = V.fromList $ rl ^. PLF.resource . PRF.attributes
+       in V.mapMaybe (getAttr attribute . (^. PLF.attributes)) logs V.!? 0
 
 
--- | Extract project API keys from resource logs, checking all supported key locations
 getLogApiKey :: V.Vector PL.ResourceLogs -> V.Vector Text
-getLogApiKey = V.mapMaybe (\rl -> getApiKeyAttr (V.fromList $ rl ^. PLF.resource . PRF.attributes))
+getLogApiKey = V.mapMaybe (\rl -> getApiKeyAttr (rl ^. PLF.resource . PRF.attributes))
 
 
--- | Extract metric attribute values
 getMetricAttributeValue :: Text -> V.Vector PM.ResourceMetrics -> Maybe Text
 getMetricAttributeValue !attribute !rms = V.mapMaybe getResourceAttr rms V.!? 0
   where
-    getResourceAttr rm = getAttr attribute (V.fromList $ rm ^. PMF.resource . PRF.attributes)
+    getResourceAttr rm = getAttr attribute (rm ^. PMF.resource . PRF.attributes)
 
 
--- | Extract project API key from resource metrics, checking all supported key locations
 getMetricApiKey :: V.Vector PM.ResourceMetrics -> Maybe Text
-getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (V.fromList $ rm ^. PMF.resource . PRF.attributes)) rms V.!? 0
+getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (rm ^. PMF.resource . PRF.attributes)) rms V.!? 0
 
 
 -- | Process a list of messages
@@ -483,55 +478,55 @@ migrateElasticsearchPathParts keyVals =
 -- == HTTP method _OTHER migration
 -- >>> migrateHttpSemanticConventions [("http.method", AE.String "_OTHER"), ("http.request.method_original", AE.String "PROPFIND")]
 -- [("http.request.method",String "PROPFIND")]
+
+fieldMappingsMap :: HM.HashMap Text Text
+fieldMappingsMap =
+  HM.fromList
+    [ ("http.method", "http.request.method")
+    , ("http.status_code", "http.response.status_code")
+    , ("http.request_content_length", "http.request.body.size")
+    , ("http.response_content_length", "http.response.body.size")
+    , ("net.protocol.name", "network.protocol.name")
+    , ("net.protocol.version", "network.protocol.version")
+    , ("net.sock.peer.addr", "network.peer.address")
+    , ("net.sock.peer.port", "network.peer.port")
+    , ("http.url", "url.full")
+    , ("http.resend_count", "http.request.resend_count")
+    , ("net.peer.name", "server.address")
+    , ("net.peer.port", "server.port")
+    , ("http.scheme", "url.scheme")
+    , ("http.client_ip", "client.address")
+    , ("db.cassandra.consistency_level", "cassandra.consistency.level")
+    , ("db.cassandra.coordinator.dc", "cassandra.coordinator.dc")
+    , ("db.cassandra.coordinator.id", "cassandra.coordinator.id")
+    , ("db.cassandra.idempotence", "cassandra.query.idempotent")
+    , ("db.cassandra.page_size", "cassandra.page.size")
+    , ("db.cassandra.speculative_execution_count", "cassandra.speculative_execution.count")
+    , ("db.cassandra.table", "db.collection.name")
+    , ("db.cosmosdb.client_id", "azure.client.id")
+    , ("db.cosmosdb.connection_mode", "azure.cosmosdb.connection.mode")
+    , ("db.cosmosdb.consistency_level", "azure.cosmosdb.consistency.level")
+    , ("db.cosmosdb.container", "db.collection.name")
+    , ("db.cosmosdb.regions_contacted", "azure.cosmosdb.operation.contacted_regions")
+    , ("db.cosmosdb.request_charge", "azure.cosmosdb.operation.request_charge")
+    , ("db.cosmosdb.request_content_length", "azure.cosmosdb.request.body.size")
+    , ("db.cosmosdb.status_code", "db.response.status_code")
+    , ("db.cosmosdb.sub_status_code", "azure.cosmosdb.response.sub_status_code")
+    , ("db.elasticsearch.cluster.name", "db.namespace")
+    , ("db.elasticsearch.node.name", "elasticsearch.node.name")
+    , ("db.mongodb.collection", "db.collection.name")
+    , ("db.name", "db.namespace")
+    , ("db.operation", "db.operation.name")
+    , ("db.redis.database_index", "db.namespace")
+    , ("db.sql.table", "db.collection.name")
+    , ("db.statement", "db.query.text")
+    , ("db.system", "db.system.name")
+    ]
+
+
 migrateHttpSemanticConventions :: [(Text, AE.Value)] -> [(Text, AE.Value)]
 migrateHttpSemanticConventions !keyVals =
   let
-    -- Build a HM.HashMap for O(1) lookups
-    fieldMappingsMap :: HM.HashMap Text Text
-    fieldMappingsMap =
-      HM.fromList
-        [ ("http.method", "http.request.method")
-        , ("http.status_code", "http.response.status_code")
-        , ("http.request_content_length", "http.request.body.size")
-        , ("http.response_content_length", "http.response.body.size")
-        , ("net.protocol.name", "network.protocol.name")
-        , ("net.protocol.version", "network.protocol.version")
-        , ("net.sock.peer.addr", "network.peer.address")
-        , ("net.sock.peer.port", "network.peer.port")
-        , ("http.url", "url.full")
-        , ("http.resend_count", "http.request.resend_count")
-        , ("net.peer.name", "server.address")
-        , ("net.peer.port", "server.port")
-        , ("http.scheme", "url.scheme")
-        , ("http.client_ip", "client.address")
-        , -- Database field mappings
-          ("db.cassandra.consistency_level", "cassandra.consistency.level")
-        , ("db.cassandra.coordinator.dc", "cassandra.coordinator.dc")
-        , ("db.cassandra.coordinator.id", "cassandra.coordinator.id")
-        , ("db.cassandra.idempotence", "cassandra.query.idempotent")
-        , ("db.cassandra.page_size", "cassandra.page.size")
-        , ("db.cassandra.speculative_execution_count", "cassandra.speculative_execution.count")
-        , ("db.cassandra.table", "db.collection.name")
-        , ("db.cosmosdb.client_id", "azure.client.id")
-        , ("db.cosmosdb.connection_mode", "azure.cosmosdb.connection.mode")
-        , ("db.cosmosdb.consistency_level", "azure.cosmosdb.consistency.level")
-        , ("db.cosmosdb.container", "db.collection.name")
-        , ("db.cosmosdb.regions_contacted", "azure.cosmosdb.operation.contacted_regions")
-        , ("db.cosmosdb.request_charge", "azure.cosmosdb.operation.request_charge")
-        , ("db.cosmosdb.request_content_length", "azure.cosmosdb.request.body.size")
-        , ("db.cosmosdb.status_code", "db.response.status_code")
-        , ("db.cosmosdb.sub_status_code", "azure.cosmosdb.response.sub_status_code")
-        , ("db.elasticsearch.cluster.name", "db.namespace")
-        , ("db.elasticsearch.node.name", "elasticsearch.node.name")
-        , ("db.mongodb.collection", "db.collection.name")
-        , ("db.name", "db.namespace")
-        , ("db.operation", "db.operation.name")
-        , ("db.redis.database_index", "db.namespace")
-        , ("db.sql.table", "db.collection.name")
-        , ("db.statement", "db.query.text")
-        , ("db.system", "db.system.name")
-        ]
-
     -- Pre-build lookups for efficiency
     kvMap = HM.fromList keyVals
     hasUrlPath = HM.member "url.path" kvMap
@@ -619,10 +614,15 @@ recordProtoError prefix err msg logFn = do
         | "Unexpected end of input" `L.isInfixOf` err = Just (prefix <> ":unexpected_eof_error")
         | otherwise = Nothing
   case categorize of
-    Just errorKey -> liftIO $ atomicModifyIORef' wireTypeErrorsRef $ \m ->
-      let updateFn Nothing = Just (1, errorInfo)
-          updateFn (Just (count, example)) = Just (count + 1, example)
-       in (HM.alter updateFn errorKey m, ())
+    Just errorKey -> liftIO $ atomicModifyIORef' wireTypeErrorsRef $ \(m, dropped) ->
+      if HM.size m >= 100
+        then case HM.lookup errorKey m of
+          Just (count, example) -> ((HM.insert errorKey (count + 1, example) m, dropped), ())
+          Nothing -> ((m, dropped + 1), ())
+        else
+          let updateFn Nothing = Just (1, errorInfo)
+              updateFn (Just (count, example)) = Just (count + 1, example)
+           in ((HM.alter updateFn errorKey m, dropped), ())
     Nothing -> logFn ("processList:" <> prefix <> ": unable to parse service request") errorInfo
 
 
@@ -649,11 +649,10 @@ byteStringToHexText :: BS.ByteString -> Text
 byteStringToHexText !bs = decodeUtf8 (B16.encode bs)
 
 
-keyValueToJSON :: V.Vector PC.KeyValue -> AE.Value
+keyValueToJSON :: [PC.KeyValue] -> AE.Value
 keyValueToJSON !kvs =
   let
-    -- Extract all key-value pairs
-    !allPairs' = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList kvs]
+    !allPairs' = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- kvs]
     !allPairs = migrateHttpSemanticConventions allPairs'
 
     specialKeys = projectSecretKeys
@@ -675,11 +674,13 @@ anyValueToJSON Nothing = AE.Null
 anyValueToJSON (Just av) = do
   case av ^. PCF.maybe'value of
     Nothing -> AE.Null
-    Just (PC.AnyValue'StringValue txt) -> do
-      let e = AE.eitherDecodeStrict' (encodeUtf8 (T.strip txt))
-      case e of
-        Right v -> AE.Object v
-        Left _ -> AE.String txt
+    Just (PC.AnyValue'StringValue txt) ->
+      let !stripped = T.strip txt
+       in if T.isPrefixOf "{" stripped
+            then case AE.eitherDecodeStrict' (encodeUtf8 stripped) of
+              Right v -> AE.Object v
+              Left _ -> AE.String txt
+            else AE.String txt
     Just (PC.AnyValue'BoolValue b) -> AE.Bool b
     Just (PC.AnyValue'IntValue i) -> AE.Number (fromInteger (toInteger i))
     Just (PC.AnyValue'DoubleValue d) -> AE.Number (fromFloatDigits d)
@@ -702,8 +703,7 @@ resourceToJSON :: Maybe PR.Resource -> AE.Value
 resourceToJSON Nothing = AE.Null
 resourceToJSON (Just resource) =
   let
-    attrs = V.fromList $ resource ^. PRF.attributes
-    attrPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- V.toList attrs]
+    attrPairs = [(kv ^. PCF.key, anyValueToJSON (Just (kv ^. PCF.value))) | kv <- resource ^. PRF.attributes]
     specialKeys = projectSecretKeys
     (flatPairs, nestedPairs) = L.partition (\(k, _) -> k `elem` specialKeys) attrPairs
 
@@ -775,15 +775,12 @@ filterEmptyEvents x =
 convertScopeLogsToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PL.ResourceLogs -> [OtelLogsAndSpans]
 convertScopeLogsToOtelLogs fallbackTime pid resourceM resourceLogs =
   filter filterEmptyEvents
-    $ join
-    $ V.toList
-    $ V.map
-      ( \scopeLog ->
-          let scope = Just $ scopeLog ^. PLF.scope
-              logRecords = V.fromList $ scopeLog ^. PLF.logRecords
-           in V.toList $ V.map (convertLogRecordToOtelLog fallbackTime pid resourceM scope) logRecords
-      )
-      (V.fromList $ resourceLogs ^. PLF.scopeLogs)
+    [ otelLog
+    | scopeLog <- resourceLogs ^. PLF.scopeLogs
+    , let scope = Just $ scopeLog ^. PLF.scope
+    , logRecord <- scopeLog ^. PLF.logRecords
+    , let otelLog = convertLogRecordToOtelLog fallbackTime pid resourceM scope logRecord
+    ]
 
 
 -- | Convert LogRecord to OtelLogsAndSpans
@@ -831,7 +828,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
                   , severity_number = severityNumber
                   }
           , body = fmap AesonText $ Just $ anyValueToJSON $ Just $ logRecord ^. PLF.body
-          , attributes = fmap AesonText $ jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ logRecord ^. PLF.attributes
+          , attributes = fmap AesonText $ jsonToMap $ removeProjectId $ keyValueToJSON $ logRecord ^. PLF.attributes
           , resource = fmap AesonText $ jsonToMap $ removeProjectId $ resourceToJSON resourceM
           , hashes = V.empty
           , kind = Just "log"
@@ -854,49 +851,40 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
 -- | Convert ResourceSpans to OtelLogsAndSpans
 convertResourceSpansToOtelLogs :: UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector (Text, Projects.ProjectId) -> V.Vector PT.ResourceSpans -> [OtelLogsAndSpans]
 convertResourceSpansToOtelLogs !fallbackTime !projectCaches !pids !resourceSpans =
-  join
-    $ V.toList
-    $ V.map
-      ( \rs ->
-          let projectKey = fromMaybe "" $ (V.!? 0) $ getSpanApiKey (V.singleton rs)
-              projectId =
-                case find (\(k, _) -> k == projectKey && k /= "") pids of
-                  Just (_, v) -> Just v
-                  Nothing ->
-                    case (V.!? 0) $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
-                      Just pidText | Just uid <- UUID.fromText pidText -> Just (UUIDId uid)
-                      -- Fallback to header auth when span has no project attributes
-                      _ | not (V.null pids) -> Just (snd $ V.head pids)
-                      _ -> Nothing
-           in case projectId of
-                Just pid ->
-                  case HM.lookup pid projectCaches of
-                    Just cache ->
-                      let !totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
-                          !isFreeTier = cache.paymentPlan == "Free"
-                          !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
-                       in if hasExceededLimit
-                            then []
-                            else convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
-                    Nothing -> []
-                _ -> []
-      )
-      resourceSpans
+  concatMap convertOne (V.toList resourceSpans)
+  where
+    convertOne rs =
+      let projectKey = fromMaybe "" $ (V.!? 0) $ getSpanApiKey (V.singleton rs)
+          projectId =
+            case find (\(k, _) -> k == projectKey && k /= "") pids of
+              Just (_, v) -> Just v
+              Nothing ->
+                case (V.!? 0) $ getSpanAttributeValue "at-project-id" (V.singleton rs) of
+                  Just pidText | Just uid <- UUID.fromText pidText -> Just (UUIDId uid)
+                  _ | not (V.null pids) -> Just (snd $ V.head pids)
+                  _ -> Nothing
+       in case projectId of
+            Just pid ->
+              case HM.lookup pid projectCaches of
+                Just cache ->
+                  let !totalDailyEvents = toInteger cache.dailyEventCount + toInteger cache.dailyMetricCount
+                      !isFreeTier = cache.paymentPlan == "Free"
+                      !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
+                   in if hasExceededLimit then [] else convertScopeSpansToOtelLogs fallbackTime pid (Just $ rs ^. PTF.resource) rs
+                Nothing -> []
+            _ -> []
 
 
 -- | Convert ScopeSpans to OtelLogsAndSpansF
 convertScopeSpansToOtelLogs :: UTCTime -> Projects.ProjectId -> Maybe PR.Resource -> PT.ResourceSpans -> [OtelLogsAndSpans]
 convertScopeSpansToOtelLogs fallbackTime pid resourceM resourceSpans =
   filter filterEmptyEvents
-    $ join
-    $ V.toList
-    $ V.map
-      ( \scopeSpan ->
-          let scope = Just $ scopeSpan ^. PTF.scope
-              spans = V.fromList $ scopeSpan ^. PTF.spans
-           in V.toList $ V.map (convertSpanToOtelLog fallbackTime pid resourceM scope) spans
-      )
-      (V.fromList $ resourceSpans ^. PTF.scopeSpans)
+    [ otelLog
+    | scopeSpan <- resourceSpans ^. PTF.scopeSpans
+    , let scope = Just $ scopeSpan ^. PTF.scope
+    , pSpan <- scopeSpan ^. PTF.spans
+    , let otelLog = convertSpanToOtelLog fallbackTime pid resourceM scope pSpan
+    ]
 
 
 -- | Convert Span to OtelLogsAndSpans
@@ -959,7 +947,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                                      in if evTimeNano >= minValidTimestampNanos && evTimeNano /= 0
                                           then nanosecondsToUTC evTimeNano
                                           else fallbackTime
-                          , "event_attributes" AE..= keyValueToJSON (V.fromList $ ev ^. PTF.attributes)
+                          , "event_attributes" AE..= keyValueToJSON ( ev ^. PTF.attributes)
                           , "event_dropped_attributes_count" AE..= (ev ^. PTF.droppedAttributesCount)
                           ]
                     )
@@ -979,13 +967,13 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
                         AE.object
                           [ "link_span_id" AE..= byteStringToHexText (link ^. PTF.spanId)
                           , "link_trace_id" AE..= byteStringToHexText (link ^. PTF.traceId)
-                          , "link_attributes" AE..= keyValueToJSON (V.fromList $ link ^. PTF.attributes)
+                          , "link_attributes" AE..= keyValueToJSON ( link ^. PTF.attributes)
                           , "link_dropped_attributes_count" AE..= (link ^. PTF.droppedAttributesCount)
                           , "link_flags" AE..= (link ^. PTF.traceState)
                           ]
                     )
                     links
-      !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ V.fromList $ pSpan ^. PTF.attributes
+      !attributes = jsonToMap $ removeProjectId $ keyValueToJSON $ pSpan ^. PTF.attributes
       spanName' = pSpan ^. PTF.name
       -- "monoscope.http" included so re-ingested spans get consistent body/attribute processing
       isOurSdkSpan = spanName' `elem` ["apitoolkit-http-span", "monoscope.http"]
@@ -1095,30 +1083,25 @@ convertResourceMetricsToMetricRecords :: UTCTime -> HM.HashMap Projects.ProjectI
 convertResourceMetricsToMetricRecords !fallbackTime !projectCaches !pid !resourceMetrics =
   case HM.lookup pid projectCaches of
     Just cache ->
-      -- Check if project has exceeded daily limit for free tier
       let !totalDailyEvents = fromIntegral cache.dailyEventCount + fromIntegral cache.dailyMetricCount
           !isFreeTier = cache.paymentPlan == "Free"
           !hasExceededLimit = isFreeTier && totalDailyEvents >= freeTierDailyMaxEvents
        in if hasExceededLimit
-            then [] -- Discard metrics for projects that exceeded limits
-            else V.toList $ V.concatMap (V.fromList . convertResourceMetricToMetricRecords fallbackTime pid) resourceMetrics
-    Nothing -> [] -- No cache found, discard
+            then []
+            else concatMap (convertResourceMetricToMetricRecords fallbackTime pid) (V.toList resourceMetrics)
+    Nothing -> []
 
 
 -- | Convert a single ResourceMetrics to MetricRecords
 convertResourceMetricToMetricRecords :: UTCTime -> Projects.ProjectId -> PM.ResourceMetrics -> [Telemetry.MetricRecord]
 convertResourceMetricToMetricRecords fallbackTime pid resourceMetric =
   let resourceM = Just $ resourceMetric ^. PMF.resource
-      scopeMetrics = V.fromList $ resourceMetric ^. PMF.scopeMetrics
-   in join
-        $ V.toList
-        $ V.map
-          ( \sm ->
-              let scope = Just $ sm ^. PMF.scope
-                  metrics = V.fromList $ sm ^. PMF.metrics
-               in V.toList $ V.concatMap (V.fromList . convertMetricToMetricRecords fallbackTime pid resourceM scope) metrics
-          )
-          scopeMetrics
+   in [ record
+      | sm <- resourceMetric ^. PMF.scopeMetrics
+      , let scope = Just $ sm ^. PMF.scope
+      , metric <- sm ^. PMF.metrics
+      , record <- convertMetricToMetricRecords fallbackTime pid resourceM scope metric
+      ]
 
 
 -- | Convert a single Metric to MetricRecords
@@ -1147,7 +1130,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
         AE.object
           [ "name" AE..= (scope ^. PCF.name)
           , "version" AE..= (scope ^. PCF.version)
-          , "attributes" AE..= keyValueToJSON (V.fromList $ scope ^. PCF.attributes)
+          , "attributes" AE..= keyValueToJSON ( scope ^. PCF.attributes)
           ]
       Nothing -> AE.Null
     !metaJSON = case scopeM of
@@ -1155,7 +1138,7 @@ convertMetricToMetricRecords fallbackTime pid resourceM scopeM metric =
       Nothing -> AE.Null
 
     pointTime timeNano = if timeNano >= minValidTimestampNanos && timeNano /= 0 then nanosecondsToUTC timeNano else fallbackTime
-    pointAttrs point = keyValueToJSON (point ^. PMF.vec'attributes)
+    pointAttrs point = keyValueToJSON (V.toList $ point ^. PMF.vec'attributes)
 
     mkRecord validTime attrs mType mValue fls temporality_ monotonic_ =
       Telemetry.MetricRecord
@@ -1298,12 +1281,11 @@ processTraceRequest metadataApiKey req = do
         pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HM.fromList caches
-  let !spans = convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
-      !spans' = V.fromList spans
+  let !spans' = V.fromList $ convertResourceSpansToOtelLogs currentTime projectCaches projectIdsAndKeys resourceSpans
 
   Log.logTrace
     "Traces: Converted resource spans to OtelLogs"
-    (AE.object ["span_count" AE..= length spans])
+    (AE.object ["span_count" AE..= V.length spans'])
 
   unless (V.null spans') do
     Telemetry.bulkInsertOtelLogsAndSpansTF spans'
@@ -1368,17 +1350,17 @@ processLogsRequest metadataApiKey req = do
       pure (pid, cache)
     pure $ HM.fromList caches
 
-  let !logs = V.toList $ V.concatMap (V.fromList . convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) resourceLogs
+  let !logs = V.fromList $ concatMap (convertResourceLogsToOtelLogs currentTime projectCaches projectIdsAndKeys) (V.toList resourceLogs)
 
   Log.logTrace
     "Logs: Converted resource logs to OtelLogs"
-    (AE.object ["log_count" AE..= length logs])
+    (AE.object ["log_count" AE..= V.length logs])
 
-  unless (null logs) do
-    Telemetry.bulkInsertOtelLogsAndSpansTF (V.fromList logs)
+  unless (V.null logs) do
+    Telemetry.bulkInsertOtelLogsAndSpansTF logs
     Log.logTrace
       "Logs: Successfully inserted logs into database"
-      (AE.object ["inserted_count" AE..= length logs])
+      (AE.object ["inserted_count" AE..= V.length logs])
 
 
 -- | Logs service handler (Export)

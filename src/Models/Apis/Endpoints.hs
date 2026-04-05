@@ -129,9 +129,8 @@ endpointRequestStatsByProject :: DB es => Projects.ProjectId -> Bool -> Bool -> 
 endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page requestType period = withConnection \conn -> liftIO $ V.fromList <$> PGS.query conn (Query $ encodeUtf8 q) queryParams
   where
     pHostParams = maybe [] (\h -> [toField h]) pHostM
-    -- hostFilter COALESCE(...) = ? has 1 ?; pHostQuery "enp.host = ?" has 1 ?
     searchParams = maybe [] (\s -> [toField ("%" <> s <> "%")]) searchM
-    queryParams = [toField pid] ++ pHostParams ++ [toField pid] ++ pHostParams ++ [toField pid, toField isOutgoing] ++ pHostParams ++ searchParams ++ [toField offset]
+    queryParams = [toField pid] ++ pHostParams ++ [toField pid, toField isOutgoing] ++ pHostParams ++ searchParams ++ [toField offset]
 
     isOutgoing = requestType == "Outgoing"
     offset = page * 30
@@ -139,46 +138,44 @@ endpointRequestStatsByProject pid ackd archived pHostM sortM searchM page reques
     search = case searchM of Just _ -> " AND enp.url_path LIKE ?"; Nothing -> ""
     pHostQuery = case pHostM of Just _ -> " AND enp.host = ?"; Nothing -> ""
     hostFilter = case pHostM of Just _ -> " AND (" <> hostCoalesceExpr <> " = ?)"; Nothing -> ""
-    orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> "coalesce(fr.eventsCount, 0) DESC"
+    orderBy = case fromMaybe "" sortM of "first_seen" -> "enp.created_at ASC"; "last_seen" -> "enp.created_at DESC"; _ -> "coalesce(es.eventsCount, 0) DESC"
     q =
       [text|
-
-   WITH filtered_requests AS (
+WITH combined AS (
     SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
            attributes___http___request___method AS method,
            COUNT(*) AS eventsCount,
-           MAX(timestamp) AS last_seen
-    FROM otel_logs_and_spans
-    WHERE project_id = ? AND attributes___http___request___method IS NOT NULL $hostFilter
-    GROUP BY url_path, method
-), bucketed AS (
-    SELECT COALESCE(NULLIF(attributes->'http'->>'route', ''), attributes___url___path, '/') AS url_path,
-           attributes___http___request___method AS method,
+           MAX(timestamp) AS last_seen,
            LEAST(width_bucket(EXTRACT(EPOCH FROM timestamp), EXTRACT(EPOCH FROM $seriesStart::timestamptz), EXTRACT(EPOCH FROM NOW()), $numBuckets), $numBuckets) AS bucket_idx,
            COUNT(*)::int AS cnt
     FROM otel_logs_and_spans
     WHERE project_id = ? AND attributes___http___request___method IS NOT NULL $hostFilter
       AND timestamp >= $seriesStart::timestamptz
     GROUP BY url_path, method, bucket_idx
+), endpoint_stats AS (
+    SELECT url_path, method,
+           SUM(eventsCount)::bigint AS eventsCount,
+           MAX(last_seen) AS last_seen
+    FROM combined
+    GROUP BY url_path, method
 ), bucketed_agg AS (
-    SELECT b.url_path, b.method,
-           ARRAY_AGG(COALESCE(b2.cnt, 0) ORDER BY s.idx) AS activity_buckets
-    FROM (SELECT DISTINCT url_path, method FROM bucketed) b
+    SELECT c.url_path, c.method,
+           ARRAY_AGG(COALESCE(c2.cnt, 0) ORDER BY s.idx) AS activity_buckets
+    FROM (SELECT DISTINCT url_path, method FROM combined) c
     CROSS JOIN generate_series(1, $numBuckets) AS s(idx)
-    LEFT JOIN bucketed b2 ON b2.url_path = b.url_path AND b2.method = b.method AND b2.bucket_idx = s.idx
-    GROUP BY b.url_path, b.method
+    LEFT JOIN combined c2 ON c2.url_path = c.url_path AND c2.method = c.method AND c2.bucket_idx = s.idx
+    GROUP BY c.url_path, c.method
 )
       SELECT enp.id endpoint_id, enp.hash endpoint_hash, enp.project_id, enp.url_path, enp.method, enp.host,
-             coalesce(fr.eventsCount, 0) as total_requests,
-             fr.last_seen,
+             coalesce(es.eventsCount, 0) as total_requests,
+             es.last_seen,
              COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets
      from apis.endpoints enp
-     left join filtered_requests fr on (enp.url_path=fr.url_path and enp.method=fr.method)
+     left join endpoint_stats es on (enp.url_path=es.url_path and enp.method=es.method)
      left join bucketed_agg ba on (enp.url_path=ba.url_path and enp.method=ba.method)
      where enp.project_id=? and enp.outgoing=? $pHostQuery $search
      order by $orderBy , url_path ASC
      offset ? limit 30;
-
   |]
 
 
@@ -207,55 +204,56 @@ dependenciesAndEventsCount pid requestType sortT skip timeF period = do
         "last_seen" -> "last_seen DESC"
         _ -> "eventsCount DESC"
       endpointFilter = case requestType of
-        "Outgoing" -> "ep.outgoing = true"
-        "Incoming" -> "ep.outgoing = false"
-        _ -> "ep.outgoing = false"
+        "Outgoing" -> "outgoing = true"
+        "Incoming" -> "outgoing = false"
+        _ -> "outgoing = false"
+      -- Single scan: compute counts + bucket distribution in one pass
+      -- Use distinct endpoint hosts to avoid DISTINCT on outer query
       q =
         [text|
-WITH filtered_requests AS (
+WITH endpoint_hosts AS (
+    SELECT DISTINCT host FROM apis.endpoints
+    WHERE project_id = ? AND host != '' AND $endpointFilter
+), combined AS (
     SELECT $hostExpr AS host,
            COUNT(*) AS eventsCount,
            MAX(timestamp) AS last_seen,
-           MIN(timestamp) AS first_seen
-    FROM otel_logs_and_spans
-    WHERE project_id = ?
-      AND $timeRange
-      AND attributes___http___request___method IS NOT NULL
-      AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
-    GROUP BY host
-), bucketed AS (
-    SELECT $hostExpr AS host,
+           MIN(timestamp) AS first_seen,
            LEAST(width_bucket(EXTRACT(EPOCH FROM timestamp), EXTRACT(EPOCH FROM $seriesStart::timestamptz), EXTRACT(EPOCH FROM NOW()), $numBuckets), $numBuckets) AS bucket_idx,
            COUNT(*)::int AS cnt
     FROM otel_logs_and_spans
     WHERE project_id = ?
-      AND timestamp >= $seriesStart::timestamptz
+      AND $timeRange
       AND attributes___http___request___method IS NOT NULL
-      AND kind IN (CASE  WHEN ? THEN 'client' ELSE 'server' END, CASE  WHEN ? THEN NULL ELSE 'internal' END)
+      AND kind IN (CASE WHEN ? THEN 'client' ELSE 'server' END, CASE WHEN ? THEN NULL ELSE 'internal' END)
     GROUP BY host, bucket_idx
+), host_stats AS (
+    SELECT host,
+           SUM(eventsCount)::bigint AS eventsCount,
+           MAX(last_seen) AS last_seen,
+           MIN(first_seen) AS first_seen
+    FROM combined
+    GROUP BY host
 ), bucketed_agg AS (
-    SELECT b.host,
-           ARRAY_AGG(COALESCE(b2.cnt, 0) ORDER BY s.idx) AS activity_buckets
-    FROM (SELECT DISTINCT host FROM bucketed) b
+    SELECT c.host,
+           ARRAY_AGG(COALESCE(c2.cnt, 0) ORDER BY s.idx) AS activity_buckets
+    FROM (SELECT DISTINCT host FROM combined) c
     CROSS JOIN generate_series(1, $numBuckets) AS s(idx)
-    LEFT JOIN bucketed b2 ON b2.host = b.host AND b2.bucket_idx = s.idx
-    GROUP BY b.host
+    LEFT JOIN combined c2 ON c2.host = c.host AND c2.bucket_idx = s.idx
+    GROUP BY c.host
 )
-SELECT DISTINCT ep.host,
-       COALESCE(fr.eventsCount, 0) AS eventsCount,
-       fr.last_seen,
-       fr.first_seen,
+SELECT eh.host,
+       COALESCE(hs.eventsCount, 0) AS eventsCount,
+       hs.last_seen,
+       hs.first_seen,
        COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets
-FROM apis.endpoints ep
-LEFT JOIN filtered_requests fr ON ep.host = fr.host
-LEFT JOIN bucketed_agg ba ON ep.host = ba.host
-WHERE ep.project_id = ?
-  AND ep.host != ''
-  AND $endpointFilter
+FROM endpoint_hosts eh
+LEFT JOIN host_stats hs ON eh.host = hs.host
+LEFT JOIN bucketed_agg ba ON eh.host = ba.host
 ORDER BY $orderBy
 LIMIT 20 OFFSET ?
         |]
-  PG.query (Query $ encodeUtf8 q) (pid, isOutgoing, isOutgoing, pid, isOutgoing, isOutgoing, pid, skip)
+  PG.query (Query $ encodeUtf8 q) (pid, pid, isOutgoing, isOutgoing, skip)
   where
     isOutgoing = requestType == "Outgoing"
 

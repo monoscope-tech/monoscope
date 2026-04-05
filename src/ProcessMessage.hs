@@ -180,9 +180,9 @@ processMessages msgs attrs = do
                     pure $! Just span'
           Nothing -> pure Nothing
 
-      let !spanVec = V.fromList spans
+      let !spanVec = V.fromList (catMaybes spans)
       unless (V.null spanVec)
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF (V.catMaybes spanVec)
+        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
 
       pure $ map fst rMsgs
 
@@ -567,16 +567,17 @@ instance {-# OVERLAPPING #-} AE.FromJSON (Either Text [Text]) where
 -- >>> redactJSON (V.fromList ["menu.[].id", "menu.[].names.[]"]) [aesonQQ| {"menu":[{"id":"i1", "names":["John","okon"]}, {"id":"i2"}]} |]
 -- Object (fromList [("menu",Array [Object (fromList [("id",String "[REDACTED]"),("names",Array [String "[REDACTED]",String "[REDACTED]"])]),Object (fromList [("id",String "[REDACTED]")])])])
 redactJSON :: V.Vector Text -> AE.Value -> AE.Value
-redactJSON paths' = redactJSON' (V.map stripPrefixDot paths')
+redactJSON paths' = redactJSON' (map stripPrefixDot $ V.toList paths')
   where
     redactJSON' !paths value = case value of
-      AET.String v -> if "" `V.elem` paths then AET.String "[REDACTED]" else AET.String v
-      AET.Number v -> if "" `V.elem` paths then AET.String "[REDACTED]" else AET.Number v
+      AET.String v -> if any T.null paths then AET.String "[REDACTED]" else AET.String v
+      AET.Number v -> if any T.null paths then AET.String "[REDACTED]" else AET.Number v
       AET.Null -> AET.Null
       AET.Bool v -> AET.Bool v
-      AET.Object objMap -> AET.Object $ AEKM.fromHashMapText $ HM.mapWithKey (\k v -> redactJSON' (V.mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path) paths) v) (AEKM.toHashMapText objMap)
-      AET.Array jsonList -> AET.Array $ V.map (redactJSON' (V.mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
+      AET.Object objMap -> AET.Object $ AEKM.mapWithKey (\k v -> redactJSON' (matchKey (AEK.toText k) paths) v) objMap
+      AET.Array jsonList -> AET.Array $ V.map (redactJSON' (mapMaybe (\path -> T.stripPrefix "[]." path <|> T.stripPrefix "[]" path) paths)) jsonList
 
+    matchKey !k = mapMaybe (\path -> T.stripPrefix (k <> ".") path <|> T.stripPrefix k path)
     stripPrefixDot !p = fromMaybe p (T.stripPrefix "." p)
 
 
