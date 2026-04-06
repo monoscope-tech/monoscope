@@ -274,33 +274,34 @@ expandedItemView pid item aptSp leftM rightM = do
             div_ [class_ "flex items-center gap-2 min-w-0"] do
               span_ [class_ $ "rounded-lg border cbadge-sm text-xs px-1.5 py-0.5 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
               h4_ [class_ "text-textStrong truncate text-sm font-medium"] $ toHtml bodyText
-          else if isAlert
-            then div_ [class_ "flex items-center gap-3"] do
-              h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
-              div_ [class_ "flex flex-wrap items-center gap-2"] do
-                let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
-                span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
-            else div_ [class_ "flex items-center gap-3 text-sm font-medium text-textStrong"] $ do
-              case reqDetails of
-                Just req -> do
-                  div_ [class_ "flex flex-wrap items-center gap-2"] do
-                    whenJust reqDetails $ \case
-                      ("HTTP", method, path, status) -> do
-                        span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap", term "data-tip" ""] $ toHtml method
-                        span_ [class_ $ "relative cbadge-sm badge-" <> T.take 1 (show status) <> "xx whitespace-nowrap", term "data-tip" ""] $ toHtml $ T.take 3 $ show status
-                        let displayPath = if T.length path <= 1 then fromMaybe path item.name else path
-                        div_ [class_ "flex items-center"] do
-                          span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml displayPath
-                          div_ [[__| install Copy(content:.urlPath )|], Aria.label_ "Copy URL to clipboard", role_ "button", tabindex_ "0"] do
-                            faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-iconNeutral"
-                      (scheme, method, path, status) -> do
-                        div_ [class_ "flex flex-wrap items-center"] do
-                          span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
-                          span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
-                          let extraClass = getGrpcStatusColor status
-                          when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
-                Nothing -> do
-                  h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
+          else
+            if isAlert
+              then div_ [class_ "flex items-center gap-3"] do
+                h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
+                div_ [class_ "flex flex-wrap items-center gap-2"] do
+                  let strCls = getAlertStatusColor $ fromMaybe "" item.status_message
+                  span_ [class_ $ "badge badge-sm whitespace-nowrap " <> strCls] $ toHtml $ fromMaybe "" item.status_message
+              else div_ [class_ "flex items-center gap-3 text-sm font-medium text-textStrong"] $ do
+                case reqDetails of
+                  Just req -> do
+                    div_ [class_ "flex flex-wrap items-center gap-2"] do
+                      whenJust reqDetails $ \case
+                        ("HTTP", method, path, status) -> do
+                          span_ [class_ $ "relative cbadge-sm badge-" <> method <> " whitespace-nowrap", term "data-tip" ""] $ toHtml method
+                          span_ [class_ $ "relative cbadge-sm badge-" <> T.take 1 (show status) <> "xx whitespace-nowrap", term "data-tip" ""] $ toHtml $ T.take 3 $ show status
+                          let displayPath = if T.length path <= 1 then fromMaybe path item.name else path
+                          div_ [class_ "flex items-center"] do
+                            span_ [class_ "shrink-1 px-2 py-1.5 max-w-96 truncate mr-2 urlPath"] $ toHtml displayPath
+                            div_ [[__| install Copy(content:.urlPath )|], Aria.label_ "Copy URL to clipboard", role_ "button", tabindex_ "0"] do
+                              faSprite_ "copy" "regular" "h-8 w-8 border border-strokeWeak bg-fillWeakerer rounded-full p-2 text-iconNeutral"
+                        (scheme, method, path, status) -> do
+                          div_ [class_ "flex flex-wrap items-center"] do
+                            span_ [class_ "flex gap-2 items-center text-textStrong bg-fillWeaker border border-strokeWeak rounded-lg whitespace-nowrap px-2 py-1"] $ toHtml method
+                            span_ [class_ "px-2 py-1.5 max-w-96"] $ toHtml path
+                            let extraClass = getGrpcStatusColor status
+                            when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
+                  Nothing -> do
+                    h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
         div_ [class_ "flex gap-2 items-center shrink-0"] $ do
           dateTime (if isLog then item.timestamp else item.start_time) Nothing
           button_
@@ -336,23 +337,23 @@ expandedItemView pid item aptSp leftM rightM = do
           _ -> pass
         let createdAt = formatUTC item.timestamp
         whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) $ \trId -> do
-            let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
-            button_
-              ( actBtn
-                  <> [ term
-                         "_"
-                         [text|on click remove .hidden from #trace_expanded_view
+          let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
+          button_
+            ( actBtn
+                <> [ term
+                       "_"
+                       [text|on click remove .hidden from #trace_expanded_view
                             then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")
                             then set #trace_expanded_view.innerHTML to #loader-tmp.innerHTML
                             then fetch $tracePath
                             then set #trace_expanded_view.innerHTML to it
                             then htmx.process(#trace_expanded_view)
                             then _hyperscript.processNode(#trace_expanded_view) then window.evalScriptsFromContent(#trace_expanded_view)|]
-                     ]
-              )
-              do
-                faSprite_ "cross-hair" "regular" "w-3 h-3"
-                "View trace"
+                   ]
+            )
+            do
+              faSprite_ "cross-hair" "regular" "w-3 h-3"
+              "View trace"
         let item_id = item.id
         let eventType = if isLog then "log" else "span"
         let monitorId = fromMaybe "" item.parent_id
