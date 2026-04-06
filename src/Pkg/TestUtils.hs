@@ -241,7 +241,7 @@ withExternalDBSetup f = do
             | attempt < (3 :: Int)
             , "being accessed by other users" `T.isInfixOf` show e -> do
                 -- Terminate connections to template and retry
-                void $ execute masterConn (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" <> templateDbName <> "' AND pid <> pg_backend_pid()") ()
+                void (PGS.query_ masterConn (Query $ encodeUtf8 $ "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = '" <> templateDbName <> "' AND pid <> pg_backend_pid()") :: IO [Only Bool])
                 threadDelay (100000 * (attempt + 1))
                 createFromTemplate (attempt + 1)
             | otherwise -> throwIO e

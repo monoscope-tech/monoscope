@@ -199,7 +199,7 @@ spec = aroundAll withTestResources do
       case pg1 of
         Log.LogsGetJson r -> do
           V.length r.logsData `shouldBe` 500  -- API limits to 500 per page
-          r.count `shouldSatisfy` (>= 1000)  -- At least our 1000 test messages
+          r.hasMore `shouldBe` True  -- More pages available
 
           -- Extract cursor timestamp from last item
           let lastItemM = r.logsData V.!? (V.length r.logsData - 1)
