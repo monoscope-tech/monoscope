@@ -424,6 +424,19 @@ describe('Monaco AQL Editor Integration Tests', () => {
       { category: 'Top-Level Fields', query: 'spans ', expect: ['timestamp', 'id', 'status_code', 'method', 'path'] },
       { category: 'Top-Level Fields', query: 'spans ', expect: ['resource', 'attributes'] },
 
+      // ==================== BARE CONDITION QUERIES (no collection prefix) ====================
+      { category: 'Bare Conditions', query: '', expect: ['status_code', 'method', 'duration', 'resource', 'attributes', 'timestamp'] },
+      { category: 'Bare Conditions', query: 'status_code ', expect: ['==', '!=', '>', '<', '>=', '<=', '=~'] },
+      { category: 'Bare Conditions', query: 'status_code == ', expect: ['OK', 'ERROR', 'UNSET'], mode: 'contains' },
+      { category: 'Bare Conditions', query: 'status_code == "OK" ', expect: ['and', 'or', '|'], mode: 'contains' },
+      { category: 'Bare Conditions', query: 'status_code == "OK" and ', expect: ['method', 'path'] },
+      { category: 'Bare Conditions', query: 'status_code == "OK" and method ', expect: ['==', '!='] },
+      { category: 'Bare Conditions', query: 'status_code == "OK" and method == ', expect: ['GET', 'POST'], mode: 'contains' },
+      { category: 'Bare Conditions', query: 'resource.', expect: ['service', 'host', 'region'] },
+      { category: 'Bare Conditions', query: 'resource.service == ', expect: ['api-service'], mode: 'contains' },
+      { category: 'Bare Conditions', query: 'duration > ', expect: [] },
+      { category: 'Bare Conditions', query: 'http_status == ', expect: ['200', '404', '500'], mode: 'contains' },
+
       // ==================== EDGE CASES ====================
       { category: 'Edge Cases', query: 'spans | stat', expect: ['status_code'] },
       { category: 'Edge Cases', query: 'spans  |  status_code  ==  ', expect: ['OK'], mode: 'contains' },

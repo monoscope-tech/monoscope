@@ -1234,6 +1234,8 @@ widgetViewerEditor_ pid paymentPlan dashboardIdM tabSlugM currentRange existingW
             , alert = False
             , patternSelected = Nothing
             , mobileExtra = Nothing
+            , parseError = Nothing
+            , facetData = Nothing
             }
         details_ [class_ "text-xs text-textWeak"] do
           summary_ [class_ "cursor-pointer hover:text-textStrong select-none transition-colors"] "Show generated SQL"

@@ -4,14 +4,16 @@ module Pkg.Components.LogQueryBox (logQueryBox_, visTypes, queryLibrary_, queryE
 
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
-import Data.Text qualified as T ()
+import Data.Text qualified as T
 import Data.Vector qualified as V
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
+import Models.Apis.Fields (FacetData (..), FacetValue (..))
 import Models.Apis.LogPatterns (knownPatternFields)
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Schema qualified as Schema
@@ -46,6 +48,9 @@ data LogQueryBoxConfig = LogQueryBoxConfig
   -- ^ ID of the widget preview element to update when the query changes
   , mobileExtra :: Maybe (Html ())
   -- ^ Extra content rendered mobile-only in the viz tabs row
+  , parseError :: Maybe Text
+  -- ^ Server-side parse error to display inline on page load
+  , facetData :: Maybe FacetData
   }
   deriving (Generic, Show)
   deriving anyclass (Default)
@@ -199,8 +204,12 @@ logQueryBox_ config = do
               ]
               do
                 faSprite_ "magnifying-glass" "regular" "h-4 w-4 inline-block"
-      -- Inline parse error display (populated by JS when query parsing fails)
-      div_ [class_ "hidden text-xs text-textError px-2 py-1 bg-fillError-weak rounded", id_ "query-parse-error"] ""
+      -- Inline parse error display
+      case config.parseError of
+        Just err -> div_ [class_ "text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1", id_ "query-parse-error"] do
+          faSprite_ "triangle-exclamation" "regular" "h-3 w-3 shrink-0"
+          toHtml err
+        Nothing -> div_ [class_ "hidden text-xs text-textError px-2 py-1 bg-fillError-weak rounded flex items-center gap-1", id_ "query-parse-error"] ""
 
       div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
@@ -292,7 +301,7 @@ logQueryBox_ config = do
               span_ "Create monitor"
 
   -- Include initialization code for the query editor
-  queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType
+  queryEditorInitializationCode config.queryLibRecent config.queryLibSaved config.vizType config.facetData
 
 
 -- | Helper for visualizing the data with different chart types
@@ -418,7 +427,7 @@ popularQueries =
   , ("duration > 1000000000", "Slow requests (>1s)", Nothing)
   , ("attributes.exception.type != null", "Exceptions", Nothing)
   , ("attributes.error.type != null", "Error types", Nothing)
-  , ("kind == \"span\" AND duration > 5000000000", "Slow spans (>5s)", Nothing)
+  , ("kind == \"span\" and duration > 5000000000", "Slow spans (>5s)", Nothing)
   , ("status_code == \"ERROR\" | summarize count(*) by bin_auto(timestamp), resource.service.name", "Errors by service", Just "Bar chart — error rate per service over time")
   , ("| summarize count(*) by bin_auto(timestamp), level", "Volume by level", Just "Bar chart — log volume breakdown")
   , ("| summarize percentiles(duration, 50, 90, 99) by bin_auto(timestamp)", "Latency percentiles", Just "Line chart — p50/p90/p99 over time")
@@ -536,12 +545,23 @@ popularSearchChips_ _pid queryLibSaved queryLibRecent showChips =
     defaultChips = [(q, l) | (q, l, _) <- take 3 popularQueries]
 
 
+-- | Merge pre-computed facet values into the schema so the query editor shows real autocomplete values
+enrichSchemaWithFacets :: Schema.Schema -> FacetData -> AE.Value
+enrichSchemaWithFacets schema (FacetData facetMap) =
+  AE.toJSON $ schema{Schema.fields = HM.foldlWithKey' mergeField schema.fields facetMap}
+  where
+    mergeField acc facetKey facetVals =
+      let dotKey = T.replace "___" "." $ T.replace "severity___severity_" "severity." facetKey
+          vals = Just $ map (.value) facetVals
+       in Map.alter (Just . maybe (Schema.FieldInfo "string" "" vals) (\fi -> fi{Schema.examples = vals})) dotKey acc
+
+
 -- | Initialization code for the query editor that sets up schema data, query library, and popular searches
-queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Maybe Text -> Html ()
-queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
+queryEditorInitializationCode :: V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Maybe Text -> Maybe FacetData -> Html ()
+queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM facetDataM = do
   let queryLibData = queryLibRecent <> queryLibSaved
       queryLibDataJson = decodeUtf8 $ AE.encode queryLibData
-      schemaJson = decodeUtf8 $ AE.encode Schema.telemetrySchemaJson
+      schemaJson = decodeUtf8 $ AE.encode $ maybe Schema.telemetrySchemaJson (enrichSchemaWithFacets Schema.telemetrySchema) facetDataM
       popularQueriesJson = decodeUtf8 $ AE.encode Schema.popularOtelQueriesJson
       vizType = fromMaybe "logs" vizTypeM
   script_
@@ -576,30 +596,25 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM = do
     var _initRetries = 0;
     (function initEditor() {
       const editor = document.getElementById('filterElement');
-      if (!editor) { if (++_initRetries < 40) setTimeout(initEditor, 50); return; }
-      if (editor.setQueryLibrary) {
-        editor.setQueryLibrary($queryLibDataJson);
-      }
-      if (window.schemaManager && window.schemaManager.setSchemaData) {
-        window.schemaManager.setSchemaData('spans', $schemaJson);
-        const queryBuilder = document.querySelector('query-builder');
-        if (queryBuilder && typeof queryBuilder.refreshFieldSuggestions === 'function') {
-          queryBuilder.refreshFieldSuggestions();
-        }
-      }
-      if (editor.setPopularSearches) {
-        editor.setPopularSearches($popularQueriesJson);
-      }
+      const retry = () => { if (++_initRetries < 80) setTimeout(initEditor, 50); };
+      if (!editor || !editor.setQueryLibrary || !window.schemaManager?.setSchemaData) { retry(); return; }
+      editor.setQueryLibrary($queryLibDataJson);
+      window.schemaManager.setSchemaData('spans', $schemaJson);
+      const queryBuilder = document.querySelector('query-builder');
+      if (queryBuilder?.refreshFieldSuggestions) queryBuilder.refreshFieldSuggestions();
+      if (editor.setPopularSearches) editor.setPopularSearches($popularQueriesJson);
     })();
 
     // Inline parse error: intercept errorToast events for query errors and show inline
     window.showQueryParseError = function(msg) {
       const el = document.getElementById('query-parse-error');
-      if (el) { el.textContent = msg; el.classList.remove('hidden'); }
+      if (el) { el.innerHTML = '<svg class="inline-block icon h-3 w-3 shrink-0"><use href="/public/assets/svgs/fa-sprites/regular.svg#triangle-exclamation"></use></svg> '; el.appendChild(document.createTextNode(msg)); el.classList.remove('hidden'); }
+      document.getElementById('queryBuilder')?.classList.add('!border-red-500/50');
     };
     window.clearQueryParseError = function() {
       const el = document.getElementById('query-parse-error');
-      if (el) { el.textContent = ''; el.classList.add('hidden'); }
+      if (el) { el.innerHTML = ''; el.classList.add('hidden'); }
+      document.getElementById('queryBuilder')?.classList.remove('!border-red-500/50');
     };
     // Clear inline error when query changes
     window.addEventListener('update-query', () => window.clearQueryParseError());

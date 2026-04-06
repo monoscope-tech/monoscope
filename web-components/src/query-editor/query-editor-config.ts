@@ -20,7 +20,7 @@ export function initializeDefaultSchema(): void {
         .filter(([name]) => !name.includes('.'))
         .map(([name, info]) => ({
           name,
-          type: info.type,
+          type: info.type || info.field_type,
           examples: info.examples,
           // Check if this field has nested fields by looking for dotted versions
           fields: Object.keys(currentSchema.fields).some((key) => key.startsWith(name + '.')) ? {} : undefined,
@@ -51,7 +51,7 @@ export function initializeDefaultSchema(): void {
       if (!childMap.has(childName)) {
         childMap.set(childName, {
           name: childName,
-          type: info.type,
+          type: info.type || info.field_type,
           examples: info.examples,
           // Mark as having nested fields if there are deeper levels or if it's an object type
           fields: hasNestedFields || nestedFields.some((f) => f.fullName.startsWith(prefixWithDot + childName + '.')) ? {} : undefined,
@@ -76,48 +76,20 @@ export function initializeDefaultSchema(): void {
       return fieldInfo.examples.map((v) => String(v));
     }
 
-    // For specific common fields, return useful values
+    // Spec-constant and syntax-helper fallbacks (always valid regardless of project data)
     const fieldSpecificValues: Record<string, string[]> = {
       status_code: ['OK', 'ERROR', 'UNSET'],
-      'attributes.http.request.method': ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'HEAD', 'OPTIONS'],
-      'resource.service.name': ['frontend', 'backend', 'api', 'auth-service'],
+      kind: ['logs', 'span', 'request'],
       level: ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
       'severity.text': ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
-      kind: ['logs', 'span', 'request'],
-      'context.trace_id': ['trace-123', 'trace-456'],
-      'context.span_id': ['span-abc', 'span-def'],
-      'attributes.http.response.status_code': ['200', '201', '400', '401', '403', '404', '500', '502', '503'],
-      'resource.telemetry.sdk.language': ['javascript', 'python', 'java', 'go', 'rust', 'csharp'],
-      'attributes.user.email': ['user@example.com', 'admin@company.com'],
+      timestamp: ['ago(1h)', 'ago(30m)', 'ago(6h)', 'ago(1d)', 'ago(7d)', 'now()'],
+      observed_timestamp: ['ago(1h)', 'ago(30m)', 'ago(6h)', 'ago(1d)', 'ago(7d)', 'now()'],
     };
 
-    // Check for exact match or partial match
-    if (fieldSpecificValues[field]) {
-      return fieldSpecificValues[field];
-    }
+    if (fieldSpecificValues[field]) return fieldSpecificValues[field];
 
-    // Check if any part of the field matches known patterns
-    for (const [key, values] of Object.entries(fieldSpecificValues)) {
-      if (field.includes(key.split('.').pop() || '')) {
-        return values;
-      }
-    }
+    if (fieldInfo?.type === 'boolean') return ['true', 'false'];
 
-    // Default fallback values based on field type
-    if (fieldInfo) {
-      switch (fieldInfo.type) {
-        case 'string':
-          return ['example-value', 'test-string', 'sample-data'];
-        case 'number':
-          return ['100', '200', '500', '1000'];
-        case 'boolean':
-          return ['true', 'false'];
-        default:
-          return ['value1', 'value2', 'value3'];
-      }
-    }
-
-    // Ultimate fallback
-    return ['value1', 'value2', 'value3'];
+    return [];
   });
 }

@@ -112,12 +112,34 @@ const PIPE_OPERATOR = ['|'];
 // Combine all operators for easy access
 const ALL_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...PIPE_OPERATOR];
 
-// Operators for suggestion dropdowns (includes logical operators)
-const SUGGESTION_OPERATORS = [...COMPARISON_OPERATORS, ...SET_OPERATORS, ...STRING_OPERATORS, ...LOGICAL_OPERATORS.filter((op) => op !== '!exists')];
+// Operator descriptions for suggestion dropdown
+const OPERATOR_DETAILS: Record<string, string> = {
+  '==': 'equals', '!=': 'not equals', '>': 'greater than', '<': 'less than',
+  '>=': 'greater or equal', '<=': 'less or equal', '=~': 'regex match',
+  'in': 'in list', '!in': 'not in list', 'has': 'has value', '!has': 'not has',
+  'has_any': 'has any of', 'has_all': 'has all of',
+  'contains': 'contains substring', '!contains': 'not contains',
+  'startswith': 'starts with', '!startswith': 'not starts with',
+  'endswith': 'ends with', '!endswith': 'not ends with', 'matches': 'glob match',
+  'and': 'both conditions', 'or': 'either condition', 'not': 'negate', 'exists': 'field exists', '!exists': 'field missing',
+};
+
+// Common operators shown first, then advanced ones
+const COMMON_OPERATORS = ['==', '!=', '>', '<', 'contains', 'in'];
+const ADVANCED_OPERATORS = ['>=', '<=', '=~', '!in', 'has', '!has', 'has_any', 'has_all', '!contains', 'startswith', '!startswith', 'endswith', '!endswith', 'matches', ...LOGICAL_OPERATORS.filter((op) => op !== '!exists')];
+const SUGGESTION_OPERATORS = [...COMMON_OPERATORS, ...ADVANCED_OPERATORS];
+const operatorSortText = (op: string, i: number) => {
+  const group = COMMON_OPERATORS.includes(op) ? '0' : '1';
+  return `${group}_${String(i).padStart(3, '0')}_${op}`;
+};
 
 // Performance constants
 const IDLE_CALLBACK_TIMEOUT = 50;
 const MAX_CACHE_SIZE = 100;
+
+// Common filter fields get higher priority (lower sortText = shown first)
+const PRIORITY_FIELDS = new Set(['status_code', 'level', 'method', 'name', 'duration', 'service', 'path', 'http_status', 'resource', 'attributes']);
+const fieldSortText = (name: string) => PRIORITY_FIELDS.has(name) ? `0_${name}` : `1_${name}`;
 
 // Sources and keywords
 const DATA_SOURCES = ['spans', 'metrics'];
@@ -483,7 +505,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
           suggestions.push({
             label: String(v),
             kind: monaco.languages.CompletionItemKind.Value,
-            insertText: typeof v === 'string' ? `"${v}" ` : `${v} `,
+            insertText: typeof v === 'string' && !String(v).includes('(') ? `"${v}" ` : `${v} `,
             range: createRange(),
           })
         );
@@ -525,7 +547,8 @@ monaco.languages.registerCompletionItemProvider('aql', {
           kind: monaco.languages.CompletionItemKind.Field,
           detail: f.type,
           documentation: f.examples?.join(', '),
-          insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
+          insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
+          sortText: fieldSortText(f.name),
           range: createRange(),
         })
       );
@@ -536,31 +559,21 @@ monaco.languages.registerCompletionItemProvider('aql', {
     // OPTIMIZATION: Only run regex if line ends with space
     const fieldSpaceMatch = lastChar === ' ' ? lineText.match(REGEX_PATTERNS.fieldSpace) : null;
     if (fieldSpaceMatch && !logicalOperatorMatch) {
-      SUGGESTION_OPERATORS.forEach((op) =>
+      SUGGESTION_OPERATORS.forEach((op, i) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
+          detail: OPERATOR_DETAILS[op],
           insertText: `${op} `,
+          sortText: operatorSortText(op, i),
           range: createRange(),
         })
       );
       return { suggestions };
     }
 
-    // Empty or start
+    // Empty or start — suggest fields first (primary use case), tables secondary
     if (segments.length === 1 && (last === '' || !tables.some((t) => last.toLowerCase().startsWith(t)))) {
-      // Suggest data sources (tables)
-      tables
-        .filter((t) => last === '' || t.toLowerCase().startsWith(last.toLowerCase().trim()))
-        .forEach((t) =>
-          suggestions.push({
-            label: t,
-            kind: monaco.languages.CompletionItemKind.Module,
-            insertText: `${t} `,
-            range: createRange(),
-          })
-        );
-
       if (last === '' || !tables.some((t) => last.toLowerCase().trim().startsWith(t))) {
         const defaultSchema = schemaManager.getDefaultSchema();
         const fields = await schemaManager.resolveNested(defaultSchema, '');
@@ -571,11 +584,25 @@ monaco.languages.registerCompletionItemProvider('aql', {
             kind: monaco.languages.CompletionItemKind.Field,
             detail: f.type,
             documentation: f.examples?.join(', '),
-            insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
+            insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
+            sortText: fieldSortText(f.name),
             range: createRange(),
           })
         );
       }
+
+      // Tables after fields
+      tables
+        .filter((t) => last === '' || t.toLowerCase().startsWith(last.toLowerCase().trim()))
+        .forEach((t) =>
+          suggestions.push({
+            label: t,
+            kind: monaco.languages.CompletionItemKind.Module,
+            insertText: `${t} `,
+            sortText: `2_${t}`,
+            range: createRange(),
+          })
+        );
       return { suggestions };
     }
 
@@ -611,7 +638,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
         suggestions.push({
           label: f.name,
           kind: monaco.languages.CompletionItemKind.Field,
-          insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
+          insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
           range: createRange(),
         })
       );
@@ -620,11 +647,13 @@ monaco.languages.registerCompletionItemProvider('aql', {
 
     // Search segment
     if (!REGEX_PATTERNS.statsOrTimechart.test(last)) {
-      SUGGESTION_OPERATORS.forEach((op) =>
+      SUGGESTION_OPERATORS.forEach((op, i) =>
         suggestions.push({
           label: op,
           kind: monaco.languages.CompletionItemKind.Operator,
+          detail: OPERATOR_DETAILS[op],
           insertText: `${op} `,
+          sortText: operatorSortText(op, i),
           range: createRange(),
         })
       );
@@ -637,7 +666,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
           kind: monaco.languages.CompletionItemKind.Field,
           detail: f.type,
           documentation: f.examples?.join(', '),
-          insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
+          insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
           range: createRange(),
         })
       );
@@ -663,7 +692,7 @@ monaco.languages.registerCompletionItemProvider('aql', {
           suggestions.push({
             label: f.name,
             kind: monaco.languages.CompletionItemKind.Field,
-            insertText: f.type === 'object' ? `${f.name}.` : `${f.name} `,
+            insertText: f.type === 'object' || f.fields ? `${f.name}.` : `${f.name} `,
             range: createRange(),
           })
         );
@@ -692,6 +721,52 @@ monaco.languages.registerCompletionItemProvider('aql', {
     return { suggestions };
   },
 });
+
+// Basic client-side query syntax validation
+const VALID_OPERATORS = new Set(['==', '!=', '>', '<', '>=', '<=', '=~', 'in', '!in', 'has', '!has', 'has_any', 'has_all', 'contains', '!contains', 'startswith', '!startswith', 'endswith', '!endswith']);
+
+interface QueryError {
+  message: string;
+  startColumn: number;
+  endColumn: number;
+  line: number;
+}
+
+function validateQuerySyntax(query: string): QueryError | null {
+  const trimmed = query.trim();
+  if (!trimmed) return null;
+
+  // Check unclosed quotes
+  let inQuote = false;
+  let quoteChar = '';
+  let quoteStart = 0;
+  for (let i = 0; i < trimmed.length; i++) {
+    const c = trimmed[i];
+    if (!inQuote && (c === '"' || c === "'")) {
+      inQuote = true;
+      quoteChar = c;
+      quoteStart = i;
+    } else if (inQuote && c === quoteChar && (i === 0 || trimmed[i - 1] !== '\\')) {
+      inQuote = false;
+    }
+  }
+  if (inQuote) {
+    return { message: `Unclosed ${quoteChar === '"' ? 'double' : 'single'} quote`, startColumn: quoteStart + 1, endColumn: trimmed.length + 1, line: 1 };
+  }
+
+  // Tokenize outside quotes for operator validation
+  // Find tokens that look like operators (sequences of =, !, <, > symbols)
+  const operatorPattern = /(?<![a-zA-Z_])([=!<>~]{2,})(?![a-zA-Z_])/g;
+  let match;
+  while ((match = operatorPattern.exec(trimmed)) !== null) {
+    const op = match[1];
+    if (!VALID_OPERATORS.has(op)) {
+      return { message: `Unknown operator "${op}". Did you mean "==" or "!="?`, startColumn: match.index + 1, endColumn: match.index + op.length + 1, line: 1 };
+    }
+  }
+
+  return null;
+}
 
 @customElement('query-editor')
 export class QueryEditorComponent extends LitElement {
@@ -796,6 +871,27 @@ export class QueryEditorComponent extends LitElement {
     this.editor?.trigger('auto', 'editor.action.triggerSuggest', {});
   };
 
+  private validateAndMark(query: string, model: monaco.editor.ITextModel): void {
+    const error = validateQuerySyntax(query);
+    const wrapper = this.querySelector(':scope > div');
+    if (error) {
+      monaco.editor.setModelMarkers(model, 'query-validator', [{
+        severity: monaco.MarkerSeverity.Error,
+        message: error.message,
+        startLineNumber: error.line,
+        startColumn: error.startColumn,
+        endLineNumber: error.line,
+        endColumn: error.endColumn,
+      }]);
+      wrapper?.classList.add('!border-red-500/60');
+      (window as any).showQueryParseError?.(error.message);
+    } else {
+      monaco.editor.setModelMarkers(model, 'query-validator', []);
+      wrapper?.classList.remove('!border-red-500/60');
+      (window as any).clearQueryParseError?.();
+    }
+  }
+
   // Debounced version - waits 300ms after user stops typing before firing
   private updateQueryTimeout: number | null = null;
   private lastQueryValue = '';
@@ -817,18 +913,6 @@ export class QueryEditorComponent extends LitElement {
     }, 500); // wait 300ms after last keypress
   };
 
-  // Debounced suggestion trigger - waits 100ms after user stops typing
-  private triggerSuggestionsTimeout: number | null = null;
-  private triggerSuggestionsDebounced = () => {
-    if (this.triggerSuggestionsTimeout !== null) {
-      clearTimeout(this.triggerSuggestionsTimeout);
-    }
-
-    this.triggerSuggestionsTimeout = window.setTimeout(() => {
-      this.triggerSuggestions();
-      this.triggerSuggestionsTimeout = null;
-    }, 100); // 100ms feels instant but prevents lag
-  };
 
   private updateQuery = (queryValue: string) => {
     if (this.updateURLParams) {
@@ -862,6 +946,12 @@ export class QueryEditorComponent extends LitElement {
         })
       );
     }
+
+    // Re-validate after update-query clears errors (setTimeout ensures it runs after event handlers)
+    setTimeout(() => {
+      const model = this.editor?.getModel();
+      if (model) this.validateAndMark(queryValue, model);
+    }, 0);
   };
 
   async firstUpdated(): Promise<void> {
@@ -924,11 +1014,6 @@ export class QueryEditorComponent extends LitElement {
     if (this.updateQueryTimeout !== null) {
       clearTimeout(this.updateQueryTimeout);
       this.updateQueryTimeout = null;
-    }
-    // Clear any pending debounced suggestion trigger
-    if (this.triggerSuggestionsTimeout !== null) {
-      clearTimeout(this.triggerSuggestionsTimeout);
-      this.triggerSuggestionsTimeout = null;
     }
     // Reset tracking variables
     this.lastEmittedQueryValue = '';
@@ -1180,7 +1265,7 @@ export class QueryEditorComponent extends LitElement {
       fontLigatures: false,
       fontSize: 14,
       'semanticHighlighting.enabled': false,
-      quickSuggestions: false,
+      quickSuggestions: { other: 'on', comments: 'off', strings: 'off' },
       suggestOnTriggerCharacters: true,
       suggest: {
         showIcons: false,
@@ -1301,31 +1386,24 @@ export class QueryEditorComponent extends LitElement {
       this.editor.onDidChangeModelContent(() => {
         if (this.isProgrammaticUpdate) return;
 
-        // PERF: Use requestIdleCallback to defer non-critical work off the keystroke path
-        const scheduleIdle = window.requestIdleCallback
-          ? (cb: () => void) => window.requestIdleCallback(cb, { timeout: IDLE_CALLBACK_TIMEOUT })
-          : (cb: () => void) => setTimeout(cb, 1);
+        const model = this.editor?.getModel();
+        if (!model) return;
 
-        scheduleIdle(() => {
-          const model = this.editor?.getModel();
-          if (!model) return;
+        const newValue = model.getValue();
 
-          const newValue = model.getValue();
+        // Only update placeholder on empty/non-empty transitions
+        const isEmpty = newValue.trim() === '';
+        const wasEmpty = !this.currentQuery || this.currentQuery.trim() === '';
+        if (isEmpty !== wasEmpty) {
+          this.updatePlaceholder();
+        }
 
-          // Only update placeholder on empty/non-empty transitions
-          const isEmpty = newValue.trim() === '';
-          const wasEmpty = !this.currentQuery || this.currentQuery.trim() === '';
-          if (isEmpty !== wasEmpty) {
-            this.updatePlaceholder();
-          }
+        // Update internal state without triggering Lit re-render
+        this.currentQuery = newValue;
 
-          // Update internal state without triggering Lit re-render
-          this.currentQuery = newValue;
-
-          // Debounced updates
-          this.updateQueryDebounced(newValue);
-          this.triggerSuggestionsDebounced();
-        });
+        // Debounced URL/event update (Monaco's quickSuggestions handles triggering completions)
+        // Validation runs after debounce to avoid race with update-query clearing errors
+        this.updateQueryDebounced(newValue);
       }),
 
       // OPTIMIZATION: Removed cursor position handler - dropdown position is already correct
@@ -1460,19 +1538,26 @@ export class QueryEditorComponent extends LitElement {
       }
     }
 
-    this.completionItems = aqlItems.slice(0, 20).map((item) => {
-      const completionData = item.completion || item;
-      return {
-        kind: 'completion' as const,
-        label: completionData.label || completionData.insertText || 'Unknown',
-        insertText: completionData.insertText || completionData.label || '',
-        kindCategory: completionData.kind || monaco.languages.CompletionItemKind.Field,
-        detail: completionData.detail || completionData.documentation || '',
-        score: item.score || 2000,
-        isContextSpecific: isContextSpecific,
-        parentPath: parentPath || undefined,
-      };
-    });
+    this.completionItems = aqlItems
+      .slice(0, 20)
+      .sort((a, b) => {
+        const sa = (a.completion || a).sortText || (a.completion || a).label || '';
+        const sb = (b.completion || b).sortText || (b.completion || b).label || '';
+        return sa.localeCompare(sb);
+      })
+      .map((item) => {
+        const completionData = item.completion || item;
+        return {
+          kind: 'completion' as const,
+          label: completionData.label || completionData.insertText || 'Unknown',
+          insertText: completionData.insertText || completionData.label || '',
+          kindCategory: completionData.kind || monaco.languages.CompletionItemKind.Field,
+          detail: completionData.detail || completionData.documentation || '',
+          score: item.score || 2000,
+          isContextSpecific: isContextSpecific,
+          parentPath: parentPath || undefined,
+        };
+      });
 
     this.selectedIndex = -1;
   }
@@ -1724,31 +1809,55 @@ export class QueryEditorComponent extends LitElement {
     `;
   }
 
+  private splitCompletionSubgroups(items: CompletionItem[]): { items: SuggestionItem[]; title: string | null }[] {
+    if (!items.length) return [];
+    const isAllOperators = items.every((i) => i.kindCategory === monaco.languages.CompletionItemKind.Operator);
+    const isAllFields = items.every((i) => i.kindCategory === monaco.languages.CompletionItemKind.Field);
+    const hasMixedTypes = !isAllOperators && !isAllFields && items.some((i) => i.kindCategory === monaco.languages.CompletionItemKind.Operator);
+
+    if (isAllOperators && items.length > 6) {
+      const common = items.filter((i) => COMMON_OPERATORS.includes(i.label));
+      const advanced = items.filter((i) => !COMMON_OPERATORS.includes(i.label));
+      const sections: { items: SuggestionItem[]; title: string | null }[] = [];
+      if (common.length) sections.push({ items: common, title: 'Common' });
+      if (advanced.length) sections.push({ items: advanced, title: 'More Operators' });
+      return sections;
+    }
+
+    if (isAllFields && items.length > 8) {
+      const priority = items.filter((i) => PRIORITY_FIELDS.has(i.label));
+      const other = items.filter((i) => !PRIORITY_FIELDS.has(i.label));
+      const sections: { items: SuggestionItem[]; title: string | null }[] = [];
+      if (priority.length) sections.push({ items: priority, title: null });
+      if (other.length) sections.push({ items: other, title: 'More Fields' });
+      return sections;
+    }
+
+    if (hasMixedTypes) {
+      const operators = items.filter((i) => i.kindCategory === monaco.languages.CompletionItemKind.Operator);
+      const fields = items.filter((i) => i.kindCategory !== monaco.languages.CompletionItemKind.Operator);
+      const sections: { items: SuggestionItem[]; title: string | null }[] = [];
+      if (fields.length) sections.push({ items: fields, title: null });
+      if (operators.length) sections.push({ items: operators, title: 'Operators' });
+      return sections;
+    }
+
+    return [{ items, title: null }];
+  }
+
   private renderSuggestionDropdown(): TemplateResult {
     if (!this.showSuggestions || !this.editor) return html``;
 
     const matches = this.getMatches();
-    const groups = {
-      completion: this.completionItems,
-      saved: matches.saved,
-      recent: matches.recent,
-      popular: matches.popular,
-    };
+    const completionSubgroups = this.splitCompletionSubgroups(this.completionItems);
 
-    const groupTitles = {
-      completion: null,
-      saved: 'Saved Views',
-      recent: 'Recent Searches',
-      popular: 'Popular Searches',
-    };
-
-    const orderedCategories: Array<keyof typeof groups> = ['completion', 'saved', 'recent', 'popular'];
-    const sections = orderedCategories
-      .filter((category) => groups[category]?.length > 0)
-      .map((category) => ({
-        items: groups[category],
-        title: groupTitles[category],
-      }));
+    type SectionDef = { items: SuggestionItem[]; title: string | null };
+    const sections: SectionDef[] = [
+      ...completionSubgroups,
+      ...(matches.saved.length ? [{ items: matches.saved as SuggestionItem[], title: 'Saved Views' }] : []),
+      ...(matches.recent.length ? [{ items: matches.recent as SuggestionItem[], title: 'Recent Searches' }] : []),
+      ...(matches.popular.length ? [{ items: matches.popular as SuggestionItem[], title: 'Popular Searches' }] : []),
+    ];
 
     const position = this.editor.getPosition();
     const coords = position ? this.editor.getScrolledVisiblePosition(position) : null;

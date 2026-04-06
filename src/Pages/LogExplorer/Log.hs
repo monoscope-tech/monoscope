@@ -561,12 +561,13 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
   let queryInput = maybeToMonoid queryM'
-  let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], True)
-  (queryAST, hadParseError) <- case parseQueryToAST queryInput of
+  let parseError msg = addTriggerEvent "showParseError" (AE.toJSON msg) >> addErrorToast "Error Parsing Query" (Just msg) $> ([], Just msg)
+  (queryAST, parseErrorMsg) <- case parseQueryToAST queryInput of
     Left err -> parseError err
     Right ast
       | not (T.null (T.strip queryInput)) && null ast -> parseError "Invalid query syntax"
-      | otherwise -> pure (ast, False)
+      | otherwise -> pure (ast, Nothing)
+  let hadParseError = isJust parseErrorMsg
   let queryText = toQText queryAST
       isJsonReq = jsonM == Just "true"
 
@@ -753,6 +754,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   , chartWidget
                   , latencyWidget
                   , queryResultCount = r.queryResultCount
+                  , parseError = parseErrorMsg
                   }
 
           addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
@@ -897,6 +899,7 @@ data ApiLogsPageData = ApiLogsPageData
   , chartWidget :: Widget.Widget
   , latencyWidget :: Widget.Widget
   , queryResultCount :: Int
+  , parseError :: Maybe Text
   }
 
 
@@ -1013,6 +1016,8 @@ apiLogsPage page = do
                 script_ "if(window.innerWidth<768) document.getElementById('toggle-filters-mobile').checked=true;"
               span_ [class_ "text-strokeWeak text-xs"] "·"
               rowCountDisplay_ "mobile" countText suffixText
+          , parseError = page.parseError
+          , facetData = (.facetJson) <$> page.facets
           }
 
       div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
@@ -1139,7 +1144,7 @@ apiLogsPage page = do
           let url = "/p/" <> page.pid.toText <> "/log_explorer/" <> te
           div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
-  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType
+  queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType ((.facetJson) <$> page.facets)
 
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)
