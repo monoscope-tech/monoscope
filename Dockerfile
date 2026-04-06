@@ -39,6 +39,7 @@ RUN --mount=type=cache,target=/root/.cabal/store \
     cabal update && cabal build --only-dependencies exe:monoscope-server -j --semaphore
 
 # Copy source code
+COPY package.yaml ./
 COPY src ./src
 COPY test ./test
 COPY app ./app
@@ -56,6 +57,7 @@ RUN npx tailwindcss -i ./static/public/assets/css/tailwind.css -o ./static/publi
 # Build Haskell executable (dist-newstyle persisted via BuildKit cache mount)
 RUN --mount=type=cache,target=/root/.cabal/store \
     --mount=type=cache,target=/build/dist-newstyle \
+    hpack && \
     cabal build exe:monoscope-server -j --semaphore --ghc-options="+RTS -A64m -n2m -RTS" && \
     mkdir -p /build/dist && \
     find dist-newstyle -name monoscope-server -type f -executable | head -1 | xargs -I {} cp {} /build/dist/
