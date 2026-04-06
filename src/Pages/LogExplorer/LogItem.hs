@@ -32,7 +32,7 @@ import Models.Telemetry.Telemetry (atMapText)
 import Models.Telemetry.Telemetry qualified as Telemetry
 import NeatInterpolation (text)
 import Pages.Components (dateTime)
-import Pkg.DeriveUtils (unAesonTextMaybe)
+import Pkg.DeriveUtils (encodeEnumSC, unAesonTextMaybe)
 import Relude
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
@@ -258,32 +258,23 @@ expandedItemView pid item aptSp leftM rightM = do
     div_ [id_ "copy_share_link"] pass
     unless isLog $ htmxOverlayIndicator_ "loading-span-list"
     htmxOverlayIndicator_ "details_indicator"
-    div_ [class_ "flex flex-col gap-3 bg-fillWeaker py-3 px-3"] $ do
-      div_ [class_ "flex justify-between items-center"] do
-        h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] $ if isLog then "Trace Log" else if isAlert then "Alert" else "Trace Span"
-        div_ [class_ "flex gap-3 items-center"] $ do
-          dateTime (if isLog then item.timestamp else item.start_time) Nothing
-          button_
-            [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
-            , Aria.label_ "Close item details"
-            , closePanelScript
-            ]
-            do
-              faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
-    div_ [class_ "flex flex-col gap-3"] do
-      if isLog
-        then div_ [class_ "flex items-center gap-3"] do
-          let svTxt = maybe "UNSET" (\x -> maybe "UNSET" show x.severity_text) item.severity
-              cls = getSeverityColor svTxt
-          span_ [class_ $ "rounded-lg border cbadge-sm text-sm px-2 py-1 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
-          h4_ [class_ "text-textStrong truncate"] $ toHtml $ case unAesonTextMaybe item.body of
-            Just (AE.String x) -> x
-            Just (AE.Object v) -> case extractMessageFromLog (AE.Object v) of
-              Just v' -> v'
-              _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
-            _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
-        else
-          if isAlert
+    div_ [class_ "flex flex-col gap-1.5 bg-fillWeaker py-2.5 px-3"] $ do
+      -- Row 1: severity/title + date + close (compact for logs)
+      div_ [class_ "flex justify-between items-start gap-2"] do
+        if isLog
+          then do
+            let svTxt = maybe "UNSET" (\x -> maybe "UNSET" (toText . encodeEnumSC @"SL") x.severity_text) item.severity
+                cls = getSeverityColor svTxt
+                bodyText = case unAesonTextMaybe item.body of
+                  Just (AE.String x) -> x
+                  Just (AE.Object v) -> case extractMessageFromLog (AE.Object v) of
+                    Just v' -> v'
+                    _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
+                  _ -> toStrict $ encodeToLazyText (unAesonTextMaybe item.body)
+            div_ [class_ "flex items-center gap-2 min-w-0"] do
+              span_ [class_ $ "rounded-lg border cbadge-sm text-xs px-1.5 py-0.5 shrink-0 " <> cls] $ toHtml $ T.toUpper svTxt
+              h4_ [class_ "text-textStrong truncate text-sm font-medium"] $ toHtml bodyText
+          else if isAlert
             then div_ [class_ "flex items-center gap-3"] do
               h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
               div_ [class_ "flex flex-wrap items-center gap-2"] do
@@ -310,14 +301,25 @@ expandedItemView pid item aptSp leftM rightM = do
                           when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
                 Nothing -> do
                   h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
-
+        div_ [class_ "flex gap-2 items-center shrink-0"] $ do
+          dateTime (if isLog then item.timestamp else item.start_time) Nothing
+          button_
+            [ class_ "cursor-pointer detail-close-btn rounded-md p-1 hover:bg-fillWeak transition-colors"
+            , Aria.label_ "Close item details"
+            , closePanelScript
+            ]
+            do
+              faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
+      -- Row 2: metadata badges
       div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ do
         unless (isLog || isAlert) $ do
           spanBadge pid "duration" (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
           spanBadge pid "kind" (fromMaybe "" item.kind) "Span Kind"
         spanBadge pid "resource___service___name" (getServiceName (unAesonTextMaybe item.resource)) "Service"
-        spanBadge pid "context___span_id" ("Span ID: " <> maybe "" (\c -> fromMaybe "" c.span_id) item.context) "Span ID"
-        spanBadge pid "context___trace_id" ("Trace ID: " <> maybe "" (\z -> fromMaybe "" z.trace_id) item.context) "Trace ID"
+        whenJust (item.context >>= (.span_id) >>= guarded (not . T.null)) $ \v ->
+          spanBadge pid "context___span_id" ("Span ID: " <> v) "Span ID"
+        whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) $ \v ->
+          spanBadge pid "context___trace_id" ("Trace ID: " <> v) "Trace ID"
       let actBtn = [class_ "cursor-pointer flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md border border-strokeWeak bg-fillWeakerer hover:bg-fillWeaker transition-colors text-textBrand"]
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
         whenJust (atMapText "session.id" (unAesonTextMaybe item.attributes)) \v ->
@@ -333,8 +335,7 @@ expandedItemView pid item aptSp leftM rightM = do
               "Copy as curl"
           _ -> pass
         let createdAt = formatUTC item.timestamp
-        whenJust item.context $ \ctx -> do
-          whenJust ctx.trace_id $ \trId -> do
+        whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) $ \trId -> do
             let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
             button_
               ( actBtn
@@ -370,7 +371,7 @@ expandedItemView pid item aptSp leftM rightM = do
             "Share link"
 
     let tabContainerId = if isLog then "log-tabs-container" else "span-tabs-container"
-    div_ [class_ "w-full mt-4", id_ tabContainerId] do
+    div_ [class_ "w-full mt-3", id_ tabContainerId] do
       let spanErrors = if isLog then [] else getSpanErrors $ fromMaybe AE.Null (unAesonTextMaybe item.events)
           isHttp = case reqDetails of
             Just ("HTTP", _, _, _) -> True
@@ -393,14 +394,16 @@ expandedItemView pid item aptSp leftM rightM = do
         tabBtn "whitespace-nowrap" "m-raw-content" "Raw data"
         div_ [class_ $ "w-full border-b-2 " <> borderClass] pass
 
-      div_ [class_ "my-4 py-2 text-textWeak"] $ do
+      div_ [class_ "mt-2 py-1 text-textWeak"] $ do
         when (isLog || isAlert) $ whenJust item.body \b ->
           div_ [class_ "http-tab-content", id_ "body-content"]
             $ jsonValueToHtmlTree (AE.toJSON b) Nothing
         div_ [class_ "hidden http-tab-content", id_ "m-raw-content"] $ do
           jsonValueToHtmlTree (AE.toJSON item) Nothing
         unless isAlert $ div_ [class_ $ "http-tab-content " <> if (isLog && isNothing item.body) || (not isLog && not isHttp) then "" else "hidden", id_ "att-content"] $ do
-          jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.attributes)) $ Just "attributes"
+          case unAesonTextMaybe item.attributes of
+            Just m | not (null m) -> jsonValueToHtmlTree (AE.Object $ KEM.fromMapText m) $ Just "attributes"
+            _ -> div_ [class_ "text-sm text-textWeak italic py-4"] "No custom attributes on this entry"
         div_ [class_ "hidden http-tab-content", id_ "meta-content"] $ do
           jsonValueToHtmlTree (maybe (AE.object []) (AE.Object . KEM.fromMapText) (unAesonTextMaybe item.resource)) $ Just "resource"
         unless isLog $ do

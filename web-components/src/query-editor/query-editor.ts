@@ -487,28 +487,38 @@ monaco.languages.registerCompletionItemProvider('aql', {
       // Special handling for 'in' and '!in' operators
       if (operator === 'in' || operator === '!in') {
         suggestions.push({
-          label: '("value1", "value2")',
+          label: '("...", "...")',
           kind: monaco.languages.CompletionItemKind.Snippet,
-          insertText: '("value1", "value2") ',
+          detail: 'comma-separated list',
+          insertText: '("", "") ',
           range: createRange(),
         });
       } else if (operator === 'has_any' || operator === 'has_all') {
-        // Special handling for 'has_any' and 'has_all' operators - suggest array syntax
         suggestions.push({
-          label: '["value1", "value2"]',
+          label: '["...", "..."]',
           kind: monaco.languages.CompletionItemKind.Snippet,
-          insertText: '["value1", "value2"] ',
+          detail: 'comma-separated array',
+          insertText: '["", ""] ',
           range: createRange(),
         });
       } else {
-        values.forEach((v) =>
+        // Store value descriptions for the custom suggestion widget to read
+        const valueDescriptions: Record<string, string> = {};
+        values.forEach((v) => {
+          const str = String(v);
+          const pipeIdx = str.indexOf('|');
+          const value = pipeIdx > 0 ? str.substring(0, pipeIdx) : str;
+          if (pipeIdx > 0) valueDescriptions[value] = str.substring(pipeIdx + 1);
           suggestions.push({
-            label: String(v),
+            label: value,
             kind: monaco.languages.CompletionItemKind.Value,
-            insertText: typeof v === 'string' && !String(v).includes('(') ? `"${v}" ` : `${v} `,
+            insertText: typeof value === 'string' && !value.includes('(') ? `"${value}" ` : `${value} `,
             range: createRange(),
-          })
-        );
+          });
+        });
+        if (Object.keys(valueDescriptions).length) {
+          (schemaManager as any)._valueDescriptions = valueDescriptions;
+        }
       }
       return { suggestions };
     }
@@ -837,7 +847,16 @@ export class QueryEditorComponent extends LitElement {
     return true;
   }
 
-  private readonly KIND_ICONS = ['📄', '🔢', '🔍', '#', '📊', '📋', '#', '🔢', '✅', '❓'];
+  // Color-coded type badges for dropdown items, keyed by Monaco CompletionItemKind
+  private readonly KIND_BADGES: Record<number, { label: string; cls: string }> = {
+    [4 /* Field */]: { label: 'F', cls: 'text-sky-400 bg-sky-400/15 border-sky-400/30' },
+    [11 /* Operator */]: { label: 'Op', cls: 'text-amber-400 bg-amber-400/15 border-amber-400/30' },
+    [12 /* Value */]: { label: 'V', cls: 'text-emerald-400 bg-emerald-400/15 border-emerald-400/30' },
+    [8 /* Module */]: { label: 'M', cls: 'text-violet-400 bg-violet-400/15 border-violet-400/30' },
+    [17 /* Keyword */]: { label: 'K', cls: 'text-rose-400 bg-rose-400/15 border-rose-400/30' },
+    [1 /* Function */]: { label: 'fn', cls: 'text-orange-400 bg-orange-400/15 border-orange-400/30' },
+    [27 /* Snippet */]: { label: '{}', cls: 'text-teal-400 bg-teal-400/15 border-teal-400/30' },
+  };
 
   public setPopularSearches(items: { query: string; description?: string }[]): void {
     if (!items?.length) return;
@@ -1547,12 +1566,14 @@ export class QueryEditorComponent extends LitElement {
       })
       .map((item) => {
         const completionData = item.completion || item;
+        const label = String(completionData.label || completionData.insertText || 'Unknown');
+        const valueDesc = (schemaManager as any)._valueDescriptions?.[label] || '';
         return {
           kind: 'completion' as const,
-          label: completionData.label || completionData.insertText || 'Unknown',
-          insertText: completionData.insertText || completionData.label || '',
+          label,
+          insertText: completionData.insertText || label || '',
           kindCategory: completionData.kind || monaco.languages.CompletionItemKind.Field,
-          detail: completionData.detail || completionData.documentation || '',
+          detail: completionData.detail || completionData.documentation || valueDesc || '',
           score: item.score || 2000,
           isContextSpecific: isContextSpecific,
           parentPath: parentPath || undefined,
@@ -1712,9 +1733,9 @@ export class QueryEditorComponent extends LitElement {
     });
   }
 
-  private getCompletionIcon(kind: number): string {
-    const idx = Math.min(Math.max(0, kind % 10), this.KIND_ICONS.length - 1);
-    return this.KIND_ICONS[idx];
+  private getCompletionIcon(kind: number): TemplateResult {
+    const badge = this.KIND_BADGES[kind] || { label: '?', cls: 'text-textWeak bg-fillWeak border-strokeWeak' };
+    return html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none ${badge.cls}">${badge.label}</span>`;
   }
 
   // Generate unique key for suggestion items (for repeat directive performance)
@@ -1734,18 +1755,18 @@ export class QueryEditorComponent extends LitElement {
   }
 
   private getSuggestionUIData(item: SuggestionItem): {
-    icon: string;
+    icon: string | TemplateResult;
     primaryText: string | TemplateResult;
     secondaryText: string | TemplateResult | undefined;
   } {
     const uiData: Record<SuggestionKind, () => ReturnType<typeof this.getSuggestionUIData>> = {
       recentSearch: () => ({
-        icon: '⏱️',
+        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none text-textWeak bg-fillWeak border-strokeWeak">⏱</span>`,
         primaryText: item.query,
         secondaryText: (item as RecentSearch).timestamp,
       }),
       savedView: () => ({
-        icon: '⭐',
+        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none text-amber-400 bg-amber-400/15 border-amber-400/30">★</span>`,
         primaryText: (item as SavedView).name,
         secondaryText: html`
           <span class="truncate text-textWeak mr-2" title="${item.query}">${item.query}</span>
@@ -1757,23 +1778,30 @@ export class QueryEditorComponent extends LitElement {
         `,
       }),
       popularSearch: () => ({
-        icon: '🔍',
+        icon: html`<span class="inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-semibold border leading-none text-sky-400 bg-sky-400/15 border-sky-400/30">↗</span>`,
         primaryText: item.query,
         secondaryText: (item as PopularSearch).description,
       }),
       completion: () => {
         const completion = item as CompletionItem;
+        const typeColor: Record<string, string> = {
+          string: 'text-sky-400', number: 'text-emerald-400', int: 'text-emerald-400',
+          object: 'text-violet-400', array: 'text-teal-400', boolean: 'text-orange-400',
+          duration: 'text-amber-400', bytes: 'text-rose-400',
+        };
+        const detailCls = typeColor[completion.detail || ''] || 'text-textWeak';
+        const detailHtml = completion.detail ? html`<span class="${detailCls}">${completion.detail}</span>` : undefined;
         if (completion.parentPath) {
           return {
             icon: this.getCompletionIcon(completion.kindCategory),
             primaryText: html` <span class="text-textWeak">${completion.parentPath}.</span><span>${completion.label}</span> `,
-            secondaryText: completion.detail,
+            secondaryText: detailHtml,
           };
         }
         return {
           icon: this.getCompletionIcon(completion.kindCategory),
           primaryText: completion.label,
-          secondaryText: completion.detail,
+          secondaryText: detailHtml,
         };
       },
     };
@@ -1801,7 +1829,7 @@ export class QueryEditorComponent extends LitElement {
         data-index="${itemIndex}"
       >
         <div class="flex items-center gap-2 overflow-hidden">
-          <span class="text-base">${icon}</span>
+          <span class="shrink-0">${icon}</span>
           <span class="truncate ${isSelected ? 'font-medium text-textBrand' : ''}" title="${displayTextForTooltip}">${primaryText}</span>
         </div>
         ${secondaryText ? html`<span class="text-xs text-textWeak ml-2 flex-shrink-0 flex items-center">${secondaryText}</span>` : ''}
@@ -1837,8 +1865,9 @@ export class QueryEditorComponent extends LitElement {
       const operators = items.filter((i) => i.kindCategory === monaco.languages.CompletionItemKind.Operator);
       const fields = items.filter((i) => i.kindCategory !== monaco.languages.CompletionItemKind.Operator);
       const sections: { items: SuggestionItem[]; title: string | null }[] = [];
-      if (fields.length) sections.push({ items: fields, title: null });
+      // Operators first when mixed — they're the more contextually relevant suggestion
       if (operators.length) sections.push({ items: operators, title: 'Operators' });
+      if (fields.length) sections.push({ items: fields, title: 'Fields' });
       return sections;
     }
 
@@ -1848,16 +1877,21 @@ export class QueryEditorComponent extends LitElement {
   private renderSuggestionDropdown(): TemplateResult {
     if (!this.showSuggestions || !this.editor) return html``;
 
-    const matches = this.getMatches();
     const completionSubgroups = this.splitCompletionSubgroups(this.completionItems);
 
+    // Only show saved/recent/popular in field position (not when suggesting operators or values)
+    const isFieldPosition =
+      !this.completionItems.length ||
+      this.completionItems.some((i) => i.kindCategory === monaco.languages.CompletionItemKind.Field);
+
     type SectionDef = { items: SuggestionItem[]; title: string | null };
-    const sections: SectionDef[] = [
-      ...completionSubgroups,
-      ...(matches.saved.length ? [{ items: matches.saved as SuggestionItem[], title: 'Saved Views' }] : []),
-      ...(matches.recent.length ? [{ items: matches.recent as SuggestionItem[], title: 'Recent Searches' }] : []),
-      ...(matches.popular.length ? [{ items: matches.popular as SuggestionItem[], title: 'Popular Searches' }] : []),
-    ];
+    const sections: SectionDef[] = [...completionSubgroups];
+    if (isFieldPosition) {
+      const matches = this.getMatches();
+      if (matches.saved.length) sections.push({ items: matches.saved as SuggestionItem[], title: 'Saved Views' });
+      if (matches.recent.length) sections.push({ items: matches.recent as SuggestionItem[], title: 'Recent Searches' });
+      if (matches.popular.length) sections.push({ items: matches.popular as SuggestionItem[], title: 'Popular Searches' });
+    }
 
     const position = this.editor.getPosition();
     const coords = position ? this.editor.getScrolledVisiblePosition(position) : null;
@@ -1873,29 +1907,40 @@ export class QueryEditorComponent extends LitElement {
           class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-10 overflow-y-auto rounded-md text-xs"
           style="${positionStyle}"
         >
-          <div class="px-4 py-2 text-sm text-textWeak italic">No suggestions found</div>
+          <div class="px-4 py-2 text-sm text-textWeak italic">No suggestions for this field</div>
         </div>
       `;
     }
 
     let currentIndex = 0;
     const keyboardHelp = html`
-      <div class="sticky bottom-0 bg-bgRaised z-50 border-t border-strokeMedium px-4 py-2 text-xs text-textWeak">
-        <span class="mr-2">
-          <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">↑</kbd>
-          <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">↓</kbd>
-          <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Tab</kbd> to navigate
-        </span>
-        <span class="mr-2">• <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Enter</kbd> to select</span>
-        <span>• <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Esc</kbd> to close</span>
+      <div class="sticky bottom-0 bg-bgRaised z-50 border-t border-strokeMedium px-4 py-2 text-xs text-textWeak flex items-center justify-between">
+        <div>
+          <span class="mr-2">
+            <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">↑</kbd>
+            <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">↓</kbd>
+            <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Tab</kbd> to navigate
+          </span>
+          <span class="mr-2">• <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Enter</kbd> to select</span>
+          <span>• <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeStrong rounded text-xs">Esc</kbd> to close</span>
+        </div>
+        <a href="https://monoscope.tech/docs/dashboard/dashboard-pages/api-log-explorer/" target="_blank" rel="noopener" class="text-textBrand hover:underline shrink-0 ml-2">Syntax guide ↗</a>
       </div>
     `;
+
+    const isEmptyEditor = !this.editor.getModel()?.getValue().trim();
+    const syntaxHint = isEmptyEditor
+      ? html`<div class="px-4 py-2 text-xs text-textWeak bg-fillWeaker border-b border-strokeWeak">
+          Type a field name, then an operator and value — e.g. <code class="text-textStrong bg-fillWeak px-1 rounded">status_code == "ERROR"</code>
+        </div>`
+      : '';
 
     return html`
       <div
         class="mt-1 suggestions-dropdown absolute bg-bgRaised border border-strokeMedium shadow-lg z-50 max-h-[80dvh] overflow-y-auto rounded-md text-xs flex flex-col"
         style="${positionStyle}"
       >
+        ${syntaxHint}
         <div class="overflow-y-auto flex-grow min-h-0">
           ${sections.map(
             (section) => html`
@@ -1934,7 +1979,7 @@ export class QueryEditorComponent extends LitElement {
           >
             <span class="opacity-60">level == "ERROR"</span>
             <span class="mx-1 opacity-30">·</span>
-            <span class="opacity-40">Press <kbd class="px-1 py-0.5 bg-fillWeak border border-strokeWeak rounded text-xs">/</kbd> to focus</span>
+            <span class="opacity-40"><kbd class="px-1 py-0.5 bg-fillWeak border border-strokeWeak rounded text-xs">/</kbd> to focus</span>
           </div>
         </div>
         <div class="p-1">

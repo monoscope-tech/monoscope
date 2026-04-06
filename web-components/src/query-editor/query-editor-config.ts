@@ -82,11 +82,17 @@ export function initializeDefaultSchema(): void {
       kind: ['logs', 'span', 'request'],
       level: ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
       'severity.text': ['TRACE', 'DEBUG', 'INFO', 'WARN', 'ERROR', 'FATAL'],
-      timestamp: ['ago(1h)', 'ago(30m)', 'ago(6h)', 'ago(1d)', 'ago(7d)', 'now()'],
-      observed_timestamp: ['ago(1h)', 'ago(30m)', 'ago(6h)', 'ago(1d)', 'ago(7d)', 'now()'],
     };
 
     if (fieldSpecificValues[field]) return fieldSpecificValues[field];
+
+    // Time helper functions with descriptions (returned as "value|description" pairs)
+    const timeHelpers: Record<string, string[]> = {
+      timestamp: ['ago(1h)|1 hour ago', 'ago(30m)|30 minutes ago', 'ago(6h)|6 hours ago', 'ago(1d)|1 day ago', 'ago(7d)|7 days ago', 'now()|current time'],
+      observed_timestamp: ['ago(1h)|1 hour ago', 'ago(30m)|30 minutes ago', 'ago(6h)|6 hours ago', 'ago(1d)|1 day ago', 'ago(7d)|7 days ago', 'now()|current time'],
+    };
+
+    if (timeHelpers[field]) return timeHelpers[field];
 
     if (fieldInfo?.type === 'boolean') return ['true', 'false'];
 

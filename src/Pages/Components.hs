@@ -76,9 +76,9 @@ dateTime :: UTCTime -> Maybe UTCTime -> Html ()
 dateTime t endTM = do
   span_ [class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong"] do
     faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
-    toHtml $ formatTime defaultTimeLocale "%b. %d, %I:%M:%S %p" t
+    toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M:%S" t
     whenJust endTM \endT ->
-      toHtml $ " - " <> formatTime defaultTimeLocale "%b. %d, %I:%M:%S %p" endT
+      toHtml $ " - " <> formatTime defaultTimeLocale "%b %d, %H:%M:%S" endT
 
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()

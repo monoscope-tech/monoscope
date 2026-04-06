@@ -116,10 +116,10 @@ logQueryBox_ config = do
             }
             |]
           div_ [class_ "w-full gap-2 items-center px-2 hidden group-has-[.ai-search:checked]/fltr:flex"] do
-            faSprite_ "sparkles" "regular" "h-4 w-4 inline-block text-iconBrand"
+            span_ [class_ "text-[10px] font-semibold text-textBrand bg-fillBrand-weak px-1.5 py-0.5 rounded shrink-0"] "AI"
             input_
               [ class_ "border-0 w-full flex-1 p-1 no-focus-ring peer"
-              , placeholder_ "Describe what you're looking for — e.g. \"errors in payment service last hour\""
+              , placeholder_ "Ask in plain English — e.g. \"errors in payment service last hour\""
               , id_ "ai-search-input"
               , required_ "required"
               , name_ "input"
