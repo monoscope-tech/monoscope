@@ -2145,8 +2145,9 @@ evaluateQueryMonitor monitor startWall = do
   --     spuriously recovering when data is simply missing.
   let durationNs = toNanoSecs (diffTimeSpec end start)
   case [v | Only v <- results] of
-    [] | not monitor.triggerLessThan && monitor.currentStatus /= Monitors.MSNormal ->
-      evaluateWithResults monitor startWall title 0 durationNs
+    []
+      | not monitor.triggerLessThan && monitor.currentStatus /= Monitors.MSNormal ->
+          evaluateWithResults monitor startWall title 0 durationNs
     [] -> do
       Log.logInfo "Monitor query returned no rows in lookback window; skipping evaluation" (monitor.id, title, lookbackMins)
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
