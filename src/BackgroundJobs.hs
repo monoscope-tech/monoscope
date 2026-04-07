@@ -2118,14 +2118,18 @@ evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
 evaluateQueryMonitor monitor startWall = do
   ctx <- ask @Config.AuthContext
   let tfEnabled = ctx.config.enableTimefusionReads
-      isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` monitor.logQueryAsSql
+      -- Re-parse on every evaluation so parser fixes apply to existing monitors
+      -- without needing a DB migration of cached SQL.
+      freshSql = case parseQueryToComponents ((defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}) monitor.logQuery of
+        Right (_, qc) -> fromMaybe monitor.logQueryAsSql qc.finalAlertQuery
+        Left _ -> monitor.logQueryAsSql
+      isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic
-  results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) ()
+  results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 freshSql) ()
   end <- liftIO $ getTime Monotonic
 
-  -- Alert query returns one row per time bucket (see Pkg.Parser.alertQuery).
-  -- Take the max across buckets so the threshold compares per-bucket, not a sum
-  -- of the entire history (which would always trip).
+  -- Alert query returns the most recent time bucket's value. Take max across
+  -- rows (usually one) to handle multi-group queries safely.
   let total = foldr max 0 [v | Only v <- results]
       durationNs = toNanoSecs (diffTimeSpec end start)
       title = monitor.alertConfig.title

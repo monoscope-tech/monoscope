@@ -357,24 +357,25 @@ sqlFromQueryComponents sqlCfg qc =
     -- For alert queries, we use a simplified whereCondition without the time range/cursor
     alertWhereCondition = nq.nqWhere
 
+    -- Alert queries must look only at recent data; otherwise time_bucket groups
+    -- across all history and max returns the all-time peak bucket.
+    alertTimeFilter = timestampCol <> " >= NOW() - INTERVAL '1 hour'"
     alertQuery =
       case qc.finalSummarizeQuery of
         Just binInterval ->
-          -- For queries with bin functions, create a time-bucketed alert query
-          let
-            -- Create time bucket expression
-            timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
-           in
-            [fmt|
+          -- For queries with bin functions, return the most recent bucket's value
+          let timeBucketExpr = "time_bucket('" <> binInterval <> "', " <> timestampCol <> ")"
+           in [fmt|
                 SELECT GREATEST({alertSelect}) FROM {fromTable}
-                WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
+                WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} AND ({alertWhereCondition})
                 GROUP BY {timeBucketExpr}
+                ORDER BY {timeBucketExpr} DESC
+                LIMIT 1
               |]
         Nothing ->
-          -- For regular summarize queries without time buckets
           [fmt|
               SELECT GREATEST({alertSelect}) FROM {fromTable}
-              WHERE project_id='{sqlCfg.pid.toText}' and ({alertWhereCondition})
+              WHERE project_id='{sqlCfg.pid.toText}' AND {alertTimeFilter} AND ({alertWhereCondition})
               {alertGroupByClause}
             |]
    in
