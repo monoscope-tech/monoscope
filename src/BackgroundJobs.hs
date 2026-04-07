@@ -2120,7 +2120,8 @@ evaluateQueryMonitor monitor startWall = do
   let tfEnabled = ctx.config.enableTimefusionReads
       title = monitor.alertConfig.title
       -- Use the monitor's configured "Include rows from" time window.
-      lookbackMins = max 1 monitor.timeWindowMins
+      -- Fall back to 60 when unset/zero (e.g. def-constructed monitors).
+      lookbackMins = if monitor.timeWindowMins > 0 then monitor.timeWindowMins else 60
       -- Re-parse on every evaluation so parser fixes apply to existing monitors
       -- without needing a DB migration of cached SQL.
       parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m", alertLookbackMins = lookbackMins}
@@ -2138,14 +2139,18 @@ evaluateQueryMonitor monitor startWall = do
   results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 freshSql) ()
   end <- liftIO $ getTime Monotonic
 
-  -- No rows = no data in lookback window. Skip the evaluation entirely rather
-  -- than defaulting to 0, which would spuriously recover (triggerLessThan=False)
-  -- or spuriously fire (triggerLessThan=True).
+  -- No rows in the lookback window:
+  --   * greater-than monitor currently alerting/warning -> treat as 0 so it can recover
+  --   * otherwise skip, to avoid spuriously firing (triggerLessThan=True) or
+  --     spuriously recovering when data is simply missing.
+  let durationNs = toNanoSecs (diffTimeSpec end start)
   case [v | Only v <- results] of
+    [] | not monitor.triggerLessThan && monitor.currentStatus /= Monitors.MSNormal ->
+      evaluateWithResults monitor startWall title 0 durationNs
     [] -> do
       Log.logInfo "Monitor query returned no rows in lookback window; skipping evaluation" (monitor.id, title, lookbackMins)
       void $ Monitors.updateLastEvaluatedAt monitor.id startWall
-    (v : vs) -> evaluateWithResults monitor startWall title (foldr max v vs) (toNanoSecs (diffTimeSpec end start))
+    (v : vs) -> evaluateWithResults monitor startWall title (foldr max v vs) durationNs
 
 
 evaluateWithResults :: Monitors.QueryMonitor -> UTCTime -> Text -> Double -> Integer -> ATBackgroundCtx ()
