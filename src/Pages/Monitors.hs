@@ -814,7 +814,7 @@ unifiedMonitorOverviewH pid monitorId = do
       (channels, discordChannels) <-
         concurrently
           ( case slackDataM of
-              Just slackData -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken slackData.teamId
+              Just slackData -> maybe [] (.channels) <$> SlackP.getSlackChannels slackData.botToken slackData.teamId
               Nothing -> return []
           )
           ( case discordDataM of

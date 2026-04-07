@@ -261,7 +261,7 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
   pagerdutyInfo <- getPagerdutyByProjectId pid
-  channels <- maybe (pure []) (\d -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId) slackInfo
+  channels <- maybe (pure []) (\d -> maybe [] (.channels) <$> SlackP.getSlackChannels d.botToken d.teamId) slackInfo
   everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
   let existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
 
@@ -305,8 +305,8 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
       integrationsSettingsGetH pid
     Right () -> do
       _ <- Projects.updateNotificationsChannel pid notificationsChannel phones emails
-      appCtx <- ask @AuthContext
       projectM <- Projects.projectById pid
+      slackInfoM <- getProjectSlackData pid
       everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
       whenJust everyoneTeamM \team -> do
         let oldChannels = S.fromList $ V.toList team.slack_channels
@@ -314,9 +314,9 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
             addedChannels = S.difference newChannelsSet oldChannels
             teamDetails = (ProjectMembers.teamToDetails team){ProjectMembers.slackChannels = V.fromList slackChannels} :: ProjectMembers.TeamDetails
         void $ ProjectMembers.updateTeam pid team.id teamDetails
-        whenJust projectM \project ->
+        whenJust ((,) <$> projectM <*> slackInfoM) \(project, slackInfo) ->
           forM_ addedChannels \channelId -> do
-            result <- try @SomeException $ SlackP.sendSlackWelcomeMessage appCtx.env.slackBotToken channelId project.title
+            result <- try @SomeException $ SlackP.sendSlackWelcomeMessage slackInfo.botToken channelId project.title
             whenLeft_ result (SlackP.logWelcomeMessageFailure channelId)
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
@@ -776,7 +776,7 @@ manageTeamsGetH pid layoutM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId
+  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels d.botToken d.teamId
   discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
   let bwconf =
@@ -858,7 +858,7 @@ teamGetH pid handle layoutM = do
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels appCtx.env.slackBotToken d.teamId
+  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels d.botToken d.teamId
   discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   case teamVm of
     Just team -> do

@@ -30,7 +30,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
-import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
+import Models.Apis.Integrations (SlackData (..), getDashboardsForSlack, getProjectSlackData, getSlackDataByTeamId, insertAccessToken, updateSlackNotificationChannel)
 import Models.Apis.Issues qualified as Issues
 import Models.Projects.Dashboards qualified as Dashboards
 import Models.Projects.ProjectMembers qualified as ProjectMembers
@@ -129,10 +129,11 @@ linkProjectGetH slack_code stateM = do
       case (token, project) of
         (Just token', Just project') -> do
           void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken
+          void $ Projects.enableNotificationChannel pid Projects.NSlack
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
-            result <- try @SomeException $ sendSlackWelcomeMessage envCfg.slackBotToken token'.incomingWebhook.channelId project'.title
+            result <- try @SomeException $ sendSlackWelcomeMessage token'.accessToken token'.incomingWebhook.channelId project'.title
             whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
@@ -149,11 +150,12 @@ slackInteractionsH interaction = do
       _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
       slackDataM <- getSlackDataByTeamId interaction.team_id
       whenJust slackDataM \slackData -> do
+        void $ Projects.enableNotificationChannel slackData.projectId Projects.NSlack
         wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam slackData.projectId interaction.channel_id
         when wasAdded do
           projectM <- Projects.projectById slackData.projectId
           whenJust projectM \project -> do
-            result <- try @SomeException $ sendSlackWelcomeMessage authCtx.env.slackBotToken interaction.channel_id project.title
+            result <- try @SomeException $ sendSlackWelcomeMessage slackData.botToken interaction.channel_id project.title
             whenLeft_ result (logWelcomeMessageFailure interaction.channel_id)
       let channelDisplay = if T.null interaction.channel_name then "this channel" else "#" <> interaction.channel_name
           resp =
@@ -181,9 +183,11 @@ slackInteractionsH interaction = do
       pure resp
     "/dashboard" -> do
       dashboardsList <- getDashboardsForSlack interaction.team_id
+      slackDataM <- getSlackDataByTeamId interaction.team_id
       let dashboards = V.fromList dashboardsList
       when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
-      _ <- triggerSlackModal authCtx.env.slackBotToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
+      whenJust slackDataM \slackData ->
+        void $ triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
       let resp = AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
       Log.logTrace ("Slack interaction response" :: Text) resp
       pure resp
@@ -351,17 +355,19 @@ slackActionsH action = do
                         ]
                     )
               ]
-      sendSlackChatMessage authCtx.env.slackBotToken content
+      whenJust (idFromText pid) \projectId ->
+        whenJustM (getProjectSlackData projectId) \sd ->
+          sendSlackChatMessage sd.botToken content
       handleUnknownActionType
 
-    updateDashboardModal authCtx slackAction dashboardVM dashboardText = do
+    updateDashboardModal _authCtx slackAction dashboardVM dashboardText = do
       dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "" dashboardVM.baseTemplate)
       whenJust dashboardM $ \dashboard -> do
         let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
             channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction.view.private_metadata
             pMeta = channelId <> "___" <> dashboardVM.projectId.toText <> "___" <> fromMaybe "" dashboardVM.baseTemplate
-        _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
-        pass
+        whenJustM (getProjectSlackData dashboardVM.projectId) \sd ->
+          triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
       pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show dashboardText), "replace_original" AE..= True, "delete_original" AE..= True]
 
     updateWidgetModal authCtx slackAction widgetTitle = do
@@ -380,8 +386,8 @@ slackActionsH action = do
           chartUrl' <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w Nothing Nothing Nothing
           let blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
               privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
-          _ <- triggerSlackModal authCtx.env.slackBotToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
-          pass
+          whenJustM (getProjectSlackData projectId) \sd ->
+            triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
       handleUnknownActionType
 
     handleUnknownActionType = pure $ AE.object []
@@ -617,36 +623,31 @@ slackEventsPostH payload = do
         whenLeft_ resultE \err -> Log.logAttention "Slack event callback background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= cb.team_id]
       pure $ AE.object []
   where
-    handleEventCallback envCfg event teamId now =
-      case event.thread_ts of
-        Nothing -> sendSlackChatMessage envCfg.slackBotToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
-        Just threadTs -> processThreadedEvent envCfg event teamId threadTs now
-
-    processThreadedEvent envCfg event teamId threadTs now = do
+    handleEventCallback envCfg event teamId now = do
       slackDataM <- getSlackDataByTeamId teamId
-      case slackDataM of
-        Nothing -> pass
-        Just slackData -> do
-          -- Generate deterministic conversation ID from channel + thread_ts
-          let convId = Issues.slackThreadToConversationId event.channel threadTs
+      whenJust slackDataM \slackData -> case event.thread_ts of
+        Nothing -> sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
+        Just threadTs -> processThreadedEvent envCfg slackData event teamId threadTs now
 
-          -- Ensure conversation exists
-          _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
+    processThreadedEvent envCfg slackData event teamId threadTs now = do
+      -- Generate deterministic conversation ID from channel + thread_ts
+      let convId = Issues.slackThreadToConversationId event.channel threadTs
 
-          -- Load existing history from DB
-          existingHistory <- Issues.selectChatHistory convId
+      -- Ensure conversation exists
+      _ <- Issues.getOrCreateConversation slackData.projectId convId Issues.CTSlackThread (AE.object ["channel_id" AE..= event.channel, "thread_ts" AE..= threadTs, "team_id" AE..= teamId])
 
-          -- One-time migration: if DB is empty, fetch from Slack API and migrate
-          when (null existingHistory) $ do
-            -- Use advisory lock to prevent race condition in thread migration
-            lockAcquired <- Issues.tryAcquireChatMigrationLock convId
-            when lockAcquired $ do
-              replies <- getChannelMessages envCfg.slackBotToken event.channel threadTs
-              for_ replies \messages -> forM_ messages.messages \m ->
-                Issues.insertChatMessage slackData.projectId convId "user" m.text Nothing Nothing
+      -- Load existing history from DB
+      existingHistory <- Issues.selectChatHistory convId
 
-          -- Process the current message with history from DB
-          processMessages envCfg event slackData convId threadTs now
+      -- One-time migration: if DB is empty, fetch from Slack API and migrate
+      when (null existingHistory) $ do
+        lockAcquired <- Issues.tryAcquireChatMigrationLock convId
+        when lockAcquired $ do
+          replies <- getChannelMessages slackData.botToken event.channel threadTs
+          for_ replies \messages -> forM_ messages.messages \m ->
+            Issues.insertChatMessage slackData.projectId convId "user" m.text Nothing Nothing
+
+      processMessages envCfg event slackData convId threadTs now
 
     processMessages envCfg event slackData convId threadTs now = do
       -- Build thread context from DB history
@@ -656,7 +657,7 @@ slackEventsPostH payload = do
       -- Use processAIQuery with thread context
       result <- processAIQuery slackData.projectId event.text (Just threadContext) envCfg.openaiModel envCfg.openaiApiKey
       case result of
-        Left _ -> sendSlackChatMessage envCfg.slackBotToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
+        Left _ -> sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel, "thread_ts" AE..= threadTs]))
         Right resp -> do
           -- Save user message and bot response to DB
           Issues.insertChatMessage slackData.projectId convId "user" event.text Nothing Nothing
@@ -669,7 +670,7 @@ slackEventsPostH payload = do
             slackData.projectId
             event.text
             resp
-            (sendSlackChatMessage envCfg.slackBotToken . addThread)
+            (sendSlackChatMessage slackData.botToken . addThread)
             getBotContentWithUrl
 
 

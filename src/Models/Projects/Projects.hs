@@ -36,6 +36,7 @@ module Models.Projects.Projects (
   ProjectCache (..),
   defaultProjectCache,
   updateNotificationsChannel,
+  enableNotificationChannel,
   updateUsageLastReported,
   updateProjectS3Bucket,
   QueryLibItemId,
@@ -523,6 +524,16 @@ updateNotificationsChannel pid channels phones emails = PG.execute q (list, V.fr
   where
     list = V.fromList channels
     q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=?, notify_emails=? WHERE id=?;|]
+
+
+-- | Idempotently append a channel (e.g. NSlack) to projects.notifications_channel.
+enableNotificationChannel :: DB es => ProjectId -> NotificationChannel -> Eff es Int64
+enableNotificationChannel pid ch = PG.execute q (ch, pid, ch)
+  where
+    q =
+      [sql| UPDATE projects.projects
+            SET notifications_channel = notifications_channel || ARRAY[?::notification_channel_enum]
+            WHERE id = ? AND NOT (?::notification_channel_enum = ANY(notifications_channel)); |]
 
 
 updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64
