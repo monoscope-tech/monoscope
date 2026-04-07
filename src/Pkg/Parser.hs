@@ -214,6 +214,9 @@ data SqlQueryCfg = SqlQueryCfg
   , defaultSelect :: [Text]
   , source :: Maybe Sources
   , targetSpansM :: Maybe Text
+  , -- Time window (minutes) the alert query should look back over.
+    -- Monitors pass max(60, 2 * checkIntervalMins) so buckets aren't missed.
+    alertLookbackMins :: Int
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default)
@@ -359,7 +362,7 @@ sqlFromQueryComponents sqlCfg qc =
 
     -- Alert queries must look only at recent data; otherwise time_bucket groups
     -- across all history and max returns the all-time peak bucket.
-    alertTimeFilter = timestampCol <> " >= NOW() - INTERVAL '1 hour'"
+    alertTimeFilter = timestampCol <> " >= NOW() - INTERVAL '" <> show sqlCfg.alertLookbackMins <> " minutes'"
     alertQuery =
       case qc.finalSummarizeQuery of
         Just binInterval ->
@@ -483,6 +486,7 @@ defSqlQueryCfg pid currentTime source spanT =
     , projectedColsByUser = []
     , currentTime
     , defaultSelect = defaultSelectSqlQuery source
+    , alertLookbackMins = 60
     }
 
 

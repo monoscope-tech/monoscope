@@ -2118,22 +2118,40 @@ evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()
 evaluateQueryMonitor monitor startWall = do
   ctx <- ask @Config.AuthContext
   let tfEnabled = ctx.config.enableTimefusionReads
+      title = monitor.alertConfig.title
+      -- Use the monitor's configured "Include rows from" time window.
+      lookbackMins = max 1 monitor.timeWindowMins
       -- Re-parse on every evaluation so parser fixes apply to existing monitors
       -- without needing a DB migration of cached SQL.
-      freshSql = case parseQueryToComponents ((defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m"}) monitor.logQuery of
-        Right (_, qc) -> fromMaybe monitor.logQueryAsSql qc.finalAlertQuery
-        Left _ -> monitor.logQueryAsSql
-      isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
+      parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m", alertLookbackMins = lookbackMins}
+  freshSql <- case parseQueryToComponents parseCfg monitor.logQuery of
+    Right (_, qc) -> case qc.finalAlertQuery of
+      Just q -> pure q
+      Nothing -> do
+        Log.logAttention "Monitor parsed but produced no alert query; using stale cached SQL" (monitor.id, title, monitor.logQuery)
+        pure monitor.logQueryAsSql
+    Left err -> do
+      Log.logAttention "Monitor logQuery re-parse failed; using stale cached SQL" (monitor.id, title, monitor.logQuery, err)
+      pure monitor.logQueryAsSql
+  let isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic
   results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 freshSql) ()
   end <- liftIO $ getTime Monotonic
 
-  -- Alert query returns the most recent time bucket's value. Take max across
-  -- rows (usually one) to handle multi-group queries safely.
-  let total = foldr max 0 [v | Only v <- results]
-      durationNs = toNanoSecs (diffTimeSpec end start)
-      title = monitor.alertConfig.title
-      prevStatus = monitor.currentStatus
+  -- No rows = no data in lookback window. Skip the evaluation entirely rather
+  -- than defaulting to 0, which would spuriously recover (triggerLessThan=False)
+  -- or spuriously fire (triggerLessThan=True).
+  case [v | Only v <- results] of
+    [] -> do
+      Log.logInfo "Monitor query returned no rows in lookback window; skipping evaluation" (monitor.id, title, lookbackMins)
+      void $ Monitors.updateLastEvaluatedAt monitor.id startWall
+    (v : vs) -> evaluateWithResults monitor startWall title (foldr max v vs) (toNanoSecs (diffTimeSpec end start))
+
+
+evaluateWithResults :: Monitors.QueryMonitor -> UTCTime -> Text -> Double -> Integer -> ATBackgroundCtx ()
+evaluateWithResults monitor startWall title total durationNs = do
+  ctx <- ask @Config.AuthContext
+  let prevStatus = monitor.currentStatus
       status =
         monitorStatus
           monitor.triggerLessThan
@@ -2171,10 +2189,15 @@ evaluateQueryMonitor monitor startWall = do
       lastTriggered = monitor.alertLastTriggered <|> monitor.warningLastTriggered
       pastReminderWindow = maybe True (\lt -> diffUTCTime startWall lt >= reminderIntervalSecs) lastTriggered
       stoppedByCount = maybe False (monitor.notificationCount >=) monitor.stopAfterCount
+      -- If notificationCount is 0 while in a non-normal state, the initial
+      -- notification was suppressed (e.g. muted during the transition). Fire
+      -- it now that we're no longer blocked.
+      missedInitial = status /= Monitors.MSNormal && monitor.notificationCount == 0
       shouldNotify
         | isRecovery = True
         | stoppedByCount = False
         | statusChanged && status /= Monitors.MSNormal = True
+        | missedInitial = True
         | not statusChanged && status /= Monitors.MSNormal && hasRenotify && pastReminderWindow = True
         | otherwise = False
       -- Update timestamps on transitions OR reminders (prevents spam after reminder window)
@@ -2197,8 +2220,14 @@ evaluateQueryMonitor monitor startWall = do
           WHERE id = ? |]
       (status, total, startWall, finalWarningAt, finalAlertAt, newNotifCount, monitor.id)
 
+  let reason :: Text
+      reason
+        | isRecovery = "recovery"
+        | statusChanged = "status_changed"
+        | missedInitial = "missed_initial"
+        | otherwise = "reminder"
+  Log.logInfo "Monitor notify decision" (monitor.id, title, status, total, shouldNotify, isMuted, reason)
   Relude.when (shouldNotify && not isMuted) do
-    Log.logInfo "Query monitor notification" (monitor.id, title, status, total, "recovery" :: Text, isRecovery)
     notifyQueryMonitorStatusChange monitor total isRecovery
 
 

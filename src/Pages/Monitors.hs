@@ -121,6 +121,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
       checkInterval = case alertForm.frequency of
         Just freq -> max 1 $ fromMaybe 5 $ readMaybe $ toString $ T.dropEnd 1 freq
         Nothing -> 5
+      timeWindowMins = maybe 60 parseIntervalToMins alertForm.timeWindow
 
       isThresholdAlert = alertForm.conditionType == Just "threshold_exceeded"
 
@@ -169,6 +170,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , renotifyIntervalMins = renotifyMins
         , stopAfterCount = stopCount
         , notificationCount = 0
+        , timeWindowMins
         }
 
 
