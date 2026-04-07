@@ -1,4 +1,4 @@
-module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDeadLetterQueue) where
+module Pkg.Queue (pubsubService, kafkaService, publishJSONToKafka, publishToDeadLetterQueue, closeSharedKafkaProducer) where
 
 import Control.Exception.Annotated (checkpoint)
 import Control.Lens ((^?), _Just)
@@ -30,8 +30,65 @@ import Relude
 import System.Config
 import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
+import System.IO.Unsafe (unsafePerformIO)
 import UnliftIO (throwIO)
 import UnliftIO.Exception (bracket, try, tryAny)
+import UnliftIO.MVar (modifyMVar)
+
+
+-- Process-wide cached Kafka producer. librdkafka producers are heavyweight
+-- (TCP, SASL handshake, idempotence PID acquisition) and leak resources if
+-- created per message. We initialize one lazily and reuse for the lifetime
+-- of the process. Holds an Either so a failed init is retried next call.
+{-# NOINLINE sharedKafkaProducer #-}
+sharedKafkaProducer :: MVar (Maybe KP.KafkaProducer)
+sharedKafkaProducer = unsafePerformIO (newMVar Nothing)
+
+
+getOrInitKafkaProducer :: EnvConfig -> IO KP.KafkaProducer
+getOrInitKafkaProducer cfg = modifyMVar sharedKafkaProducer $ \case
+  Just p -> pure (Just p, p)
+  Nothing -> do
+    p <- either throwIO pure =<< KP.newProducer (kafkaProducerProps cfg)
+    pure (Just p, p)
+
+
+-- | Flush any in-flight librdkafka batches and release the cached producer.
+-- Safe to call multiple times. Intended for graceful shutdown.
+closeSharedKafkaProducer :: IO ()
+closeSharedKafkaProducer = modifyMVar sharedKafkaProducer $ \case
+  Nothing -> pure (Nothing, ())
+  Just p -> do
+    -- 30s flush window covers delivery.timeout.ms worst-case for queued batches
+    _ <- tryAny $ KP.flushProducer p
+    _ <- tryAny $ KP.closeProducer p
+    pure (Nothing, ())
+
+
+-- librdkafka producer settings. linger.ms/batch.size are tuned aggressively
+-- because the producer is now reused process-wide (see sharedKafkaProducer);
+-- larger batches amortize SASL/TCP/idempotence overhead across many messages.
+kafkaProducerProps :: EnvConfig -> KP.ProducerProperties
+kafkaProducerProps cfg =
+  KP.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
+    <> KP.extraProp "security.protocol" "sasl_plaintext"
+    <> KP.extraProp "sasl.mechanism" "SCRAM-SHA-256"
+    <> KP.extraProp "sasl.username" cfg.kafkaUsername
+    <> KP.extraProp "sasl.password" cfg.kafkaPassword
+    <> KP.extraProp "acks" "all"
+    <> KP.extraProp "retries" "2147483647"
+    <> KP.extraProp "max.in.flight.requests.per.connection" "5"
+    <> KP.extraProp "enable.idempotence" "true"
+    <> KP.extraProp "compression.type" "snappy"
+    <> KP.extraProp "batch.size" "1048576" -- 1 MiB batches (was 16 KiB)
+    <> KP.extraProp "linger.ms" "50" -- wait up to 50ms to coalesce (was 5ms)
+    <> KP.extraProp "queue.buffering.max.messages" "1000000"
+    <> KP.extraProp "queue.buffering.max.kbytes" "1048576" -- 1 GiB librdkafka queue cap
+    <> KP.extraProp "request.timeout.ms" "30000"
+    <> KP.extraProp "delivery.timeout.ms" "120000"
+    <> KP.extraProp "message.max.bytes" "52428800"
+    <> KP.extraProp "receive.message.max.bytes" "104857600"
+    <> KP.logLevel KP.KafkaLogInfo
 
 
 -- pubsubService connects to the pubsub service and listens for  messages,
@@ -122,53 +179,25 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
 
 publishJSONToKafka :: AE.ToJSON a => AuthContext -> Text -> a -> HM.HashMap Text Text -> IO (Either Text Text)
 publishJSONToKafka appCtx topicName jsonData attributes = checkpoint "publishJSONToKafka" do
-  result <- tryAny
-    $ bracket
-      (either throwIO pure =<< KP.newProducer (producerProps appCtx.config))
-      KP.closeProducer
-    $ \producer -> checkpoint (toAnnotation $ "publishJSONToKafka: " <> topicName) do
-      let messageData = BC.toStrict $ LT.encodeUtf8 $ LT.decodeUtf8 $ AE.encode jsonData
-
-      let headers = KP.headersFromList $ map (\(k, v) -> (BC.pack $ toString k, BC.pack $ toString v)) $ HM.toList attributes
-
-      let record =
-            KP.ProducerRecord
-              { prTopic = K.TopicName topicName
-              , prPartition = KP.UnassignedPartition -- Let Kafka choose partition
-              , prKey = Nothing
-              , prValue = Just messageData
-              , prHeaders = headers
-              }
-
-      sendResult <- KP.produceMessage producer record
-
-      case sendResult of
-        Just er -> pure $ Left $ "Failed to send message to Kafka: " <> toText (show er)
-        _ -> pure $ Right ""
-
+  result <- tryAny $ checkpoint (toAnnotation $ "publishJSONToKafka: " <> topicName) do
+    producer <- getOrInitKafkaProducer appCtx.config
+    let messageData = BC.toStrict $ LT.encodeUtf8 $ LT.decodeUtf8 $ AE.encode jsonData
+    let headers = KP.headersFromList $ map (\(k, v) -> (BC.pack $ toString k, BC.pack $ toString v)) $ HM.toList attributes
+    let record =
+          KP.ProducerRecord
+            { prTopic = K.TopicName topicName
+            , prPartition = KP.UnassignedPartition
+            , prKey = Nothing
+            , prValue = Just messageData
+            , prHeaders = headers
+            }
+    sendResult <- KP.produceMessage producer record
+    case sendResult of
+      Just er -> pure $ Left $ "Failed to send message to Kafka: " <> toText (show er)
+      _ -> pure $ Right ""
   case result of
     Left e -> pure $ Left $ toText $ show e
     Right res -> pure res
-  where
-    producerProps :: EnvConfig -> KP.ProducerProperties
-    producerProps cfg =
-      KP.brokersList (map K.BrokerAddress cfg.kafkaBrokers)
-        <> KP.extraProp "security.protocol" "sasl_plaintext"
-        <> KP.extraProp "sasl.mechanism" "SCRAM-SHA-256"
-        <> KP.extraProp "sasl.username" cfg.kafkaUsername
-        <> KP.extraProp "sasl.password" cfg.kafkaPassword
-        <> KP.extraProp "acks" "all" -- Wait for all replicas to acknowledge
-        <> KP.extraProp "retries" "2147483647" -- Max retries
-        <> KP.extraProp "max.in.flight.requests.per.connection" "5"
-        <> KP.extraProp "enable.idempotence" "true" -- Exactly-once semantics
-        <> KP.extraProp "compression.type" "snappy" -- Compress messages
-        <> KP.extraProp "batch.size" "16384" -- Batch size in bytes
-        <> KP.extraProp "linger.ms" "5" -- Wait up to 5ms to batch messages
-        <> KP.extraProp "request.timeout.ms" "30000" -- 30 second timeout
-        <> KP.extraProp "delivery.timeout.ms" "120000" -- 2 minute total timeout
-        <> KP.extraProp "message.max.bytes" "52428800"
-        <> KP.extraProp "receive.message.max.bytes" "104857600"
-        <> KP.logLevel KP.KafkaLogInfo
 
 
 kafkaService :: Log.Logger -> AuthContext -> TracerProvider -> [Text] -> ([(Text, ByteString)] -> HM.HashMap Text Text -> ATBackgroundCtx [Text]) -> IO ()

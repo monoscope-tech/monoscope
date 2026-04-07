@@ -132,6 +132,9 @@ mkServer logger env tp = do
 shutdownMonoscope :: AuthContext -> Eff '[IOE] ()
 shutdownMonoscope env =
   liftIO $ do
+    -- Flush + close cached Kafka producer first so any in-flight replay/dead-letter
+    -- batches make it to the broker before we tear down DB pools.
+    Queue.closeSharedKafkaProducer
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool
     Pool.destroyAllResources env.timefusionPgPool

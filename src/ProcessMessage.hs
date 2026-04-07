@@ -34,6 +34,7 @@ import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy.Char8 qualified as BL
 import Data.Cache qualified as Cache
 import Data.Char (isAlpha, isAlphaNum, isDigit, isLower, isUpper)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff)
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
@@ -53,7 +54,6 @@ import Effectful.Concurrent (Concurrent)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled (..))
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified as Eff
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Fields qualified as Fields
@@ -133,7 +133,7 @@ import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, jsonToMap, nes
  --}
 
 processMessages
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es [Text]
@@ -1040,7 +1040,7 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
       , fieldFormat = format
       , -- NOTE: A trailing question, is whether to store examples into a separate table.
         -- It requires some more of a cost benefit analysis.
-        examples = val
+        examples = boundedVal
       , hash = formatHash
       }
   )
@@ -1053,13 +1053,24 @@ fieldsToFieldDTO fieldCategory projectID endpointHash (keyPath, val) =
     aeValueToFieldType (AET.Object _) = Fields.FTObject
     aeValueToFieldType (AET.Array _) = Fields.FTList
 
+    -- Cap stored example/format-source values to avoid persisting large
+    -- payloads (e.g. HTML response bodies) into apis.fields/apis.formats.
+    -- Oversized strings are replaced with a sentinel; non-strings are kept as-is.
+    maxFieldValueSize :: Int
+    maxFieldValueSize = 256
+    boundVal :: AE.Value -> AE.Value
+    boundVal (AET.String s)
+      | T.length s > maxFieldValueSize = AET.String (T.take maxFieldValueSize s <> "…")
+    boundVal v = v
+    boundedVal = V.map boundVal val
+
     fieldType :: Fields.FieldTypes
-    fieldType = fromMaybe Fields.FTUnknown $ V.map aeValueToFieldType val V.!? 0
+    fieldType = fromMaybe Fields.FTUnknown $ V.map aeValueToFieldType boundedVal V.!? 0
 
     -- field hash is <hash of the endpoint> + <the hash of <field_category><key_path_str><field_type>> (No space or comma between data)
     !fieldHash = endpointHash <> toXXHash (display fieldCategory <> keyPath)
     -- FIXME: We should rethink this value to format logic.
     -- FIXME: Maybe it actually needs machine learning,
     -- FIXME: or maybe it should operate on the entire list, and not just one value.
-    format = fromMaybe "" $ V.map valueToFormat val V.!? 0
+    format = fromMaybe "" $ V.map valueToFormat boundedVal V.!? 0
     !formatHash = fieldHash <> toXXHash format
