@@ -133,7 +133,7 @@ getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field
 -- Capped at 5000: the DrainTree's maxLogGroups=1000, so loading more is wasteful.
 -- ORDER BY last_seen_at DESC keeps the most recently active patterns as seeds.
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
-getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT log_pattern FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|] (pid, sourceField)
+getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT LEFT(log_pattern, 2000) FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|] (pid, sourceField)
 
 
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
@@ -340,8 +340,8 @@ getPatternsWithCurrentRates pid now =
   where
     q =
       [sql|
-        SELECT lp.id, lp.project_id, lp.log_pattern, lp.pattern_hash, lp.source_field,
-          lp.service_name, lp.log_level, lp.sample_message,
+        SELECT lp.id, lp.project_id, LEFT(lp.log_pattern, 2000), lp.pattern_hash, lp.source_field,
+          lp.service_name, lp.log_level, LEFT(lp.sample_message, 2000),
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
           COALESCE(hs.event_count, 0)::BIGINT + COALESCE(mhs.member_count, 0)::BIGINT AS current_hour_count
         FROM apis.log_patterns lp

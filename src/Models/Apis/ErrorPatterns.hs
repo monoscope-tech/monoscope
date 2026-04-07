@@ -383,10 +383,10 @@ getErrorPatternsWithCurrentRates pid now =
     q =
       [sql|
         SELECT
-          e.id, e.project_id, e.error_type, e.message, e.service, e.state,
+          e.id, e.project_id, e.error_type, LEFT(e.message, 2000), e.service, e.state,
           e.baseline_state, e.baseline_error_rate_mean, e.baseline_error_rate_stddev,
           COALESCE(counts.event_count, 0)::INT AS current_hour_count,
-          e.error_data, e.stacktrace, e.hash, e.slack_thread_ts, e.discord_message_id
+          e.error_data, LEFT(e.stacktrace, 8000), e.hash, e.slack_thread_ts, e.discord_message_id
         FROM apis.error_patterns e
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
