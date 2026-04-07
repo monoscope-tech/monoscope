@@ -28,9 +28,9 @@ import OpenTelemetry.Attributes qualified as OA
 import OpenTelemetry.Trace (TracerProvider)
 import Relude
 import System.Config
+import System.IO.Unsafe (unsafePerformIO)
 import System.Tracing (SpanStatus (..), addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, runBackground)
-import System.IO.Unsafe (unsafePerformIO)
 import UnliftIO (throwIO)
 import UnliftIO.Exception (bracket, try, tryAny)
 import UnliftIO.MVar (modifyMVar)

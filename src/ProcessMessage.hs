@@ -133,7 +133,7 @@ import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, jsonToMap, nes
  --}
 
 processMessages
-  :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es [Text]
