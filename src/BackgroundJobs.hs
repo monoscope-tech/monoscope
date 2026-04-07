@@ -2123,7 +2123,10 @@ evaluateQueryMonitor monitor startWall = do
   results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 monitor.logQueryAsSql) ()
   end <- liftIO $ getTime Monotonic
 
-  let total = sum [v | Only v <- results]
+  -- Alert query returns one row per time bucket (see Pkg.Parser.alertQuery).
+  -- Take the max across buckets so the threshold compares per-bucket, not a sum
+  -- of the entire history (which would always trip).
+  let total = foldr max 0 [v | Only v <- results]
       durationNs = toNanoSecs (diffTimeSpec end start)
       title = monitor.alertConfig.title
       prevStatus = monitor.currentStatus

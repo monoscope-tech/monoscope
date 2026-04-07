@@ -884,7 +884,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
       metadataChip_ "shield-halved" $ "Severity: " <> alert.alertConfig.severity
       metadataChip_ "clock" $ "Every " <> show alert.checkIntervalMins <> " min"
       span_ [class_ "max-md:hidden"] $ metadataChip_ "calendar" $ "Created " <> toText (prettyTimeAuto currTime alert.createdAt)
-      whenJust alert.mutedUntil \until' ->
+      whenJust (mfilter (> currTime) alert.mutedUntil) \until' ->
         span_ [class_ "badge badge-sm badge-warning gap-1"] do
           faSprite_ "bell-slash" "regular" "h-3 w-3"
           toHtml $ mutedLabel currTime until'
