@@ -24,6 +24,7 @@ module Pkg.TestUtils (
   atAuthToBase,
   effToServantHandlerTest,
   runQueryEffect,
+  runHasqlEffect,
   frozenTime,
   -- Helper functions for tests
   processMessagesAndBackgroundJobs,
@@ -113,7 +114,9 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), runConnectionPool)
+import Data.Effectful.Hasql (Hasql, runHasqlPool)
+import Hasql.Pool qualified as HPool
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool, runConnectionPool)
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -184,7 +187,7 @@ migrate db = do
 
 -- Setup function that spins up a database with the db migrations already executed.
 -- source: https://jfischoff.github.io/blog/keeping-database-tests-fast.html
-withSetup :: (Pool Connection -> IO ()) -> IO ()
+withSetup :: (Pool Connection -> ByteString -> IO ()) -> IO ()
 withSetup f = do
   useExternalDB <- lookupEnv "USE_EXTERNAL_DB"
   case useExternalDB of
@@ -192,8 +195,9 @@ withSetup f = do
     _ -> withLocalSetup f
 
 
--- Local setup using tmp-postgres
-withLocalSetup :: (Pool Connection -> IO ()) -> IO ()
+-- Local setup using tmp-postgres. The callback receives both the postgresql-simple
+-- pool and the raw libpq connection string so a parallel hasql pool can be built.
+withLocalSetup :: (Pool Connection -> ByteString -> IO ()) -> IO ()
 withLocalSetup f = do
   -- Helper to throw exceptions
   let throwE x = either throwIO pure =<< x
@@ -209,7 +213,10 @@ withLocalSetup f = do
               }
     dirSize <- sum <$> (listDirectory migrationsDirr >>= mapM (getFileSize . (migrationsDirr <>)))
     migratedConfig <- throwE $ cacheAction ("./.tmp/postgres/" <> show dirSize) migrate combinedConfig
-    withConfig migratedConfig $ \db -> f =<< newPool (defaultPoolConfig (connectPostgreSQL $ toConnectionString db) close 60 50)
+    withConfig migratedConfig $ \db -> do
+      let cstr = toConnectionString db
+      pool <- newPool (defaultPoolConfig (connectPostgreSQL cstr) close 60 50)
+      f pool cstr
 
 
 -- Test DB connection info, host configurable via DB_HOST env var
@@ -218,7 +225,7 @@ testConnInfo dbName = defaultConnectInfo{connectUser = "postgres", connectPasswo
 
 
 -- External database setup using template database approach for better isolation and performance
-withExternalDBSetup :: (Pool Connection -> IO ()) -> IO ()
+withExternalDBSetup :: (Pool Connection -> ByteString -> IO ()) -> IO ()
 withExternalDBSetup f = do
   dbHost <- fromMaybe "localhost" <$> lookupEnv "DB_HOST"
   let connInfo dbName = (testConnInfo dbName){connectHost = dbHost}
@@ -250,9 +257,16 @@ withExternalDBSetup f = do
 
   -- Connect to the new test database
   pool <- newPool (defaultPoolConfig (connect $ connInfo (toString testDbName)) close 60 10)
+  let cstr =
+        encodeUtf8
+          ( "host="
+              <> toText dbHost
+              <> " user=postgres password=postgres dbname="
+              <> testDbName
+          )
 
   -- Run tests and cleanup
-  finally (f pool) $ do
+  finally (f pool cstr) $ do
     -- Close all connections in the pool
     destroyAllResources pool
 
@@ -503,6 +517,8 @@ runTestBackgroundWithNotifications t logger appCtx process = do
       & Effectful.Reader.Static.runReader appCtx
       & runConnectionPool appCtx.pool
       & runLabeled @"timefusion" (runConnectionPool appCtx.timefusionPgPool)
+      & runHasqlPool appCtx.hasqlPool
+      & runLabeled @"timefusion" (runHasqlPool appCtx.hasqlTimefusionPool)
       & runFrozenTime t
       & Logging.runLog ("background-job:" <> show appCtx.config.environment) logger appCtx.config.logLevel
       & Tracing.runTracing tp
@@ -574,12 +590,16 @@ data TestResources = TestResources
 
 -- Compose withSetup with additional IO actions
 withTestResources :: (TestResources -> IO ()) -> IO ()
-withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger -> do
+withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \logger -> do
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
   sessAndHeader <- testSessionHeader pool
   tp <- getGlobalTracerProvider
+  -- Parallel hasql pools sharing the same test DB
+  hasqlMain <- mkHasqlPool 5 cstr
+  hasqlJobs <- mkHasqlPool 5 cstr
+  hasqlTf <- mkHasqlPool 5 cstr
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
@@ -593,6 +613,9 @@ withTestResources f = withSetup $ \pool -> LogBulk.withBulkStdOutLogger \logger 
           pool
           pool
           pool
+          hasqlMain
+          hasqlJobs
+          hasqlTf
           projectCache
           logsPatternCache
           projectKeyCache
@@ -689,6 +712,18 @@ runQueryEffect TestResources{..} action = do
     & runErrorNoCallStack @ServantS.ServerError
     & Effectful.Reader.Static.runReader trATCtx
     & runConnectionPool trATCtx.pool
+    & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
+    & runEff
+    <&> fromRightShow
+
+
+-- | Hasql twin of `runQueryEffect`.
+runHasqlEffect :: TestResources -> (forall es. (Hasql :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
+runHasqlEffect TestResources{..} action = do
+  action
+    & runErrorNoCallStack @ServantS.ServerError
+    & Effectful.Reader.Static.runReader trATCtx
+    & runHasqlPool trATCtx.hasqlPool
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
     & runEff
     <&> fromRightShow

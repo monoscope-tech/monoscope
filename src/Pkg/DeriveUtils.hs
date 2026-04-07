@@ -21,6 +21,8 @@ module Pkg.DeriveUtils (
   hashAssetFile,
   hashFile,
   showPGFloatArray,
+  textArrayEnc,
+  mkHasqlPool,
 ) where
 
 import Control.Exception (throwIO)
@@ -50,6 +52,12 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift)
 import Effectful.PostgreSQL.Connection (WithConnection (..))
+import Hasql.Connection.Setting qualified as HCS
+import Hasql.Connection.Setting.Connection qualified as HCSC
+import Hasql.Encoders qualified as E
+import Hasql.Interpolate qualified as HI
+import Hasql.Pool qualified as HPool
+import Hasql.Pool.Config qualified as HPC
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
@@ -120,7 +128,7 @@ newtype PGTextArray = PGTextArray (V.Vector Text)
 -- Usage: type ProjectId = UUIDId "project"
 newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
   deriving stock (Generic, Read, Show, THS.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, HI.DecodeValue, HI.EncodeValue, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
   deriving anyclass (FromRow, ToRow)
 
 
@@ -357,3 +365,22 @@ instance Default TL.Text where
 instance Default (V.Vector a) where
   def = V.empty
   {-# INLINE def #-}
+
+
+textArrayEnc :: E.Value (V.Vector Text)
+textArrayEnc = E.array (E.dimension foldl' (E.element (E.nonNullable E.text)))
+{-# INLINE textArrayEnc #-}
+
+
+-- | Build a hasql pool. Timeouts are `DiffTime` (seconds): 30s acquisition,
+-- 30min aging/idleness — matches the postgresql-simple pool's lifetime envelope.
+mkHasqlPool :: Int -> ByteString -> IO HPool.Pool
+mkHasqlPool sz cstr =
+  HPool.acquire
+    $ HPC.settings
+      [ HPC.size sz
+      , HPC.acquisitionTimeout 30
+      , HPC.agingTimeout 1800
+      , HPC.idlenessTimeout 1800
+      , HPC.staticConnectionSettings [HCS.connection (HCSC.string (decodeUtf8 cstr))]
+      ]

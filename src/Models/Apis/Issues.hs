@@ -252,6 +252,8 @@ data Issue = Issue
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
   , targetHash :: Text -- Must stay non-null: used in ON CONFLICT unique index for dedup
+  , parentHash :: Maybe Text -- Broad (span-agnostic) hash for cross-route rollup. Nothing for non-error issue types.
+  , isFramework :: Bool -- True for framework/transport errors rolled up under parent hash
   , endpointHash :: Text -- Deprecated: always == targetHash (set by mkIssue). Drop column once selectIssues/selectIssueByHash are migrated.
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Projects.UserId
@@ -285,6 +287,8 @@ data IssueL = IssueL
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType -- Will be converted from anomaly_type in query
+  , parentHash :: Maybe Text
+  , isFramework :: Bool
   , endpointHash :: Text
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Projects.UserId
@@ -324,13 +328,13 @@ insertIssue issue = void $ PG.execute q issue
     q =
       [sql|
 INSERT INTO apis.issues (
-  id, created_at, updated_at, project_id, issue_type, target_hash, endpoint_hash,
+  id, created_at, updated_at, project_id, issue_type, target_hash, parent_hash, is_framework, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
   title, service, environment, critical, severity,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version, seq_num
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
@@ -428,7 +432,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
       _ -> ("CURRENT_DATE - INTERVAL '6 days'", "'1 day'", "INTERVAL '1 day'")
     q =
       [text|
-      SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
+      SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.parent_hash, i.is_framework, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
         CASE WHEN i.critical THEN 'critical' ELSE 'info' END, i.affected_requests, i.affected_clients, NULL::double precision,
         i.recommended_action, i.migration_complexity, i.issue_data, i.request_payloads, i.response_payloads, NULL::timestamp with time zone, NULL::int, i.seq_num,
         CASE
@@ -449,7 +453,9 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
           FROM generate_series($seriesStart, NOW(), $seriesStep) d
           LEFT JOIN (apis.error_hourly_stats ehs
             JOIN apis.error_patterns ep ON ep.id = ehs.error_id AND ep.project_id = ehs.project_id
-              AND ep.hash = i.target_hash AND ep.project_id = i.project_id
+              AND ep.project_id = i.project_id
+              AND ((i.is_framework AND ep.parent_hash = i.target_hash)
+                OR (NOT i.is_framework AND ep.hash = i.target_hash))
           ) ON ehs.hour_bucket >= d AND ehs.hour_bucket < d + $bucketSize
           GROUP BY d
         ) sub
@@ -566,6 +572,8 @@ createAPIChangeIssue projectId endpointHash anomalies = do
       { projectId
       , issueType = ApiChange
       , targetHash = endpointHash
+      , parentHash = Nothing
+      , isFramework = False
       , service = Just $ Anomalies.detectService Nothing firstAnomaly.endpointUrlPath
       , critical = isCritical
       , severity = if isCritical then "critical" else "warning"
@@ -589,6 +597,8 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
       { projectId
       , issueType = QueryAlert
       , targetHash = queryId
+      , parentHash = Nothing
+      , isFramework = False
       , service = Just "Monitoring"
       , critical = True
       , severity = "warning"
@@ -722,6 +732,8 @@ createLogPatternRateChangeIssue projectId lp sr = do
       { projectId
       , issueType = LogPatternRateChange
       , targetHash = lp.patternHash
+      , parentHash = Nothing
+      , isFramework = False
       , service = lp.serviceName
       , critical = sr.direction == Spike && lvl == "error"
       , severity
@@ -773,6 +785,8 @@ createLogPatternIssue projectId lp = do
       { projectId
       , issueType = LogPattern
       , targetHash = lp.patternHash
+      , parentHash = Nothing
+      , isFramework = False
       , service = lp.serviceName
       , critical = lvl == "error"
       , severity
@@ -843,6 +857,8 @@ data MkIssueOpts a = MkIssueOpts
   { projectId :: Projects.ProjectId
   , issueType :: IssueType
   , targetHash :: Text
+  , parentHash :: Maybe Text
+  , isFramework :: Bool
   , service :: Maybe Text
   , critical :: Bool
   , severity :: Text
@@ -866,6 +882,8 @@ mkIssue opts = do
       , projectId = opts.projectId
       , issueType = opts.issueType
       , targetHash = opts.targetHash
+      , parentHash = opts.parentHash
+      , isFramework = opts.isFramework
       , endpointHash = opts.targetHash
       , acknowledgedAt = Nothing
       , acknowledgedBy = Nothing
@@ -988,9 +1006,15 @@ getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @R
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue
 createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
   let increasePercent = if baselineMean > 0 then ((currentRate / baselineMean) - 1) * 100 else 0
+      -- Inherit classification from the underlying pattern so a spike on a framework
+      -- error dedupes against the rolled-up framework issue via the same target_hash.
+      useFramework = errRate.isFramework && isJust errRate.parentHash
+      tgt = if useFramework then fromMaybe errRate.hash errRate.parentHash else errRate.hash
    in mkErrorIssue
         projectId
-        errRate.hash
+        tgt
+        errRate.parentHash
+        useFramework
         errRate.service
         errRate.errorType
         errRate.message
@@ -1000,28 +1024,46 @@ createErrorSpikeIssue projectId errRate currentRate baselineMean zScore =
         ("Error rate has spiked " <> show (round zScore :: Int) <> " standard deviations above baseline. Current: " <> show (round currentRate :: Int) <> "/hr, Baseline: " <> show (round baselineMean :: Int) <> "/hr. Investigate recent deployments or changes.")
 
 
+-- | Create a new issue for an error pattern. Framework/transport errors are keyed on
+-- the *parent* (broad) hash so that subsequent per-route variants hit the ON CONFLICT
+-- path and do not fragment into many issues. App errors keep per-route identity and
+-- store the parent hash for UI rollup.
 createNewErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPattern -> Eff es Issue
 createNewErrorIssue projectId err =
-  mkErrorIssue
-    projectId
-    err.hash
-    err.service
-    err.errorType
-    err.message
-    err.stacktrace
-    1
-    ("New Error: " <> err.errorType <> " - " <> T.take 80 err.message)
-    "Investigate the new error and implement a fix."
+  -- Framework errors key the issue on parentHash so per-route variants collapse into one
+  -- issue via the (project_id, target_hash, issue_type) ON CONFLICT index. If the broad
+  -- hash is somehow missing we fall back to the narrow hash (behaves like an app error).
+  let useFramework = err.isFramework && isJust err.parentHash
+      tgt = if useFramework then fromMaybe err.hash err.parentHash else err.hash
+      title =
+        (if useFramework then "Framework Error: " else "New Error: ")
+          <> err.errorType
+          <> " - "
+          <> T.take 80 err.message
+   in mkErrorIssue
+        projectId
+        tgt
+        err.parentHash
+        useFramework
+        err.service
+        err.errorType
+        err.message
+        err.stacktrace
+        1
+        title
+        "Investigate the new error and implement a fix."
 
 
-mkErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Maybe Text -> Text -> Text -> Text -> Int -> Text -> Text -> Eff es Issue
-mkErrorIssue projectId targetHash service errType errMsg stack occurrences title recommendedAction = do
+mkErrorIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> Text -> Maybe Text -> Bool -> Maybe Text -> Text -> Text -> Text -> Int -> Text -> Text -> Eff es Issue
+mkErrorIssue projectId targetHash parentHash isFramework service errType errMsg stack occurrences title recommendedAction = do
   now <- Time.currentTime
   mkIssue
     MkIssueOpts
       { projectId
       , issueType = RuntimeException
       , targetHash
+      , parentHash
+      , isFramework
       , service
       , critical = True
       , severity = "critical"

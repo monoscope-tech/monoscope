@@ -87,14 +87,23 @@ import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
+import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
+import Hasql.Interpolate qualified as HI
+import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param)
+import Hasql.DynamicStatements.Statement (dynamicallyParameterized)
+import Hasql.Decoders qualified as D
+import Hasql.Encoders qualified as E
+import Hasql.Session qualified as HSession
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Effectful.Reader.Static qualified as Eff
 import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, textArrayEnc, unAesonTextMaybe)
 import Relude hiding (ask)
 import System.Config (AuthContext)
 import System.Config qualified as SysConfig
@@ -515,24 +524,24 @@ data MetricChartListData = MetricChartListData
   deriving anyclass (FromRow, NFData, ToRow)
 
 
-getTraceDetails :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
-getTraceDetails pid trId tme now = listToMaybe <$> PG.query q (pid.toText, start, end, trId)
+getTraceDetails :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
+getTraceDetails pid trId tme now = do
+  rows :: V.Vector (Text, UTCTime, UTCTime, Int64, Int64, Maybe (V.Vector Text)) <- Hasql.interp
+    [HI.sql| SELECT
+              context___trace_id,
+              MIN(start_time) AS trace_start_time,
+              MAX(COALESCE(end_time, start_time)) AS trace_end_time,
+              CAST(EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000000000 AS int8) AS trace_duration_ns,
+              COUNT(context->>'span_id')::int8 AS total_spans,
+              ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
+            FROM otel_logs_and_spans
+            WHERE project_id = #{pid} AND timestamp BETWEEN #{start} AND #{end} AND context___trace_id = #{trId}
+            GROUP BY context___trace_id |]
+  pure $ (\(tid, ts, te, dur, ns, sn) -> Trace tid ts te (fromIntegral dur) (fromIntegral ns) sn) <$> (rows V.!? 0)
   where
     (start, end) = case tme of
       Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
       Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
-    q = do
-      [sql| SELECT
-              context___trace_id,
-              MIN(start_time) AS trace_start_time,
-              MAX(COALESCE(end_time, start_time)) AS trace_end_time,
-              CAST(EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, start_time)) - MIN(start_time))) * 1000000000 AS BIGINT) AS trace_duration_ns,
-              COUNT(context->>'span_id') AS total_spans,
-              ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
-            FROM otel_logs_and_spans
-            WHERE  project_id = ? AND timestamp BETWEEN ? AND ? AND context___trace_id = ?
-            GROUP BY context___trace_id;
-        |]
 
 
 logRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
@@ -765,107 +774,18 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
         :. (entry.aggregationTemporality, entry.isMonotonic)
 
 
--- OtelLogsAndSpans ToRow instance
-instance ToRow OtelLogsAndSpans where
-  toRow entry =
-    [ toField entry.timestamp -- timestamp
-    , toField entry.observed_timestamp -- observed_timestamp
-    , toField entry.id -- id
-    , toField $ fmap cleanNullBytes entry.parent_id -- parent_id
-    , toField $ V.map cleanNullBytes entry.hashes
-    , toField $ fmap cleanNullBytes entry.name -- name
-    , toField $ fmap cleanNullBytes entry.kind -- kind
-    , toField $ fmap cleanNullBytes entry.status_code -- status_code
-    , toField $ fmap cleanNullBytes entry.status_message -- status_message
-    , toField $ fmap cleanNullBytes entry.level -- level
-    , toField $ fmap AE.toJSON entry.severity -- severity as JSON
-    , toField $ parseSeverityText entry.severity -- severity___severity_text
-    , toField $ parseSeverityNumber entry.severity -- severity___severity_number
-    , toField $ fmap cleanNullBytesFromJSON (unAesonTextMaybe entry.body) -- body as JSON
-    , toField entry.duration -- duration
-    , toField entry.start_time -- start_time
-    , toField entry.end_time -- end_time
-    , toField $ fmap (cleanNullBytesFromJSON . AE.toJSON) entry.context -- context as JSON
-    , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_id) -- context___trace_id
-    , toField $ fmap cleanNullBytes $ entry.context >>= (.span_id) -- context___span_id
-    , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_state) -- context___trace_state
-    , toField $ fmap cleanNullBytes $ entry.context >>= (.trace_flags) -- context___trace_flags
-    , toField $ fmap cleanNullBytes $ entry.context >>= (.is_remote) -- context___is_remote
-    , toField $ fmap cleanNullBytesFromJSON (unAesonTextMaybe entry.events) -- events as JSON
-    , toField $ fmap cleanNullBytes entry.links -- links
-    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) (unAesonTextMaybe entry.attributes) -- attributes as JSON
-    , toField $ atMapText "client.address" (unAesonTextMaybe entry.attributes) -- attributes___client___address
-    , toField $ atMapInt "client.port" (unAesonTextMaybe entry.attributes) -- attributes___client___port
-    , toField $ atMapText "server.address" (unAesonTextMaybe entry.attributes) -- attributes___server___address
-    , toField $ atMapInt "server.port" (unAesonTextMaybe entry.attributes) -- attributes___server___port
-    , toField $ atMapText "network.local.address" (unAesonTextMaybe entry.attributes) -- attributes___network___local__address
-    , toField $ atMapInt "network.local.port" (unAesonTextMaybe entry.attributes) -- attributes___network___local__port
-    , toField $ atMapText "network.peer.address" (unAesonTextMaybe entry.attributes) -- attributes___network___peer___address
-    , toField $ atMapInt "network.peer.port" (unAesonTextMaybe entry.attributes) -- attributes___network___peer__port
-    , toField $ atMapText "network.protocol.name" (unAesonTextMaybe entry.attributes) -- attributes___network___protocol___name
-    , toField $ atMapText "network.protocol.version" (unAesonTextMaybe entry.attributes) -- attributes___network___protocol___version
-    , toField $ atMapText "network.transport" (unAesonTextMaybe entry.attributes) -- attributes___network___transport
-    , toField $ atMapText "network.type" (unAesonTextMaybe entry.attributes) -- attributes___network___type
-    , toField $ atMapInt "code.number" (unAesonTextMaybe entry.attributes) -- attributes___code___number
-    , toField $ atMapText "code.file.path" (unAesonTextMaybe entry.attributes) -- attributes___code___file___path
-    , toField $ atMapText "code.function.name" (unAesonTextMaybe entry.attributes) -- attributes___code___function___name
-    , toField $ atMapInt "code.line.number" (unAesonTextMaybe entry.attributes) -- attributes___code___line___number
-    , toField $ atMapText "code.stacktrace" (unAesonTextMaybe entry.attributes) -- attributes___code___stacktrace
-    , toField $ atMapText "log.record.original" (unAesonTextMaybe entry.attributes) -- attributes___log__record___original
-    , toField $ atMapText "log.record.uid" (unAesonTextMaybe entry.attributes) -- attributes___log__record___uid
-    , toField $ atMapText "error.type" (unAesonTextMaybe entry.attributes) -- attributes___error___type
-    , toField $ atMapText "exception.type" (unAesonTextMaybe entry.attributes) -- attributes___exception___type
-    , toField $ atMapText "exception.message" (unAesonTextMaybe entry.attributes) -- attributes___exception___message
-    , toField $ atMapText "exception.stacktrace" (unAesonTextMaybe entry.attributes) -- attributes___exception___stacktrace
-    , toField $ atMapText "url.fragment" (unAesonTextMaybe entry.attributes) -- attributes___url___fragment
-    , toField $ atMapText "url.full" (unAesonTextMaybe entry.attributes) -- attributes___url___full
-    , toField $ atMapText "url.path" (unAesonTextMaybe entry.attributes) -- attributes___url___path
-    , toField $ atMapText "url.query" (unAesonTextMaybe entry.attributes) -- attributes___url___query
-    , toField $ atMapText "url.scheme" (unAesonTextMaybe entry.attributes) -- attributes___url___scheme
-    , toField $ atMapText "user_agent.original" (unAesonTextMaybe entry.attributes) -- attributes___user_agent___original
-    , toField $ atMapText "http.request.method" (unAesonTextMaybe entry.attributes) -- attributes___http___request___method
-    , toField $ atMapText "http.request.method_original" (unAesonTextMaybe entry.attributes) -- attributes___http___request___method_original
-    , toField $ atMapInt "http.response.status_code" (unAesonTextMaybe entry.attributes) -- attributes___http___response___status_code
-    , toField $ atMapInt "http.request.resend_count" (unAesonTextMaybe entry.attributes) -- attributes___http___request___resend_count
-    , toField $ atMapInt "http.request.body.size" (unAesonTextMaybe entry.attributes) -- attributes___http___request___body___size
-    , toField $ atMapText "session.id" (unAesonTextMaybe entry.attributes) -- attributes___session___id
-    , toField $ atMapText "session.previous.id" (unAesonTextMaybe entry.attributes) -- attributes___session___previous___id
-    , toField $ atMapText "db.system.name" (unAesonTextMaybe entry.attributes) -- attributes___db___system___name
-    , toField $ atMapText "db.collection.name" (unAesonTextMaybe entry.attributes) -- attributes___db___collection___name
-    , toField $ atMapText "db.namespace" (unAesonTextMaybe entry.attributes) -- attributes___db___namespace
-    , toField $ atMapText "db.operation.name" (unAesonTextMaybe entry.attributes) -- attributes___db___operation___name
-    , toField $ atMapText "db.response.status_code" (unAesonTextMaybe entry.attributes) -- attributes___db___response___status_code
-    , toField $ atMapInt "db.operation.batch.size" (unAesonTextMaybe entry.attributes) -- attributes___db___operation___batch___size
-    , toField $ atMapText "db.query.summary" (unAesonTextMaybe entry.attributes) -- attributes___db___query___summary
-    , toField $ atMapText "db.query.text" (unAesonTextMaybe entry.attributes) -- attributes___db___query___text
-    , toField $ atMapText "user.id" (unAesonTextMaybe entry.attributes) -- attributes___user___id
-    , toField $ atMapText "user.email" (unAesonTextMaybe entry.attributes) -- attributes___user___email
-    , toField $ atMapText "user.full_name" (unAesonTextMaybe entry.attributes) -- attributes___user___full_name
-    , toField $ atMapText "user.name" (unAesonTextMaybe entry.attributes) -- attributes___user___name
-    , toField $ atMapText "user.hash" (unAesonTextMaybe entry.attributes) -- attributes___user___hash
-    , toField $ fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) (unAesonTextMaybe entry.resource) -- resource as JSON
-    , toField $ atMapText "service.name" (unAesonTextMaybe entry.resource) -- resource___service___name
-    , toField $ atMapText "service.version" (unAesonTextMaybe entry.resource) -- resource___service___version
-    , toField $ atMapText "service.instance.id" (unAesonTextMaybe entry.resource) -- resource___service___instance___id
-    , toField $ atMapText "service.namespace" (unAesonTextMaybe entry.resource) -- resource___service___namespace
-    , toField $ atMapText "telemetry.sdk.language" (unAesonTextMaybe entry.resource) -- resource___telemetry___sdk___language
-    , toField $ atMapText "telemetry.sdk.name" (unAesonTextMaybe entry.resource) -- resource___telemetry___sdk___name
-    , toField $ atMapText "telemetry.sdk.version" (unAesonTextMaybe entry.resource) -- resource___telemetry___sdk___version
-    , toField $ atMapText "user_agent.original" (unAesonTextMaybe entry.resource) -- resource___user_agent___original
-    , toField $ cleanNullBytes entry.project_id -- project_id
-    , toField $ V.map cleanNullBytes entry.summary -- summary
-    , toField entry.date
-    ]
-    where
-      -- Helper functions for severity fields
-      parseSeverityText sev = do
-        s <- sev
-        cleanNullBytes . toText . encodeEnumSC @"SL" <$> s.severity_text
-
-      parseSeverityNumber = fmap (show . severity_number)
-
-
-bulkInsertOtelLogsAndSpansTF :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => V.Vector OtelLogsAndSpans -> Eff es ()
+bulkInsertOtelLogsAndSpansTF
+  :: ( Concurrent :> es
+     , Hasql :> es
+     , Labeled "timefusion" Hasql :> es
+     , IOE :> es
+     , Eff.Reader AuthContext :> es
+     , Ki.StructuredConcurrency :> es
+     , Log :> es
+     , UUIDEff :> es
+     )
+  => V.Vector OtelLogsAndSpans
+  -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   appCtx <- Eff.ask @AuthContext
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON appCtx.config.enableTimefusionWrites)]
@@ -875,66 +795,215 @@ bulkInsertOtelLogsAndSpansTF records = do
       mainThread <- Ki.fork scope $ void $ bulkInsertOtelLogsAndSpans updatedRecords
       _ <- Ki.fork scope do
         Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length updatedRecords)]
-        void $ tryAny (retryTimefusion 10 updatedRecords) >>= \case
-          Left e -> Log.logAttention "TimeFusion write failed" $ AE.object [("error", AE.toJSON $ show e)]
+        tryAny (retryTimefusion 10 updatedRecords) >>= \case
+          Left e -> do
+            -- Distinguish infra failures (HasqlException) from programmer bugs so on-call
+            -- can triage: infra → page storage; bug → file an issue.
+            let isHasql = isJust (fromException @Hasql.HasqlException e)
+                errId = if isHasql then "TIMEFUSION_WRITE_FAILED" else "TIMEFUSION_WRITE_BUG" :: Text
+                kind = if isHasql then "infra" else "programmer_error" :: Text
+            Log.logAttention errId
+              $ AE.object
+                [ "error_id" AE..= errId
+                , "kind" AE..= kind
+                , "record_count" AE..= V.length updatedRecords
+                , "error" AE..= show @Text e
+                ]
           Right _ -> pass
       Ki.atomically $ Ki.await mainThread
     else void $ bulkInsertOtelLogsAndSpans updatedRecords
   where
-    retryTimefusion 0 recs = labeled @"timefusion" @WithConnection $ bulkInsertOtelLogsAndSpans recs
-    retryTimefusion n recs = do
-      tryAny (labeled @"timefusion" @WithConnection $ bulkInsertOtelLogsAndSpans recs) >>= \case
-        Left e | "Connection refused" `T.isInfixOf` show e -> do
-          Log.logAttention "Retrying bulkInsertOtelLogsAndSpans" $ AE.object [("remaining_retries", show n), ("error", show e)]
-          threadDelay (1000000 * (4 - n))
+    -- Retry only transient HasqlException; non-Hasql exceptions (e.g. InvalidOtelRowIdException
+    -- from bad UUIDs, encode panics) are programmer bugs and must propagate immediately.
+    -- Do NOT widen to tryAny-style retry — that would re-raise programmer bugs in a loop.
+    retryTimefusion n recs =
+      tryAny (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans recs) >>= \case
+        Right count -> Log.logTrace "TimeFusion write succeeded" $ AE.object [("rows_inserted", AE.toJSON count)]
+        Left e | n > 0, maybe False Hasql.isTransientHasqlError (fromException e) -> do
+          let attempt = 11 - n -- attempts: 1..10
+              delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,...,cap 5s
+          Log.logAttention "Retrying bulkInsertOtelLogsAndSpans"
+            $ AE.object [("attempt", AE.toJSON attempt), ("max_attempts", AE.toJSON (10 :: Int)), ("backoff_us", AE.toJSON delayMicros), ("error", AE.toJSON $ show @Text e)]
+          threadDelay delayMicros
           retryTimefusion (n - 1) recs
         Left e -> throwIO e
-        Right count -> do
-          Log.logTrace "TimeFusion write succeeded" $ AE.object [("rows_inserted", AE.toJSON count)]
-          pure count
 
 
--- Function to insert OtelLogsAndSpans records with all fields in flattened structure
--- Using direct connection without transaction
-bulkInsertOtelLogsAndSpans :: DB es => V.Vector OtelLogsAndSpans -> Eff es Int64
-bulkInsertOtelLogsAndSpans records = PG.executeMany bulkInserSpansAndLogsQuery (V.toList records)
+-- | Hasql-backed bulk insert for OtelLogsAndSpans.
+--
+-- Sends all 87 columns of every row as binary parameters via a multi-row VALUES
+-- INSERT built with hasql-dynamic-statements. Postgres caps the bind protocol at
+-- 65535 parameters per statement, so we chunk to keep `chunkSize * 87 < 65535`.
+-- Each row's `id` MUST be a parseable UUID — callers (`bulkInsertOtelLogsAndSpansTF`)
+-- guarantee this by minting fresh UUIDs upfront.
+bulkInsertOtelLogsAndSpans :: (Hasql :> es, IOE :> es, Log :> es) => V.Vector OtelLogsAndSpans -> Eff es Int64
+bulkInsertOtelLogsAndSpans records
+  | V.null records = pure 0
+  | otherwise = do
+      rowSnippets <- V.mapM otelRowSnippet records
+      let chunkSize = 700 -- 700 * 87 = 60900 < 65535 PG bind-message limit
+          chunks = unfoldr (\v -> if V.null v then Nothing else Just (V.splitAt chunkSize v)) rowSnippets
+          chunkStmt c = dynamicallyParameterized (otelInsertHeader <> mconcat (intersperse ", " (V.toList c))) D.rowsAffected True
+      case chunks of
+        [single] -> Hasql.session (HSession.statement () (chunkStmt single))
+        _ ->
+          -- Multi-chunk insert: wrap in a single transaction so a mid-stream failure
+          -- cannot leave a partial write.
+          Hasql.transaction TxS.ReadCommitted TxS.Write
+            $ foldl' (+) 0 <$> traverse (\c -> Tx.statement () (chunkStmt c)) chunks
 
 
-bulkInserSpansAndLogsQuery :: Query
-bulkInserSpansAndLogsQuery =
-  [sql| INSERT INTO otel_logs_and_spans
-      (timestamp, observed_timestamp, id, parent_id, hashes, name, kind, status_code, status_message, 
-       level, severity, severity___severity_text, severity___severity_number, body, duration, 
-       start_time, end_time, context, context___trace_id, context___span_id, context___trace_state, 
-       context___trace_flags, context___is_remote, events, links, attributes, 
-       attributes___client___address, attributes___client___port, attributes___server___address,
-       attributes___server___port, attributes___network___local__address, attributes___network___local__port,
-       attributes___network___peer___address, attributes___network___peer__port, 
-       attributes___network___protocol___name, attributes___network___protocol___version,
-       attributes___network___transport, attributes___network___type, attributes___code___number,
-       attributes___code___file___path, attributes___code___function___name, attributes___code___line___number,
-       attributes___code___stacktrace, attributes___log__record___original, attributes___log__record___uid,
-       attributes___error___type, attributes___exception___type, attributes___exception___message,
-       attributes___exception___stacktrace, attributes___url___fragment, attributes___url___full,
-       attributes___url___path, attributes___url___query, attributes___url___scheme,
-       attributes___user_agent___original, attributes___http___request___method,
-       attributes___http___request___method_original, attributes___http___response___status_code,
-       attributes___http___request___resend_count, attributes___http___request___body___size,
-       attributes___session___id, attributes___session___previous___id, attributes___db___system___name,
-       attributes___db___collection___name, attributes___db___namespace, attributes___db___operation___name,
-       attributes___db___response___status_code, attributes___db___operation___batch___size,
-       attributes___db___query___summary, attributes___db___query___text, attributes___user___id,
-       attributes___user___email, attributes___user___full_name, attributes___user___name,
-       attributes___user___hash, resource, resource___service___name, resource___service___version,
-       resource___service___instance___id, resource___service___namespace, 
-       resource___telemetry___sdk___language, resource___telemetry___sdk___name,
-       resource___telemetry___sdk___version, resource___user_agent___original,
-       project_id, summary, date)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-              ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
- 
-    |]
+-- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
+-- unparseable id. Callers must mint UUIDs upfront — failing loud here prevents
+-- silently writing rows under a sentinel UUID.
+newtype InvalidOtelRowIdException = InvalidOtelRowIdException Text
+  deriving stock (Show)
+  deriving anyclass (Exception)
+
+
+-- | Per-row context: pre-decoded attribute/resource maps (bound once instead
+-- of re-parsing JSON ~50× per row) plus the params that need IO/logging to
+-- compute (id UUID parse, is_remote textual bool parse).
+data OtelRowCtx = OtelRowCtx
+  { row :: OtelLogsAndSpans
+  , am :: Maybe (Map.Map Text AE.Value)
+  , rm :: Maybe (Map.Map Text AE.Value)
+  , uuidP :: Snippet
+  , isRemoteP :: Snippet
+  }
+
+
+-- | Single source of truth for the otel_logs_and_spans bulk insert: SQL column
+-- name + per-row encoder. `otelInsertHeader` and `otelRowSnippet` are both
+-- derived from this list, so the two can never drift apart.
+otelColumns :: [(Text, OtelRowCtx -> Snippet)]
+otelColumns =
+  let aT k c = param (atMapText k c.am)
+      aI k c = param (fmap (fromIntegral :: Int -> Int32) (atMapInt k c.am))
+      aI8 k c = param (fmap (fromIntegral :: Int -> Int64) (atMapInt k c.am))
+      rT k c = param (atMapText k c.rm)
+      top f c = f c.row
+      txt g = top (param . fmap cleanNullBytes . g)
+      jp :: AE.ToJSON a => (OtelLogsAndSpans -> Maybe a) -> OtelRowCtx -> Snippet
+      jp g = top (param . fmap (cleanNullBytesFromJSON . AE.toJSON) . g)
+      aeson g = top (param . fmap cleanNullBytesFromJSON . unAesonTextMaybe . g)
+      arr g = top (\e -> encoderAndParam (E.nonNullable textArrayEnc) (V.map cleanNullBytes (g e)))
+      ctxT f = top (\e -> param (fmap cleanNullBytes (e.context >>= f)))
+      sevText e = e.severity >>= \s -> cleanNullBytes . toText . encodeEnumSC @"SL" <$> s.severity_text
+      sevNum :: OtelLogsAndSpans -> Maybe Int32
+      sevNum e = fromIntegral . severity_number <$> e.severity
+   in [ ("timestamp", top (param . (.timestamp)))
+      , ("observed_timestamp", top (param . (.observed_timestamp)))
+      , ("id", (.uuidP))
+      , ("parent_id", txt (.parent_id))
+      , ("hashes", arr (.hashes))
+      , ("name", txt (.name))
+      , ("kind", txt (.kind))
+      , ("status_code", txt (.status_code))
+      , ("status_message", txt (.status_message))
+      , ("level", txt (.level))
+      , ("severity", jp (.severity))
+      , ("severity___severity_text", top (param . sevText))
+      , ("severity___severity_number", top (param . sevNum))
+      , ("body", aeson (.body))
+      , ("duration", top (param . (.duration)))
+      , ("start_time", top (param . (.start_time)))
+      , ("end_time", top (param . (.end_time)))
+      , ("context", jp (.context))
+      , ("context___trace_id", ctxT (.trace_id))
+      , ("context___span_id", ctxT (.span_id))
+      , ("context___trace_state", ctxT (.trace_state))
+      , ("context___trace_flags", ctxT (.trace_flags))
+      , ("context___is_remote", (.isRemoteP))
+      , ("events", aeson (.events))
+      , ("links", txt (.links))
+      , ("attributes", \c -> param (fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) c.am))
+      , ("attributes___client___address", aT "client.address")
+      , ("attributes___client___port", aI "client.port")
+      , ("attributes___server___address", aT "server.address")
+      , ("attributes___server___port", aI "server.port")
+      , ("attributes___network___local__address", aT "network.local.address")
+      , ("attributes___network___local__port", aI "network.local.port")
+      , ("attributes___network___peer___address", aT "network.peer.address")
+      , ("attributes___network___peer__port", aI "network.peer.port")
+      , ("attributes___network___protocol___name", aT "network.protocol.name")
+      , ("attributes___network___protocol___version", aT "network.protocol.version")
+      , ("attributes___network___transport", aT "network.transport")
+      , ("attributes___network___type", aT "network.type")
+      , ("attributes___code___number", aI "code.number")
+      , ("attributes___code___file___path", aT "code.file.path")
+      , ("attributes___code___function___name", aT "code.function.name")
+      , ("attributes___code___line___number", aI "code.line.number")
+      , ("attributes___code___stacktrace", aT "code.stacktrace")
+      , ("attributes___log__record___original", aT "log.record.original")
+      , ("attributes___log__record___uid", aT "log.record.uid")
+      , ("attributes___error___type", aT "error.type")
+      , ("attributes___exception___type", aT "exception.type")
+      , ("attributes___exception___message", aT "exception.message")
+      , ("attributes___exception___stacktrace", aT "exception.stacktrace")
+      , ("attributes___url___fragment", aT "url.fragment")
+      , ("attributes___url___full", aT "url.full")
+      , ("attributes___url___path", aT "url.path")
+      , ("attributes___url___query", aT "url.query")
+      , ("attributes___url___scheme", aT "url.scheme")
+      , ("attributes___user_agent___original", aT "user_agent.original")
+      , ("attributes___http___request___method", aT "http.request.method")
+      , ("attributes___http___request___method_original", aT "http.request.method_original")
+      , ("attributes___http___response___status_code", aI "http.response.status_code")
+      , ("attributes___http___request___resend_count", aI "http.request.resend_count")
+      , ("attributes___http___request___body___size", aI8 "http.request.body.size")
+      , ("attributes___session___id", aT "session.id")
+      , ("attributes___session___previous___id", aT "session.previous.id")
+      , ("attributes___db___system___name", aT "db.system.name")
+      , ("attributes___db___collection___name", aT "db.collection.name")
+      , ("attributes___db___namespace", aT "db.namespace")
+      , ("attributes___db___operation___name", aT "db.operation.name")
+      , ("attributes___db___response___status_code", aT "db.response.status_code")
+      , ("attributes___db___operation___batch___size", aI "db.operation.batch.size")
+      , ("attributes___db___query___summary", aT "db.query.summary")
+      , ("attributes___db___query___text", aT "db.query.text")
+      , ("attributes___user___id", aT "user.id")
+      , ("attributes___user___email", aT "user.email")
+      , ("attributes___user___full_name", aT "user.full_name")
+      , ("attributes___user___name", aT "user.name")
+      , ("attributes___user___hash", aT "user.hash")
+      , ("resource", \c -> param (fmap (cleanNullBytesFromJSON . AE.Object . KEM.fromMapText) c.rm))
+      , ("resource___service___name", rT "service.name")
+      , ("resource___service___version", rT "service.version")
+      , ("resource___service___instance___id", rT "service.instance.id")
+      , ("resource___service___namespace", rT "service.namespace")
+      , ("resource___telemetry___sdk___language", rT "telemetry.sdk.language")
+      , ("resource___telemetry___sdk___name", rT "telemetry.sdk.name")
+      , ("resource___telemetry___sdk___version", rT "telemetry.sdk.version")
+      , ("resource___user_agent___original", rT "user_agent.original")
+      , ("project_id", top (param . cleanNullBytes . (.project_id)))
+      , ("summary", arr (.summary))
+      , ("date", top (param . (.date)))
+      ]
+
+
+otelInsertHeader :: Snippet
+otelInsertHeader =
+  fromString $ "INSERT INTO otel_logs_and_spans (" <> toString (T.intercalate ", " (fst <$> otelColumns)) <> ") VALUES "
+
+
+-- | Build the (?, ?, ..., ?) values group for one OtelLogsAndSpans row by
+-- walking `otelColumns`. Throws `InvalidOtelRowIdException` on bad id and logs
+-- on unparseable `is_remote` rather than silently corrupting the row.
+otelRowSnippet :: (IOE :> es, Log :> es) => OtelLogsAndSpans -> Eff es Snippet
+otelRowSnippet e = do
+  uuidP <- maybe (liftIO $ throwIO (InvalidOtelRowIdException e.id)) (pure . param) (UUID.fromText e.id)
+  isRemoteP <- case e.context >>= (.is_remote) of
+    Nothing -> pure (param (Nothing :: Maybe Bool))
+    Just t -> case T.toLower t of
+      l | l `elem` ["true", "t", "1"] -> pure (param (Just True))
+        | l `elem` ["false", "f", "0"] -> pure (param (Just False))
+        | otherwise -> do
+            Log.logAttention "OTEL_UNPARSEABLE_IS_REMOTE"
+              $ AE.object ["error_id" AE..= ("OTEL_UNPARSEABLE_IS_REMOTE" :: Text), "value" AE..= t, "trace_id" AE..= (e.context >>= (.trace_id))]
+            pure (param (Nothing :: Maybe Bool))
+  let ctx = OtelRowCtx{row = e, am = unAesonTextMaybe e.attributes, rm = unAesonTextMaybe e.resource, uuidP, isRemoteP}
+  pure $ "(" <> mconcat (intersperse ", " [enc ctx | (_, enc) <- otelColumns]) <> ")"
 
 
 removeDuplic :: (Ord a, Ord e) => [(a, e, b, c, d, q)] -> [(a, e, b, c, d, q)]
@@ -1141,6 +1210,11 @@ extractATError spanObj (AE.Object o) = do
   -- This ensures similar errors are grouped while allowing variations in the actual message
   -- projectId mService mEndpoint runtime exceptionType message stackTrace
 
+  -- Use "" (empty) rather than a magic "unknown" sentinel so the hash inputs stay stable
+  -- across events regardless of whether runtime detection succeeded.
+  let rt = fromMaybe "" tech
+      hashes = ErrorPatterns.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
+      isFwk = ErrorPatterns.isFrameworkTransportError typ (ErrorPatterns.normalizeMessage msg)
   return
     $ ErrorPatterns.ATError
       { projectId = pid
@@ -1150,7 +1224,9 @@ extractATError spanObj (AE.Object o) = do
       , message = msg
       , rootErrorMessage = msg
       , stackTrace = stack
-      , hash = ErrorPatterns.computeErrorFingerprint spanObj.project_id serviceName spanObj.name (fromMaybe "unknown" tech) typ msg stack
+      , hash = hashes.narrow
+      , parentHash = Just hashes.broad
+      , isFramework = isFwk
       , technology = Nothing
       , serviceName = serviceName
       , requestMethod = method
@@ -1231,25 +1307,23 @@ ORDER BY
     |]
 
 
-getDBQueryStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getDBQueryStats projectId start end = PG.query q (projectId, start, end)
-  where
-    q =
-      [sql| SELECT
-  attributes___db___query___text AS query,
-  ROUND(AVG(duration))::BIGINT AS avg_duration,
-  COUNT(*) AS count
-FROM otel_logs_and_spans
-WHERE
-  project_id = ?
-  AND timestamp >= ?
-  AND timestamp <= ?
-  AND kind != 'log'
-  AND attributes___db___query___text IS NOT NULL
-GROUP BY attributes___db___query___text
-HAVING ROUND(AVG(duration)/1000000) > 500
-ORDER BY avg_duration DESC LIMIT 10;
-      |]
+getDBQueryStats :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
+getDBQueryStats projectId start end = do
+  rows :: V.Vector (Text, Int64, Int64) <- Hasql.interp
+    [HI.sql| SELECT
+        attributes___db___query___text AS query,
+        ROUND(AVG(duration))::int8 AS avg_duration,
+        COUNT(*)::int8 AS count
+      FROM otel_logs_and_spans
+      WHERE project_id = #{projectId}
+        AND timestamp >= #{start}
+        AND timestamp <= #{end}
+        AND kind != 'log'
+        AND attributes___db___query___text IS NOT NULL
+      GROUP BY attributes___db___query___text
+      HAVING ROUND(AVG(duration)/1000000) > 500
+      ORDER BY avg_duration DESC LIMIT 10 |]
+  pure [(q, fromIntegral d, fromIntegral c) | (q, d, c) <- V.toList rows]
 
 
 getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
@@ -1355,7 +1429,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, Hasql :> es, Labeled "timefusion" Hasql :> es, IOE :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es)
   => OtelLogsAndSpans
   -> Eff es ()
 insertSystemLog otelLog = bulkInsertOtelLogsAndSpansTF (V.singleton otelLog)

@@ -11,6 +11,7 @@ import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
+import Hasql.Pool qualified as HPool
 import Effectful.Fail (Fail)
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
@@ -192,6 +193,9 @@ data AuthContext = AuthContext
   , pool :: Pool.Pool Connection
   , jobsPool :: Pool.Pool Connection
   , timefusionPgPool :: Pool.Pool Connection
+  , hasqlPool :: HPool.Pool
+  , hasqlJobsPool :: HPool.Pool
+  , hasqlTimefusionPool :: HPool.Pool
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
@@ -225,6 +229,11 @@ configToEnv config = do
   pool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 20 & setNumStripes (Just 4))
   jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 10 & setNumStripes (Just 2))
+  let mainHasqlSettings = DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
+      tfHasqlSettings = DeriveUtils.addKeepaliveParams $ encodeUtf8 config.timefusionPgUrl
+  hasqlPool <- liftIO $ DeriveUtils.mkHasqlPool 20 mainHasqlSettings
+  hasqlJobsPool <- liftIO $ DeriveUtils.mkHasqlPool 10 mainHasqlSettings
+  hasqlTimefusionPool <- liftIO $ DeriveUtils.mkHasqlPool 10 tfHasqlSettings
   projectCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
@@ -233,6 +242,9 @@ configToEnv config = do
       { pool
       , jobsPool
       , timefusionPgPool
+      , hasqlPool
+      , hasqlJobsPool
+      , hasqlTimefusionPool
       , env = config
       , projectCache
       , projectKeyCache

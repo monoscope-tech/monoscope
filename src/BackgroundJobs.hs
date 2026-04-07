@@ -31,11 +31,16 @@ import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple (FromRow, SomePostgreSqlException)
+import Data.Effectful.Hasql qualified as Hasql
+import Hasql.Interpolate qualified as HI
+import Database.PostgreSQL.Simple (FromRow)
 import Database.PostgreSQL.Simple qualified as SimplePG
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types
 import Effectful (Eff, IOE, (:>))
+import Hasql.TH (resultlessStatement, singletonStatement)
+import Hasql.Transaction qualified as Tx
+import Hasql.Transaction.Sessions qualified as TxS
 import Effectful.Concurrent.Async (concurrently, forConcurrently)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
@@ -94,7 +99,7 @@ import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
-import UnliftIO.Exception (bracket, catch, throwIO, try)
+import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
 import Utils (formatUTC, freeTierDailyMaxEvents, replaceAllFormats, toXXHash)
 
 
@@ -262,11 +267,12 @@ processBackgroundJob authCtx bgJob =
         -- on connection close, providing a safety net if explicit unlock fails.
         withAdvisoryLock :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()
         withAdvisoryLock lockName action = do
-          let acquireLock = PG.query [sql|SELECT pg_try_advisory_lock(hashtext(?))|] (Only lockName) <&> \case [Only True] -> True; _ -> False
+          let acquireLock = Hasql.statement lockName [singletonStatement|SELECT pg_try_advisory_lock(hashtext($1 :: text)) :: bool|]
               releaseLock =
-                ( PG.query [sql|SELECT pg_advisory_unlock(hashtext(?))|] (Only lockName) >>= \case
-                    [Only True] -> pass
-                    other -> Log.logAttention "Advisory unlock returned unexpected result" (AE.object ["lock_name" AE..= lockName, "result" AE..= show (other :: [Only Bool])])
+                ( Hasql.statement lockName [singletonStatement|SELECT pg_advisory_unlock(hashtext($1 :: text)) :: bool|] >>= \ok ->
+                    Relude.unless ok
+                      $ Log.logAttention "Advisory unlock returned FALSE (lock was not held by this session)"
+                        (AE.object ["lock_name" AE..= lockName, "released" AE..= ok])
                 )
                   `catch` \(e :: SomeException) -> Log.logAttention "Failed to release advisory lock (will auto-release on disconnect)" (AE.object ["lock_name" AE..= lockName, "error" AE..= show e])
           bracket acquireLock (Relude.when ?? releaseLock) \acquired ->
@@ -277,16 +283,12 @@ processBackgroundJob authCtx bgJob =
           currentDay <- utctDay <$> Time.currentTime
           currentTime <- Time.currentTime
           -- Check if app-wide jobs already scheduled for today (idempotent check)
-          hourlyJobsExist <-
-            maybe False ((>= 24) . fromOnly)
-              . listToMaybe
-              <$> PG.query
-                [sql|SELECT COUNT(*) FROM background_jobs
+          hourlyJobsExist <- (>= (24 :: Int64)) . HI.getOneColumn . HI.getOneRow <$> Hasql.interp
+            [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
                WHERE payload->>'tag' = 'HourlyJob'
-                 AND run_at >= date_trunc('day', ?::timestamptz)
-                 AND run_at < date_trunc('day', ?::timestamptz) + interval '1 day'
+                 AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
+                 AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
                  AND status IN ('queued', 'locked')|]
-                (currentTime, currentTime)
 
           unless hourlyJobsExist $ do
             Log.logInfo "Scheduling hourly jobs for today" ()
@@ -311,23 +313,21 @@ processBackgroundJob authCtx bgJob =
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
 
-          projects <- PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > ?::timestamptz - interval '24 hours'|] (Only currentTime)
+          projectsRaw <- Hasql.interp
+            [HI.sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > #{currentTime}::timestamptz - interval '24 hours'|]
+          let projects = HI.getOneColumn <$> (projectsRaw :: V.Vector (HI.OneColumn Projects.ProjectId))
           Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
           forM_ projects \p -> do
             -- Check if this project's jobs already scheduled for today (per-project idempotent check)
-            existingProjectJobs <-
-              PG.query
-                [sql|SELECT COUNT(*) FROM background_jobs
+            let pTxt = p.toText
+            projectJobsExistCount <- HI.getOneColumn . HI.getOneRow <$> Hasql.interp
+              [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
                  WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
-                   AND payload->>'projectId' = ?
-                   AND run_at >= date_trunc('day', ?::timestamptz)
-                   AND run_at < date_trunc('day', ?::timestamptz) + interval '1 day'
+                   AND payload->>'projectId' = #{pTxt}
+                   AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
+                   AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
                    AND status IN ('queued', 'locked')|]
-                (p, currentTime, currentTime)
-
-            let projectJobsExist = case existingProjectJobs of
-                  [Only (count :: Int)] -> count >= 288
-                  _ -> False
+            let projectJobsExist = (projectJobsExistCount :: Int64) >= 288
 
             unless projectJobsExist
               $ liftIO
@@ -385,11 +385,15 @@ processBackgroundJob authCtx bgJob =
             void $ Projects.addDailyUsageReport pid totalUsage
             void $ Projects.updateUsageLastReported pid currentTime
             Log.logInfo "Usage reported successfully" ("project_id", pid.toText, "total", totalUsage)
-    CleanupDemoProject -> do
-      let pid = UUIDId UUID.nil
-      void $ PG.execute [sql| DELETE FROM projects.project_members WHERE project_id = ? |] (Only pid)
-      void $ PG.execute [sql|DELETE FROM tests.collections  WHERE project_id = ? and title != 'Default Health check' |] (Only pid)
-      void $ PG.execute [sql| DELETE FROM projects.project_api_keys WHERE project_id = ? AND title != 'Default API Key' |] (Only pid)
+    CleanupDemoProject ->
+      -- ReadCommitted is sufficient: we need atomicity across the three deletes,
+      -- not Serializable's anti-conflict guarantees (which would surface as opaque
+      -- retryable errors that the current Hasql retry path does not handle).
+      Hasql.transaction TxS.ReadCommitted TxS.Write $ do
+        let pid = UUID.nil
+        Tx.statement pid [resultlessStatement|DELETE FROM projects.project_members WHERE project_id = $1 :: uuid|]
+        Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
+        Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
     FiveMinuteSpanProcessing scheduledTime pid -> unlessStale "FiveMinuteSpanProcessing" scheduledTime (15 * 60) $ processFiveMinuteSpans scheduledTime pid
     OneMinuteErrorProcessing scheduledTime pid -> unlessStale "OneMinuteErrorProcessing" scheduledTime (5 * 60) $ processOneMinuteErrors scheduledTime pid
     SlackNotification pid message -> sendSlackMessage pid message
@@ -575,7 +579,7 @@ processBackgroundJob authCtx bgJob =
       -- Section 9: Project links
       let linkRow (p, _, _, _) = "- [" <> p.title <> "](" <> authCtx.env.hostUrl <> "p/" <> p.id.toText <> ")"
           links = map linkRow sorted
-      forM_ (buildMessages links []) send
+      forM_ (buildMessages links ([] :: [Text])) send
       Log.logInfo "Sent daily admin summary to Discord" ("project_count", length sorted)
 
 
@@ -775,7 +779,9 @@ logsPatternExtraction scheduledTime pid = do
     -- Tags otel events per-page using the mapping from buildDrainTreeWithMapping, avoiding unbounded accumulation
     paginateTree :: Bool -> Drain.DrainTree -> Int -> UTCTime -> ATBackgroundCtx Drain.DrainTree
     paginateTree tfEnabled tree offset startTime = do
-      otelEvents :: [(Text, Text)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? OFFSET ? LIMIT ?|] (pid, startTime, scheduledTime, offset, limitVal)
+      otelEventsV :: V.Vector (Text, Text) <- Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp
+        [HI.sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} OFFSET #{fromIntegral offset :: Int64} LIMIT #{fromIntegral limitVal :: Int64}|]
+      let otelEvents = V.toList otelEventsV
       if null otelEvents
         then pure tree
         else do
@@ -783,9 +789,11 @@ logsPatternExtraction scheduledTime pid = do
           let batch = V.fromList [NewEvent logId content | (logId, content) <- otelEvents]
               (!tree', mapping) = processBatchWithMapping True batch scheduledTime tree
           -- Tag otel events with pattern hashes per-page
-          let hashToIds = HM.toList $ V.foldl' (\acc (lid, tpl) -> let h = "pat:" <> toXXHash tpl in HM.insertWith (<>) h [lid] acc) HM.empty mapping
-          forM_ hashToIds \(hashTag, ids) ->
-            void $ withTimefusion tfEnabled $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND id = ANY(?::uuid[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, startTime, PGArray ids, hashTag)
+          let hashToIds = HM.toList $ V.foldl' (\acc (lid, tpl) -> let h = "pat:" <> toXXHash tpl in HM.insertWith (<>) h ([lid] :: [Text]) acc) HM.empty mapping
+          forM_ hashToIds \(hashTag, ids :: [Text]) -> do
+            (() :: ()) <- Hasql.withHasqlTimefusion tfEnabled
+              $ Hasql.interp [HI.sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, #{hashTag}) WHERE project_id = #{pid} AND timestamp >= #{startTime} AND id = ANY(#{ids}::uuid[]) AND NOT (hashes @> ARRAY[#{hashTag}])|]
+            pass
           if length otelEvents == limitVal
             then paginateTree tfEnabled tree' (offset + limitVal) startTime
             else pure tree'
@@ -795,10 +803,12 @@ logsPatternExtraction scheduledTime pid = do
           allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
       -- Fetch one sample row per pattern hash for metadata (traceId, serviceName, level)
       let patternHashes = [toXXHash dp.templateStr | dp <- V.toList allPatterns, not $ T.null dp.templateStr, dp.frequency > 0]
-      sampleMeta :: [(Text, Maybe Text, Maybe Text, Maybe Text)] <-
+      sampleMetaV :: V.Vector (Text, Maybe Text, Maybe Text, Maybe Text) <-
         if null patternHashes
-          then pure []
-          else withTimefusion tfEnabled $ PG.query [sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(?::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|] (PGArray patternHashes, pid, since, scheduledTime)
+          then pure V.empty
+          else Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp
+            [HI.sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(#{patternHashes}::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{since} AND timestamp < #{scheduledTime} AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|]
+      let sampleMeta = V.toList sampleMetaV
       let metaMap = HM.fromList [(h, (trId, sName, lvl)) | (h, trId, sName, lvl) <- sampleMeta]
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
             let eventCount = fromIntegral dp.frequency :: Int64
@@ -813,10 +823,14 @@ logsPatternExtraction scheduledTime pid = do
       void $ LogPatterns.upsertHourlyStatBatch hss
 
     extractFieldPatterns tfEnabled startTime = do
-      urlPaths :: [(Maybe Text, Maybe Text, Int64)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|] (pid, startTime, scheduledTime)
+      urlPathsV :: V.Vector (Maybe Text, Maybe Text, Int64) <- Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp
+        [HI.sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|]
+      let urlPaths = V.toList urlPathsV
       Relude.when (length urlPaths == 1000) $ Log.logWarn "url_path pattern limit reached" pid
       let urlUpserts = [(up, hs) | (Just path, serviceName, cnt) <- urlPaths, let (up, hs) = mkNormalized "url_path" path serviceName Nothing cnt]
-      exceptions :: [(Maybe Text, Maybe Text, Maybe Text, Int64)] <- withTimefusion tfEnabled $ PG.query [sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::BIGINT FROM otel_logs_and_spans WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|] (pid, startTime, scheduledTime)
+      exceptionsV :: V.Vector (Maybe Text, Maybe Text, Maybe Text, Int64) <- Hasql.withHasqlTimefusion tfEnabled $ Hasql.interp
+        [HI.sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|]
+      let exceptions = V.toList exceptionsV
       Relude.when (length exceptions == 1000) $ Log.logWarn "exception pattern limit reached" pid
       let excUpserts = [(up, hs) | (Just msg, serviceName, level, cnt) <- exceptions, let (up, hs) = mkNormalized "exception" msg serviceName level cnt]
           (ups, hss) = unzip (urlUpserts ++ excUpserts)
@@ -1072,10 +1086,15 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
 -- Creates issues synchronously for new/regressed errors. Reopens existing issues on regression.
 processProjectErrors :: Projects.ProjectId -> V.Vector ErrorPatterns.ATError -> UTCTime -> ATBackgroundCtx ()
 processProjectErrors pid errors now = do
-  result <- try $ ErrorPatterns.batchUpsertErrorPatterns pid errors now
-  case result of
-    Left (e :: SomePostgreSqlException) ->
-      Log.logAttention "Failed to insert errors" ("error", AE.toJSON $ show e)
+  tryAny (ErrorPatterns.batchUpsertErrorPatterns pid errors now) >>= \case
+    Left e ->
+      Log.logAttention "ERR_BATCH_UPSERT_FAILED"
+        $ AE.object
+          [ "error_id" AE..= ("ERR_BATCH_UPSERT_FAILED" :: Text)
+          , "project_id" AE..= pid.toText
+          , "kind" AE..= (if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text)
+          , "error" AE..= show @Text e
+          ]
     Right newOrRegressed -> do
       unless (V.null errors)
         $ Log.logTrace "Successfully inserted errors for project"
@@ -1181,7 +1200,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
       )
 
   -- Insert extracted entities
-  result <- try $ Ki.scoped \scope -> do
+  result <- tryAny $ Ki.scoped \scope -> do
     unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
     unless (null shapesFinal) $ void $ Ki.fork scope $ Fields.bulkInsertShapes shapesFinal
     unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
@@ -1189,7 +1208,15 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
     Ki.atomically $ Ki.awaitAll scope
 
   case result of
-    Left (e :: SomePostgreSqlException) -> Log.logAttention "Postgres Exception during span processing" (show e)
+    Left e ->
+      Log.logAttention "SPAN_ENTITY_INSERT_FAILED"
+        $ AE.object
+          [ "error_id" AE..= ("SPAN_ENTITY_INSERT_FAILED" :: Text)
+          , "project_id" AE..= pid.toText
+          , "kind" AE..= (if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text)
+          , "span_count" AE..= V.length spans
+          , "error" AE..= show @Text e
+          ]
     Right _ -> do
       -- Batch update spans with computed hashes using a single query
       let spansWithHashes = V.filter (\(_, hashes) -> not $ V.null hashes) $ V.zip spans spanUpdates
@@ -2060,9 +2087,13 @@ checkTriggeredQueryMonitors = do
     let evalInterval = startWall `diffUTCTime` monitor.lastEvaluated
     Relude.when (evalInterval >= fromIntegral monitor.checkIntervalMins * 60) $ do
       Log.logInfo "Evaluating query monitor" (monitor.id, monitor.alertConfig.title)
-      catch (evaluateQueryMonitor monitor startWall) \(err :: SomePostgreSqlException) -> do
-        Log.logWarn "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
-        void $ Monitors.updateLastEvaluatedAt monitor.id startWall -- Still update to prevent infinite retry loop
+      -- Catch ANY synchronous exception: updateLastEvaluatedAt MUST run on failure
+      -- to prevent an infinite re-evaluation loop hammering a failing backend.
+      tryAny (evaluateQueryMonitor monitor startWall) >>= \case
+        Right _ -> pass
+        Left err -> do
+          Log.logWarn "Query monitor evaluation failed" (monitor.id, monitor.alertConfig.title, show err)
+          void $ Monitors.updateLastEvaluatedAt monitor.id startWall
 
 
 evaluateQueryMonitor :: Monitors.QueryMonitor -> UTCTime -> ATBackgroundCtx ()

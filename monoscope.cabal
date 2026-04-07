@@ -99,6 +99,7 @@ custom-setup
 library
   exposed-modules:
       BackgroundJobs
+      Data.Effectful.Hasql
       Data.Effectful.LLM
       Data.Effectful.Notify
       Data.Effectful.UUID
@@ -287,6 +288,12 @@ library
     , grapesy
     , hashable
     , hashtables
+    , hasql
+    , hasql-dynamic-statements
+    , hasql-interpolate
+    , hasql-pool
+    , hasql-th
+    , hasql-transaction
     , hs-opentelemetry-api
     , hs-opentelemetry-instrumentation-auto
     , hs-opentelemetry-instrumentation-wai

@@ -1,9 +1,12 @@
 module Pkg.ErrorFingerprint (
   StackFrame (..),
+  ErrorHashes (..),
   parseStackTrace,
   normalizeStackTrace,
   normalizeMessage,
   computeErrorFingerprint,
+  computeErrorHashes,
+  isFrameworkTransportError,
 )
 where
 
@@ -561,21 +564,155 @@ normalizeMessage msg =
 -- >>> computeErrorFingerprint "proj1" Nothing Nothing "java" "NullPointerException" "msg1" "at com.example.App.process(App.java:42)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:1067)" == computeErrorFingerprint "proj1" Nothing Nothing "java" "NullPointerException" "msg2" "at com.example.App.process(App.java:99)\nat org.springframework.web.servlet.DispatcherServlet.doDispatch(DispatcherServlet.java:2000)"
 -- True
 computeErrorFingerprint :: Text -> Maybe Text -> Maybe Text -> Text -> Text -> Text -> Text -> Text
-computeErrorFingerprint projectIdText mService spanName runtime exceptionType message stackTrace =
-  let
-    -- Normalize components
-    normalizedStack = normalizeStackTrace runtime stackTrace
-    normalizedMsg = normalizeMessage message
-    normalizedType = T.strip exceptionType
+computeErrorFingerprint p s sn rt et msg st = (computeErrorHashes p s sn rt et msg st).narrow
 
-    -- Build fingerprint components based on priority
-    fingerprintComponents =
-      if
-        | not (T.null normalizedStack) -> [projectIdText, fromMaybe "" mService, normalizedType, normalizedStack]
-        | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedType, normalizedMsg]
-        | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" spanName, normalizedMsg]
 
-    -- Combine and hash
-    combined = T.intercalate "|" $ filter (not . T.null) fingerprintComponents
-   in
-    toXXHash combined
+-- | Pair of fingerprints: the narrow one (includes spanName) for per-route identity,
+-- and the broad one (excludes spanName) for cross-route rollup of span-agnostic errors.
+data ErrorHashes = ErrorHashes
+  { narrow :: Text
+  , broad :: Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving anyclass (NFData)
+
+
+-- | Compute both narrow (spanName-aware) and broad (spanName-agnostic) hashes.
+--
+-- Two different spanNames produce the same broad hash:
+-- >>> (computeErrorHashes "p" (Just "s") (Just "GET /a") "nodejs" "" "boom" "").broad == (computeErrorHashes "p" (Just "s") (Just "GET /b") "nodejs" "" "boom" "").broad
+-- True
+--
+-- But different narrow hashes:
+-- >>> (computeErrorHashes "p" (Just "s") (Just "GET /a") "nodejs" "" "boom" "").narrow == (computeErrorHashes "p" (Just "s") (Just "GET /b") "nodejs" "" "boom" "").narrow
+-- False
+computeErrorHashes :: Text -> Maybe Text -> Maybe Text -> Text -> Text -> Text -> Text -> ErrorHashes
+computeErrorHashes projectIdText mService spanName runtime exceptionType message stackTrace =
+  ErrorHashes
+    { narrow = go spanName
+    , broad = go Nothing
+    }
+  where
+    go sn =
+      let
+        normalizedStack = normalizeStackTrace runtime stackTrace
+        normalizedMsg = normalizeMessage message
+        normalizedType = T.strip exceptionType
+        fingerprintComponents =
+          if
+            | not (T.null normalizedStack) -> [projectIdText, fromMaybe "" mService, normalizedType, normalizedStack]
+            | not (T.null normalizedType) -> [projectIdText, fromMaybe "" mService, fromMaybe "" sn, normalizedType, normalizedMsg]
+            | otherwise -> [projectIdText, fromMaybe "" mService, fromMaybe "" sn, normalizedMsg]
+        combined = T.intercalate "|" $ filter (not . T.null) fingerprintComponents
+       in
+        toXXHash combined
+
+
+-- | Detect framework/transport-layer errors that happen independently of the
+-- application's span identity. These should be rolled up into a single issue
+-- even when they occur across many different routes or handlers.
+--
+-- Classification is conservative to avoid silently merging user errors:
+-- 1. An allowlisted exception type (case-insensitive) matches unconditionally.
+-- 2. Message-pattern matching only applies when the exception type is empty or
+--    a generic IO/runtime type — prevents `ValidationError: "cannot have broken
+--    pipe in filename"` from being misclassified.
+--
+-- >>> isFrameworkTransportError "InvalidRequest" "Warp: Client closed connection prematurely"
+-- True
+--
+-- Case-insensitive type match:
+-- >>> isFrameworkTransportError "econnreset" ""
+-- True
+--
+-- Java SocketException: message fallback under a generic type:
+-- >>> isFrameworkTransportError "SocketException" "connection reset by peer"
+-- True
+--
+-- Generic IOError with broken-pipe message:
+-- >>> isFrameworkTransportError "IOError" "broken pipe"
+-- True
+--
+-- Non-generic type with a substring false-positive is NOT flagged:
+-- >>> isFrameworkTransportError "ValidationError" "cannot use broken pipe in filename"
+-- False
+--
+-- >>> isFrameworkTransportError "ValidationError" "Invalid email"
+-- False
+--
+-- >>> isFrameworkTransportError "NullPointerException" "foo was null"
+-- False
+isFrameworkTransportError :: Text -> Text -> Bool
+isFrameworkTransportError exceptionType normalizedMessage =
+  let tLower = T.toLower $ T.strip exceptionType
+      m = T.toLower normalizedMessage
+      -- All entries lowercased for case-insensitive compare
+      knownTypes =
+        S.fromList
+          -- Haskell / Warp
+          [ "invalidrequest"
+          , "connectionclosedbypeer"
+          , "endofstream"
+          -- Python
+          , "clientabortexception"
+          , "brokenpipeerror"
+          , "connectionreseterror"
+          , "connectionabortederror"
+          , "connectionerror"
+          , "remotedisconnected"
+          , "http2.connectionerror"
+          , "h2.exceptions.streamclosederror"
+          , "h11._util.remoteprotocolerror"
+          -- Node.js (errno codes)
+          , "econnreset"
+          , "epipe"
+          , "econnaborted"
+          , "econnrefused"
+          , "etimedout"
+          , "ehostunreach"
+          -- Go
+          , "*net.operror"
+          , "net.operror"
+          , "syscall.errno"
+          , "io.erruneexpectedeof"
+          , "io.errclosedpipe"
+          -- .NET
+          , "system.io.ioexception"
+          , "system.net.sockets.socketexception"
+          , "system.net.http.httprequestexception"
+          , "system.operationcanceledexception"
+          -- Java
+          , "java.net.socketexception"
+          , "java.io.eofexception"
+          , "org.apache.catalina.connector.clientabortexception"
+          -- Ruby
+          , "errno::epipe"
+          , "errno::econnreset"
+          , "errno::econnaborted"
+          -- Rust
+          , "std::io::error"
+          ]
+      -- Types where a message-pattern fallback is trustworthy (generic / IO layer)
+      genericTypes =
+        S.fromList
+          [ ""
+          , "ioerror"
+          , "ioexception"
+          , "oserror"
+          , "socketexception"
+          , "runtimeerror"
+          , "error"
+          , "systemerror"
+          , "exception"
+          ]
+      messagePatterns =
+        [ "client closed"
+        , "broken pipe"
+        , "connection reset"
+        , "connection aborted"
+        , "premature eof"
+        , "client disconnected"
+        ]
+      messageMatches = any (`T.isInfixOf` m) messagePatterns
+   in S.member tLower knownTypes
+        || (S.member tLower genericTypes && messageMatches)

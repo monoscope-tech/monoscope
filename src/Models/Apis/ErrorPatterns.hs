@@ -24,17 +24,22 @@ module Models.Apis.ErrorPatterns (
   ErrorPatternWithCurrentRate (..),
   getErrorPatternsWithCurrentRates,
   findCanonicalMatch,
+  getErrorPatternsByParentHash,
   -- Error Fingerprinting (re-exported from Pkg.ErrorFingerprint)
   EF.StackFrame (..),
+  EF.ErrorHashes (..),
   EF.parseStackTrace,
   EF.normalizeStackTrace,
   EF.normalizeMessage,
   EF.computeErrorFingerprint,
+  EF.computeErrorHashes,
+  EF.isFrameworkTransportError,
 )
 where
 
 import Data.Aeson qualified as AE
 import Data.Default
+import Data.Text qualified as T
 import Data.HashMap.Strict qualified as HM
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
@@ -85,6 +90,8 @@ data ErrorPattern = ErrorPattern
   , message :: Text
   , stacktrace :: Text
   , hash :: Text
+  , parentHash :: Maybe Text
+  , isFramework :: Bool
   , environment :: Maybe Text
   , service :: Maybe Text
   , runtime :: Maybe Text
@@ -154,6 +161,8 @@ data ATError = ATError
   , rootErrorMessage :: Text
   , stackTrace :: Text
   , hash :: Text
+  , parentHash :: Maybe Text
+  , isFramework :: Bool
   , technology :: Maybe LogQueries.SDKTypes
   , requestMethod :: Maybe Text
   , requestPath :: Maybe Text
@@ -192,6 +201,14 @@ getErrorPatternById eid = listToMaybe <$> PG.query (_selectWhere @ErrorPattern [
 -- | Get error pattern by hash
 getErrorPatternByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe ErrorPattern)
 getErrorPatternByHash pid hash = listToMaybe <$> PG.query (_selectWhere @ErrorPattern [[field| project_id |], [field| hash |]]) (pid, hash)
+
+
+-- | Get all error pattern children belonging to a parent hash family (used for rollup views).
+-- Returns [] for empty/missing parent hash rather than scanning for empty-string rows.
+getErrorPatternsByParentHash :: DB es => Projects.ProjectId -> Text -> Eff es [ErrorPattern]
+getErrorPatternsByParentHash _pid pHash | T.null pHash = pure []
+getErrorPatternsByParentHash pid pHash =
+  PG.query (_selectWhere @ErrorPattern [[field| project_id |], [field| parent_hash |]] <> " ORDER BY created_at ASC") (pid, pHash)
 
 
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
@@ -369,6 +386,8 @@ data ErrorPatternWithCurrentRate = ErrorPatternWithCurrentRate
   , errorData :: ATError
   , stacktrace :: Text
   , hash :: Text
+  , parentHash :: Maybe Text
+  , isFramework :: Bool
   , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
   }
@@ -386,7 +405,7 @@ getErrorPatternsWithCurrentRates pid now =
           e.id, e.project_id, e.error_type, LEFT(e.message, 2000), e.service, e.state,
           e.baseline_state, e.baseline_error_rate_mean, e.baseline_error_rate_stddev,
           COALESCE(counts.event_count, 0)::INT AS current_hour_count,
-          e.error_data, LEFT(e.stacktrace, 8000), e.hash, e.slack_thread_ts, e.discord_message_id
+          e.error_data, LEFT(e.stacktrace, 8000), e.hash, e.parent_hash, e.is_framework, e.slack_thread_ts, e.discord_message_id
         FROM apis.error_patterns e
         LEFT JOIN apis.error_hourly_stats counts
           ON counts.error_id = e.id AND counts.project_id = e.project_id
@@ -419,15 +438,16 @@ batchUpsertErrorPatterns pid errors now =
   filter (\(_, s) -> s == "new" || s == "regressed")
     <$> PG.query
       [sql| INSERT INTO apis.error_patterns (
-            project_id, error_type, message, stacktrace, hash,
+            project_id, error_type, message, stacktrace, hash, parent_hash, is_framework,
             environment, service, runtime, error_data,
             first_trace_id, recent_trace_id,
             occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h)
-          SELECT ?, u.error_type, u.message, u.stacktrace, u.hash,
+          SELECT ?, u.error_type, u.message, u.stacktrace, u.hash, u.parent_hash, u.is_framework,
                  u.environment, u.service, u.runtime, u.error_data,
                  u.trace_id, u.trace_id, u.cnt, u.cnt, u.cnt, u.cnt
           FROM (SELECT unnest(?::text[]) AS error_type, unnest(?::text[]) AS message,
                        unnest(?::text[]) AS stacktrace, unnest(?::text[]) AS hash,
+                       unnest(?::text[]) AS parent_hash, unnest(?::bool[]) AS is_framework,
                        unnest(?::text[]) AS environment, unnest(?::text[]) AS service,
                        unnest(?::text[]) AS runtime, unnest(?::jsonb[]) AS error_data,
                        unnest(?::text[]) AS trace_id, unnest(?::int[]) AS cnt) u
@@ -436,6 +456,12 @@ batchUpsertErrorPatterns pid errors now =
             message = EXCLUDED.message,
             error_data = EXCLUDED.error_data,
             recent_trace_id = EXCLUDED.recent_trace_id,
+            -- Both fields are deterministic from (error_type, message, stacktrace, service, runtime)
+            -- so EXCLUDED always matches the existing row for the same hash. Write-through keeps
+            -- semantics symmetric (no sticky-first vs sticky-true asymmetry) and lets a backfill/
+            -- classifier upgrade take effect immediately.
+            parent_hash = EXCLUDED.parent_hash,
+            is_framework = EXCLUDED.is_framework,
             occurrences_1m = apis.error_patterns.occurrences_1m + EXCLUDED.occurrences_1m,
             occurrences_5m = apis.error_patterns.occurrences_5m + EXCLUDED.occurrences_1m,
             occurrences_1h = apis.error_patterns.occurrences_1h + EXCLUDED.occurrences_1m,
@@ -450,7 +476,7 @@ batchUpsertErrorPatterns pid errors now =
             WHEN xmax = 0 THEN 'new'
             WHEN state = 'regressed' AND regressed_at = ? THEN 'regressed'
             ELSE 'unchanged' END::text |]
-      (pid, errorTypes, messages, stacktraces, hashes, environments, services, runtimes, errorDatas, traceIds, counts, now, now, now)
+      (pid, errorTypes, messages, stacktraces, hashes, parentHashes, isFrameworks, environments, services, runtimes, errorDatas, traceIds, counts, now, now, now)
   where
     -- Group by hash: keep last occurrence + sum count (avoids ON CONFLICT duplicate-row error)
     grouped = HM.elems $ V.foldl' (\m e -> HM.insertWith (\(a, n) (_, k) -> (a, n + k)) e.hash (e, 1 :: Int) m) HM.empty errors
@@ -459,6 +485,8 @@ batchUpsertErrorPatterns pid errors now =
     messages = V.map (.message) errs
     stacktraces = V.map (.stackTrace) errs
     hashes = V.map (.hash) errs
+    parentHashes = V.map (.parentHash) errs
+    isFrameworks = V.map (.isFramework) errs
     environments = V.map (.environment) errs
     services = V.map (.serviceName) errs
     runtimes = V.map (.runtime) errs

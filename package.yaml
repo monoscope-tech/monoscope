@@ -218,6 +218,12 @@ library:
     - pg-entity
     - postgresql-migration
     - postgresql-simple
+    - hasql
+    - hasql-pool
+    - hasql-th
+    - hasql-transaction
+    - hasql-interpolate
+    - hasql-dynamic-statements
     - regex-tdfa
     - regex
     - resource-pool

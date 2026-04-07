@@ -27,6 +27,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff)
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
@@ -46,7 +47,6 @@ import Effectful.Exception (onException)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
 import Log (LogLevel (..), Logger, runLogT)
@@ -209,7 +209,7 @@ getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (rm ^. PMF.resource . PR
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -1235,7 +1235,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
   Log.logTrace "Received trace export request" AE.Null
 
@@ -1306,7 +1306,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
   Log.logTrace "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
@@ -1518,14 +1518,22 @@ metricsServiceRpcHandler appLogger appCtx tp = mkRpcHandler $ \call -> do
 
 -- | Run a background task for gRPC handlers, catching exceptions to prevent server crash.
 -- Transient DB errors were propagating up and crashing the entire process via waitAnyCancel.
+-- Deliberately swallow & log: the OTLP collector treats no-response as retryable, so the
+-- client will resend rather than seeing an INTERNAL status.
 grpcRunBackground :: Logger -> AuthContext -> TracerProvider -> Text -> ATBackgroundCtx () -> IO ()
 grpcRunBackground appLogger appCtx tp label task =
   tryAny (runBackground appLogger appCtx tp task) >>= \case
     Right _ -> pass
     Left e ->
-      runLogT "monoscope" appLogger LogAttention
-        $ LogBase.logAttention "gRPC handler: caught exception"
-        $ AE.object ["error" AE..= show @Text e, "handler" AE..= label]
+      let kind = if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text
+       in runLogT "monoscope" appLogger LogAttention
+            $ LogBase.logAttention "GRPC_HANDLER_CAUGHT"
+            $ AE.object
+              [ "error_id" AE..= ("GRPC_HANDLER_CAUGHT" :: Text)
+              , "handler" AE..= label
+              , "kind" AE..= kind
+              , "error" AE..= show @Text e
+              ]
 
 
 services :: Logger -> AuthContext -> TracerProvider -> [SomeRpcHandler IO]
