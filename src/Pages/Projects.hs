@@ -88,7 +88,7 @@ import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsCont
 import Pages.Bots.Discord qualified as Discord
 import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
-import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
+import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
 import Pkg.Components.Table (BulkAction (..), Table (..))
 import Pkg.Components.Table qualified as Table
@@ -1532,14 +1532,19 @@ createProjectBody sess pid envCfg paymentPlan cp cpe proj = do
         div_ [class_ "min-w-0"] do
           h3_ [class_ "text-sm font-medium text-textStrong"] "Delete project"
           p_ [class_ "text-xs text-textWeak"] "Permanently remove this project and all associated data."
-      button_
+      label_
         [ class_ "btn btn-sm bg-fillError-weak text-textError hover:bg-fillError-strong hover:text-white gap-1 shrink-0 max-sm:w-full"
-        , hxDelete_ $ "/p/" <> pid.toText <> "/delete"
-        , hxConfirm_ "Are you sure you want to delete this project? This action cannot be undone."
+        , Lucid.for_ "delete-project-modal"
         ]
         do
           faSprite_ "trash" "regular" "w-3 h-3"
           span_ "Delete Project"
+    confirmModal_
+      "delete-project-modal"
+      "Delete project?"
+      "This permanently removes the project and all associated data. This action cannot be undone."
+      [type_ "button", hxDelete_ $ "/p/" <> pid.toText <> "/delete"]
+      "Delete project"
 
 
 alertConfiguration :: Bool -> Bool -> Bool -> Bool -> Html ()
