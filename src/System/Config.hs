@@ -11,8 +11,8 @@ import Database.PostgreSQL.Simple (Connection)
 import Database.PostgreSQL.Simple qualified as PG
 import Database.PostgreSQL.Simple.Migration qualified as Migrations
 import Effectful
-import Hasql.Pool qualified as HPool
 import Effectful.Fail (Fail)
+import Hasql.Pool qualified as HPool
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils qualified as DeriveUtils

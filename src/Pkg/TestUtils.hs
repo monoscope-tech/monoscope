@@ -66,6 +66,7 @@ import Data.Aeson.Types (KeyValue (..))
 import Data.ByteString.Base16 qualified as B16
 import Data.ByteString.Lazy qualified as LBS
 import Data.Cache (Cache (..), newCache)
+import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
@@ -97,6 +98,7 @@ import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
+import Hasql.Pool qualified as HPool
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -114,8 +116,6 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
-import Data.Effectful.Hasql (Hasql, runHasqlPool)
-import Hasql.Pool qualified as HPool
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool, runConnectionPool)
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -718,7 +718,7 @@ runQueryEffect TestResources{..} action = do
 
 
 -- | Hasql twin of `runQueryEffect`.
-runHasqlEffect :: TestResources -> (forall es. (Hasql :> es, Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
+runHasqlEffect :: TestResources -> (forall es. (Effectful.Reader.Static.Reader AuthContext :> es, Error ServantS.ServerError :> es, Hasql :> es, IOE :> es, Time :> es) => Eff es a) -> IO a
 runHasqlEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError

@@ -79,7 +79,7 @@ statement p st = session (Session.statement p st)
 
 
 -- | Run a `hasql-interpolate` `Sql` value as a prepared statement.
-interp :: (Hasql :> es, IOE :> es, HI.DecodeResult a) => HI.Sql -> Eff es a
+interp :: (HI.DecodeResult a, Hasql :> es, IOE :> es) => HI.Sql -> Eff es a
 interp s = statement () (HI.interp True s)
 
 
@@ -90,7 +90,7 @@ transaction iso mode tx = session (TxS.transaction iso mode tx)
 -- | Generic helper: route an effect through a labelled variant when a flag is on.
 withLabeled
   :: forall name e es a
-   . (e :> es, Labeled name e :> es)
+   . (Labeled name e :> es, e :> es)
   => Bool -> Eff (e ': es) a -> Eff es a
 withLabeled cond q = if cond then labeled @name @e q else subsume q
 

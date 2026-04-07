@@ -653,8 +653,8 @@ isFrameworkTransportError exceptionType normalizedMessage =
           [ "invalidrequest"
           , "connectionclosedbypeer"
           , "endofstream"
-          -- Python
-          , "clientabortexception"
+          , -- Python
+            "clientabortexception"
           , "brokenpipeerror"
           , "connectionreseterror"
           , "connectionabortederror"
@@ -663,34 +663,34 @@ isFrameworkTransportError exceptionType normalizedMessage =
           , "http2.connectionerror"
           , "h2.exceptions.streamclosederror"
           , "h11._util.remoteprotocolerror"
-          -- Node.js (errno codes)
-          , "econnreset"
+          , -- Node.js (errno codes)
+            "econnreset"
           , "epipe"
           , "econnaborted"
           , "econnrefused"
           , "etimedout"
           , "ehostunreach"
-          -- Go
-          , "*net.operror"
+          , -- Go
+            "*net.operror"
           , "net.operror"
           , "syscall.errno"
           , "io.erruneexpectedeof"
           , "io.errclosedpipe"
-          -- .NET
-          , "system.io.ioexception"
+          , -- .NET
+            "system.io.ioexception"
           , "system.net.sockets.socketexception"
           , "system.net.http.httprequestexception"
           , "system.operationcanceledexception"
-          -- Java
-          , "java.net.socketexception"
+          , -- Java
+            "java.net.socketexception"
           , "java.io.eofexception"
           , "org.apache.catalina.connector.clientabortexception"
-          -- Ruby
-          , "errno::epipe"
+          , -- Ruby
+            "errno::epipe"
           , "errno::econnreset"
           , "errno::econnaborted"
-          -- Rust
-          , "std::io::error"
+          , -- Rust
+            "std::io::error"
           ]
       -- Types where a message-pattern fallback is trustworthy (generic / IO layer)
       genericTypes =

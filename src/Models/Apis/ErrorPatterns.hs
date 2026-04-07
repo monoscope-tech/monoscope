@@ -39,8 +39,8 @@ where
 
 import Data.Aeson qualified as AE
 import Data.Default
-import Data.Text qualified as T
 import Data.HashMap.Strict qualified as HM
+import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V

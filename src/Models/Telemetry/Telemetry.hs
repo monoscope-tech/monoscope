@@ -73,6 +73,8 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed), (:.) (..))
 
+import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -88,18 +90,16 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
-import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.Hasql qualified as Hasql
-import Hasql.Interpolate qualified as HI
+import Effectful.Reader.Static qualified as Eff
+import Effectful.Time qualified as Time
+import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param)
 import Hasql.DynamicStatements.Statement (dynamicallyParameterized)
-import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
+import Hasql.Interpolate qualified as HI
 import Hasql.Session qualified as HSession
 import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
-import Effectful.Reader.Static qualified as Eff
-import Effectful.Time qualified as Time
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -526,8 +526,9 @@ data MetricChartListData = MetricChartListData
 
 getTraceDetails :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
 getTraceDetails pid trId tme now = do
-  rows :: V.Vector (Text, UTCTime, UTCTime, Int64, Int64, Maybe (V.Vector Text)) <- Hasql.interp
-    [HI.sql| SELECT
+  rows :: V.Vector (Text, UTCTime, UTCTime, Int64, Int64, Maybe (V.Vector Text)) <-
+    Hasql.interp
+      [HI.sql| SELECT
               context___trace_id,
               MIN(start_time) AS trace_start_time,
               MAX(COALESCE(end_time, start_time)) AS trace_end_time,
@@ -776,11 +777,11 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
 
 bulkInsertOtelLogsAndSpansTF
   :: ( Concurrent :> es
-     , Hasql :> es
-     , Labeled "timefusion" Hasql :> es
-     , IOE :> es
      , Eff.Reader AuthContext :> es
+     , Hasql :> es
+     , IOE :> es
      , Ki.StructuredConcurrency :> es
+     , Labeled "timefusion" Hasql :> es
      , Log :> es
      , UUIDEff :> es
      )
@@ -819,13 +820,15 @@ bulkInsertOtelLogsAndSpansTF records = do
     retryTimefusion n recs =
       tryAny (labeled @"timefusion" @Hasql $ bulkInsertOtelLogsAndSpans recs) >>= \case
         Right count -> Log.logTrace "TimeFusion write succeeded" $ AE.object [("rows_inserted", AE.toJSON count)]
-        Left e | n > 0, maybe False Hasql.isTransientHasqlError (fromException e) -> do
-          let attempt = 11 - n -- attempts: 1..10
-              delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,...,cap 5s
-          Log.logAttention "Retrying bulkInsertOtelLogsAndSpans"
-            $ AE.object [("attempt", AE.toJSON attempt), ("max_attempts", AE.toJSON (10 :: Int)), ("backoff_us", AE.toJSON delayMicros), ("error", AE.toJSON $ show @Text e)]
-          threadDelay delayMicros
-          retryTimefusion (n - 1) recs
+        Left e
+          | n > 0
+          , maybe False Hasql.isTransientHasqlError (fromException e) -> do
+              let attempt = 11 - n -- attempts: 1..10
+                  delayMicros = min 5000000 (100000 * (2 ^ (attempt - 1) :: Int)) -- 100ms,200ms,...,cap 5s
+              Log.logAttention "Retrying bulkInsertOtelLogsAndSpans"
+                $ AE.object [("attempt", AE.toJSON attempt), ("max_attempts", AE.toJSON (10 :: Int)), ("backoff_us", AE.toJSON delayMicros), ("error", AE.toJSON $ show @Text e)]
+              threadDelay delayMicros
+              retryTimefusion (n - 1) recs
         Left e -> throwIO e
 
 
@@ -850,7 +853,8 @@ bulkInsertOtelLogsAndSpans records
           -- Multi-chunk insert: wrap in a single transaction so a mid-stream failure
           -- cannot leave a partial write.
           Hasql.transaction TxS.ReadCommitted TxS.Write
-            $ foldl' (+) 0 <$> traverse (\c -> Tx.statement () (chunkStmt c)) chunks
+            $ foldl' (+) 0
+            <$> traverse (\c -> Tx.statement () (chunkStmt c)) chunks
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
@@ -996,7 +1000,8 @@ otelRowSnippet e = do
   isRemoteP <- case e.context >>= (.is_remote) of
     Nothing -> pure (param (Nothing :: Maybe Bool))
     Just t -> case T.toLower t of
-      l | l `elem` ["true", "t", "1"] -> pure (param (Just True))
+      l
+        | l `elem` ["true", "t", "1"] -> pure (param (Just True))
         | l `elem` ["false", "f", "0"] -> pure (param (Just False))
         | otherwise -> do
             Log.logAttention "OTEL_UNPARSEABLE_IS_REMOTE"
@@ -1309,8 +1314,9 @@ ORDER BY
 
 getDBQueryStats :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getDBQueryStats projectId start end = do
-  rows :: V.Vector (Text, Int64, Int64) <- Hasql.interp
-    [HI.sql| SELECT
+  rows :: V.Vector (Text, Int64, Int64) <-
+    Hasql.interp
+      [HI.sql| SELECT
         attributes___db___query___text AS query,
         ROUND(AVG(duration))::int8 AS avg_duration,
         COUNT(*)::int8 AS count
@@ -1429,7 +1435,7 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Concurrent :> es, Hasql :> es, Labeled "timefusion" Hasql :> es, IOE :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, Eff.Reader AuthContext :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, UUIDEff :> es)
   => OtelLogsAndSpans
   -> Eff es ()
 insertSystemLog otelLog = bulkInsertOtelLogsAndSpansTF (V.singleton otelLog)

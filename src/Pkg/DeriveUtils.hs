@@ -52,15 +52,15 @@ import Database.PostgreSQL.Simple.ToField (ToField (..))
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift)
 import Effectful.PostgreSQL.Connection (WithConnection (..))
+import GHC.Generics (Rep)
+import GHC.Records (HasField (getField))
+import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Connection.Setting qualified as HCS
 import Hasql.Connection.Setting.Connection qualified as HCSC
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HPool
 import Hasql.Pool.Config qualified as HPC
-import GHC.Generics (Rep)
-import GHC.Records (HasField (getField))
-import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Language.Haskell.TH qualified as TH
 import Language.Haskell.TH.Syntax qualified as TH
 import Language.Haskell.TH.Syntax qualified as THS
@@ -128,7 +128,7 @@ newtype PGTextArray = PGTextArray (V.Vector Text)
 -- Usage: type ProjectId = UUIDId "project"
 newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
   deriving stock (Generic, Read, Show, THS.Lift)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, HI.DecodeValue, HI.EncodeValue, Eq, FromField, FromHttpApiData, Hashable, NFData, Ord, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Hashable, NFData, Ord, ToField)
   deriving anyclass (FromRow, ToRow)
 
 

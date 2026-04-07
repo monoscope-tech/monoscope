@@ -209,7 +209,7 @@ getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (rm ^. PMF.resource . PR
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -1235,7 +1235,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
   Log.logTrace "Received trace export request" AE.Null
 
@@ -1306,7 +1306,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB es, Hasql.Hasql :> es, Labeled "timefusion" Hasql.Hasql :> es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
   Log.logTrace "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
