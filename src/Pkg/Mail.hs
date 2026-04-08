@@ -336,10 +336,27 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     ]
   where
     targetUrl = projectUrl <> "/issues/by_hash/" <> hash
-    enp = (\x -> "\"" <> x <> "\"") . T.dropWhile (/= ' ') <$> V.toList endpoints
-    query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
-    explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
+    explorerUrl = newEndpointsExplorerUrl projectUrl endpoints
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
+
+
+-- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
+--
+-- >>> import qualified Data.Vector as V
+-- >>> import Network.HTTP.Types (urlDecode)
+-- >>> let decode u = decodeUtf8 (urlDecode True (encodeUtf8 (T.drop (T.length "https://app/log_explorer?query=") u)))
+-- >>> decode (newEndpointsExplorerUrl "https://app" (V.fromList ["GET /home"]))
+-- "attributes.http.route == \"/home\""
+-- >>> decode (newEndpointsExplorerUrl "https://app" (V.fromList ["GET /home", "POST /users"]))
+-- "attributes.http.route in (\"/home\",\"/users\")"
+newEndpointsExplorerUrl :: Text -> V.Vector Text -> Text
+newEndpointsExplorerUrl projectUrl endpoints =
+  projectUrl <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 expr)
+  where
+    paths = (\x -> "\"" <> T.drop 1 (T.dropWhile (/= ' ') x) <> "\"") <$> V.toList endpoints
+    expr = case paths of
+      [p] -> "attributes.http.route == " <> p
+      ps -> "attributes.http.route in (" <> T.intercalate "," ps <> ")"
 
 
 mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Text -> Text -> AE.Value
@@ -520,9 +537,7 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     endpointsCount = length endpoints
     description = "We've detected **" <> show endpointsCount <> " new endpoints** in the **" <> projectName <> "** project."
     url = projectUrl <> "/issues/by_hash/" <> hash
-    enp = (\x -> "\"" <> x <> "\"") . T.dropWhile (/= ' ') <$> V.toList endpoints
-    query = urlEncode True $ encodeUtf8 $ "attributes.http.route in (" <> T.intercalate "," enp <> ")"
-    explorerUrl = projectUrl <> "/log_explorer?query=" <> decodeUtf8 query
+    explorerUrl = newEndpointsExplorerUrl projectUrl endpoints
     explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
     enps = T.intercalate "\n\n" $ (\x -> "`" <> x <> "`") <$> V.toList endpoints
 
