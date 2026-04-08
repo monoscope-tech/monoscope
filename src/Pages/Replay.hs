@@ -2,6 +2,7 @@ module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySe
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
+import Control.Exception (throwIO)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as BL
@@ -23,9 +24,8 @@ import Effectful.Reader.Static qualified
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
-import Control.Exception (throwIO)
-import Network.Minio qualified as Minio
 import Network.Minio (MinioErr (..), ServiceErr (..))
+import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
 import Pages.Settings (getMinioConnectInfo)
 import Pkg.Queue (publishJSONToKafka)
@@ -128,15 +128,19 @@ data MergeError
   = MergeDecodeFailed [(Text, String)]
   | MergeFetchFailed MinioErr
   | MergePutFailed MinioErr
-  deriving stock Show
-  deriving anyclass Exception
+  deriving stock (Show)
+  deriving anyclass (Exception)
 
 
 -- | Describe the top-level JSON constructor (for error messages).
 describeValue :: AE.Value -> String
 describeValue = \case
-  AE.Object _ -> "object"; AE.Array _ -> "array"; AE.String _ -> "string"
-  AE.Number _ -> "number"; AE.Bool _ -> "bool"; AE.Null -> "null"
+  AE.Object _ -> "object"
+  AE.Array _ -> "array"
+  AE.String _ -> "string"
+  AE.Number _ -> "number"
+  AE.Bool _ -> "bool"
+  AE.Null -> "null"
 
 
 -- | Download one object as a JSON array. Transport errors propagate through the
@@ -367,9 +371,10 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
       -- Orphaned row (project gone). Flip merged=TRUE so we stop re-picking it every run.
       Log.logAttention "Project not found for replay session merge; marking merged" logCtx
       now' <- Time.currentTime
-      void $ PG.execute
-        [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? AND project_id = ? |]
-        (now', sessionId, pid)
+      void
+        $ PG.execute
+          [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? AND project_id = ? |]
+          (now', sessionId, pid)
     Just p -> do
       let (s3Conn, bucket) = projectMinioConn ctx.config p
       fileKeys <- sessionFileKeys pid sessionId
@@ -378,9 +383,10 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
           -- No tracked files: reset counter so the threshold path doesn't re-trigger
           -- on a stale value, then finalize.
           now' <- Time.currentTime
-          void $ PG.execute
-            [sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = ? WHERE session_id = ? AND project_id = ? |]
-            (now', sessionId, pid)
+          void
+            $ PG.execute
+              [sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = ? WHERE session_id = ? AND project_id = ? |]
+              (now', sessionId, pid)
           afterMerge now'
           Log.logInfo "Replay session merge skipped (no tracked file keys)" ("session_id", UUID.toText sessionId)
         else do
