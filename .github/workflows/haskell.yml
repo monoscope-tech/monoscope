@@ -91,6 +91,9 @@ jobs:
           mkdir -p static/public/assets/web-components/dist/js
           mkdir -p static/public/assets/web-components/dist/css
 
+      - name: Install hpack
+        run: cabal install --install-method=copy --overwrite-policy=always hpack
+
       - name: Regenerate cabal file
         run: hpack
 
