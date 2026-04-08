@@ -3,7 +3,6 @@
 module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, logWelcomeMessageFailure) where
 
 import BackgroundJobs qualified as BgJobs
-import Control.Exception.Annotated (try)
 import Control.Lens ((.~), (^.))
 import Data.Aeson (withObject)
 import Data.Aeson qualified as AE
@@ -49,8 +48,29 @@ import Servant.API (Header)
 import Servant.API.ResponseHeaders (Headers, addHeader)
 import Servant.Server (ServerError (errBody), err400)
 import System.Config (AuthContext (env, pool), EnvConfig (..))
-import System.Types (ATBaseCtx)
+import System.Types (ATBaseCtx, DB)
+import UnliftIO.Exception (tryAny)
 import Web.FormUrlEncoded (FromForm)
+
+
+-- | Log-and-return-Nothing helper: missing slackData is always an anomaly (the caller
+-- either just received an event from Slack or is acting on behalf of an authed project).
+withSlackDataByTeam :: (DB es, Log.Log :> es) => Text -> Text -> (SlackData -> Eff es a) -> Eff es (Maybe a)
+withSlackDataByTeam ctx teamId k =
+  getSlackDataByTeamId teamId >>= \case
+    Nothing -> do
+      Log.logAttention ("Missing SlackData for team_id" :: Text) $ AE.object ["context" AE..= ctx, "team_id" AE..= teamId]
+      pure Nothing
+    Just sd -> Just <$> k sd
+
+
+withProjectSlackDataLogged :: (DB es, Log.Log :> es) => Text -> Projects.ProjectId -> (SlackData -> Eff es a) -> Eff es (Maybe a)
+withProjectSlackDataLogged ctx pid k =
+  getProjectSlackData pid >>= \case
+    Nothing -> do
+      Log.logAttention ("Missing SlackData for project" :: Text) $ AE.object ["context" AE..= ctx, "project_id" AE..= pid]
+      pure Nothing
+    Just sd -> Just <$> k sd
 
 
 logWelcomeMessageFailure :: Log.Log :> es => Text -> SomeException -> Eff es ()
@@ -133,7 +153,7 @@ linkProjectGetH slack_code stateM = do
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
           when wasAdded do
-            result <- try @SomeException $ sendSlackWelcomeMessage token'.accessToken token'.incomingWebhook.channelId project'.title
+            result <- tryAny $ sendSlackWelcomeMessage token'.accessToken token'.incomingWebhook.channelId project'.title
             whenLeft_ result (logWelcomeMessageFailure token'.incomingWebhook.channelId)
           if isOnboarding
             then pure $ addHeader ("/p/" <> pid.toText <> "/onboarding?step=NotifChannel") $ NoContent $ PageCtx bwconf ()
@@ -147,54 +167,28 @@ slackInteractionsH interaction = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   case interaction.command of
     "/monoscope-here" -> do
-      _ <- updateSlackNotificationChannel interaction.team_id interaction.channel_id
-      slackDataM <- getSlackDataByTeamId interaction.team_id
-      whenJust slackDataM \slackData -> do
-        void $ Projects.enableNotificationChannel slackData.projectId Projects.NSlack
-        wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam slackData.projectId interaction.channel_id
-        when wasAdded do
-          projectM <- Projects.projectById slackData.projectId
-          whenJust projectM \project -> do
-            result <- try @SomeException $ sendSlackWelcomeMessage slackData.botToken interaction.channel_id project.title
-            whenLeft_ result (logWelcomeMessageFailure interaction.channel_id)
-      let channelDisplay = if T.null interaction.channel_name then "this channel" else "#" <> interaction.channel_name
-          resp =
-            AE.object
-              [ "response_type" AE..= "in_channel"
-              , "blocks"
-                  AE..= AE.Array
-                    ( V.fromList
-                        [ AE.object ["type" AE..= "header", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= (botEmoji "success" <> " Notification channel set"), "emoji" AE..= True]]
-                        , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("*" <> channelDisplay <> "* will now receive:")]]
-                        , AE.object
-                            [ "type" AE..= "section"
-                            , "text"
-                                AE..= AE.object
-                                  [ "type" AE..= "mrkdwn"
-                                  , "text" AE..= ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
-                                  ]
-                            ]
-                        ]
-                    )
-              , "replace_original" AE..= True
-              , "delete_original" AE..= True
-              ]
+      resp <-
+        withSlackDataByTeam "/monoscope-here" interaction.team_id (\sd -> runMonoscopeHere interaction sd)
+          <&> fromMaybe workspaceNotLinkedResp
       Log.logTrace ("Slack interaction response" :: Text) resp
       pure resp
     "/dashboard" -> do
       dashboardsList <- getDashboardsForSlack interaction.team_id
-      slackDataM <- getSlackDataByTeamId interaction.team_id
       let dashboards = V.fromList dashboardsList
       when (V.null dashboards) $ throwError err400{errBody = "No dashboards found for this project"}
-      whenJust slackDataM \slackData ->
-        void $ triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
-      let resp = AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
-      Log.logTrace ("Slack interaction response" :: Text) resp
-      pure resp
+      slackDataM <- withSlackDataByTeam "/dashboard" interaction.team_id \slackData ->
+        triggerSlackModal slackData.botToken "open" $ AE.object ["trigger_id" AE..= interaction.trigger_id, "view" AE..= dashboardView interaction.channel_id (V.fromList [dashboardViewOne dashboards])]
+      case slackDataM of
+        Nothing -> throwError err400{errBody = "This Slack workspace is not linked to a Monoscope project. Please reinstall the Monoscope app."}
+        Just () -> do
+          let resp = AE.object ["text" AE..= "modal opened", "replace_original" AE..= True, "delete_original" AE..= True]
+          Log.logTrace ("Slack interaction response" :: Text) resp
+          pure resp
     _ -> do
       slackDataM <- getSlackDataByTeamId interaction.team_id
+      when (isNothing slackDataM) $ Log.logAttention ("Slack slash command for unlinked workspace" :: Text) $ AE.object ["team_id" AE..= interaction.team_id, "command" AE..= interaction.command]
       void $ forkIO $ do
-        resultE <- try @SomeException $ case slackDataM of
+        resultE <- tryAny $ case slackDataM of
           Nothing -> sendSlackFollowupResponse interaction.response_url (formatBotError Slack ServiceError)
           Just slackData -> handleAskCommand interaction slackData authCtx
         whenLeft_ resultE \err -> Log.logAttention "Slack slash command background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= interaction.team_id]
@@ -203,6 +197,49 @@ slackInteractionsH interaction = do
       Log.logTrace ("Slack interaction response" :: Text) resp
       pure resp
   where
+    workspaceNotLinkedResp =
+      AE.object
+        [ "response_type" AE..= ("ephemeral" :: Text)
+        , "text" AE..= ("This Slack workspace is not linked to a Monoscope project. Please install the Monoscope app from your project's integrations page." :: Text)
+        , "replace_original" AE..= True
+        , "delete_original" AE..= True
+        ]
+
+    runMonoscopeHere :: SlackInteraction -> SlackData -> ATBaseCtx AE.Value
+    runMonoscopeHere inter slackData = do
+      _ <- updateSlackNotificationChannel inter.team_id inter.channel_id
+      void $ Projects.enableNotificationChannel slackData.projectId Projects.NSlack
+      wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam slackData.projectId inter.channel_id
+      when wasAdded do
+        projectM <- Projects.projectById slackData.projectId
+        case projectM of
+          Nothing -> Log.logAttention ("Slack install references missing project" :: Text) $ AE.object ["project_id" AE..= slackData.projectId, "team_id" AE..= inter.team_id]
+          Just project -> do
+            result <- tryAny $ sendSlackWelcomeMessage slackData.botToken inter.channel_id project.title
+            whenLeft_ result (logWelcomeMessageFailure inter.channel_id)
+      let channelDisplay = if T.null inter.channel_name then "this channel" else "#" <> inter.channel_name
+      pure
+        $ AE.object
+          [ "response_type" AE..= ("in_channel" :: Text)
+          , "blocks"
+              AE..= AE.Array
+                ( V.fromList
+                    [ AE.object ["type" AE..= ("header" :: Text), "text" AE..= AE.object ["type" AE..= ("plain_text" :: Text), "text" AE..= (botEmoji "success" <> " Notification channel set"), "emoji" AE..= True]]
+                    , AE.object ["type" AE..= ("section" :: Text), "text" AE..= AE.object ["type" AE..= ("mrkdwn" :: Text), "text" AE..= ("*" <> channelDisplay <> "* will now receive:")]]
+                    , AE.object
+                        [ "type" AE..= ("section" :: Text)
+                        , "text"
+                            AE..= AE.object
+                              [ "type" AE..= ("mrkdwn" :: Text)
+                              , "text" AE..= ("• " <> botEmoji "error" <> " Error alerts\n• " <> botEmoji "chart" <> " Daily & weekly reports\n• " <> botEmoji "warning" <> " Anomaly detections\n\nYou can also configure channels on the web dashboard.")
+                              ]
+                        ]
+                    ]
+                )
+          , "replace_original" AE..= True
+          , "delete_original" AE..= True
+          ]
+
     handleAskCommand :: SlackInteraction -> SlackData -> AuthContext -> ATBaseCtx ()
     handleAskCommand inter slackData authCtx = do
       let envCfg = authCtx.env
@@ -305,37 +342,29 @@ slackActionsH action = do
       "view_submission" -> handleViewSubmission authCtx slackAction
       _ -> handleUnknownActionType
 
-    handleBlockActions authCtx slackAction = do
-      let actionTypeM = viaNonEmpty head $ fromMaybe [] slackAction.actions
-      case actionTypeM of
+    handleBlockActions authCtx slackAction =
+      case viaNonEmpty head $ fromMaybe [] slackAction.actions of
         Nothing -> handleUnknownActionType
         Just actionType -> case actionType.action_id of
-          "dashboard-select" -> handleDashboardSelect authCtx slackAction actionType
+          "dashboard-select" -> handleDashboardSelect slackAction actionType
           "widget-select" -> handleWidgetSelect authCtx slackAction actionType
           _ -> handleUnknownActionType
 
-    handleDashboardSelect authCtx slackAction actionType = do
-      let selectedOption = actionType.selected_option
-      case selectedOption of
-        Just opt -> do
-          let dashboardId = opt.value
-          dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText dashboardId)
-          case dashboardVMM of
-            Nothing -> pure $ AE.object []
-            Just dashboardVM -> updateDashboardModal authCtx slackAction dashboardVM opt.text
-        Nothing -> pure $ AE.object ["text" AE..= "No dashboard selected", "replace_original" AE..= True, "delete_original" AE..= True]
+    handleDashboardSelect slackAction actionType = case actionType.selected_option of
+      Just opt -> do
+        dashboardVMM <- maybe (pure Nothing) Dashboards.getDashboardById (idFromText opt.value)
+        case dashboardVMM of
+          Nothing -> pure $ AE.object []
+          Just dashboardVM -> updateDashboardModal slackAction dashboardVM opt.text
+      Nothing -> pure $ AE.object ["text" AE..= "No dashboard selected", "replace_original" AE..= True, "delete_original" AE..= True]
 
-    handleWidgetSelect authCtx slackAction actionType = do
-      let selectedOption = actionType.selected_option
-      case selectedOption of
-        Just opt -> updateWidgetModal authCtx slackAction opt.value
-        Nothing -> handleUnknownActionType
+    handleWidgetSelect authCtx slackAction actionType = case actionType.selected_option of
+      Just opt -> updateWidgetModal authCtx slackAction opt.value
+      Nothing -> handleUnknownActionType
 
     handleViewSubmission authCtx slackAction = do
       let view = slackAction.view
-          privateMeta = view.private_metadata
-          metas = T.splitOn "___" privateMeta
-
+          metas = T.splitOn "___" view.private_metadata
           channelId = fromMaybe "" $ viaNonEmpty head metas
           pid = fromMaybe "" $ viaNonEmpty head $ fromMaybe [] $ viaNonEmpty tail metas
           image_url = fromMaybe "" $ viaNonEmpty last metas
@@ -355,19 +384,23 @@ slackActionsH action = do
                         ]
                     )
               ]
-      whenJust (idFromText pid) \projectId ->
-        whenJustM (getProjectSlackData projectId) \sd ->
+      case idFromText pid of
+        Nothing -> Log.logAttention ("Slack view_submission with unparseable pid" :: Text) $ AE.object ["private_metadata" AE..= view.private_metadata]
+        Just projectId -> void $ withProjectSlackDataLogged "slackActionsH.view_submission" projectId \sd ->
           sendSlackChatMessage sd.botToken content
       handleUnknownActionType
 
-    updateDashboardModal _authCtx slackAction dashboardVM dashboardText = do
-      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString $ fromMaybe "" dashboardVM.baseTemplate)
-      whenJust dashboardM $ \dashboard -> do
-        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
-            channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction.view.private_metadata
-            pMeta = channelId <> "___" <> dashboardVM.projectId.toText <> "___" <> fromMaybe "" dashboardVM.baseTemplate
-        whenJustM (getProjectSlackData dashboardVM.projectId) \sd ->
-          triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
+    updateDashboardModal slackAction dashboardVM dashboardText = do
+      let baseTemplate = fromMaybe "" dashboardVM.baseTemplate
+      dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString baseTemplate)
+      case dashboardM of
+        Nothing -> Log.logAttention "Slack updateDashboardModal: readDashboardFile failed" $ AE.object ["base_template" AE..= baseTemplate, "project_id" AE..= dashboardVM.projectId]
+        Just dashboard -> do
+          let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
+              channelId = fromMaybe "" $ viaNonEmpty head $ T.splitOn "___" slackAction.view.private_metadata
+              pMeta = channelId <> "___" <> dashboardVM.projectId.toText <> "___" <> baseTemplate
+          void $ withProjectSlackDataLogged "slackActionsH.updateDashboardModal" dashboardVM.projectId \sd ->
+            triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView pMeta (V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets])]
       pure $ AE.object ["text" AE..= ("Selected dashboard: " <> show dashboardText), "replace_original" AE..= True, "delete_original" AE..= True]
 
     updateWidgetModal authCtx slackAction widgetTitle = do
@@ -379,15 +412,17 @@ slackActionsH action = do
           baseTemplate = fromMaybe "" $ viaNonEmpty head res'
 
       dashboardM <- liftIO $ Dashboards.readDashboardFile "static/public/dashboards" (toString baseTemplate)
-      whenJust dashboardM $ \dashboard -> do
-        let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
-            widget = find (\w -> fromMaybe "Untitled-" w.title == widgetTitle) dashboard.widgets
-        whenJust widget $ \w -> whenJust (idFromText pid) $ \projectId -> do
-          chartUrl' <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w Nothing Nothing Nothing
-          let blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
-              privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
-          whenJustM (getProjectSlackData projectId) \sd ->
-            triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
+      case dashboardM of
+        Nothing -> Log.logAttention "Slack updateWidgetModal: readDashboardFile failed" $ AE.object ["base_template" AE..= baseTemplate, "project_id" AE..= pid]
+        Just dashboard -> do
+          let widgets = V.fromList $ (\w -> (fromMaybe "Untitled-" w.title, fromMaybe "Untitled-" w.title)) <$> dashboard.widgets
+              widget = find (\w -> fromMaybe "Untitled-" w.title == widgetTitle) dashboard.widgets
+          whenJust widget $ \w -> whenJust (idFromText pid) $ \projectId -> do
+            chartUrl' <- widgetPngUrl authCtx.env.apiKeyEncryptionSecretKey authCtx.env.hostUrl projectId w Nothing Nothing Nothing
+            let blocks = V.fromList [dashboardViewOne widgets, dashboardViewTwo widgets, dashboardWidgetView chartUrl' widgetTitle]
+                privateMeta = channelId <> "___" <> pid <> "___" <> baseTemplate <> "___" <> chartUrl'
+            void $ withProjectSlackDataLogged "slackActionsH.updateWidgetModal" projectId \sd ->
+              triggerSlackModal sd.botToken "update" $ AE.object ["view_id" AE..= slackAction.view.id, "view" AE..= dashboardView privateMeta blocks]
       handleUnknownActionType
 
     handleUnknownActionType = pure $ AE.object []
@@ -619,15 +654,13 @@ slackEventsPostH payload = do
     UrlVerification (UrlVerificationData _ challenge) -> pure $ AE.object ["challenge" AE..= challenge]
     EventCallback cb -> do
       void $ forkIO $ do
-        resultE <- try @SomeException $ handleEventCallback envCfg cb.event cb.team_id now
+        resultE <- tryAny $ handleEventCallback envCfg cb.event cb.team_id now
         whenLeft_ resultE \err -> Log.logAttention "Slack event callback background task failed" $ AE.object ["error" AE..= show @Text err, "team_id" AE..= cb.team_id]
       pure $ AE.object []
   where
-    handleEventCallback envCfg event teamId now = do
-      slackDataM <- getSlackDataByTeamId teamId
-      whenJust slackDataM \slackData -> case event.thread_ts of
-        Nothing -> sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
-        Just threadTs -> processThreadedEvent envCfg slackData event teamId threadTs now
+    handleEventCallback envCfg event teamId now = void $ withSlackDataByTeam "handleEventCallback" teamId \slackData -> case event.thread_ts of
+      Nothing -> sendSlackChatMessage slackData.botToken (mergeSlackContent (formatBotError Slack ServiceError) (AE.object ["channel" AE..= event.channel]))
+      Just threadTs -> processThreadedEvent envCfg slackData event teamId threadTs now
 
     processThreadedEvent envCfg slackData event teamId threadTs now = do
       -- Generate deterministic conversation ID from channel + thread_ts
@@ -643,9 +676,15 @@ slackEventsPostH payload = do
       when (null existingHistory) $ do
         lockAcquired <- Issues.tryAcquireChatMigrationLock convId
         when lockAcquired $ do
-          replies <- getChannelMessages slackData.botToken event.channel threadTs
-          for_ replies \messages -> forM_ messages.messages \m ->
-            Issues.insertChatMessage slackData.projectId convId "user" m.text Nothing Nothing
+          result <- tryAny $ do
+            replies <- getChannelMessages slackData.botToken event.channel threadTs
+            case replies of
+              Nothing -> Log.logAttention "Slack chat migration: getChannelMessages failed" $ AE.object ["conv_id" AE..= show @Text convId, "channel" AE..= event.channel, "thread_ts" AE..= threadTs]
+              Just messages -> forM_ messages.messages \m ->
+                Issues.insertChatMessage slackData.projectId convId "user" m.text Nothing Nothing
+          Issues.releaseChatMigrationLock convId
+          whenLeft_ result \err ->
+            Log.logAttention "Slack chat migration failed" $ AE.object ["error" AE..= show @Text err, "conv_id" AE..= show @Text convId]
 
       processMessages envCfg event slackData convId threadTs now
 
@@ -716,7 +755,7 @@ data SlackThreadedMessageResponse = SlackThreadedMessageResponse
   deriving anyclass (AE.FromJSON)
 
 
-getChannelMessages :: HTTP :> es => Text -> Text -> Text -> Eff es (Maybe SlackThreadedMessageResponse)
+getChannelMessages :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Text -> Eff es (Maybe SlackThreadedMessageResponse)
 getChannelMessages token channelId ts = do
   let url = "https://slack.com/api/conversations.replies"
       opts = defaults & header "Content-Type" .~ ["application/json"] & header "Authorization" .~ [encodeUtf8 $ "Bearer " <> token]
@@ -724,6 +763,7 @@ getChannelMessages token channelId ts = do
   response <- getWith (opts & Wreq.params .~ params) (toString url)
   let responseBdy = response ^. responseBody
   case AE.eitherDecode responseBdy of
-    Right res -> return $ Just res
+    Right res -> pure $ Just res
     Left err -> do
-      return Nothing
+      Log.logAttention "Slack conversations.replies decode failed" $ AE.object ["error" AE..= err, "channel" AE..= channelId, "ts" AE..= ts, "body" AE..= decodeUtf8 @Text (toStrict responseBdy)]
+      pure Nothing

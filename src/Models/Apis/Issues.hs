@@ -67,6 +67,7 @@ module Models.Apis.Issues (
   insertChatMessage,
   selectChatHistory,
   tryAcquireChatMigrationLock,
+  releaseChatMigrationLock,
 
   -- * Thread ID Helpers
   slackThreadToConversationId,
@@ -706,13 +707,20 @@ discordThreadToConversationId = textToConversationId
 -- | Try to acquire an advisory lock for chat migration to prevent race conditions.
 -- Returns True if lock was acquired, False if already locked (another request is migrating).
 -- Uses PostgreSQL advisory locks which are automatically released on connection close.
+chatMigrationLockKey :: UUIDId "conversation" -> Int64
+chatMigrationLockKey convId = fromIntegral @Int @Int64 $ abs $ hash $ show convId.unwrap
+
+
 tryAcquireChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es Bool
 tryAcquireChatMigrationLock convId = do
-  -- Use conversation ID hash as lock key (pg_try_advisory_lock takes bigint)
-  let lockKey = fromIntegral @Int @Int64 $ abs $ hash $ show convId.unwrap
-  -- Try to acquire lock, returns immediately with True/False
-  result <- PG.query [sql| SELECT pg_try_advisory_lock(?) |] (Only lockKey)
+  result <- PG.query [sql| SELECT pg_try_advisory_lock(?) |] (Only $ chatMigrationLockKey convId)
   pure $ fromMaybe False $ viaNonEmpty head result >>= \(Only acquired) -> Just acquired
+
+
+-- | Release a chat migration advisory lock so that a failed migration can be retried
+-- on a subsequent event instead of being silently blocked for the connection's lifetime.
+releaseChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es ()
+releaseChatMigrationLock convId = void $ PG.execute [sql| SELECT pg_advisory_unlock(?) |] (Only $ chatMigrationLockKey convId)
 
 
 -- | Create an issue for a log pattern rate change

@@ -44,7 +44,7 @@ module Pages.Projects (
 where
 
 import BackgroundJobs qualified
-import Control.Exception.Annotated (try)
+import UnliftIO.Exception (tryAny)
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
@@ -314,10 +314,14 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
             addedChannels = S.difference newChannelsSet oldChannels
             teamDetails = (ProjectMembers.teamToDetails team){ProjectMembers.slackChannels = V.fromList slackChannels} :: ProjectMembers.TeamDetails
         void $ ProjectMembers.updateTeam pid team.id teamDetails
-        whenJust ((,) <$> projectM <*> slackInfoM) \(project, slackInfo) ->
-          forM_ addedChannels \channelId -> do
-            result <- try @SomeException $ SlackP.sendSlackWelcomeMessage slackInfo.botToken channelId project.title
-            whenLeft_ result (SlackP.logWelcomeMessageFailure channelId)
+        case ((,) <$> projectM <*> slackInfoM) of
+          Just (project, slackInfo) ->
+            forM_ addedChannels \channelId -> do
+              result <- tryAny $ SlackP.sendSlackWelcomeMessage slackInfo.botToken channelId project.title
+              whenLeft_ result (SlackP.logWelcomeMessageFailure channelId)
+          Nothing ->
+            unless (S.null addedChannels) $
+              addErrorToast "Slack workspace is not linked to this project; welcome messages were not sent" Nothing
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
 

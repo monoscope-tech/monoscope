@@ -16,6 +16,7 @@ receivers:
 processors:
   batch:
     send_batch_size: 1024
+    send_batch_max_size: 1024
     timeout: 5s
   memory_limiter:
     check_interval: 1s
@@ -60,7 +61,8 @@ exporters:
       queue_size: 1000000
       num_consumers: 6
     producer:
-      max_message_bytes: 10000000
+      max_message_bytes: 20000000
+      compression: zstd
     brokers:
       - redpanda-0.s.past3.tech:19092
       - redpanda-1.s.past3.tech:29092
