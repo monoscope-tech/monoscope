@@ -85,6 +85,10 @@ extra-source-files:
     static/migrations/0057_http_request_method_index.sql
     static/migrations/0058_metrics_native_columns_and_compression.sql
     static/migrations/0059_drop_swagger_jsons.sql
+    static/migrations/0060_error_pattern_parent_hash.sql
+    static/migrations/0061_backfill_slack_notification_channel.sql
+    static/migrations/0062_monitor_time_window_mins.sql
+    static/migrations/0063_replay_session_file_keys.sql
 
 source-repository head
   type: git

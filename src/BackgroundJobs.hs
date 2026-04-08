@@ -791,7 +791,7 @@ logsPatternExtraction scheduledTime pid = do
       otelEventsV :: V.Vector (Text, Text) <-
         Hasql.withHasqlTimefusion tfEnabled
           $ Hasql.interp
-            [HI.sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} OFFSET #{fromIntegral offset :: Int64} LIMIT #{fromIntegral limitVal :: Int64}|]
+            [HI.sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} OFFSET #{fromIntegral offset :: Int64} LIMIT #{fromIntegral limitVal :: Int64}|]
       let otelEvents = V.toList otelEventsV
       if null otelEvents
         then pure tree
@@ -804,7 +804,7 @@ logsPatternExtraction scheduledTime pid = do
           forM_ hashToIds \(hashTag, ids :: [Text]) -> do
             (() :: ()) <-
               Hasql.withHasqlTimefusion tfEnabled
-                $ Hasql.interp [HI.sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, #{hashTag}) WHERE project_id = #{pid} AND timestamp >= #{startTime} AND id = ANY(#{ids}::uuid[]) AND NOT (hashes @> ARRAY[#{hashTag}])|]
+                $ Hasql.interp [HI.sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, #{hashTag}) WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND id = ANY(#{ids}::uuid[]) AND NOT (hashes @> ARRAY[#{hashTag}])|]
             pass
           if length otelEvents == limitVal
             then paginateTree tfEnabled tree' (offset + limitVal) startTime
@@ -821,7 +821,7 @@ logsPatternExtraction scheduledTime pid = do
           else
             Hasql.withHasqlTimefusion tfEnabled
               $ Hasql.interp
-                [HI.sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(#{patternHashes}::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{since} AND timestamp < #{scheduledTime} AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|]
+                [HI.sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(#{patternHashes}::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{since} AND timestamp < #{scheduledTime} AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|]
       let sampleMeta = V.toList sampleMetaV
       let metaMap = HM.fromList [(h, (trId, sName, lvl)) | (h, trId, sName, lvl) <- sampleMeta]
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
@@ -840,14 +840,14 @@ logsPatternExtraction scheduledTime pid = do
       urlPathsV :: V.Vector (Maybe Text, Maybe Text, Int64) <-
         Hasql.withHasqlTimefusion tfEnabled
           $ Hasql.interp
-            [HI.sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|]
+            [HI.sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|]
       let urlPaths = V.toList urlPathsV
       Relude.when (length urlPaths == 1000) $ Log.logWarn "url_path pattern limit reached" pid
       let urlUpserts = [(up, hs) | (Just path, serviceName, cnt) <- urlPaths, let (up, hs) = mkNormalized "url_path" path serviceName Nothing cnt]
       exceptionsV :: V.Vector (Maybe Text, Maybe Text, Maybe Text, Int64) <-
         Hasql.withHasqlTimefusion tfEnabled
           $ Hasql.interp
-            [HI.sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid} AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|]
+            [HI.sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|]
       let exceptions = V.toList exceptionsV
       Relude.when (length exceptions == 1000) $ Log.logWarn "exception pattern limit reached" pid
       let excUpserts = [(up, hs) | (Just msg, serviceName, level, cnt) <- exceptions, let (up, hs) = mkNormalized "exception" msg serviceName level cnt]
@@ -2125,15 +2125,19 @@ evaluateQueryMonitor monitor startWall = do
       -- Re-parse on every evaluation so parser fixes apply to existing monitors
       -- without needing a DB migration of cached SQL.
       parseCfg = (defSqlQueryCfg monitor.projectId fixedUTCTime Nothing Nothing){presetRollup = Just "5m", alertLookbackMins = lookbackMins}
-  freshSql <- case parseQueryToComponents parseCfg monitor.logQuery of
-    Right (_, qc) -> case qc.finalAlertQuery of
-      Just q -> pure q
-      Nothing -> do
-        Log.logAttention "Monitor parsed but produced no alert query; using stale cached SQL" (monitor.id, title, monitor.logQuery)
-        pure monitor.logQueryAsSql
-    Left err -> do
-      Log.logAttention "Monitor logQuery re-parse failed; using stale cached SQL" (monitor.id, title, monitor.logQuery, err)
-      pure monitor.logQueryAsSql
+  -- Empty logQuery means no source KQL is tracked; trust the cached SQL.
+  freshSql <-
+    if T.null (T.strip monitor.logQuery)
+      then pure monitor.logQueryAsSql
+      else case parseQueryToComponents parseCfg monitor.logQuery of
+        Right (_, qc) -> case qc.finalAlertQuery of
+          Just q -> pure q
+          Nothing -> do
+            Log.logAttention "Monitor parsed but produced no alert query; using stale cached SQL" (monitor.id, title, monitor.logQuery)
+            pure monitor.logQueryAsSql
+        Left err -> do
+          Log.logAttention "Monitor logQuery re-parse failed; using stale cached SQL" (monitor.id, title, monitor.logQuery, err)
+          pure monitor.logQueryAsSql
   let isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic
   results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 freshSql) ()

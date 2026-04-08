@@ -425,7 +425,8 @@ insertPipelineMonitor tr monId sqlQuery threshold warnThreshold direction alertR
         def
           { Monitors.id = monId
           , Monitors.projectId = testPid
-          , Monitors.logQuery = "test"
+          , -- Empty so evaluateQueryMonitor skips re-parsing and uses logQueryAsSql below.
+            Monitors.logQuery = ""
           , Monitors.logQueryAsSql = sqlQuery
           , Monitors.alertThreshold = threshold
           , Monitors.warningThreshold = warnThreshold
