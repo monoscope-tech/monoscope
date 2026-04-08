@@ -341,24 +341,26 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
 
 
 -- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
--- Matches on @attributes.url.path@ because that's the field populated by OTLP ingestion;
--- @http.route@ is only set when SDKs provide a route template and is usually NULL.
+-- Matches on both @attributes.http.route@ and @attributes.url.path@ because endpoint
+-- discovery (see @Models.Apis.Endpoints@) keys off @COALESCE(http.route, url.path)@ —
+-- different SDKs populate different fields, so we OR them to mirror that fallback.
 --
 -- >>> import qualified Data.Vector as V
 -- >>> import Network.HTTP.Types (urlDecode)
 -- >>> let decode u = decodeUtf8 (urlDecode True (encodeUtf8 (T.drop (T.length "https://app/log_explorer?query=") u)))
 -- >>> decode (newEndpointsExplorerUrl "https://app" (V.fromList ["GET /home"]))
--- "attributes.url.path == \"/home\""
+-- "(attributes.http.route == \"/home\" OR attributes.url.path == \"/home\")"
 -- >>> decode (newEndpointsExplorerUrl "https://app" (V.fromList ["GET /home", "POST /users"]))
--- "attributes.url.path in (\"/home\",\"/users\")"
+-- "(attributes.http.route in (\"/home\",\"/users\") OR attributes.url.path in (\"/home\",\"/users\"))"
 newEndpointsExplorerUrl :: Text -> V.Vector Text -> Text
 newEndpointsExplorerUrl projectUrl endpoints =
   projectUrl <> "/log_explorer?query=" <> decodeUtf8 (urlEncode True $ encodeUtf8 expr)
   where
     paths = (\x -> "\"" <> T.drop 1 (T.dropWhile (/= ' ') x) <> "\"") <$> V.toList endpoints
-    expr = case paths of
-      [p] -> "attributes.url.path == " <> p
-      ps -> "attributes.url.path in (" <> T.intercalate "," ps <> ")"
+    clause field = case paths of
+      [p] -> field <> " == " <> p
+      ps -> field <> " in (" <> T.intercalate "," ps <> ")"
+    expr = "(" <> clause "attributes.http.route" <> " OR " <> clause "attributes.url.path" <> ")"
 
 
 mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Text -> Text -> AE.Value
