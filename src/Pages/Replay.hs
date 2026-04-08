@@ -2,7 +2,7 @@ module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySe
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
-import Control.Exception (throwIO)
+import Control.Exception (throwIO, try)
 import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.ByteString.Lazy qualified as BL
@@ -23,7 +23,6 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
-import Control.Exception (throwIO, try)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
@@ -406,9 +405,10 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                 MergeDecodeFailed _ -> do
                   Log.logError "Replay session merge aborted due to corrupt data; marking merged to stop retries" ctxWithErr
                   now' <- Time.currentTime
-                  void $ PG.execute
-                    [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? AND project_id = ? |]
-                    (now', sessionId, pid)
+                  void
+                    $ PG.execute
+                      [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? AND project_id = ? |]
+                      (now', sessionId, pid)
                 -- Transient: leave row untouched so next batch retries.
                 MergeFetchFailed _ -> Log.logAttention "Replay session merge transient fetch failure; will retry" ctxWithErr
                 MergePutFailed _ -> Log.logAttention "Replay session merge transient put failure; will retry" ctxWithErr

@@ -740,11 +740,16 @@ getSlackChannels token team_id = do
   let url = "https://slack.com/api/conversations.list"
       opts =
         defaults
-          & header "Authorization" .~ ["Bearer " <> encodeUtf8 token]
-          & Wreq.param "team_id" .~ [team_id]
-          & Wreq.param "types" .~ ["public_channel,private_channel"]
-          & Wreq.param "exclude_archived" .~ ["true"]
-          & Wreq.param "limit" .~ ["1000"]
+          & header "Authorization"
+          .~ ["Bearer " <> encodeUtf8 token]
+            & Wreq.param "team_id"
+          .~ [team_id]
+            & Wreq.param "types"
+          .~ ["public_channel,private_channel"]
+            & Wreq.param "exclude_archived"
+          .~ ["true"]
+            & Wreq.param "limit"
+          .~ ["1000"]
 
   r <- getWith opts url
   let resBody = r ^. responseBody
