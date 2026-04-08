@@ -44,7 +44,6 @@ module Pages.Projects (
 where
 
 import BackgroundJobs qualified
-import UnliftIO.Exception (tryAny)
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
 import Data.Base64.Types qualified as B64
@@ -104,6 +103,7 @@ import Servant.API.ResponseHeaders (Headers)
 import Servant.Server (err302, errHeaders)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addReswap, addSuccessToast, addTriggerEvent, redirectCS)
+import UnliftIO.Exception (tryAny)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
 import "base64" Data.ByteString.Base64 qualified as B64
@@ -320,8 +320,8 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
               result <- tryAny $ SlackP.sendSlackWelcomeMessage slackInfo.botToken channelId project.title
               whenLeft_ result (SlackP.logWelcomeMessageFailure channelId)
           Nothing ->
-            unless (S.null addedChannels) $
-              addErrorToast "Slack workspace is not linked to this project; welcome messages were not sent" Nothing
+            unless (S.null addedChannels)
+              $ addErrorToast "Slack workspace is not linked to this project; welcome messages were not sent" Nothing
       addSuccessToast "Updated Notification Channels Successfully" Nothing
       integrationsSettingsGetH pid
 
