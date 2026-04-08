@@ -962,7 +962,7 @@ otelColumns =
       , ("attributes___db___collection___name", aT "db.collection.name")
       , ("attributes___db___namespace", aT "db.namespace")
       , ("attributes___db___operation___name", aT "db.operation.name")
-      , ("attributes___db___response___status_code", aT "db.response.status_code")
+      , ("attributes___db___response___status_code", aI "db.response.status_code")
       , ("attributes___db___operation___batch___size", aI "db.operation.batch.size")
       , ("attributes___db___query___summary", aT "db.query.summary")
       , ("attributes___db___query___text", aT "db.query.text")
