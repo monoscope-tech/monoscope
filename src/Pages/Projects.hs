@@ -261,7 +261,7 @@ integrationsSettingsGetH pid = do
           }
   slackInfo <- getProjectSlackData pid
   pagerdutyInfo <- getPagerdutyByProjectId pid
-  channels <- maybe (pure []) (\d -> maybe [] (.channels) <$> SlackP.getSlackChannels d.botToken d.teamId) slackInfo
+  channels <- maybe (pure []) (\d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId) slackInfo
   everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
   let existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
 
@@ -532,7 +532,7 @@ renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_i
 renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> V.Vector Text -> Html ()
 renderSlackIntegration envCfg pid slackData channels existingChannels = do
   let stateParam = if T.null pid then "" else "&state=" <> pid
-      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
+      oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
 
   case slackData of
     Just sd -> do
@@ -780,7 +780,7 @@ manageTeamsGetH pid layoutM = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels d.botToken d.teamId
+  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
   discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   teams <- V.fromList <$> ProjectMembers.getTeamsVM pid
   let bwconf =
@@ -862,7 +862,7 @@ teamGetH pid handle layoutM = do
   appCtx <- ask @AuthContext
   teamVm <- ProjectMembers.getTeamByHandle pid handle
   projMembers <- V.fromList <$> ProjectMembers.selectActiveProjectMembers pid
-  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (.channels) <$> SlackP.getSlackChannels d.botToken d.teamId
+  channels <- Slack.getProjectSlackData pid >>= maybe (pure []) \d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId
   discordChannels <- Slack.getDiscordDataByProjectId pid >>= maybe (pure []) (Discord.getDiscordChannels appCtx.env.discordBotToken . (.guildId))
   case teamVm of
     Just team -> do

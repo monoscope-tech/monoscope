@@ -2136,7 +2136,9 @@ evaluateQueryMonitor monitor startWall = do
             Log.logAttention "Monitor parsed but produced no alert query; using stale cached SQL" (monitor.id, title, monitor.logQuery)
             pure monitor.logQueryAsSql
         Left err -> do
-          Log.logAttention "Monitor logQuery re-parse failed; using stale cached SQL" (monitor.id, title, monitor.logQuery, err)
+          -- Escalate to logError: the user's saved KQL no longer parses, meaning
+          -- the monitor is silently running stale SQL. On-call should see this.
+          Log.logError "Monitor logQuery re-parse failed; using stale cached SQL" (monitor.id, title, monitor.logQuery, err)
           pure monitor.logQueryAsSql
   let isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic

@@ -23,6 +23,7 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Control.Exception (throwIO, try)
 import Models.Projects.Projects qualified as Projects
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
@@ -98,19 +99,18 @@ processReplayEvents msgs attrs = do
   pure $ catMaybes vs
 
 
--- | Retrieve replay events from a single MinIO/S3 object (legacy format)
-getMinioFile :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Minio.Object -> Eff es AE.Array
+-- | Retrieve a legacy single-object replay blob. Returns `Left` on transport
+-- failure or decode error (caller decides how to surface); `Right V.empty` only
+-- when the underlying JSON is genuinely empty or not an array.
+getMinioFile :: IOE :> es => Minio.ConnectInfo -> Minio.Bucket -> Minio.Object -> Eff es (Either Text AE.Array)
 getMinioFile conn bucket objKey = do
-  res <- liftIO $ Minio.runMinio conn do
-    src <- Minio.getObject bucket objKey Minio.defaultGetObjectOptions
-    let sld = Minio.gorObjectStream src
-    bs <- runConduit $ sld .| CC.foldMap fromStrict
-    case AE.eitherDecode bs of
-      Right v' -> case v' of
-        AE.Array a -> pure a
-        _ -> pure V.empty
-      Left _ -> pure V.empty
-  whenRight V.empty res pure
+  res <- liftIO $ Minio.runMinio conn $ fetchEventArray bucket objKey False
+  pure $ case res of
+    Right (Right a) -> Right a
+    Right (Left decodeErr) -> Left $ "decode: " <> toText decodeErr
+    Left err
+      | isNoSuchKey err -> Right V.empty
+      | otherwise -> Left $ "transport: " <> toText (displayException err)
 
 
 -- | True if the Minio error represents a missing object (safe to treat as empty).
@@ -202,32 +202,38 @@ getSessionEvents conn pid bucket sessionId = do
       logCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
       legacy reason = do
         Log.logInfo "Falling back to legacy replay blob" (HM.insert "reason" reason logCtx)
-        Right . (,False) <$> getMinioFile conn bucket (fromString $ toString $ sessionStr <> ".json")
+        legacyRes <- getMinioFile conn bucket (fromString $ toString $ sessionStr <> ".json")
+        case legacyRes of
+          Right a -> pure $ Right (a, False)
+          Left e -> do
+            Log.logError "Failed to load legacy replay blob" (HM.insert "error" e logCtx)
+            pure $ Left "Temporarily unavailable; please retry."
       transientErr = Left "Temporarily unavailable; please retry."
+      corruptedErr = Left "Session history is corrupted; please contact support."
   fileKeys <- sessionFileKeys pid sessionId
   mergedRes <- liftIO $ Minio.runMinio conn $ fetchEventArray bucket mergedKey True
-  mergedArrM <- case mergedRes of
-    Right (Right a) -> pure (Just a)
+  case mergedRes of
+    -- Corrupt merged.json.gz is a data-integrity event — do NOT silently fall through
+    -- to individuals/legacy, that would hide the pre-merge history from the user.
     Right (Left decodeErr) -> do
-      Log.logAttention "Decode error reading merged replay events" (HM.insert "error" (toText decodeErr) logCtx)
-      pure Nothing -- treat as missing; fall through to individuals / legacy
-    Left err
-      | isNoSuchKey err -> pure (Just V.empty)
-      | otherwise -> do
-          Log.logAttention "Failed to fetch merged replay events" (HM.insert "error" (toText $ displayException err) logCtx)
-          pure Nothing
-  case mergedArrM of
-    Nothing
-      | null fileKeys -> legacy "merged_unavailable_no_keys"
-      | otherwise -> do
+      Log.logError "Corrupt merged replay blob" (HM.insert "error" (toText decodeErr) logCtx)
+      pure corruptedErr
+    Left err | not (isNoSuchKey err) -> do
+      Log.logError "Failed to fetch merged replay events" (HM.insert "error" (toText $ displayException err) logCtx)
+      pure transientErr
+    _ -> do
+      let mergedEvents = case mergedRes of
+            Right (Right a) -> a
+            _ -> V.empty -- NoSuchKey path
+      if null fileKeys
+        then
+          if V.null mergedEvents
+            then legacy "new_or_pre_migration_session"
+            else pure $ Right (mergedEvents, False)
+        else do
           (arr, partial) <- fetchIndividuals conn bucket fileKeys logCtx
-          pure $ if partial && V.null arr then transientErr else Right (arr, True)
-    Just mergedEvents
-      | null fileKeys && V.null mergedEvents -> legacy "new_or_pre_migration_session"
-      | null fileKeys -> pure $ Right (mergedEvents, False)
-      | otherwise -> do
-          (arr, partial) <- fetchIndividuals conn bucket fileKeys logCtx
-          pure $ Right (mergeEventArrays [mergedEvents, arr], partial)
+          let combined = mergeEventArrays [mergedEvents, arr]
+          pure $ if partial && V.null combined then transientErr else Right (combined, partial)
 
 
 -- | Lookup the tracked object keys for an unmerged replay session.
@@ -390,10 +396,22 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
           afterMerge now'
           Log.logInfo "Replay session merge skipped (no tracked file keys)" ("session_id", UUID.toText sessionId)
         else do
-          result <- liftIO $ tryAny $ mergeOneSession s3Conn bucket sessionId fileKeys
+          result <- liftIO $ try @MergeError $ mergeOneSession s3Conn bucket sessionId fileKeys
           case result of
-            Left err ->
-              Log.logAttention "Failed to merge replay session" (HM.insert "error" (toText $ displayException err) logCtx)
+            Left merr -> do
+              let ctxWithErr = HM.insert "error" (toText $ displayException merr) logCtx
+              case merr of
+                -- Fatal: corrupt data will never succeed. Mark merged so we stop
+                -- retrying forever and paging on-call.
+                MergeDecodeFailed _ -> do
+                  Log.logError "Replay session merge aborted due to corrupt data; marking merged to stop retries" ctxWithErr
+                  now' <- Time.currentTime
+                  void $ PG.execute
+                    [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? AND project_id = ? |]
+                    (now', sessionId, pid)
+                -- Transient: leave row untouched so next batch retries.
+                MergeFetchFailed _ -> Log.logAttention "Replay session merge transient fetch failure; will retry" ctxWithErr
+                MergePutFailed _ -> Log.logAttention "Replay session merge transient put failure; will retry" ctxWithErr
             Right _ -> do
               now' <- Time.currentTime
               -- Only remove keys we actually merged; concurrent `array_append` writers
@@ -418,7 +436,8 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                 then Log.logAttention "Post-merge UPDATE affected 0 rows; row vanished, skipping afterMerge" logCtx
                 else do
                   afterMerge now'
-                  Log.logInfo ("Merged replay session " <> logSuffix) ("session_id", UUID.toText sessionId)
+                  let msg = if logSuffix == "" then "Merged replay session" else "Merged replay session " <> logSuffix
+                  Log.logInfo msg ("session_id", UUID.toText sessionId)
 
 
 -- | Merge the tracked S3 event files for a single session into one gzip-compressed file.

@@ -726,7 +726,10 @@ data SlackThreadedMessage = SlackThreadedMessage
 
 data SlackChannelsResponse = SlackChannelsResponse
   { ok :: Bool
-  , channels :: [Channel]
+  , channels :: Maybe [Channel]
+  , error :: Maybe Text
+  , needed :: Maybe Text
+  , provided :: Maybe Text
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -736,15 +739,30 @@ getSlackChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es (Maybe
 getSlackChannels token team_id = do
   let url = "https://slack.com/api/conversations.list"
       opts =
-        defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token] & Wreq.param "team_id" .~ [team_id]
+        defaults
+          & header "Authorization" .~ ["Bearer " <> encodeUtf8 token]
+          & Wreq.param "team_id" .~ [team_id]
+          & Wreq.param "types" .~ ["public_channel,private_channel"]
+          & Wreq.param "exclude_archived" .~ ["true"]
+          & Wreq.param "limit" .~ ["1000"]
 
   r <- getWith opts url
   let resBody = r ^. responseBody
   case AE.eitherDecode resBody of
-    Right val -> return $ Just val
+    Right val -> do
+      unless val.ok
+        $ Log.logAttention "Slack conversations.list returned ok=false"
+        $ AE.object
+          [ "error" AE..= val.error
+          , "needed" AE..= val.needed
+          , "provided" AE..= val.provided
+          , "team_id" AE..= team_id
+          ]
+      pure $ Just val
     Left err -> do
-      Log.logAttention ("Error decoding Slack channels response: " <> toText err) ()
-      return Nothing
+      Log.logAttention "Error decoding Slack channels response"
+        $ AE.object ["error" AE..= err, "body" AE..= decodeUtf8 @Text (toStrict resBody)]
+      pure Nothing
 
 
 data SlackThreadedMessageResponse = SlackThreadedMessageResponse
