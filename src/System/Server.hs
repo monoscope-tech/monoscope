@@ -14,9 +14,10 @@ import Effectful.Fail (runFailIO)
 import Effectful.Time (runTime)
 import Log (LogLevel (..), runLogT)
 import Log qualified as LogBase
-import Network.HTTP.Types (methodGet, methodHead, status200)
+import Network.HTTP.Types (methodGet, methodHead, status200, status500)
 import Network.Wai
-import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdownTimeout, setOnException, setPort)
+import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdownTimeout, setOnException, setOnExceptionResponse, setPort)
+import Web.Auth qualified as Auth
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
@@ -75,10 +76,17 @@ runServer appLogger env tp = do
         defaultSettings
           & setPort env.config.port
           & setGracefulShutdownTimeout (Just 30)
-          & setOnException \_ exception ->
-            runLogT "monoscope" appLogger LogAttention
-              $ LogBase.logAttention "Unhandled exception"
-              $ AE.object ["exception" AE..= show @String exception]
+          & setOnException
+            ( \_ exception ->
+                runLogT "monoscope" appLogger LogAttention
+                  $ LogBase.logAttention "Unhandled exception"
+                  $ AE.object ["exception" AE..= show @String exception]
+            )
+          & setOnExceptionResponse
+            ( \_ ->
+                responseLBS status500 [("Content-Type", "text/html; charset=utf-8")]
+                  $ Auth.errorPageHtml env.config 500
+            )
   let compressionSettings =
         defaultGzipSettings
           { gzipFiles = GzipCompress
