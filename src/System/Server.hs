@@ -72,21 +72,15 @@ runServer :: IOE :> es => LogBase.Logger -> AuthContext -> TracerProvider -> Eff
 runServer appLogger env tp = do
   loggingMiddleware <- Logging.runLog (show env.config.environment) appLogger env.config.logLevel WaiLog.mkLogMiddleware
   let server = mkServer appLogger env tp
+  let onExc _ exception = runLogT "monoscope" appLogger LogAttention do
+        LogBase.logAttention "Unhandled exception" (AE.object ["exception" AE..= show @String exception])
+  let onExcResp _ = responseLBS status500 [("Content-Type", "text/html; charset=utf-8")] (Auth.errorPageHtml env.config 500)
   let warpSettings =
         defaultSettings
           & setPort env.config.port
           & setGracefulShutdownTimeout (Just 30)
-          & setOnException
-            ( \_ exception ->
-                runLogT "monoscope" appLogger LogAttention
-                  $ LogBase.logAttention "Unhandled exception"
-                  $ AE.object ["exception" AE..= show @String exception]
-            )
-          & setOnExceptionResponse
-            ( \_ ->
-                responseLBS status500 [("Content-Type", "text/html; charset=utf-8")]
-                  $ Auth.errorPageHtml env.config 500
-            )
+          & setOnException onExc
+          & setOnExceptionResponse onExcResp
   let compressionSettings =
         defaultGzipSettings
           { gzipFiles = GzipCompress
