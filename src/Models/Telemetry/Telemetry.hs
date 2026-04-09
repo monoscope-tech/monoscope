@@ -526,6 +526,7 @@ data MetricChartListData = MetricChartListData
 
 getTraceDetails :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
 getTraceDetails pid trId tme now = do
+  let pidTxt = pid.toText
   rows :: V.Vector (Text, UTCTime, UTCTime, Int64, Int64, Maybe (V.Vector Text)) <-
     Hasql.interp
       [HI.sql| SELECT
@@ -536,7 +537,7 @@ getTraceDetails pid trId tme now = do
               COUNT(context->>'span_id')::int8 AS total_spans,
               ARRAY_REMOVE(ARRAY_AGG(DISTINCT jsonb_extract_path_text(resource, 'service.name')), NULL) AS service_names
             FROM otel_logs_and_spans
-            WHERE project_id = #{pid} AND timestamp BETWEEN #{start} AND #{end} AND context___trace_id = #{trId}
+            WHERE project_id = #{pidTxt} AND timestamp BETWEEN #{start} AND #{end} AND context___trace_id = #{trId}
             GROUP BY context___trace_id |]
   pure $ (\(tid, ts, te, dur, ns, sn) -> Trace tid ts te (fromIntegral dur) (fromIntegral ns) sn) <$> (rows V.!? 0)
   where
