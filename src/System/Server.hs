@@ -17,7 +17,6 @@ import Log qualified as LogBase
 import Network.HTTP.Types (methodGet, methodHead, status200, status500)
 import Network.Wai
 import Network.Wai.Handler.Warp (defaultSettings, runSettings, setGracefulShutdownTimeout, setOnException, setOnExceptionResponse, setPort)
-import Web.Auth qualified as Auth
 import Network.Wai.Log qualified as WaiLog
 import Network.Wai.Middleware.Cors
 import Network.Wai.Middleware.Gzip (GzipFiles (..), GzipSettings (..), defaultGzipSettings, gzip)
@@ -38,6 +37,7 @@ import System.Config (
  )
 import System.Logging qualified as Logging
 import System.Types (effToServantHandler)
+import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
 
 
