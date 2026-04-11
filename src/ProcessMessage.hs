@@ -192,23 +192,21 @@ stripNulBytes :: Text -> Text
 stripNulBytes = T.replace "\NUL" ""
 
 
--- | Process a single span to extract entities for anomaly detection
--- This function is the core of the anomaly detection system. It extracts:
--- 1. Endpoints - New API routes (triggers endpoint anomalies)
--- 2. Shapes - Request/response structures (triggers shape anomalies)
--- 3. Fields - Individual data fields (triggers field anomalies)
--- 4. Formats - Field value patterns (triggers format anomalies)
---
--- The extracted entities are compared against the project cache to avoid
--- redundant database operations. New entities will trigger database inserts
--- which fire PostgreSQL triggers to create anomaly records.
-processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Fields.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text)
+-- | Process a single span to extract entities for anomaly detection.
+-- Returns @(endpoint, shape, fields, formats, hashes, normalizedPath)@.
+-- The normalized path (@Just@ for HTTP spans) is stamped back onto the span's
+-- @attributes.http.route@ and @attributes.url.path@ by the caller so that
+-- explorer queries match the template stored in @apis.endpoints@.
+processSpanToEntities :: HM.HashMap (Text, Text) [([Text], Text)] -> Projects.ProjectCache -> Telemetry.OtelLogsAndSpans -> UUID.UUID -> (Maybe Endpoints.Endpoint, Maybe Fields.Shape, V.Vector Fields.Field, V.Vector Fields.Format, V.Vector Text, Maybe Text)
 processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
   let !projectId = UUIDId $ Unsafe.fromJust $ UUID.fromText otelSpan.project_id
 
       -- Extract HTTP attributes from nested JSON structure
       !attributes = maybeToMonoid (unAesonTextMaybe otelSpan.attributes)
       !attrValue = AE.Object $ AEKM.fromMapText attributes
+
+      -- HTTP spans carry http.request.method; only these get endpoint/path normalization
+      !isHttpSpan = isJust $ attrValue ^? key "http" . key "request" . key "method" . _String
 
       -- Navigate nested JSON to extract values using lens
       !method = T.toUpper $ fromMaybe "GET" $ attrValue ^? key "http" . key "request" . key "method" . _String
@@ -364,7 +362,12 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
       -- Collect hashes to update span with
       !hashes =
         V.cons endpointHash (if isJust shape then V.cons shapeHash fieldHashes else fieldHashes)
-   in (endpoint, shape, fields', formats', hashes)
+
+      -- Normalized path written into both attributes.http.route and attributes.url.path
+      -- so new-endpoint notification links and the catalog UI can filter by the
+      -- same template stored in apis.endpoints.
+      !normalizedPathForSpan = if isHttpSpan then Just urlPath else Nothing
+   in (endpoint, shape, fields', formats', hashes, normalizedPathForSpan)
   where
     -- Helper function to extract headers from nested attribute structure
     extractHeaders :: Text -> AE.Value -> Maybe AE.Value

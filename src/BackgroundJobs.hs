@@ -1195,7 +1195,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
   let !results = V.zipWith (processSpanToEntities canonicalTemplates projectCacheVal) spans spanIds
 
   -- Unzip and deduplicate extracted entities using HashMap for O(n) performance
-  let !(endpoints, shapes, fields, formats, spanUpdates) = V.unzip5 results
+  let !(endpoints, shapes, fields, formats, spanUpdates, normalizedPaths) = V.unzip6 results
 
   -- Deduplicate using HashMap instead of O(n²) nubBy
   let !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
@@ -1236,18 +1236,30 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
           , "error" AE..= show @Text e
           ]
     Right _ -> do
-      -- Batch update spans with computed hashes using a single query
-      let spansWithHashes = V.filter (\(_, hashes) -> not $ V.null hashes) $ V.zip spans spanUpdates
+      -- Batch update spans with computed hashes using a single query.
+      -- For HTTP spans we also stamp the normalized path onto attributes.http.route,
+      -- attributes.url.path and the promoted attributes___url___path column so
+      -- notification explorer links and the catalog UI can filter by the same
+      -- template stored in apis.endpoints.
+      let spansWithHashes = V.filter (\(_, hashes, _) -> not $ V.null hashes) $ V.zip3 spans spanUpdates normalizedPaths
       Relude.when (V.length spansWithHashes > 0) $ do
         let expectedCount = V.length spansWithHashes
         Log.logTrace "Updating spans with computed hashes" ("span_count", AE.toJSON expectedCount)
-        let dbSpanIds = PGArray $ V.toList $ V.map ((.id) . fst) spansWithHashes
-            hashValues = PGArray $ V.toList $ V.map (AE.toJSON . snd) spansWithHashes
+        let dbSpanIds = PGArray $ V.toList $ V.map (\(s, _, _) -> s.id) spansWithHashes
+            hashValues = PGArray $ V.toList $ V.map (\(_, h, _) -> AE.toJSON h) spansWithHashes
+            normPaths = PGArray $ V.toList $ V.map (\(_, _, p) -> p) spansWithHashes
         rowsUpdated <-
           PG.execute
             [sql| UPDATE otel_logs_and_spans
-                  SET hashes = converted.arr
-                  FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes_json) updates
+                  SET hashes = converted.arr,
+                      attributes___url___path = COALESCE(updates.norm_path, otel_logs_and_spans.attributes___url___path),
+                      attributes = CASE WHEN updates.norm_path IS NOT NULL THEN
+                        COALESCE(otel_logs_and_spans.attributes, '{}'::jsonb)
+                          || jsonb_build_object(
+                               'url', COALESCE(otel_logs_and_spans.attributes->'url', '{}'::jsonb) || jsonb_build_object('path', updates.norm_path),
+                               'http', COALESCE(otel_logs_and_spans.attributes->'http', '{}'::jsonb) || jsonb_build_object('route', updates.norm_path))
+                      ELSE otel_logs_and_spans.attributes END
+                  FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes_json, unnest(?::text[]) as norm_path) updates
                   CROSS JOIN LATERAL (
                     SELECT ARRAY(SELECT jsonb_array_elements_text(updates.hashes_json)) as arr
                   ) converted
@@ -1255,7 +1267,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
                     AND otel_logs_and_spans.project_id = ?
                     AND otel_logs_and_spans.timestamp >= ?
                     AND otel_logs_and_spans.timestamp < ? |]
-            (dbSpanIds, hashValues, pid, fiveMinutesAgo, scheduledTime)
+            (dbSpanIds, hashValues, normPaths, pid, fiveMinutesAgo, scheduledTime)
         Relude.when (fromIntegral rowsUpdated /= expectedCount)
           $ Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
         Log.logTrace "Completed span processing for project" ("project_id", AE.toJSON pid.toText)

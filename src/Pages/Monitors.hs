@@ -65,7 +65,9 @@ import Pkg.Components.Table (BulkAction (..), Config (..), Features (..), Search
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget (Widget (..))
 import Pkg.Components.Widget qualified as Widget
-import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToComponents, presetRollup)
+import Pkg.Parser (defSqlQueryCfg, finalAlertQuery, fixedUTCTime, parseQueryToAST, parseQueryToComponents, presetRollup)
+import Pkg.Parser.Expr (ToQueryText (..))
+import Pkg.QueryCache (rewriteBinAutoToFixed)
 import Relude hiding (ask)
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
@@ -782,6 +784,17 @@ statusBadge_ isLarge status = do
     toHtml status
 
 
+-- | Rewrite @bin_auto@ to a fixed @<mins>m@ interval via the KQL AST so the monitor
+-- overview chart bins match the evaluation window rather than the viewer's time range.
+-- Falls back to the original query on parse failure or when @mins <= 0@.
+rewriteBinAutoMins :: Int -> Text -> (Text, Maybe Text)
+rewriteBinAutoMins mins q
+  | mins <= 0 = (q, Nothing)
+  | otherwise = case parseQueryToAST q of
+      Right ast -> (toQText (rewriteBinAutoToFixed (show mins <> "m") ast), Nothing)
+      Left err -> (q, Just err)
+
+
 unifiedMonitorOverviewH :: Projects.ProjectId -> Text -> ATAuthCtx (RespHeaders (PageCtx (Html ())))
 unifiedMonitorOverviewH pid monitorId = do
   (sess, project) <- Projects.sessionAndProject pid
@@ -901,7 +914,7 @@ unifiedOverviewPage pid alert currTime teams slackDataM discordDataM = do
           Widget.widget_
             $ (def :: Widget)
               { Widget.wType = Widget.mapChatTypeToWidgetType alert.visualizationType
-              , Widget.query = Just alert.logQuery
+              , Widget.query = Just (fst $ rewriteBinAutoMins alert.timeWindowMins alert.logQuery)
               , Widget.title = Just "Query Results"
               , Widget.standalone = Just True
               , Widget._projectId = Just pid
