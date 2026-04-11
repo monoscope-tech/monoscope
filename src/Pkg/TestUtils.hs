@@ -55,6 +55,7 @@ where
 
 import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
+import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
@@ -606,6 +607,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
 
   -- Load config from environment variables
   envConfig <- decodeWithDefaults defConfig
+  extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
 
   let atAuthCtx =
         AuthContext
@@ -619,6 +621,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
           projectCache
           logsPatternCache
           projectKeyCache
+          extractionWorker
           ( envConfig
               { -- Override to ensure test database is used (never production DB from .env)
                 databaseUrl = "test-db-connection-from-pool"

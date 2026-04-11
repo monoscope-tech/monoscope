@@ -390,7 +390,7 @@ convertRequestMessageToSpan rm (spanId, trId) =
 
     otelSpan =
       Telemetry.OtelLogsAndSpans
-        { id = UUID.toText UUID.nil
+        { id = UUID.toText spanId
         , project_id = UUID.toText rm.projectId
         , timestamp = zonedTimeToUTC rm.timestamp
         , parent_id = parentId

@@ -89,6 +89,7 @@ extra-source-files:
     static/migrations/0061_backfill_slack_notification_channel.sql
     static/migrations/0062_monitor_time_window_mins.sql
     static/migrations/0063_replay_session_file_keys.sql
+    static/migrations/0064_processed_at_safety_net.sql
 
 source-repository head
   type: git
@@ -161,6 +162,7 @@ library
       Pkg.Drain
       Pkg.EmailTemplates
       Pkg.ErrorFingerprint
+      Pkg.ExtractionWorker
       Pkg.Mail
       Pkg.Parser
       Pkg.Parser.Expr
@@ -358,6 +360,7 @@ library
     , servant-server
     , slugify
     , smtp-mail
+    , stm
     , template-haskell
     , temporary
     , text

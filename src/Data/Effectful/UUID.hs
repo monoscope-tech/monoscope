@@ -25,6 +25,9 @@ type instance DispatchOf UUIDEff = 'Dynamic
 makeEffect ''UUIDEff
 
 
+-- TODO: swap to UUIDv7 for time-sortable ids (hypertable BRIN locality) once a
+-- maintained Hackage library ships one. Today the `uuid` package tops out at V4
+-- and there is no `uuid-v7` package available — keeping V4 until then.
 runUUID :: IOE :> es => Eff (UUIDEff ': es) a -> Eff es a
 runUUID = interpret $ \_ -> \case
   GenUUID -> liftIO UUID.nextRandom

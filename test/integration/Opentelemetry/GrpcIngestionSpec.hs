@@ -7,6 +7,10 @@ import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.DBT (withPool)
+import Database.PostgreSQL.Entity.DBT qualified as DBT
+import Database.PostgreSQL.Simple (Only (..))
+import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
@@ -20,6 +24,7 @@ import Pkg.TestUtils
 import Relude
 import Data.Aeson qualified as AE
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
+import Data.Set qualified as Set
 
 
 pid :: Projects.ProjectId
@@ -188,3 +193,26 @@ spec = aroundAll withTestResources do
         result <- queryLogs tr Nothing
         dataset <- expectLogsJson result
         V.length dataset `shouldSatisfy` (>= 4)
+
+    -- Guards against regressions where UUID minting is skipped at an ingestion
+    -- call site after the re-mint inside `bulkInsertOtelLogsAndSpansTF` was
+    -- removed (plan squishy-imagining-diffie.md §1). If a call site forgets to
+    -- call `mintOtelLogIds` or passes `UUID.nil`, rows either collide or land
+    -- with the nil UUID — both caught here.
+    it "Test 10.1: ingested rows have distinct non-nil UUID ids (minted upstream)" $ \tr -> do
+      key <- createTestAPIKey tr pid "id-mint-key"
+      let names = ["GET /a", "GET /b", "GET /c", "GET /d", "GET /e"] :: [Text]
+      forM_ names $ \n -> ingestTrace tr key n frozenTime
+      ids <-
+        withPool tr.trPool
+          $ DBT.query
+            [sql|
+              SELECT id::text FROM otel_logs_and_spans
+              WHERE project_id = ? AND name = ANY(?)
+            |]
+            (pid, V.fromList names)
+          :: IO (V.Vector (Only Text))
+      let idList = V.toList (fmap (\(Only t) -> t) ids)
+      length idList `shouldBe` length names
+      idList `shouldSatisfy` all (\t -> t /= UUID.toText UUID.nil)
+      Set.size (Set.fromList idList) `shouldBe` length idList

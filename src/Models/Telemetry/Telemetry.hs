@@ -37,6 +37,7 @@ module Models.Telemetry.Telemetry (
   getMetricData,
   bulkInsertMetrics,
   bulkInsertOtelLogsAndSpansTF,
+  mintOtelLogIds,
   getMetricChartListData,
   getMetricLabelValues,
   getTraceShapes,
@@ -776,6 +777,14 @@ bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
         :. (entry.aggregationTemporality, entry.isMonotonic)
 
 
+-- | Mint a fresh UUID for every row's `id` field. Call this once at the ingestion
+-- call site BEFORE handing the vector to `bulkInsertOtelLogsAndSpansTF`, so the
+-- caller holds a vector whose ids match what lands in the DB (needed by the
+-- in-process extraction worker hand-off — see plan notes).
+mintOtelLogIds :: UUIDEff :> es => V.Vector OtelLogsAndSpans -> Eff es (V.Vector OtelLogsAndSpans)
+mintOtelLogIds = V.mapM \r -> genUUID <&> \uid -> r & #id .~ UUID.toText uid
+
+
 bulkInsertOtelLogsAndSpansTF
   :: ( Concurrent :> es
      , Eff.Reader AuthContext :> es
@@ -784,20 +793,18 @@ bulkInsertOtelLogsAndSpansTF
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
      , Log :> es
-     , UUIDEff :> es
      )
   => V.Vector OtelLogsAndSpans
   -> Eff es ()
 bulkInsertOtelLogsAndSpansTF records = do
   appCtx <- Eff.ask @AuthContext
   Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON appCtx.config.enableTimefusionWrites)]
-  updatedRecords <- V.mapM (\r -> genUUID >>= \uid -> pure (r & #id .~ UUID.toText uid)) records
   if appCtx.config.enableTimefusionWrites
     then Ki.scoped \scope -> do
-      mainThread <- Ki.fork scope $ void $ bulkInsertOtelLogsAndSpans updatedRecords
+      mainThread <- Ki.fork scope $ void $ bulkInsertOtelLogsAndSpans records
       _ <- Ki.fork scope do
-        Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length updatedRecords)]
-        tryAny (retryTimefusion 10 updatedRecords) >>= \case
+        Log.logTrace "TimeFusion write enabled, attempting write" $ AE.object [("record_count", AE.toJSON $ V.length records)]
+        tryAny (retryTimefusion 10 records) >>= \case
           Left e -> do
             -- Distinguish infra failures (HasqlException) from programmer bugs so on-call
             -- can triage: infra → page storage; bug → file an issue.
@@ -808,12 +815,12 @@ bulkInsertOtelLogsAndSpansTF records = do
               $ AE.object
                 [ "error_id" AE..= errId
                 , "kind" AE..= kind
-                , "record_count" AE..= V.length updatedRecords
+                , "record_count" AE..= V.length records
                 , "error" AE..= show @Text e
                 ]
           Right _ -> pass
       Ki.atomically $ Ki.await mainThread
-    else void $ bulkInsertOtelLogsAndSpans updatedRecords
+    else void $ bulkInsertOtelLogsAndSpans records
   where
     -- Retry only transient HasqlException; non-Hasql exceptions (e.g. InvalidOtelRowIdException
     -- from bad UUIDs, encode panics) are programmer bugs and must propagate immediately.
@@ -1440,7 +1447,9 @@ insertSystemLog
   :: (Concurrent :> es, Eff.Reader AuthContext :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, UUIDEff :> es)
   => OtelLogsAndSpans
   -> Eff es ()
-insertSystemLog otelLog = bulkInsertOtelLogsAndSpansTF (V.singleton otelLog)
+insertSystemLog otelLog = do
+  minted <- mintOtelLogIds (V.singleton otelLog)
+  bulkInsertOtelLogsAndSpansTF minted
 
 
 -- | Generate summary array for an OtelLogsAndSpans record

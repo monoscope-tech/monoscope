@@ -254,7 +254,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
-            (checkpoint "processList:logs:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
+            (\v -> Telemetry.mintOtelLogIds v >>= checkpoint "processList:logs:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
         Just "org.opentelemetry.otlp.traces.v1" ->
           processBatchPipeline @TS.ExportTraceServiceRequest
             "traces"
@@ -269,7 +269,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
-            (checkpoint "processList:traces:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
+            (\v -> Telemetry.mintOtelLogIds v >>= checkpoint "processList:traces:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
         Just "org.opentelemetry.otlp.metrics.v1" ->
           processBatchPipeline @MS.ExportMetricsServiceRequest
             "metrics"
@@ -808,7 +808,7 @@ convertLogRecordToOtelLog !fallbackTime !pid resourceM scopeM logRecord =
       otelLog =
         OtelLogsAndSpans
           { project_id = pid.toText
-          , id = UUID.toText UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
+          , id = UUID.toText UUID.nil
           , timestamp = validTimestamp
           , observed_timestamp = Just validObservedTimestamp
           , context =
@@ -1044,7 +1044,7 @@ convertSpanToOtelLog !fallbackTime !pid resourceM scopeM pSpan =
       otelSpan =
         OtelLogsAndSpans
           { project_id = pid.toText
-          , id = UUID.toText UUID.nil -- Will be replaced in bulkInsertOtelLogsAndSpansTF
+          , id = UUID.toText UUID.nil
           , timestamp = validStartTime
           , observed_timestamp = Just validStartTime
           , context =
@@ -1289,10 +1289,11 @@ processTraceRequest metadataApiKey req = do
     (AE.object ["span_count" AE..= V.length spans'])
 
   unless (V.null spans') do
-    Telemetry.bulkInsertOtelLogsAndSpansTF spans'
+    mintedSpans <- Telemetry.mintOtelLogIds spans'
+    Telemetry.bulkInsertOtelLogsAndSpansTF mintedSpans
     Log.logTrace
       "Traces: Successfully inserted spans into database"
-      (AE.object ["inserted_count" AE..= V.length spans'])
+      (AE.object ["inserted_count" AE..= V.length mintedSpans])
 
 
 -- | Trace service handler (Export)
@@ -1358,10 +1359,11 @@ processLogsRequest metadataApiKey req = do
     (AE.object ["log_count" AE..= V.length logs])
 
   unless (V.null logs) do
-    Telemetry.bulkInsertOtelLogsAndSpansTF logs
+    mintedLogs <- Telemetry.mintOtelLogIds logs
+    Telemetry.bulkInsertOtelLogsAndSpansTF mintedLogs
     Log.logTrace
       "Logs: Successfully inserted logs into database"
-      (AE.object ["inserted_count" AE..= V.length logs])
+      (AE.object ["inserted_count" AE..= V.length mintedLogs])
 
 
 -- | Logs service handler (Export)

@@ -282,6 +282,7 @@ library:
     - conduit
     - mime-mail
     - smtp-mail
+    - stm
     - zlib
     - openapi3
     - servant-openapi3

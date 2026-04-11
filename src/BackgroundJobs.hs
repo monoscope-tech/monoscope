@@ -143,6 +143,15 @@ data BgJobs
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
   | MonoscopeAdminDaily
+  | -- | Hourly catch-up for rows the extraction worker missed. Scheduled only when
+    -- `enableExtractionWorker` is True. Re-drives rows where processed_at IS NULL
+    -- through the same submitBatch path as live ingestion.
+    SafetyNetReprocess Projects.ProjectId
+  | -- | Per-batch odd-job fired from the extraction worker's eager track, carrying
+    -- the error vector it decoded in-memory. Separated from the worker so
+    -- createJob failure aborts UPDATE-1 and safety-net retries the whole batch,
+    -- and so per-error odd-jobs retry semantics are preserved.
+    ProcessProjectErrorsJob Projects.ProjectId (V.Vector ErrorPatterns.ATError) UTCTime
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -427,6 +436,22 @@ processBackgroundJob authCtx bgJob =
       tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
       tryLog "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
+    SafetyNetReprocess pid ->
+      -- TODO(extraction-worker slice 2): Sweep `processed_at IS NULL` rows via
+      -- the time-scoped partial index and re-drive them through `submitBatch`.
+      -- Only scheduled when enableExtractionWorker is on (see runDailyJobScheduling).
+      -- See plan squishy-imagining-diffie.md "Safety net" section.
+      -- Until slice 2 lands, log loudly so a queued row is observable instead of
+      -- silently dropped — and so the handler can't be mistaken for complete in metrics.
+      Log.logAttention "TODO(slice 2): SafetyNetReprocess invoked but not yet implemented" pid
+    ProcessProjectErrorsJob pid errors _now ->
+      -- TODO(extraction-worker slice 2): Call processProjectErrors +
+      -- notifyErrorSubscriptions so the eager-track fork in the extraction worker
+      -- preserves today's issue-creation retry + alert-dispatch semantics. See plan
+      -- squishy-imagining-diffie.md "Error path — enqueue an odd-job".
+      Log.logAttention
+        "TODO(slice 2): ProcessProjectErrorsJob invoked but not yet implemented"
+        (AE.object ["project_id" AE..= pid, "error_count" AE..= V.length errors])
     MonoscopeAdminDaily -> do
       now <- Time.currentTime
       let since = addUTCTime (-86400) now
