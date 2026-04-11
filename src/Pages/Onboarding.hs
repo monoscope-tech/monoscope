@@ -296,7 +296,7 @@ checkIntegrationGet pid languageM = do
   (sess, project) <- Projects.sessionAndProject pid
   let stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Integration" stepsCompleted
-  v :: Maybe (Only Text) <- listToMaybe <$> PG.query [sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = ? LIMIT 1|] (Only pid)
+  v :: Maybe (Only Text) <- listToMaybe <$> PG.query [sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = ? LIMIT 1|] (Only pid.toText)
   if isJust v
     then do
       _ <- PG.execute [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)

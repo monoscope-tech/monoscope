@@ -424,9 +424,9 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- withTimefusion authCtx.env.enableTimefusionReads case resolveFieldExpr target of
         Just (Left colExpr) -> do
           let q = "SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=? AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000"
-          PG.query (Query $ encodeUtf8 q) (Only pid)
+          PG.query (Query $ encodeUtf8 q) (Only pid.toText)
         Just (Right pathParts) ->
-          PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, " <> bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=? AND " <> fullWhere <> " AND attributes #>> ? IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000") (pathParts, pid, pathParts)
+          PG.query (Query $ encodeUtf8 $ "SELECT attributes #>> ?, " <> bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=? AND " <> fullWhere <> " AND attributes #>> ? IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000") (pathParts, pid.toText, pathParts)
         Nothing -> pure []
       Log.logTrace "fetchLogPatterns: on-the-fly query done" $ AE.object ["raw_results" AE..= length rawResults]
       let agg (c1, l1, s1, b1) (c2, l2, s2, b2) = (c1 + c2, l1 <|> l2, s1 <|> s2, b1 ++ b2)
@@ -486,6 +486,6 @@ getLastSevenDaysTotalRequest = getRequestCountForInterval "7 days"
 getRequestCountForInterval :: (DB es, Time.Time :> es) => Text -> Projects.ProjectId -> Eff es Int
 getRequestCountForInterval interval pid = do
   now <- Time.currentTime
-  fromMaybe 0 . coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query q (pid, now, interval)
+  fromMaybe 0 . coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query q (pid.toText, now, interval)
   where
     q = [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval ?;|]

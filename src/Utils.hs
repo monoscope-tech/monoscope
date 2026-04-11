@@ -510,7 +510,7 @@ checkFreeTierStatus pid paymentPlan =
   if paymentPlan == "Free"
     then do
       now <- Time.currentTime
-      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day'|] (pid, now)
+      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day'|] (pid.toText, now)
       let limit = fromInteger freeTierDailyMaxEvents
       pure $ if count >= limit then FreeTierExceeded count limit else if count >= (limit * 80) `div` 100 then FreeTierWarning count limit else FreeTierOk
     else pure NotFreeTier

@@ -684,7 +684,7 @@ getMetricData pid metricName = listToMaybe <$> PG.query q (pid, metricName, pid,
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
 getTotalEventsToReport pid lastReported = do
-  result <- PG.query q (pid, lastReported)
+  result <- PG.query q (pid.toText, lastReported)
   case result of
     [Only c] -> return c
     v -> return $ length v
@@ -1252,7 +1252,7 @@ extractATError _ _ = Nothing
 
 
 getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsForReport projectId start end = PG.query q (projectId, start, end)
+getProjectStatsForReport projectId start end = PG.query q (projectId.toText, start, end)
   where
     q =
       [sql| SELECT resource___service___name AS service_name,  COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL) AS total_error_events, COUNT(*) AS total_events
@@ -1264,7 +1264,7 @@ getProjectStatsForReport projectId start end = PG.query q (projectId, start, end
 
 
 getProjectStatsBySpanType :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsBySpanType projectId start end = PG.query q (projectId, start, end)
+getProjectStatsBySpanType projectId start end = PG.query q (projectId.toText, start, end)
   where
     q =
       [sql|
@@ -1315,6 +1315,7 @@ ORDER BY
 
 getDBQueryStats :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
 getDBQueryStats projectId start end = do
+  let pidTxt = projectId.toText
   rows :: V.Vector (Text, Int64, Int64) <-
     Hasql.interp
       [HI.sql| SELECT
@@ -1322,7 +1323,7 @@ getDBQueryStats projectId start end = do
         ROUND(AVG(duration))::int8 AS avg_duration,
         COUNT(*)::int8 AS count
       FROM otel_logs_and_spans
-      WHERE project_id = #{projectId}
+      WHERE project_id = #{pidTxt}
         AND timestamp >= #{start}
         AND timestamp <= #{end}
         AND kind != 'log'
@@ -1336,7 +1337,7 @@ getDBQueryStats projectId start end = do
 getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
 getTraceShapes pid trIds = do
   now <- Time.currentTime
-  PG.query q (pid, now, trIds, pid, now, pid, now)
+  PG.query q (pid.toText, now, trIds, pid.toText, now, pid.toText, now)
   where
     q =
       [sql|

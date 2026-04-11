@@ -606,8 +606,8 @@ runHourlyJob scheduledTime hour = do
       <$> PG.query
         [sql| SELECT DISTINCT project_id::uuid
               FROM otel_logs_and_spans ols
-              WHERE ols.timestamp >= ?
-                AND ols.timestamp <= ? |]
+              WHERE ols.timestamp >= ?::timestamptz
+                AND ols.timestamp <= ?::timestamptz |]
         (oneHourAgo, scheduledTime)
 
   -- Log count of projects to process
@@ -657,7 +657,7 @@ checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgrou
 checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-check" do
   projectM <- Projects.projectById pid
   forM_ projectM \project -> Relude.when (project.paymentPlan == "Free") do
-    count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day' |] (pid, now)
+    count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day' |] (pid.toText, now)
     let limit = fromInteger freeTierDailyMaxEvents
         exceeded = count >= limit
         warning = count >= (limit * 80) `div` 100
@@ -669,7 +669,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
           . listToMaybe
           <$> PG.query
             [sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=? AND name=? AND timestamp > ?::timestamptz - interval '1 day') |]
-            (pid, eventName, now)
+            (pid.toText, eventName, now)
       Relude.unless alreadyNotified do
         ctx <- ask @Config.AuthContext
         let sev = if exceeded then SLError else SLWarn
@@ -791,7 +791,7 @@ logsPatternExtraction scheduledTime pid = do
       otelEventsV :: V.Vector (Text, Text) <-
         Hasql.withHasqlTimefusion tfEnabled
           $ Hasql.interp
-            [HI.sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} OFFSET #{fromIntegral offset :: Int64} LIMIT #{fromIntegral limitVal :: Int64}|]
+            [HI.sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} OFFSET #{fromIntegral offset :: Int64} LIMIT #{fromIntegral limitVal :: Int64}|]
       let otelEvents = V.toList otelEventsV
       if null otelEvents
         then pure tree
@@ -804,7 +804,7 @@ logsPatternExtraction scheduledTime pid = do
           forM_ hashToIds \(hashTag, ids :: [Text]) -> do
             (() :: ()) <-
               Hasql.withHasqlTimefusion tfEnabled
-                $ Hasql.interp [HI.sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, #{hashTag}) WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND id = ANY(#{ids}::uuid[]) AND NOT (hashes @> ARRAY[#{hashTag}])|]
+                $ Hasql.interp [HI.sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, #{hashTag}) WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND id = ANY(#{ids}::uuid[]) AND NOT (hashes @> ARRAY[#{hashTag}])|]
             pass
           if length otelEvents == limitVal
             then paginateTree tfEnabled tree' (offset + limitVal) startTime
@@ -821,7 +821,7 @@ logsPatternExtraction scheduledTime pid = do
           else
             Hasql.withHasqlTimefusion tfEnabled
               $ Hasql.interp
-                [HI.sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(#{patternHashes}::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{since} AND timestamp < #{scheduledTime} AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|]
+                [HI.sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(#{patternHashes}::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{since} AND timestamp < #{scheduledTime} AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|]
       let sampleMeta = V.toList sampleMetaV
       let metaMap = HM.fromList [(h, (trId, sName, lvl)) | (h, trId, sName, lvl) <- sampleMeta]
           prepared = flip mapMaybe (V.toList allPatterns) \dp ->
@@ -840,14 +840,14 @@ logsPatternExtraction scheduledTime pid = do
       urlPathsV :: V.Vector (Maybe Text, Maybe Text, Int64) <-
         Hasql.withHasqlTimefusion tfEnabled
           $ Hasql.interp
-            [HI.sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|]
+            [HI.sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|]
       let urlPaths = V.toList urlPathsV
       Relude.when (length urlPaths == 1000) $ Log.logWarn "url_path pattern limit reached" pid
       let urlUpserts = [(up, hs) | (Just path, serviceName, cnt) <- urlPaths, let (up, hs) = mkNormalized "url_path" path serviceName Nothing cnt]
       exceptionsV :: V.Vector (Maybe Text, Maybe Text, Maybe Text, Int64) <-
         Hasql.withHasqlTimefusion tfEnabled
           $ Hasql.interp
-            [HI.sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::uuid AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|]
+            [HI.sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|]
       let exceptions = V.toList exceptionsV
       Relude.when (length exceptions == 1000) $ Log.logWarn "exception pattern limit reached" pid
       let excUpserts = [(up, hs) | (Just msg, serviceName, level, cnt) <- exceptions, let (up, hs) = mkNormalized "exception" msg serviceName level cnt]
@@ -980,7 +980,7 @@ processOneMinuteErrors scheduledTime pid = do
       -- Append "err:<hash>" to otel hashes using array_append + guard (same pattern as pat: hashes)
       let hashToSpans = HM.toList $ V.foldl' (\acc e -> maybe acc (\sId -> HM.insertWith (\new old -> let !r = new <> old in r) ("err:" <> e.hash) [sId] acc) e.spanId) HM.empty allErrors
       forM_ hashToSpans \(hashTag, sIds) ->
-        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid, oneMinuteAgo, scheduledTime, PGArray sIds, hashTag)
+        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid.toText, oneMinuteAgo, scheduledTime, PGArray sIds, hashTag)
       -- Notify after hashes are injected so chart queries can find "err:<hash>" in spans
       notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) allErrors)
       Relude.when (V.length spansWithErrors == 2000)
@@ -1267,7 +1267,7 @@ processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
                     AND otel_logs_and_spans.project_id = ?
                     AND otel_logs_and_spans.timestamp >= ?
                     AND otel_logs_and_spans.timestamp < ? |]
-            (dbSpanIds, hashValues, normPaths, pid, fiveMinutesAgo, scheduledTime)
+            (dbSpanIds, hashValues, normPaths, pid.toText, fiveMinutesAgo, scheduledTime)
         Relude.when (fromIntegral rowsUpdated /= expectedCount)
           $ Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
         Log.logTrace "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
