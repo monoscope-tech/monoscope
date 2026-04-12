@@ -113,14 +113,13 @@ data QueryMonitor = QueryMonitor
   , deletedAt :: Maybe UTCTime
   , visualizationType :: Text
   , teams :: V.Vector UUID.UUID
-  , mutedAt :: Maybe UTCTime
-  , mutedUntil :: Maybe UTCTime
   , widgetId :: Maybe Text
   , dashboardId :: Maybe UUID.UUID
   , alertRecoveryThreshold :: Maybe Double
   , warningRecoveryThreshold :: Maybe Double
   , currentStatus :: MonitorStatus
   , currentValue :: Double
+  , mutedUntil :: Maybe UTCTime
   , renotifyIntervalMins :: Maybe Int
   , stopAfterCount :: Maybe Int
   , notificationCount :: Int
