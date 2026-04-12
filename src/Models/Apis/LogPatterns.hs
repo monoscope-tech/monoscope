@@ -96,6 +96,10 @@ data LogPattern = LogPattern
   , baselineVolumeHourlyMad :: Maybe Double
   , baselineSamples :: Int
   , baselineUpdatedAt :: Maybe ZonedTime
+  , canonicalId :: Maybe LogPatternId
+  , embedding :: Maybe (V.Vector Float)
+  , embeddingAt :: Maybe ZonedTime
+  , mergeOverride :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)

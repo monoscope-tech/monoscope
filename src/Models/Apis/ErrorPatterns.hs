@@ -122,6 +122,10 @@ data ErrorPattern = ErrorPattern
   , firstTraceId :: Maybe Text
   , recentTraceId :: Maybe Text
   , regressionCount :: Int
+  , canonicalId :: Maybe ErrorPatternId
+  , embedding :: Maybe (V.Vector Float)
+  , embeddingAt :: Maybe ZonedTime
+  , mergeOverride :: Bool
   , rootCause :: Maybe Text
   , errorCategory :: Maybe Text
   , parentHash :: Maybe Text
