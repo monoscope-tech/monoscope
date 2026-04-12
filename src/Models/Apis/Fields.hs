@@ -282,9 +282,9 @@ bulkInsertFormat formats = void $ PG.executeMany q $ V.toList rowsToInsert
       [sql|
       insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash)
         VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT (hash)
+        ON CONFLICT (project_id, field_hash, field_format)
         DO
-          UPDATE SET field_type= EXCLUDED.field_type, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20);
+          UPDATE SET field_type= EXCLUDED.field_type, hash = EXCLUDED.hash, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20);
       |]
     rowsToInsert =
       formats <&> \fmt ->
