@@ -90,14 +90,10 @@ data ErrorPattern = ErrorPattern
   , message :: Text
   , stacktrace :: Text
   , hash :: Text
-  , parentHash :: Maybe Text
-  , isFramework :: Bool
   , environment :: Maybe Text
   , service :: Maybe Text
   , runtime :: Maybe Text
   , errorData :: ATError
-  , firstTraceId :: Maybe Text
-  , recentTraceId :: Maybe Text
   , firstEventId :: Maybe UUID.UUID
   , lastEventId :: Maybe UUID.UUID
   , state :: ErrorState
@@ -105,10 +101,6 @@ data ErrorPattern = ErrorPattern
   , assignedAt :: Maybe ZonedTime
   , resolvedAt :: Maybe ZonedTime
   , regressedAt :: Maybe ZonedTime
-  , regressionCount :: Int
-  , subscribed :: Bool
-  , notifyEveryMinutes :: Int
-  , lastNotifiedAt :: Maybe ZonedTime
   , occurrences_1m :: Int -- snake_case fields match DB column names exactly
   , occurrences_5m :: Int
   , occurrences_1h :: Int
@@ -122,10 +114,18 @@ data ErrorPattern = ErrorPattern
   , baselineUpdatedAt :: Maybe ZonedTime
   , isIgnored :: Bool
   , ignoredUntil :: Maybe ZonedTime
+  , subscribed :: Bool
+  , notifyEveryMinutes :: Int
+  , lastNotifiedAt :: Maybe ZonedTime
   , slackThreadTs :: Maybe Text
   , discordMessageId :: Maybe Text
+  , firstTraceId :: Maybe Text
+  , recentTraceId :: Maybe Text
+  , regressionCount :: Int
   , rootCause :: Maybe Text
   , errorCategory :: Maybe Text
+  , parentHash :: Maybe Text
+  , isFramework :: Bool
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)

@@ -159,6 +159,7 @@ convertToQueryMonitor projectId now queryMonitorId alertForm =
         , alertConfig
         , deletedAt = Nothing
         , deactivatedAt = Nothing
+        , mutedAt = Nothing
         , mutedUntil = Nothing
         , visualizationType = fromMaybe "timeseries" alertForm.vizType
         , teams = V.fromList alertForm.teams

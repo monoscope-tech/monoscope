@@ -275,7 +275,7 @@ bulkInsertFormat :: DB es => V.Vector Format -> Eff es ()
 bulkInsertFormat = V.mapM_ \Format{projectId, fieldHash, fieldType, fieldFormat, examples, hash} ->
   Hasql.interpExecute
     [HI.sql| INSERT INTO apis.formats (project_id, field_hash, field_type, field_format, examples, hash)
-             VALUES (#{projectId}, #{fieldHash}, #{fieldType}, #{fieldFormat}, #{examples}, #{hash})
+             VALUES (#{projectId}, #{fieldHash}, #{fieldType}::apis.field_type, #{fieldFormat}, #{examples}, #{hash})
              ON CONFLICT (project_id, field_hash, field_format)
              DO UPDATE SET field_type = EXCLUDED.field_type, hash = EXCLUDED.hash,
                 examples = ARRAY(SELECT DISTINCT e FROM unnest(apis.formats.examples || excluded.examples) AS e ORDER BY e LIMIT 20) |]

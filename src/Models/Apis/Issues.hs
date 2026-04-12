@@ -342,7 +342,7 @@ INSERT INTO apis.issues (
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version, seq_num
-) VALUES (#{iId}, #{iCreated}, #{iUpdated}, #{iPid}, #{iType}, #{iTgt}, #{iPHash}, #{iFrame}, #{iEHash},
+) VALUES (#{iId}, #{iCreated}, #{iUpdated}, #{iPid}, #{iType}::apis.issue_type, #{iTgt}, #{iPHash}, #{iFrame}, #{iEHash},
   #{iAckAt}, #{iAckBy}, #{iArchAt}, #{iTitle}, #{iSvc}, #{iEnv}, #{iCrit}, #{iSev},
   #{iAction}, #{iComplex}, #{iData}, #{iReqP}, #{iResP}, #{iLlmAt}, #{iLlmVer}, #{iSeq})
 ON CONFLICT (project_id, target_hash, issue_type)
