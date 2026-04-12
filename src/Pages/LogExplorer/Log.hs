@@ -837,7 +837,15 @@ instance AE.ToJSON LogsGet where
     let total = V.foldl' (\acc p -> acc + p.count) 0 patterns
         patternToSummary pat
           | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
-          | otherwise = AE.toJSON (words pat)
+          | otherwise = AE.toJSON (splitSummaryElements pat)
+        -- Group words into summary elements: each word containing ⇒ starts a new
+        -- element; subsequent plain words are part of the preceding element's value.
+        splitSummaryElements :: Text -> [Text]
+        splitSummaryElements = map (T.unwords . reverse) . reverse . foldl' go [] . T.words
+          where
+            go [] w = [[w]]
+            go acc w | "⇒" `T.isInfixOf` w = [w] : acc
+            go (cur : rest) w = (w : cur) : rest
         cols = ["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text]
         allCols = cols ++ ["merged_count"] :: [Text]
         rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount]) patterns
