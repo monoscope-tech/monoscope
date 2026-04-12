@@ -23,13 +23,11 @@ import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Data.Effectful.Hasql qualified as Hasql
+import Hasql.Interpolate qualified as HI
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
-import Effectful.Labeled (labeled)
 import Effectful.Log qualified as ELog
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Lucid
@@ -575,7 +573,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   unless isJsonReq do
     unless (V.elem "explored_logs" project.onboardingStepsCompleted)
       $ void
-      $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = ? AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |] (Only pid)
+      $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'explored_logs') WHERE id = #{pid} AND NOT ('explored_logs' = ANY(onboarding_steps_completed)) |]
     unless (isJust queryLibItemTitle) $ Projects.queryLibInsert Projects.QLTHistory pid sess.persistentSession.userId queryText queryAST Nothing
 
   when (layoutM == Just "SaveQuery") do
@@ -608,10 +606,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   -- Skip table load on initial page load unless it's a JSON request
   let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true"
-      fetchLogs =
-        if authCtx.env.enableTimefusionReads
-          then labeled @"timefusion" @PG.WithConnection $ LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
-          else LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+      fetchLogs = Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads $
+        LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
   let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"

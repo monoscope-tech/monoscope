@@ -20,17 +20,11 @@ module Models.Apis.PatternMerge (
 )
 where
 
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Lazy qualified as Map
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_selectWhere)
-import Database.PostgreSQL.Entity.Types (field)
-import Database.PostgreSQL.Simple (Only (..), Query)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.ToRow (ToRow)
-import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful (Eff)
-import Effectful.PostgreSQL qualified as PG
+import Hasql.Interpolate qualified as HI
 import Models.Apis.ErrorPatterns (ErrorPattern, ErrorPatternId (..))
 import Models.Apis.LogPatterns (LogPattern, LogPatternId)
 import Models.Projects.Projects qualified as Projects
@@ -40,145 +34,140 @@ import Relude hiding (id)
 import System.Types (DB)
 
 
--- Generic helpers for shared patterns across error_patterns and log_patterns
-
-updateEmbeddings :: (DB es, ToRow params) => Query -> ([(id, [Float])] -> params) -> [(id, [Float])] -> Eff es Int64
-updateEmbeddings _ _ [] = pure 0
-updateEmbeddings q mkParams pairs = PG.execute q (mkParams pairs)
-
-
-assignToCanonical :: (DB es, ToField id) => Query -> [(id, id)] -> Eff es Int64
-assignToCanonical _ [] = pure 0
-assignToCanonical q pairs = PG.execute q (V.fromList pids, V.fromList cids) where (pids, cids) = unzip pairs
-
-
-unmergePattern :: (DB es, ToField id) => Query -> id -> Eff es Int64
-unmergePattern q pid = PG.execute q (Only pid)
-
-
 -- Error pattern operations
 
 getUnembeddedErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, Text, Text)]
 getUnembeddedErrorPatterns pid =
-  PG.query
-    [sql| SELECT id, error_type, message FROM apis.error_patterns
-        WHERE project_id = ? AND embedding IS NULL AND merge_override = FALSE
+  Hasql.interp
+    [HI.sql| SELECT id, error_type, message FROM apis.error_patterns
+        WHERE project_id = #{pid} AND embedding IS NULL AND merge_override = FALSE
         LIMIT 500 |]
-    (Only pid)
 
 
 updateErrorEmbeddings :: DB es => [(ErrorPatternId, [Float])] -> Eff es Int64
-updateErrorEmbeddings =
-  updateEmbeddings
-    [sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
-        FROM ROWS FROM (unnest(?::uuid[]), unnest(?::text[])) AS u(id, emb)
+updateErrorEmbeddings [] = pure 0
+updateErrorEmbeddings pairs = do
+  let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
+      vIds = V.fromList ids
+      vEmbs = V.fromList embs
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
+        FROM ROWS FROM (unnest(#{vIds}::uuid[]), unnest(#{vEmbs}::text[])) AS u(id, emb)
         WHERE apis.error_patterns.id = u.id |]
-    (\pairs -> let (ids, embs) = unzip $ map (second showPGFloatArray) pairs in (V.fromList ids, V.fromList embs))
 
 
 getCanonicalErrorPatterns :: DB es => Projects.ProjectId -> Eff es [(ErrorPatternId, [Float])]
 getCanonicalErrorPatterns pid =
-  map (\(eid, PGArray e) -> (eid, e))
-    <$> PG.query
-      [sql| SELECT id, embedding FROM apis.error_patterns
-        WHERE project_id = ? AND canonical_id IS NULL
+  map (second V.toList)
+    <$> Hasql.interp
+      [HI.sql| SELECT id, embedding FROM apis.error_patterns
+        WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
-      (Only pid)
 
 
 assignErrorsToCanonical :: DB es => [(ErrorPatternId, ErrorPatternId)] -> Eff es Int64
-assignErrorsToCanonical =
-  assignToCanonical
-    [sql| UPDATE apis.error_patterns SET canonical_id = u.canonical
-        FROM (SELECT unnest(?::uuid[]) AS id, unnest(?::uuid[]) AS canonical) u
+assignErrorsToCanonical [] = pure 0
+assignErrorsToCanonical pairs = do
+  let (pids, cids) = unzip pairs
+      vPids = V.fromList pids
+      vCids = V.fromList cids
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_patterns SET canonical_id = u.canonical
+        FROM (SELECT unnest(#{vPids}::uuid[]) AS id, unnest(#{vCids}::uuid[]) AS canonical) u
         WHERE apis.error_patterns.id = u.id |]
 
 
 setCanonicalId :: DB es => ErrorPatternId -> ErrorPatternId -> Eff es Int64
 setCanonicalId patternId canonicalId =
-  PG.execute [sql| UPDATE apis.error_patterns SET canonical_id = ? WHERE id = ? AND merge_override = FALSE |] (canonicalId, patternId)
+  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET canonical_id = #{canonicalId} WHERE id = #{patternId} AND merge_override = FALSE |]
 
 
 unmergeErrorPattern :: DB es => ErrorPatternId -> Eff es Int64
-unmergeErrorPattern =
-  unmergePattern
-    [sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = ? |]
+unmergeErrorPattern pid =
+  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{pid} |]
 
 
 getErrorPatternGroupMembers :: DB es => ErrorPatternId -> Eff es [ErrorPattern]
 getErrorPatternGroupMembers eid =
-  PG.query (_selectWhere @ErrorPattern [[field| canonical_id |]] <> " ORDER BY updated_at DESC") (Only eid)
+  Hasql.interp [HI.sql| SELECT * FROM apis.error_patterns WHERE canonical_id = #{eid} ORDER BY updated_at DESC |]
 
 
 fetchErrorTexts :: DB es => [ErrorPatternId] -> Eff es (Map ErrorPatternId Text)
 fetchErrorTexts [] = pure mempty
-fetchErrorTexts ids =
+fetchErrorTexts ids = do
+  let vIds = V.fromList ids
   Map.fromList
     . map (\(eid, et, msg) -> (eid, embeddingTextForError et msg))
-    <$> PG.query [sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
+    <$> Hasql.interp [HI.sql| SELECT id, error_type, message FROM apis.error_patterns WHERE id = ANY(#{vIds}) |]
 
 
 -- Log pattern operations
 
 getUnembeddedLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, Text)]
 getUnembeddedLogPatterns pid =
-  PG.query
-    [sql| SELECT id, log_pattern FROM apis.log_patterns
-        WHERE project_id = ? AND embedding IS NULL AND merge_override = FALSE
+  Hasql.interp
+    [HI.sql| SELECT id, log_pattern FROM apis.log_patterns
+        WHERE project_id = #{pid} AND embedding IS NULL AND merge_override = FALSE
         LIMIT 500 |]
-    (Only pid)
 
 
 updateLogEmbeddings :: DB es => [(LogPatternId, [Float])] -> Eff es Int64
-updateLogEmbeddings =
-  updateEmbeddings
-    [sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
-        FROM ROWS FROM (unnest(?::bigint[]), unnest(?::text[])) AS u(id, emb)
+updateLogEmbeddings [] = pure 0
+updateLogEmbeddings pairs = do
+  let (ids, embs) = unzip $ map (second showPGFloatArray) pairs
+      vIds = V.fromList ids
+      vEmbs = V.fromList embs
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.log_patterns SET embedding = u.emb::float4[], embedding_at = NOW()
+        FROM ROWS FROM (unnest(#{vIds}::bigint[]), unnest(#{vEmbs}::text[])) AS u(id, emb)
         WHERE apis.log_patterns.id = u.id |]
-    (\pairs -> let (ids, embs) = unzip $ map (second showPGFloatArray) pairs in (V.fromList ids, V.fromList embs))
 
 
 getCanonicalLogPatterns :: DB es => Projects.ProjectId -> Eff es [(LogPatternId, [Float])]
 getCanonicalLogPatterns pid =
-  map (\(lid, PGArray e) -> (lid, e))
-    <$> PG.query
-      [sql| SELECT id, embedding FROM apis.log_patterns
-        WHERE project_id = ? AND canonical_id IS NULL
+  map (second V.toList)
+    <$> Hasql.interp
+      [HI.sql| SELECT id, embedding FROM apis.log_patterns
+        WHERE project_id = #{pid} AND canonical_id IS NULL
           AND embedding IS NOT NULL AND merge_override = FALSE
         LIMIT 10000 |]
-      (Only pid)
 
 
 assignLogsToCanonical :: DB es => [(LogPatternId, LogPatternId)] -> Eff es Int64
-assignLogsToCanonical =
-  assignToCanonical
-    [sql| UPDATE apis.log_patterns SET canonical_id = u.canonical
-        FROM (SELECT unnest(?::bigint[]) AS id, unnest(?::bigint[]) AS canonical) u
+assignLogsToCanonical [] = pure 0
+assignLogsToCanonical pairs = do
+  let (pids, cids) = unzip pairs
+      vPids = V.fromList pids
+      vCids = V.fromList cids
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.log_patterns SET canonical_id = u.canonical
+        FROM (SELECT unnest(#{vPids}::bigint[]) AS id, unnest(#{vCids}::bigint[]) AS canonical) u
         WHERE apis.log_patterns.id = u.id |]
 
 
 unmergeLogPattern :: DB es => LogPatternId -> Eff es Int64
-unmergeLogPattern =
-  unmergePattern
-    [sql| UPDATE apis.log_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = ? |]
+unmergeLogPattern lid =
+  Hasql.interpExecute [HI.sql| UPDATE apis.log_patterns SET merge_override = TRUE, canonical_id = NULL WHERE id = #{lid} |]
 
 
 getLogPatternGroupMembers :: DB es => LogPatternId -> Eff es [LogPattern]
 getLogPatternGroupMembers lid =
-  PG.query (_selectWhere @LogPattern [[field| canonical_id |]] <> " ORDER BY last_seen_at DESC") (Only lid)
+  Hasql.interp [HI.sql| SELECT * FROM apis.log_patterns WHERE canonical_id = #{lid} ORDER BY last_seen_at DESC |]
 
 
 fetchLogTexts :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogTexts [] = pure mempty
-fetchLogTexts ids =
+fetchLogTexts ids = do
+  let vIds = V.fromList ids
   Map.fromList
-    <$> PG.query [sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
+    <$> Hasql.interp [HI.sql| SELECT id, log_pattern FROM apis.log_patterns WHERE id = ANY(#{vIds}) |]
 
 
 fetchLogSamples :: DB es => [LogPatternId] -> Eff es (Map LogPatternId Text)
 fetchLogSamples [] = pure mempty
-fetchLogSamples ids =
+fetchLogSamples ids = do
+  let vIds = V.fromList ids
   Map.fromList
     . mapMaybe (\(pid, mSample) -> (pid,) <$> mSample)
-    <$> PG.query [sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(?) |] (Only $ PGArray ids)
+    <$> Hasql.interp [HI.sql| SELECT id, sample_message FROM apis.log_patterns WHERE id = ANY(#{vIds}) |]

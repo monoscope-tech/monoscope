@@ -117,7 +117,8 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
-import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool, runConnectionPool)
+import Hasql.Pool qualified as HPool
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
@@ -426,13 +427,13 @@ ensureTemplateDatabase connInfo templateDbName = do
 
 -- | `testSessionHeader` would log a user in and automatically generate a session header
 -- which can be reused in subsequent tests
-testSessionHeader :: MonadIO m => Pool Connection -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
-testSessionHeader pool = do
+testSessionHeader :: MonadIO m => Pool Connection -> HPool.Pool -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
+testSessionHeader pool hpool = do
   pSessId <-
     Auth.authorizeUserAndPersist Nothing "firstName" "lastName" "https://placehold.it/500x500" "test@monoscope.tech"
       & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 100])
       & runHTTPGolden "./tests/golden/"
-      & runConnectionPool pool
+      & runHasqlPool hpool
       & runTime
       & runEff
       & liftIO
@@ -476,19 +477,19 @@ testSessionHeader pool = do
 
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" Nothing False)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" True "light" Nothing False)
     & liftIO
     <&> fromRightShow
 
 
 -- | Refresh a session to pick up any new projects added to the user
-refreshSession :: MonadIO m => Pool Connection -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
-refreshSession pool sessionHeaders = do
+refreshSession :: MonadIO m => Pool Connection -> HPool.Pool -> Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session -> m (Servant.Headers '[Servant.Header "Set-Cookie" SetCookie] Projects.Session)
+refreshSession pool hpool sessionHeaders = do
   let session = Servant.getResponse sessionHeaders
       pSessId = session.sessionId
   tp <- liftIO getGlobalTracerProvider
   logger <- liftIO $ Log.mkLogger "test" (const pass)
-  runTestEffect pool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme Nothing False)
+  runTestEffect pool hpool logger tp (Auth.sessionByID (Just pSessId) "requestID" session.isSidebarClosed session.theme Nothing False)
     & liftIO
     <&> fromRightShow
 
@@ -517,8 +518,6 @@ runTestBackgroundWithNotifications t logger appCtx process = do
     process
       & Data.Effectful.Notify.runNotifyTest notifRef
       & Effectful.Reader.Static.runReader appCtx
-      & runConnectionPool appCtx.pool
-      & runLabeled @"timefusion" (runConnectionPool appCtx.timefusionPgPool)
       & runHasqlPool appCtx.hasqlPool
       & runLabeled @"timefusion" (runHasqlPool appCtx.hasqlTimefusionPool)
       & runFrozenTime t
@@ -560,12 +559,12 @@ runTestBackgroundWithLogger t logger appCtx process = do
 
 
 -- | Run an effect action in test context (for non-servant handlers like Auth.sessionByID)
-runTestEffect :: Pool Connection -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
-runTestEffect pool logger tp action = do
+runTestEffect :: Pool Connection -> HPool.Pool -> Log.Logger -> TracerProvider -> (forall es. (DB es, Error ServantS.ServerError :> es, HTTP :> es, Log :> es, Time :> es, Tracing :> es, UUIDEff :> es) => Eff es a) -> IO (Either ServantS.ServerError a)
+runTestEffect pool hpool logger tp action = do
   logLevel <- Logging.getLogLevelFromEnv
   action
     & runErrorNoCallStack @ServantS.ServerError
-    & runConnectionPool pool
+    & runHasqlPool hpool
     & runTime
     & Logging.runLog "test" logger logLevel
     & Tracing.runTracing tp
@@ -596,12 +595,12 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   projectCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   projectKeyCache <- newCache (Just $ TimeSpec (60 * 60) 0)
   logsPatternCache <- newCache (Just $ TimeSpec (30 * 60) 0) -- Cache for log patterns, 30 minutes TTL
-  sessAndHeader <- testSessionHeader pool
   tp <- getGlobalTracerProvider
   -- Parallel hasql pools sharing the same test DB
   hasqlMain <- mkHasqlPool 5 cstr
   hasqlJobs <- mkHasqlPool 5 cstr
   hasqlTf <- mkHasqlPool 5 cstr
+  sessAndHeader <- testSessionHeader pool hasqlMain
 
   -- Load .env file for tests (to get OPENAI_API_KEY and other non-database configs)
   _ <- Safe.try (Dotenv.loadFile Dotenv.defaultConfig) :: IO (Either SomeException ())
@@ -718,7 +717,7 @@ runQueryEffect TestResources{..} action = do
   action
     & runErrorNoCallStack @ServantS.ServerError
     & Effectful.Reader.Static.runReader trATCtx
-    & runConnectionPool trATCtx.pool
+    & runHasqlPool trATCtx.hasqlPool
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
     & runEff
     <&> fromRightShow

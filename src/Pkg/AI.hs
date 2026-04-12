@@ -855,7 +855,7 @@ executeRunQuery config args = case getTextArg "query" args of
   _ -> pure $ ToolResult (toolError "run_query" "missing 'query'" args) Nothing
 
 
-executeSqlQuery :: DB es => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
+executeSqlQuery :: (DB es) => AgenticConfig -> Map.Map Text AE.Value -> Eff es Text
 executeSqlQuery config args = case getTextArg "query" args of
   Just query -> do
     let lim = getLimitArg "limit" config.limits.maxQueryResults config.limits.maxDisplayRows args

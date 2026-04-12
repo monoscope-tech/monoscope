@@ -615,6 +615,8 @@ test-suite integration-tests
     , effectful-postgresql
     , generic-lens
     , grapesy
+    , hasql-interpolate
+    , hasql-pool
     , hs-opentelemetry-instrumentation-auto
     , hspec
     , http-client

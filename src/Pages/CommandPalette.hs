@@ -1,11 +1,10 @@
 module Pages.CommandPalette (paletteShell_, commandPaletteItemsH, commandPaletteRecentPostH, RecentForm (..)) where
 
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.UUID (UUID)
-import Database.PostgreSQL.Simple (FromRow, Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Effectful (Eff)
-import Effectful.PostgreSQL qualified as PG
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -20,17 +19,17 @@ import Web.FormUrlEncoded (FromForm)
 
 data PaletteIssue = PaletteIssue {id :: UUID, title :: Text, seqNum :: Int}
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 data PaletteItem = PaletteItem {id :: UUID, title :: Text}
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 data PaletteRecent = PaletteRecent {itemType :: Text, label :: Text, url :: Text}
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
+  deriving anyclass (HI.DecodeRow)
 
 
 data RecentForm = RecentForm {label :: Text, url :: Text, itemType :: Text}
@@ -60,50 +59,45 @@ commandPaletteRecentPostH pid form = do
 fetchPaletteData :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es ([PaletteRecent], [PaletteIssue], [PaletteItem], [PaletteItem])
 fetchPaletteData pid userId = do
   recents <-
-    PG.query
-      [sql|
+    Hasql.interp
+      [HI.sql|
     SELECT item_type, label, url FROM apis.command_palette_recents
-    WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 10 |]
-      (pid, userId)
+    WHERE project_id = #{pid} AND user_id = #{userId} ORDER BY created_at DESC LIMIT 10 |]
   issues <-
-    PG.query
-      [sql|
+    Hasql.interp
+      [HI.sql|
     SELECT id, title, seq_num FROM apis.issues
-    WHERE project_id = ? AND archived_at IS NULL ORDER BY created_at DESC LIMIT 50 |]
-      (Only pid)
+    WHERE project_id = #{pid} AND archived_at IS NULL ORDER BY created_at DESC LIMIT 50 |]
   monitors <-
-    PG.query
-      [sql|
+    Hasql.interp
+      [HI.sql|
     SELECT id, alert_config->>'title' as title FROM monitors.query_monitors
-    WHERE project_id = ? AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 50 |]
-      (Only pid)
+    WHERE project_id = #{pid} AND deleted_at IS NULL ORDER BY created_at DESC LIMIT 50 |]
   dashboards <-
-    PG.query
-      [sql|
+    Hasql.interp
+      [HI.sql|
     SELECT id, title FROM projects.dashboards
-    WHERE project_id = ? ORDER BY title |]
-      (Only pid)
+    WHERE project_id = #{pid} ORDER BY title |]
   pure (recents, issues, monitors, dashboards)
 
 
 recordRecent :: DB es => Projects.ProjectId -> Projects.UserId -> RecentForm -> Eff es ()
 recordRecent pid userId form = do
+  let (fType, fLabel, fUrl) = (form.itemType, form.label, form.url)
   void
-    $ PG.execute
-      [sql|
+    $ Hasql.interpExecute
+      [HI.sql|
     INSERT INTO apis.command_palette_recents (project_id, user_id, item_type, label, url)
-    VALUES (?, ?, ?, ?, ?)
+    VALUES (#{pid}, #{userId}, #{fType}, #{fLabel}, #{fUrl})
     ON CONFLICT (project_id, user_id, url) DO UPDATE SET created_at = now(), label = EXCLUDED.label |]
-      (pid, userId, form.itemType, form.label, form.url)
   void
-    $ PG.execute
-      [sql|
+    $ Hasql.interpExecute
+      [HI.sql|
     DELETE FROM apis.command_palette_recents
-    WHERE project_id = ? AND user_id = ? AND id = ANY(
+    WHERE project_id = #{pid} AND user_id = #{userId} AND id = ANY(
       SELECT id FROM apis.command_palette_recents
-      WHERE project_id = ? AND user_id = ? ORDER BY created_at DESC OFFSET 20
+      WHERE project_id = #{pid} AND user_id = #{userId} ORDER BY created_at DESC OFFSET 20
     ) |]
-      (pid, userId, pid, userId)
 
 
 -- Rendering

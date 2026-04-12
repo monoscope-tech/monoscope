@@ -36,10 +36,9 @@ import Data.Time (UTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ qualified as SqlQQ
+import Data.Effectful.Hasql qualified as Hasql
+import Hasql.Interpolate qualified as HI
 import Effectful.Concurrent.Async (concurrently)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
@@ -220,7 +219,7 @@ alertUpsertPostH pid form = do
   _ <- Monitors.queryMonitorUpsert queryMonitor
   when (isNothing alertId)
     $ void
-    $ PG.execute [SqlQQ.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'created_monitor') WHERE id = ? AND NOT ('created_monitor' = ANY(onboarding_steps_completed)) |] (Only pid)
+    $ Hasql.interpExecute [HI.sql| UPDATE projects.projects SET onboarding_steps_completed = array_append(onboarding_steps_completed, 'created_monitor') WHERE id = #{pid} AND NOT ('created_monitor' = ANY(onboarding_steps_completed)) |]
   addSuccessToast "Monitor was updated successfully" Nothing
   addRespHeaders $ AlertNoContent ""
 

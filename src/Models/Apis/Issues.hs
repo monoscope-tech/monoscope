@@ -96,6 +96,7 @@ module Models.Apis.Issues (
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
 import Data.Default (Default)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Hashable (hash)
 import Data.Text qualified as T
@@ -104,27 +105,25 @@ import Data.Time (UTCTime)
 import Data.Time.LocalTime (ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID.V5 qualified as UUID5
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_insert, _selectWhere)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.Types (PGArray (..), Query (Query), fromPGArray)
+import Database.PostgreSQL.Simple.Types (PGArray (..), fromPGArray)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Models.Apis.Anomalies (PayloadChange)
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText, rawSql)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Types (DB)
@@ -147,7 +146,7 @@ data IssueType
   | LogPatternRateChange
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "" IssueType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "" IssueType
 
 
 -- | Hash prefix used in otel_logs_and_spans hashes column
@@ -252,18 +251,17 @@ data Issue = Issue
   , updatedAt :: ZonedTime
   , projectId :: Projects.ProjectId
   , issueType :: IssueType
-  , targetHash :: Text -- Must stay non-null: used in ON CONFLICT unique index for dedup
-  , parentHash :: Maybe Text -- Broad (span-agnostic) hash for cross-route rollup. Nothing for non-error issue types.
-  , isFramework :: Bool -- True for framework/transport errors rolled up under parent hash
-  , endpointHash :: Text -- Deprecated: always == targetHash (set by mkIssue). Drop column once selectIssues/selectIssueByHash are migrated.
+  , endpointHash :: Text
   , acknowledgedAt :: Maybe ZonedTime
   , acknowledgedBy :: Maybe Projects.UserId
   , archivedAt :: Maybe ZonedTime
   , title :: Text
   , service :: Maybe Text
-  , environment :: Maybe Text
   , critical :: Bool
   , severity :: Text -- "critical", "warning", "info"
+  , affectedRequests :: Int
+  , affectedClients :: Int
+  , errorRate :: Maybe Double
   , recommendedAction :: Text
   , migrationComplexity :: Text -- "low", "medium", "high", "n/a"
   , issueData :: Aeson AE.Value
@@ -271,10 +269,14 @@ data Issue = Issue
   , responsePayloads :: Aeson [PayloadChange]
   , llmEnhancedAt :: Maybe UTCTime
   , llmEnhancementVersion :: Maybe Int
+  , targetHash :: Text
+  , environment :: Maybe Text
   , seqNum :: Int
+  , parentHash :: Maybe Text
+  , isFramework :: Bool
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, HI.EncodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "issues", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Issue)
 
 
@@ -317,17 +319,21 @@ data IssueL = IssueL
   , activityBuckets :: PGArray Int
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
 -- | Insert a single issue
 -- ON CONFLICT dedup applies to all issue types on (project_id, target_hash, issue_type)
 -- but only for open issues (not acknowledged/archived). Preserves occurrence_count and first_seen.
 insertIssue :: DB es => Issue -> Eff es ()
-insertIssue issue = void $ PG.execute q issue
-  where
-    q =
-      [sql|
+insertIssue (i :: Issue) = do
+  let (iId, iCreated, iUpdated, iPid, iType, iTgt, iPHash, iFrame, iEHash) =
+        (i.id, i.createdAt, i.updatedAt, i.projectId, i.issueType, i.targetHash, i.parentHash, i.isFramework, i.endpointHash)
+      (iAckAt, iAckBy, iArchAt, iTitle, iSvc, iEnv, iCrit, iSev) =
+        (i.acknowledgedAt, i.acknowledgedBy, i.archivedAt, i.title, i.service, i.environment, i.critical, i.severity)
+      (iAction, iComplex, iData, iReqP, iResP, iLlmAt, iLlmVer, iSeq) =
+        (i.recommendedAction, i.migrationComplexity, i.issueData, i.requestPayloads, i.responsePayloads, i.llmEnhancedAt, i.llmEnhancementVersion, i.seqNum)
+  Hasql.interpExecute_ [HI.sql|
 INSERT INTO apis.issues (
   id, created_at, updated_at, project_id, issue_type, target_hash, parent_hash, is_framework, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
@@ -335,7 +341,9 @@ INSERT INTO apis.issues (
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
   llm_enhanced_at, llm_enhancement_version, seq_num
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (#{iId}, #{iCreated}, #{iUpdated}, #{iPid}, #{iType}, #{iTgt}, #{iPHash}, #{iFrame}, #{iEHash},
+  #{iAckAt}, #{iAckBy}, #{iArchAt}, #{iTitle}, #{iSvc}, #{iEnv}, #{iCrit}, #{iSev},
+  #{iAction}, #{iComplex}, #{iData}, #{iReqP}, #{iResP}, #{iLlmAt}, #{iLlmVer}, #{iSeq})
 ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
@@ -355,53 +363,47 @@ DO UPDATE SET
 
 -- | Select issue by ID
 selectIssueById :: DB es => IssueId -> Eff es (Maybe Issue)
-selectIssueById iid = listToMaybe <$> PG.query (_selectWhere @Issue [[field| id |]]) (Only iid)
+selectIssueById iid = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE id = #{iid} |]
 
 
 selectIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectIssueByHash pid targetHash = listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| target_hash |]]) (pid, targetHash)
+selectIssueByHash pid tgtHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} |]
 
 
 -- | Find most recent RuntimeException issue for a given hash (including acknowledged/archived)
 selectLatestIssueByHash :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-selectLatestIssueByHash pid targetHash =
-  listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| target_hash |], [field| issue_type |]] <> " ORDER BY created_at DESC LIMIT 1") (pid, targetHash, RuntimeException)
+selectLatestIssueByHash pid tgtHash =
+  Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND target_hash = #{tgtHash} AND issue_type = #{RuntimeException}::apis.issue_type ORDER BY created_at DESC LIMIT 1 |]
 
 
 -- | Reopen a previously acknowledged/archived issue (clear ack/archive, bump occurrence count)
 reopenIssue :: (DB es, Time :> es) => IssueId -> Eff es ()
 reopenIssue issueId = do
   now <- Time.currentTime
-  void
-    $ PG.execute
-      [sql| UPDATE apis.issues SET
-            acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL, updated_at = ?,
+  Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET
+            acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL, updated_at = #{now},
             issue_data = issue_data || jsonb_build_object('occurrence_count',
               COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
-          WHERE id = ? |]
-      (now, issueId)
+          WHERE id = #{issueId} |]
 
 
 -- | Bump updated_at and occurrence count without clearing ack/archive (for already-open issues)
 bumpIssueUpdatedAt :: (DB es, Time :> es) => IssueId -> Eff es ()
 bumpIssueUpdatedAt issueId = do
   now <- Time.currentTime
-  void
-    $ PG.execute
-      [sql| UPDATE apis.issues SET updated_at = ?,
+  Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET updated_at = #{now},
             issue_data = issue_data || jsonb_build_object('occurrence_count',
               COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
-          WHERE id = ? |]
-      (now, issueId)
+          WHERE id = #{issueId} |]
 
 
 -- | Select issues with filters, returns issues and total count for pagination
 -- period: "24h" = 24 hourly buckets, "7d" = 7 daily buckets (default)
 selectIssues :: DB es => Projects.ProjectId -> Maybe IssueType -> Maybe Bool -> Maybe Bool -> Int -> Int -> Maybe (UTCTime, UTCTime) -> Maybe Text -> Text -> [Text] -> [Text] -> Eff es ([IssueL], Int)
 selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM period serviceFilters typeFilters = do
-  issues <- PG.query (Query $ encodeUtf8 q) (pid, limit, offset)
-  countResult <- coerce @(Maybe (Only Int)) @(Maybe Int) . listToMaybe <$> PG.query (Query $ encodeUtf8 countQ) (Only pid)
-  pure (issues, fromMaybe 0 countResult)
+  issues <- Hasql.interp $ rawSql q <> [HI.sql| LIMIT #{limit} OFFSET #{offset}|]
+  countResult <- fromMaybe 0 <$> Hasql.interpOne (rawSql countQ)
+  pure (issues, countResult)
   where
     mkFilters pfx =
       let timeF = maybe "" (\(st, end) -> " AND " <> pfx <> "created_at >= '" <> formatUTC st <> "' AND " <> pfx <> "created_at <= '" <> formatUTC end <> "'") timeRangeM
@@ -431,6 +433,7 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
     (seriesStart, seriesStep, bucketSize) = case period of
       "24h" -> ("NOW() - INTERVAL '23 hours'" :: Text, "'1 hour'" :: Text, "INTERVAL '1 hour'" :: Text)
       _ -> ("CURRENT_DATE - INTERVAL '6 days'", "'1 day'", "INTERVAL '1 day'")
+    pidTxt = pid.toText
     q =
       [text|
       SELECT i.id, i.created_at, i.updated_at, i.project_id, i.issue_type::text, i.parent_hash, i.is_framework, i.target_hash, i.acknowledged_at, i.acknowledged_by, i.archived_at, i.title, i.service, i.critical,
@@ -476,78 +479,52 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
         WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
         ORDER BY a.created_at DESC LIMIT 1
       ) lat ON TRUE
-      WHERE i.project_id = ? $timefilter $ackF $archF $svcF $typF $orderBy LIMIT ? OFFSET ?
-    |]
-    countQ = [text|SELECT COUNT(*) FROM apis.issues WHERE project_id = ? $cTimefilter $cAckF $cArchF $cSvcF $cTypF|]
+      WHERE i.project_id = |] <> "'" <> pidTxt <> "'::uuid " <> timefilter <> " " <> ackF <> " " <> archF <> " " <> svcF <> " " <> typF <> " " <> orderBy
+    countQ = "SELECT COUNT(*)::INT FROM apis.issues WHERE project_id = '" <> pidTxt <> "'::uuid " <> cTimefilter <> " " <> cAckF <> " " <> cArchF <> " " <> cSvcF <> " " <> cTypF
 
 
 -- | Find open issue for endpoint
 findOpenIssueForEndpoint :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Issue)
-findOpenIssueForEndpoint pid targetHash =
-  listToMaybe <$> PG.query (_selectWhere @Issue [[field| project_id |], [field| issue_type |], [field| target_hash |]] <> " AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1") (pid, ApiChange, targetHash)
+findOpenIssueForEndpoint pid tgtHash =
+  Hasql.interpOne [HI.sql| SELECT * FROM apis.issues WHERE project_id = #{pid} AND issue_type = #{ApiChange}::apis.issue_type AND target_hash = #{tgtHash} AND acknowledged_at IS NULL AND archived_at IS NULL LIMIT 1 |]
 
 
 -- | Update issue with new anomaly data
 updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> APIChangeData -> Eff es ()
 updateIssueWithNewAnomaly issueId newData = do
   now <- Time.currentTime
-  void $ PG.execute q (Aeson newData, now, issueId)
-  where
-    q =
-      [sql|
-      UPDATE apis.issues
-      SET
-        issue_data = issue_data || ?::jsonb,
+  let jdata = Aeson newData
+  Hasql.interpExecute_ [HI.sql|
+      UPDATE apis.issues SET
+        issue_data = issue_data || #{jdata}::jsonb,
         affected_requests = affected_requests + 1,
-        updated_at = ?
-      WHERE id = ?
-    |]
+        updated_at = #{now}
+      WHERE id = #{issueId} |]
 
 
 updateIssueEnhancement :: (DB es, Time :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
-updateIssueEnhancement issueId title action complexity = do
+updateIssueEnhancement issueId iTitle action complexity = do
   now <- Time.currentTime
-  void $ PG.execute q (title, action, complexity, now, issueId)
-  where
-    q =
-      [sql|
-      UPDATE apis.issues
-      SET
-        title = ?,
-        recommended_action = ?,
-        migration_complexity = ?,
-        updated_at = ?
-      WHERE id = ?
-    |]
+  Hasql.interpExecute_ [HI.sql|
+      UPDATE apis.issues SET
+        title = #{iTitle}, recommended_action = #{action},
+        migration_complexity = #{complexity}, updated_at = #{now}
+      WHERE id = #{issueId} |]
 
 
 -- | Update issue criticality and severity
 updateIssueCriticality :: DB es => IssueId -> Bool -> Text -> Eff es ()
-updateIssueCriticality issueId isCritical severity = void $ PG.execute q params
-  where
-    q =
-      [sql|
-      UPDATE apis.issues
-      SET 
-        critical = ?,
-        severity = ?
-      WHERE id = ?
-    |]
-    params = (isCritical, severity, issueId)
+updateIssueCriticality issueId isCritical sev =
+  Hasql.interpExecute_ [HI.sql|
+      UPDATE apis.issues SET critical = #{isCritical}, severity = #{sev} WHERE id = #{issueId} |]
 
 
 -- | Acknowledge issue
 acknowledgeIssue :: (DB es, Time :> es) => IssueId -> Projects.UserId -> Eff es ()
 acknowledgeIssue issueId userId = do
   now <- Time.currentTime
-  void $ PG.execute q (now, userId, issueId)
-  where
-    q =
-      [sql|
-      UPDATE apis.issues
-      SET acknowledged_at = ?, acknowledged_by = ?
-      WHERE id = ?
-    |]
+  Hasql.interpExecute_ [HI.sql|
+      UPDATE apis.issues SET acknowledged_at = #{now}, acknowledged_by = #{userId} WHERE id = #{issueId} |]
 
 
 -- | Create API Change issue from anomalies
@@ -624,7 +601,7 @@ createQueryAlertIssue projectId queryId queryName queryExpr threshold actual thr
 data ConversationType = CTAnomaly | CTTrace | CTLogExplorer | CTDashboard | CTSlackThread | CTDiscordThread
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default) -- required by Default AIConversation; first constructor = CTAnomaly
-  deriving (Display, FromField, ToField) via WrappedEnumSC "CT" ConversationType
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "CT" ConversationType
 
 
 -- | AI Conversation metadata
@@ -638,7 +615,7 @@ data AIConversation = AIConversation
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, ToRow)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, ToRow)
 
 
 -- | AI Chat message
@@ -653,40 +630,35 @@ data AIChatMessage = AIChatMessage
   , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, ToRow)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, ToRow)
 
 
 -- | Get or create a conversation (race-condition safe via ON CONFLICT + RETURNING)
 getOrCreateConversation :: (DB es, Error ServerError :> es, Time :> es) => Projects.ProjectId -> UUIDId "conversation" -> ConversationType -> AE.Value -> Eff es AIConversation
 getOrCreateConversation pid convId convType ctx = do
   now <- Time.currentTime
-  result <- PG.query q (pid, convId, convType, Aeson ctx, now)
-  maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure $ listToMaybe result
-  where
-    q =
-      [sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
-              VALUES (?, ?, ?, ?) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = ?
+  let ctxJ = Aeson ctx
+  result <- Hasql.interp [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+              VALUES (#{pid}, #{convId}, #{convType}, #{ctxJ}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
+  maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure $ listToMaybe result
 
 
 -- | Insert a new chat message
 insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Text -> Text -> Maybe AE.Value -> Maybe AE.Value -> Eff es ()
-insertChatMessage pid convId role content widgetsM metadataM = void $ PG.execute q params
-  where
-    q =
-      [sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
-            VALUES (?, ?, ?, ?, ?, ?) |]
-    params = (pid, convId, role, content, Aeson <$> widgetsM, Aeson <$> metadataM)
+insertChatMessage pid convId chatRole chatContent widgetsM metadataM = do
+  let widgetsJ = Aeson <$> widgetsM
+      metaJ = Aeson <$> metadataM
+  Hasql.interpExecute_ [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
+            VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{widgetsJ}, #{metaJ}) |]
 
 
 -- | Select chat history for a conversation (oldest first)
 selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
-selectChatHistory convId = PG.query q (Only convId)
-  where
-    q =
-      [sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
+selectChatHistory convId =
+  Hasql.interp [HI.sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
             FROM apis.ai_chat_messages
-            WHERE conversation_id = ?
+            WHERE conversation_id = #{convId}
             ORDER BY created_at ASC
             LIMIT 200 |]
 
@@ -713,14 +685,17 @@ chatMigrationLockKey convId = fromIntegral @Int @Int64 $ abs $ hash $ show convI
 
 tryAcquireChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es Bool
 tryAcquireChatMigrationLock convId = do
-  result <- PG.query [sql| SELECT pg_try_advisory_lock(?) |] (Only $ chatMigrationLockKey convId)
-  pure $ fromMaybe False $ viaNonEmpty head result >>= \(Only acquired) -> Just acquired
+  let lockKey = chatMigrationLockKey convId
+  result :: [Bool] <- Hasql.interp [HI.sql| SELECT pg_try_advisory_lock(#{lockKey}) |]
+  pure $ fromMaybe False $ viaNonEmpty head result
 
 
 -- | Release a chat migration advisory lock so that a failed migration can be retried
 -- on a subsequent event instead of being silently blocked for the connection's lifetime.
 releaseChatMigrationLock :: DB es => UUIDId "conversation" -> Eff es ()
-releaseChatMigrationLock convId = void $ PG.execute [sql| SELECT pg_advisory_unlock(?) |] (Only $ chatMigrationLockKey convId)
+releaseChatMigrationLock convId = do
+  let lockKey = chatMigrationLockKey convId
+  Hasql.interpExecute_ [HI.sql| SELECT pg_advisory_unlock(#{lockKey}) |]
 
 
 -- | Create an issue for a log pattern rate change
@@ -903,6 +878,9 @@ mkIssue opts = do
       , severity = opts.severity
       , recommendedAction = opts.recommendedAction
       , migrationComplexity = opts.migrationComplexity
+      , affectedRequests = 0
+      , affectedClients = 0
+      , errorRate = Nothing
       , issueData = Aeson $ AE.toJSON opts.issueData
       , requestPayloads = Aeson []
       , responsePayloads = Aeson []
@@ -929,7 +907,7 @@ data IssueEvent
   | IEEscalated
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, ToField) via WrappedEnumSC "IE" IssueEvent
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "IE" IssueEvent
 
 
 data IssueActivity = IssueActivity
@@ -941,27 +919,23 @@ data IssueActivity = IssueActivity
   , createdAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
 logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projects.UserId -> Maybe AE.Value -> Eff es ()
 logIssueActivity issueId event createdBy metadataM = do
   now <- Time.currentTime
-  void
-    $ PG.execute
-      [sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at) VALUES (?, ?, ?, ?, ?) |]
-      (issueId, event, createdBy, Aeson <$> metadataM, now)
+  let metaJ = Aeson <$> metadataM
+  Hasql.interpExecute_ [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at) VALUES (#{issueId}, #{event}, #{createdBy}, #{metaJ}, #{now}) |]
 
 
 selectIssueActivity :: DB es => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId =
-  PG.query
-    [sql| SELECT a.id, a.issue_id, a.event, a.created_by, a.metadata, a.created_at
+  Hasql.interp [HI.sql| SELECT a.id, a.issue_id, a.event, a.created_by, a.metadata, a.created_at
         FROM apis.issue_activity_log a
         JOIN apis.issues i ON i.id = a.issue_id
-        WHERE a.issue_id = ? AND i.project_id = ?
+        WHERE a.issue_id = #{issueId} AND i.project_id = #{pid}
         ORDER BY a.created_at DESC LIMIT 200 |]
-    (issueId, pid)
 
 
 -- Reports
@@ -980,7 +954,7 @@ data Report = Report
   , endTime :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, HI.EncodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Report)
 
 
@@ -991,24 +965,30 @@ data ReportListItem = ReportListItem
   , reportType :: Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "reports", PrimaryKey "id", FieldModifiers '[CamelToSnake]] ReportListItem)
 
 
 addReport :: DB es => Report -> Eff es ()
-addReport report = void $ PG.execute (_insert @Report) report
+addReport (r :: Report) = do
+  let (rId, rCreated, rUpdated, rPid, rType, rJson, rStart, rEnd) =
+        (r.id, r.createdAt, r.updatedAt, r.projectId, r.reportType, r.reportJson, r.startTime, r.endTime)
+  Hasql.interpExecute_ [HI.sql| INSERT INTO apis.reports (id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time)
+      VALUES (#{rId}, #{rCreated}, #{rUpdated}, #{rPid}, #{rType}, #{rJson}, #{rStart}, #{rEnd}) |]
 
 
 getReportById :: DB es => ReportId -> Eff es (Maybe Report)
-getReportById id' = listToMaybe <$> PG.query (_selectWhere @Report [[field| id |]]) (Only id')
+getReportById rid = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE id = #{rid} |]
 
 
 reportHistoryByProject :: DB es => Projects.ProjectId -> Int -> Eff es [ReportListItem]
-reportHistoryByProject pid page = PG.query (_selectWhere @ReportListItem [[field| project_id |]] <> " ORDER BY created_at DESC LIMIT 20 OFFSET ?") (pid, page * 20)
+reportHistoryByProject pid page = do
+  let off = page * 20
+  Hasql.interp [HI.sql| SELECT id, created_at, project_id, report_type FROM apis.reports WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20 OFFSET #{off} |]
 
 
 getLatestReportByType :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe Report)
-getLatestReportByType pid reportType = listToMaybe <$> PG.query (_selectWhere @Report [[field| project_id |], [field| report_type |]] <> " ORDER BY created_at DESC LIMIT 1") (pid, reportType)
+getLatestReportByType pid rType = Hasql.interpOne [HI.sql| SELECT * FROM apis.reports WHERE project_id = #{pid} AND report_type = #{rType} ORDER BY created_at DESC LIMIT 1 |]
 
 
 createErrorSpikeIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> ErrorPatterns.ErrorPatternWithCurrentRate -> Double -> Double -> Double -> Eff es Issue

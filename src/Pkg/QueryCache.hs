@@ -21,10 +21,9 @@ import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (Only (..))
+import Data.Effectful.Hasql qualified as Hasql
 import Effectful (Eff, type (:>))
-import Effectful.PostgreSQL qualified as PG
+import Hasql.Interpolate qualified as HI
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
@@ -144,16 +143,16 @@ rowTimestamp = join . V.headM
 
 -- | Look up cache entry and determine cache result
 lookupCache :: DB es => CacheKey -> (UTCTime, UTCTime) -> Eff es CacheResult
-lookupCache key (reqFrom, reqTo) =
-  PG.query
-    [sql|
+lookupCache key (reqFrom, reqTo) = do
+  let (kPid, kSrc, kHash, kBin) = (key.projectId, key.source, key.queryHash, key.binInterval)
+  Hasql.interp
+    [HI.sql|
       SELECT project_id, source, query_hash, bin_interval, original_query,
              cached_from, cached_to, cached_data, hit_count
       FROM query_cache
-      WHERE project_id = ? AND source = ? AND query_hash = ? AND bin_interval = ?
+      WHERE project_id = #{kPid} AND source = #{kSrc} AND query_hash = #{kHash} AND bin_interval = #{kBin}
       LIMIT 1
     |]
-    (key.projectId, key.source, key.queryHash, key.binInterval)
     <&> \case
       [] -> CacheMiss
       ((pid, src, qh, bi, oq, cf, ct, AesonText cd, hc) : _) ->
@@ -171,12 +170,13 @@ lookupCache key (reqFrom, reqTo) =
 updateCache :: (DB es, Time :> es) => CacheKey -> (UTCTime, UTCTime) -> MetricsData -> Text -> Eff es ()
 updateCache key (fromTime, toTime) metricsData originalQuery = do
   now <- Time.currentTime
-  void
-    $ PG.execute
-      [sql|
+  let (kPid, kSrc, kHash, kBin) = (key.projectId, key.source, key.queryHash, key.binInterval)
+      cd = AesonText metricsData
+  Hasql.interpExecute_
+      [HI.sql|
     INSERT INTO query_cache (project_id, source, query_hash, bin_interval, original_query,
                              cached_from, cached_to, cached_data, hit_count, last_accessed_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?)
+    VALUES (#{kPid}, #{kSrc}, #{kHash}, #{kBin}, #{originalQuery}, #{fromTime}, #{toTime}, #{cd}, 1, #{now})
     ON CONFLICT (project_id, source, query_hash, bin_interval)
     DO UPDATE SET
       cached_from = EXCLUDED.cached_from,
@@ -187,7 +187,6 @@ updateCache key (fromTime, toTime) metricsData originalQuery = do
       last_accessed_at = EXCLUDED.last_accessed_at,
       updated_at = EXCLUDED.last_accessed_at
   |]
-      (key.projectId, key.source, key.queryHash, key.binInterval, originalQuery, fromTime, toTime, AesonText metricsData, now)
 
 
 -- | Merge two MetricsData by timestamp, handling different column structures
@@ -285,15 +284,14 @@ trimOldData windowStart = filterByTimestamp (>= toPosix windowStart)
 cleanupExpiredCache :: (DB es, Time :> es) => Eff es Int
 cleanupExpiredCache = do
   now <- Time.currentTime
-  maybe 0 fromOnly
+  maybe 0 identity
     . viaNonEmpty head
-    <$> PG.query
-      [sql|
+    <$> Hasql.interp
+      [HI.sql|
       WITH deleted AS (
         DELETE FROM query_cache
-        WHERE last_accessed_at < ?::timestamptz - interval '4 hours'
+        WHERE last_accessed_at < #{now}::timestamptz - interval '4 hours'
         RETURNING id
       )
       SELECT COUNT(*)::int FROM deleted
     |]
-      (Only now)

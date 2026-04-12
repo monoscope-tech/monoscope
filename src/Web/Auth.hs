@@ -39,8 +39,7 @@ import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Hasql.Interpolate qualified as HI
 import Deriving.Aeson qualified as DAE
 import Effectful (
   Eff,
@@ -52,7 +51,6 @@ import Effectful (
 import Effectful.Dispatch.Static (unsafeEff_)
 import Effectful.Error.Static (Error, runErrorNoCallStack, throwError)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, currentTime, runTime)
@@ -66,7 +64,7 @@ import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Pkg.DeriveUtils (runConnectionPool)
+import Data.Effectful.Hasql qualified as EHasql
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
 import Servant (Header, Headers, NoContent (..), addHeader)
@@ -104,7 +102,7 @@ authHandler logger env =
   mkAuthHandler \request ->
     handler request
       & Logging.runLog (show env.config.environment) logger env.config.logLevel
-      & runConnectionPool env.pool
+      & EHasql.runHasqlPool env.hasqlPool
       & runHTTPWreq
       & runUUID
       & runTime
@@ -256,12 +254,12 @@ resolveApiKeyProject bearerToken =
 apiKeyAuthHandler :: Logger -> AuthContext -> ApiKeyAuthContext
 apiKeyAuthHandler logger env = mkAuthHandler \req -> do
   let mbAuth = L.lookup hAuthorization (requestHeaders req) <&> decodeUtf8
-      runEffs :: Eff '[Log, PG.WithConnection, Effectful.Reader.Static.Reader AuthContext, IOE] a -> Handler a
+      runEffs :: Eff '[Log, EHasql.Hasql, Effectful.Reader.Static.Reader AuthContext, IOE] a -> Handler a
       runEffs act =
         liftIO
           $ act
           & Logging.runLog (show env.config.environment) logger env.config.logLevel
-          & runConnectionPool env.pool
+          & EHasql.runHasqlPool env.hasqlPool
           & Effectful.Reader.Static.runReader env
           & runEff
   case mbAuth of
@@ -516,9 +514,8 @@ deviceCodeH = do
   let expiresAt = addUTCTime 300 now
       verificationUri = T.dropWhileEnd (== '/') envCfg.hostUrl <> "/device?code=" <> userCode
   void
-    $ PG.execute
-      [sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (?, ?, ?, ?) |]
-      (rowId, deviceCode, userCode, expiresAt)
+    $ EHasql.interpExecute
+      [HI.sql| INSERT INTO users.device_auth_codes (id, device_code, user_code, expires_at) VALUES (#{rowId}, #{deviceCode}, #{userCode}, #{expiresAt}) |]
   pure DeviceCodeResponse{expiresIn = 300, ..}
 
 
@@ -529,9 +526,8 @@ deviceTokenH mCode = do
     Nothing -> errResp "missing device_code"
     Just dCode -> do
       rows <-
-        PG.query
-          [sql| SELECT session_id, expires_at FROM users.device_auth_codes WHERE device_code = ? |]
-          (Only dCode)
+        EHasql.interp
+          [HI.sql| SELECT session_id, expires_at FROM users.device_auth_codes WHERE device_code = #{dCode} |]
       now <- currentTime
       case rows of
         [] -> errResp "invalid_device_code"
@@ -555,12 +551,12 @@ deviceApproveH codeM actionM = do
       Just "approve" -> do
         persistentSessId <- lift Projects.newPersistentSessionId
         lift $ Projects.insertSession persistentSessId sess.user.id (Projects.SessionData Map.empty)
+        let sessUuid = persistentSessId.getPersistentSessionId
         updated <-
           lift
-            $ PG.execute
-              [sql| UPDATE users.device_auth_codes SET session_id = ?
-                WHERE user_code = ? AND session_id IS NULL AND expires_at > now() |]
-              (persistentSessId.getPersistentSessionId, userCode)
+            $ EHasql.interpExecute
+              [HI.sql| UPDATE users.device_auth_codes SET session_id = #{sessUuid}
+                WHERE user_code = #{userCode} AND session_id IS NULL AND expires_at > now() |]
         when (updated == 0) $ hoistEither $ Left "Invalid, expired, or already used code."
         pure True
       _ -> pure False

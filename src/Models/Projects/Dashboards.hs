@@ -30,8 +30,8 @@ module Models.Projects.Dashboards (
 import Control.Exception (try)
 import Control.Lens
 import Data.Aeson qualified as AE
-import Data.ByteString qualified as BS
 import Data.Default
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W
@@ -41,26 +41,22 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
-import Database.PostgreSQL.Entity (_delete, _select, _selectWhere)
-import Database.PostgreSQL.Entity qualified as DBT
-import Database.PostgreSQL.Entity.Types
+import Database.PostgreSQL.Entity.Types (Entity, GenericEntity (..), FieldModifiers, Schema, TableName, PrimaryKey, CamelToSnake)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField
-import Database.PostgreSQL.Simple.Types (Only (Only), Query (Query))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAES
 import Effectful
 import Effectful.Error.Static (Error, throwError)
-import Effectful.PostgreSQL qualified as PG
+import Hasql.Interpolate qualified as HI
 import Language.Haskell.TH (Exp, Q, runIO)
 import Language.Haskell.TH.Syntax qualified as THS
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Pkg.Components.TimePicker qualified as TimePicker
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (UUIDId (..))
+import Pkg.DeriveUtils (UUIDId (..), selectFrom)
 import Pkg.Parser (replacePlaceholders, variablePresets)
 import Relude
 import Servant (ServerError (..), err404)
@@ -86,9 +82,9 @@ data DashboardVM = DashboardVM
   , fileSha :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving
-    (DBT.Entity)
+    (Entity)
     via (GenericEntity '[Schema "projects", TableName "dashboards", PrimaryKey "id", FieldModifiers '[CamelToSnake]] DashboardVM)
 
 
@@ -114,6 +110,7 @@ data Dashboard = Dashboard
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson Dashboard
   deriving (AE.FromJSON, AE.ToJSON) via DAES.Snake Dashboard
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb Dashboard
 
 
 data VariableType = VTQuery | VTValues
@@ -169,27 +166,9 @@ data Tab = Tab
 
 
 insert :: DB es => DashboardVM -> Eff es Int64
-insert dashboardVM = PG.execute (Query $ encodeUtf8 q) params
-  where
-    q =
-      [text| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?::uuid[], ?, ?) |]
-    params =
-      ( dashboardVM.id
-      , dashboardVM.projectId
-      , dashboardVM.createdAt
-      , dashboardVM.updatedAt
-      , dashboardVM.createdBy
-      , dashboardVM.baseTemplate
-      , dashboardVM.schema
-      , dashboardVM.starredSince
-      , dashboardVM.homepageSince
-      , dashboardVM.tags
-      , dashboardVM.title
-      , dashboardVM.teams
-      , dashboardVM.filePath
-      , dashboardVM.fileSha
-      )
+insert DashboardVM{id = did, projectId, createdAt, updatedAt, createdBy, baseTemplate, schema, starredSince, homepageSince, tags, title, teams, filePath, fileSha} = Hasql.interpExecute
+  [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
+           VALUES (#{did}, #{projectId}, #{createdAt}, #{updatedAt}, #{createdBy}, #{baseTemplate}, #{schema}, #{starredSince}, #{homepageSince}, #{tags}, #{title}, #{teams}::uuid[], #{filePath}, #{fileSha}) |]
 
 
 -- | Read dashboard YAML files from directory at compile time via TH
@@ -206,7 +185,7 @@ readDashboardsFromDirectory dir = do
 readDashboardFile :: FilePath -> FilePath -> IO (Maybe Dashboard)
 readDashboardFile dir file = do
   let filePath = dir </> file
-  result <- try $ readFileBS filePath :: IO (Either SomeException BS.ByteString)
+  result <- try $ readFileBS filePath :: IO (Either SomeException ByteString)
   case result of
     Left err -> do
       putStrLn $ "Error reading file " ++ filePath ++ ": " ++ show err
@@ -247,60 +226,65 @@ replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just %~
 
 
 getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
-getDashboardById did = listToMaybe <$> PG.query (_selectWhere @DashboardVM [[field| id |]]) (Only did)
+getDashboardById did = Hasql.interpOne
+  (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
 
 
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
-deleteDashboardsByIds pid dids = PG.execute (Query $ encodeUtf8 q) (pid, dids)
-  where
-    q = """DELETE FROM projects.dashboards WHERE project_id = ? AND id = ANY(?::uuid[])"""
+deleteDashboardsByIds pid dids = Hasql.interpExecute
+  [HI.sql| DELETE FROM projects.dashboards WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
 
 
 addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
-addTeamsToDashboards pid dids teamIds = PG.execute (Query $ encodeUtf8 q) (teamIds, pid, dids)
-  where
-    q =
-      [text|
-      UPDATE projects.dashboards
-      SET teams = teams || ?::uuid[]
-      WHERE project_id = ? AND id = ANY(?::uuid[])
-    |]
+addTeamsToDashboards pid dids teamIds = Hasql.interpExecute
+  [HI.sql| UPDATE projects.dashboards SET teams = teams || #{teamIds}::uuid[]
+           WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
 
 
 selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
-selectDashboardsByTeam pid teamId = PG.query (_select @DashboardVM <> " WHERE project_id = ? AND teams @> ARRAY[?::uuid] ORDER BY starred_since DESC NULLS LAST, updated_at DESC") (pid, teamId)
+selectDashboardsByTeam pid teamId = Hasql.interp
+  (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND teams @> ARRAY[#{teamId}::uuid]
+           ORDER BY starred_since DESC NULLS LAST, updated_at DESC |])
 
 
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
-selectDashboardsSortedBy pid orderByParam = PG.query (_selectWhere @DashboardVM [[field| project_id |]] <> orderClause) (Only pid)
+selectDashboardsSortedBy pid orderByParam = Hasql.interp $
+  selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, |] <> orderClause
   where
-    sortFields = [("title", "title ASC"), ("created_at", "created_at DESC"), ("updated_at", "updated_at DESC")] :: [(Text, Query)]
-    orderClause = " ORDER BY starred_since DESC NULLS LAST, " <> fromMaybe "updated_at DESC" (L.lookup (T.toLower $ T.strip orderByParam) sortFields)
+    sortFields = [("title", "title ASC"), ("created_at", "created_at DESC"), ("updated_at", "updated_at DESC")] :: [(Text, HI.Sql)]
+    orderClause = fromMaybe "updated_at DESC" (L.lookup (T.toLower $ T.strip orderByParam) sortFields)
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
-updateSchema dashId dashboard = PG.execute (Query "UPDATE projects.dashboards SET schema = ? WHERE id = ?") (dashboard, dashId)
+updateSchema dashId dashboard = Hasql.interpExecute
+  [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} WHERE id = #{dashId} |]
 
 
 updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
-updateTitle dashId title = PG.execute (Query "UPDATE projects.dashboards SET title = ? WHERE id = ?") (title, dashId)
+updateTitle dashId title = Hasql.interpExecute
+  [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE id = #{dashId} |]
 
 
 updateTags :: DB es => DashboardId -> V.Vector Text -> Eff es Int64
-updateTags dashId tags = PG.execute (Query "UPDATE projects.dashboards SET tags = ? WHERE id = ?") (tags, dashId)
+updateTags dashId tags = Hasql.interpExecute
+  [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE id = #{dashId} |]
 
 
 updateSchemaAndUpdatedAt :: DB es => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
-updateSchemaAndUpdatedAt dashId dashboard updatedAt = PG.execute (Query "UPDATE projects.dashboards SET schema = ?, updated_at = ? WHERE id = ?") (dashboard, updatedAt, dashId)
+updateSchemaAndUpdatedAt dashId dashboard updatedAt = Hasql.interpExecute
+  [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard}, updated_at = #{updatedAt} WHERE id = #{dashId} |]
 
 
 updateStarredSince :: DB es => DashboardId -> Maybe UTCTime -> Eff es Int64
-updateStarredSince dashId starredSince = PG.execute (Query "UPDATE projects.dashboards SET starred_since = ? WHERE id = ?") (starredSince, dashId)
+updateStarredSince dashId starredSince = Hasql.interpExecute
+  [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE id = #{dashId} |]
 
 
 deleteDashboard :: DB es => DashboardId -> Eff es Int64
-deleteDashboard dashId = PG.execute (_delete @DashboardVM) (Only dashId)
+deleteDashboard dashId = Hasql.interpExecute
+  [HI.sql| DELETE FROM projects.dashboards WHERE id = #{dashId} |]
 
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
-getDashboardByBaseTemplate pid baseTemplate = fmap (.id) . listToMaybe <$> (PG.query (_selectWhere @DashboardVM [[field| project_id |], [field| base_template |]]) (pid, baseTemplate) :: DB es => Eff es [DashboardVM])
+getDashboardByBaseTemplate pid baseTemplate = fmap (.id) <$> Hasql.interpOne @DashboardVM
+  (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND base_template = #{baseTemplate} |])

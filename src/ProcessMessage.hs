@@ -133,7 +133,7 @@ import Utils (b64ToJson, eitherStrToText, freeTierDailyMaxEvents, jsonToMap, nes
  --}
 
 processMessages
-  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es)
+  :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es)
   => [(Text, ByteString)]
   -> HM.HashMap Text Text
   -> Eff es [Text]
@@ -159,7 +159,7 @@ processMessages msgs attrs = do
         let projectIds = (\(_, m) -> UUIDId m.projectId) <$> rMsgs
         cachePairs <- forM projectIds $ \pid ->
           Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-            mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
+            mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
             pure $! fromMaybe Projects.defaultProjectCache mpjCache
         pure $! zip projectIds cachePairs
       let projectCaches = HM.fromList caches

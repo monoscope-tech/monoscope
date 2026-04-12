@@ -209,7 +209,7 @@ getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (rm ^. PMF.resource . PR
 
 
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -329,7 +329,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
             caches <- liftIO $ do
               cachePairs <- forM projectIds \pid ->
                 Cache.fetchWithCache appCtx.projectCache pid \pid' -> do
-                  mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
+                  mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
                   pure $! fromMaybe Projects.defaultProjectCache mpjCache
               pure $! zip projectIds cachePairs
             pure $ HM.fromList caches
@@ -1243,7 +1243,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
   Log.logTrace "Received trace export request" AE.Null
 
@@ -1286,7 +1286,7 @@ processTraceRequest metadataApiKey req = do
 
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
+        mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
         pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HM.fromList caches
@@ -1315,7 +1315,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Hasql.Hasql :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
   Log.logTrace "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
@@ -1355,7 +1355,7 @@ processLogsRequest metadataApiKey req = do
     let projectIds = toList . HS.fromList $ V.toList atIds <> [pid | (_, pid) <- V.toList projectIdsAndKeys]
     caches <- forM projectIds $ \pid -> do
       cache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
+        mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
         pure $ fromMaybe Projects.defaultProjectCache mpjCache
       pure (pid, cache)
     pure $ HM.fromList caches
@@ -1412,7 +1412,7 @@ processMetricsRequest metadataApiKey req = do
 
       -- Fetch project cache using cache pattern
       projectCache <- liftIO $ Cache.fetchWithCache appCtx.projectCache pid $ \pid' -> do
-        mpjCache <- Projects.projectCacheByIdIO appCtx.jobsPool pid'
+        mpjCache <- Projects.projectCacheByIdIO appCtx.hasqlJobsPool pid'
         pure $ fromMaybe Projects.defaultProjectCache mpjCache
       let !projectCaches = one (pid, projectCache)
           !metricRecords = convertResourceMetricsToMetricRecords currentTime projectCaches pid resourceMetrics

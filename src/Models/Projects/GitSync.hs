@@ -50,15 +50,14 @@ import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Yaml qualified as Yaml
-import Database.PostgreSQL.Entity (Entity, _selectWhere)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
-import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Database.PostgreSQL.Entity.Types (Entity, CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
-import Effectful.PostgreSQL qualified as PG
+import Hasql.Interpolate qualified as HI
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Jose.Jwa (JwsAlg (RS256))
@@ -69,7 +68,7 @@ import Models.Projects.ProjectApiKeys (decryptAPIKey, encryptAPIKey)
 import Models.Projects.Projects (ProjectId)
 import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), responseStatus)
 import Network.HTTP.Types.Status (statusCode)
-import Pkg.DeriveUtils (DB, UUIDId (..))
+import Pkg.DeriveUtils (DB, UUIDId (..), selectFrom)
 import Relude
 import System.IO (hClose)
 import System.IO.Temp (withSystemTempFile)
@@ -102,7 +101,7 @@ data GitHubSync = GitHubSync
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "projects", TableName "github_sync", PrimaryKey "id", FieldModifiers '[CamelToSnake]] GitHubSync)
 
 
@@ -156,7 +155,8 @@ decryptSync encKey sync = case sync.accessToken of
 
 -- DB Operations
 getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSync pid = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| project_id |]]) (Only pid)
+getGitHubSync pid = Hasql.interp
+  (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} |])
 
 
 -- | Helper to decrypt sync config, logging on failure
@@ -170,86 +170,72 @@ getGitHubSyncDecrypted encKey pid = withDecryption encKey pid $ getGitHubSync pi
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepo owner repo = listToMaybe <$> PG.query (_selectWhere @GitHubSync [[field| owner |], [field| repo |]]) (owner, repo)
+getGitHubSyncByRepo owner repo = Hasql.interp
+  (selectFrom @GitHubSync <> [HI.sql| WHERE owner = #{owner} AND repo = #{repo} |])
 
 
 -- | Insert a new GitHub sync config using PAT authentication
 insertGitHubSync :: DB es => ByteString -> ProjectId -> Text -> Text -> Text -> Text -> Maybe Text -> Text -> Eff es (Maybe GitHubSync)
-insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecretVal prefix =
-  listToMaybe <$> PG.query q (pid, ownerVal, repoVal, branchVal, encryptToken encKey token, webhookSecretVal, prefix)
-  where
-    q =
-      [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret, path_prefix)
-              VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING * |]
+insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecretVal prefix = do
+  let encToken = encryptToken encKey token
+  Hasql.interp
+    [HI.sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, access_token, webhook_secret, path_prefix)
+             VALUES (#{pid}, #{ownerVal}, #{repoVal}, #{branchVal}, #{encToken}, #{webhookSecretVal}, #{prefix}) RETURNING * |]
 
 
 -- | Insert a new GitHub sync config using GitHub App installation
 insertGitHubAppSync :: DB es => ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
-insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix =
-  listToMaybe <$> PG.query q (pid, ownerVal, repoVal, branchVal, instId, prefix)
-  where
-    q =
-      [sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, installation_id, path_prefix)
-              VALUES (?, ?, ?, ?, ?, ?) RETURNING * |]
+insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix = Hasql.interp
+  [HI.sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, installation_id, path_prefix)
+           VALUES (#{pid}, #{ownerVal}, #{repoVal}, #{branchVal}, #{instId}, #{prefix}) RETURNING * |]
 
 
 updateGitHubSync :: (DB es, Time :> es) => ByteString -> GitHubSyncId -> Text -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
 updateGitHubSync encKey sid ownerVal repoVal branchVal token enabled = do
   now <- Time.currentTime
-  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, encryptToken encKey token, enabled, now, sid)
-  where
-    q =
-      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, access_token = ?, sync_enabled = ?, updated_at = ?
-              WHERE id = ? RETURNING * |]
+  let encToken = encryptToken encKey token
+  Hasql.interp
+    [HI.sql| UPDATE projects.github_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, access_token = #{encToken}, sync_enabled = #{enabled}, updated_at = #{now}
+             WHERE id = #{sid} RETURNING * |]
 
 
 updateGitHubSyncKeepToken :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text -> Text -> Bool -> Eff es (Maybe GitHubSync)
 updateGitHubSyncKeepToken sid ownerVal repoVal branchVal enabled = do
   now <- Time.currentTime
-  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, enabled, now, sid)
-  where
-    q =
-      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, sync_enabled = ?, updated_at = ?
-              WHERE id = ? RETURNING * |]
+  Hasql.interp
+    [HI.sql| UPDATE projects.github_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, sync_enabled = #{enabled}, updated_at = #{now}
+             WHERE id = #{sid} RETURNING * |]
 
 
 -- | Update repo selection for GitHub App installation
 updateGitHubSyncRepo :: (DB es, Time :> es) => GitHubSyncId -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
 updateGitHubSyncRepo sid ownerVal repoVal branchVal prefix = do
   now <- Time.currentTime
-  listToMaybe <$> PG.query q (ownerVal, repoVal, branchVal, prefix, now, sid)
-  where
-    q =
-      [sql| UPDATE projects.github_sync SET owner = ?, repo = ?, branch = ?, path_prefix = ?, updated_at = ?
-              WHERE id = ? RETURNING * |]
+  Hasql.interp
+    [HI.sql| UPDATE projects.github_sync SET owner = #{ownerVal}, repo = #{repoVal}, branch = #{branchVal}, path_prefix = #{prefix}, updated_at = #{now}
+             WHERE id = #{sid} RETURNING * |]
 
 
 updateLastTreeSha :: (DB es, Time :> es) => GitHubSyncId -> Text -> Eff es Int64
-updateLastTreeSha sid sha = do
+updateLastTreeSha sid treeSha = do
   now <- Time.currentTime
-  PG.execute q (sha, now, sid)
-  where
-    q = [sql|UPDATE projects.github_sync SET last_tree_sha = ?, updated_at = ? WHERE id = ?|]
+  Hasql.interpExecute [HI.sql| UPDATE projects.github_sync SET last_tree_sha = #{treeSha}, updated_at = #{now} WHERE id = #{sid} |]
 
 
 deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64
-deleteGitHubSync sid = PG.execute q (Only sid)
-  where
-    q = [sql|DELETE FROM projects.github_sync WHERE id = ?|]
+deleteGitHubSync sid = Hasql.interpExecute
+  [HI.sql| DELETE FROM projects.github_sync WHERE id = #{sid} |]
 
 
 getDashboardGitState :: DB es => ProjectId -> Eff es (M.Map Text (DashboardId, Text))
-getDashboardGitState pid = M.fromList . fmap (\(did, path, sha) -> (path, (did, sha))) <$> PG.query q (Only pid)
-  where
-    q = [sql|SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = ? AND file_path IS NOT NULL AND file_sha IS NOT NULL|]
+getDashboardGitState pid = M.fromList . fmap (\(did, path, fsha) -> (path, (did, fsha))) <$> Hasql.interp
+  [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND file_path IS NOT NULL AND file_sha IS NOT NULL |]
 
 
 updateDashboardGitInfo :: (DB es, Time :> es) => DashboardId -> Text -> Text -> Eff es Int64
-updateDashboardGitInfo did path sha = do
+updateDashboardGitInfo did path fsha = do
   now <- Time.currentTime
-  PG.execute q (path, sha, now, did)
-  where
-    q = [sql|UPDATE projects.dashboards SET file_path = ?, file_sha = ?, updated_at = ? WHERE id = ?|]
+  Hasql.interpExecute [HI.sql| UPDATE projects.dashboards SET file_path = #{path}, file_sha = #{fsha}, updated_at = #{now} WHERE id = #{did} |]
 
 
 -- GitHub API Operations

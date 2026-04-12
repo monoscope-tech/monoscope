@@ -6,6 +6,7 @@ import Data.Int (Int64)
 import Data.Aeson.KeyMap qualified as KM
 import Data.ByteString.Lazy qualified as BL
 import Data.Pool (Pool, withResource)
+import System.Config qualified
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, getCurrentTime, getZonedTime)
 import Data.UUID qualified as UUID
@@ -50,7 +51,7 @@ withTestProject action = withTestResources $ \tr -> do
         Just uuid -> do
           -- Refresh session to pick up sudo status and new project
           let projectId = UUIDId uuid
-          refreshedSession <- refreshSession tr.trPool tr.trSessAndHeader
+          refreshedSession <- refreshSession tr.trPool (System.Config.hasqlPool tr.trATCtx) tr.trSessAndHeader
           let updatedTr = tr{trSessAndHeader = refreshedSession}
           action $ TestContext updatedTr projectId
         Nothing -> fail $ "Could not parse project ID from location: " <> toString location

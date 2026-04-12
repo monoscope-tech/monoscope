@@ -84,12 +84,10 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (fromOnly)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Hasql.Interpolate qualified as HI
 import Effectful (Eff, IOE, type (:>))
-import Effectful.PostgreSQL (WithConnection)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -505,18 +503,19 @@ freeTierUsageBanner pid = \case
   _ -> pass
 
 
-checkFreeTierStatus :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
+checkFreeTierStatus :: (IOE :> es, Time :> es, Hasql.Hasql :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
 checkFreeTierStatus pid paymentPlan =
   if paymentPlan == "Free"
     then do
       now <- Time.currentTime
-      count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day'|] (pid.toText, now)
+      let pidText = pid.toText
+      count <- fromMaybe (0 :: Int) <$> Hasql.interpOne [HI.sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=#{pidText} AND timestamp > #{now}::timestamptz - interval '1 day'|]
       let limit = fromInteger freeTierDailyMaxEvents
       pure $ if count >= limit then FreeTierExceeded count limit else if count >= (limit * 80) `div` 100 then FreeTierWarning count limit else FreeTierOk
     else pure NotFreeTier
 
 
-checkFreeTierExceeded :: (IOE :> es, Time :> es, WithConnection :> es) => Projects.ProjectId -> Text -> Eff es Bool
+checkFreeTierExceeded :: (IOE :> es, Time :> es, Hasql.Hasql :> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
   where
     isExceeded (FreeTierExceeded _ _) = True

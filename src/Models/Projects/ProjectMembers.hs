@@ -35,6 +35,7 @@ module Models.Projects.ProjectMembers (
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Set qualified as S
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
@@ -49,17 +50,16 @@ import Database.PostgreSQL.Entity.Types (
   Schema,
   TableName,
  )
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Effectful (Eff, type (:>))
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (WrappedEnumSC (..))
+import Pkg.DeriveUtils (WrappedEnumSC (..), selectFrom)
 import Relude
 import Servant (FromHttpApiData)
 import System.Types (DB)
@@ -72,6 +72,11 @@ data Permissions
   deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
   deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "P" Permissions
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "P" Permissions
+
+
+instance HI.DecodeRow Permissions where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
 
 
 data ProjectMembers = ProjectMembers
@@ -105,9 +110,15 @@ data CreateProjectMembers = CreateProjectMembers
 
 insertProjectMembers :: DB es => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers [] = pure 0
-insertProjectMembers members = PG.executeMany q members
+insertProjectMembers members = Hasql.interpExecute
+  [HI.sql| INSERT INTO projects.project_members(project_id, user_id, permission)
+           SELECT * FROM unnest(#{pidsV}::uuid[], #{uidsV}::uuid[], #{permsV}::projects.project_permissions[])
+           ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL |]
   where
-    q = [sql| INSERT INTO projects.project_members(project_id, user_id, permission) VALUES (?,?,?) ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL |]
+    v = V.fromList members
+    pidsV = V.map (.projectId) v
+    uidsV = V.map (.userId) v
+    permsV = V.map (.permission) v
 
 
 data ProjectMemberVM = ProjectMemberVM
@@ -119,61 +130,52 @@ data ProjectMemberVM = ProjectMemberVM
   , last_name :: Text
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
 selectActiveProjectMembers :: DB es => Projects.ProjectId -> Eff es [ProjectMemberVM]
-selectActiveProjectMembers pid = PG.query q (Only pid)
-  where
-    q =
-      [sql| SELECT pm.id, pm.user_id, pm.permission,us.email, us.first_name, us.last_name from projects.project_members pm
-                   JOIN users.users us ON (pm.user_id=us.id)
-                   WHERE pm.project_id=?::uuid and pm.active=TRUE
-                   ORDER BY pm.created_at ASC;
-        |]
+selectActiveProjectMembers pid = Hasql.interp
+  [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name FROM projects.project_members pm
+           JOIN users.users us ON (pm.user_id=us.id)
+           WHERE pm.project_id=#{pid}::uuid AND pm.active=TRUE
+           ORDER BY pm.created_at ASC |]
 
 
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
-getUserPermission pid uid = coerce @(Maybe (Only Permissions)) @(Maybe Permissions) . listToMaybe <$> PG.query q (pid, uid)
-  where
-    q =
-      [sql| SELECT permission FROM projects.project_members
-            WHERE project_id = ? AND user_id = ? AND active = TRUE |]
+getUserPermission pid uid = Hasql.interp
+  [HI.sql| SELECT permission FROM projects.project_members
+           WHERE project_id = #{pid} AND user_id = #{uid} AND active = TRUE |]
 
 
 updateProjectMembersPermissons :: DB es => [(UUID.UUID, Permissions)] -> Eff es ()
-updateProjectMembersPermissons vals = void $ PG.executeMany q vals
+updateProjectMembersPermissons [] = pass
+updateProjectMembersPermissons vals = Hasql.interpExecute_
+  [HI.sql| UPDATE projects.project_members pm
+           SET permission = u.perm::projects.project_permissions
+           FROM unnest(#{idsV}::uuid[], #{permsV}::text[]) AS u(id, perm)
+           WHERE pm.id = u.id |]
   where
-    q =
-      [sql| UPDATE projects.project_members pm
-            SET permission = c.permission::projects.project_permissions
-            FROM (VALUES (?,?)) as c(id, permission)
-            WHERE pm.id::uuid = c.id::uuid; |]
+    (ids, perms) = unzip vals
+    (idsV, permsV) = (V.fromList ids, V.fromList perms)
 
 
 softDeleteProjectMembers :: (DB es, Time :> es) => NonEmpty UUID.UUID -> Eff es ()
 softDeleteProjectMembers ids = do
   now <- Time.currentTime
-  void $ PG.execute q (now, V.fromList $ toList ids)
-  where
-    q =
-      [sql| UPDATE projects.project_members
-            SET active = FALSE, deleted_at = ?
-            WHERE id = ANY(?::uuid[]); |]
+  let idsVec = V.fromList $ toList ids
+  Hasql.interpExecute_
+    [HI.sql| UPDATE projects.project_members SET active = FALSE, deleted_at = #{now} WHERE id = ANY(#{idsVec}::uuid[]) |]
 
 
 deactivateNonOwnerMembers :: DB es => Projects.ProjectId -> Eff es Int64
-deactivateNonOwnerMembers pid = PG.execute q (pid, pid)
-  where
-    q =
-      [sql| UPDATE projects.project_members SET active = FALSE WHERE project_id = ?
-              AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = ? ORDER BY created_at LIMIT 1) |]
+deactivateNonOwnerMembers pid = Hasql.interpExecute
+  [HI.sql| UPDATE projects.project_members SET active = FALSE WHERE project_id = #{pid}
+           AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = #{pid} ORDER BY created_at LIMIT 1) |]
 
 
 activateAllMembers :: DB es => Projects.ProjectId -> Eff es Int64
-activateAllMembers pid = PG.execute q (Only pid)
-  where
-    q = [sql| UPDATE projects.project_members SET active = TRUE WHERE project_id = ? |]
+activateAllMembers pid = Hasql.interpExecute
+  [HI.sql| UPDATE projects.project_members SET active = TRUE WHERE project_id = #{pid} |]
 
 
 data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
@@ -186,16 +188,14 @@ data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
   , active :: Bool
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
 selectAllProjectMembers :: DB es => Projects.ProjectId -> Eff es [ProjectMemberWithStatusVM]
-selectAllProjectMembers pid = PG.query q (Only pid)
-  where
-    q =
-      [sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name, pm.active
-              FROM projects.project_members pm JOIN users.users us ON (pm.user_id=us.id)
-              WHERE pm.project_id=?::uuid AND pm.deleted_at IS NULL AND pm.active = TRUE ORDER BY pm.created_at ASC |]
+selectAllProjectMembers pid = Hasql.interp
+  [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name, pm.active
+           FROM projects.project_members pm JOIN users.users us ON (pm.user_id=us.id)
+           WHERE pm.project_id=#{pid}::uuid AND pm.deleted_at IS NULL AND pm.active = TRUE ORDER BY pm.created_at ASC |]
 
 
 data TeamDetails = TeamDetails
@@ -213,46 +213,34 @@ data TeamDetails = TeamDetails
 
 
 createTeam :: DB es => Projects.ProjectId -> Projects.UserId -> TeamDetails -> Eff es Int64
-createTeam pid uid TeamDetails{..}
+createTeam pid uid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices}
   | handle == "everyone" = pure 0 -- Prevent creating team with reserved handle
-  | otherwise = PG.execute q (pid, uid, name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices)
-  where
-    q =
-      [sql| INSERT INTO projects.teams
+  | otherwise = Hasql.interpExecute
+      [HI.sql| INSERT INTO projects.teams
                (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
-               VALUES (?, ?, ?, ?, ?, ?::uuid[], ?, ?, ?, ?, ?)
+               VALUES (#{pid}, #{uid}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices})
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
 createEveryoneTeam :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es Int64
-createEveryoneTeam pid uid = PG.execute q (pid, uid)
-  where
-    q =
-      [sql| INSERT INTO projects.teams
-               (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
-               VALUES (?, ?, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
-                       '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
-               ON CONFLICT (project_id, handle) DO NOTHING |]
+createEveryoneTeam pid uid = Hasql.interpExecute
+  [HI.sql| INSERT INTO projects.teams
+           (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
+           VALUES (#{pid}, #{uid}, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
+                   '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
+           ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
 getEveryoneTeam :: DB es => Projects.ProjectId -> Eff es (Maybe Team)
-getEveryoneTeam pid = listToMaybe <$> PG.query q (Only pid)
-  where
-    q =
-      [sql|
-      SELECT t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
-      FROM projects.teams t
-      WHERE t.project_id = ? AND t.is_everyone = TRUE AND t.deleted_at IS NULL
-    |]
+getEveryoneTeam pid = Hasql.interp
+  (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL |])
 
 
 updateTeam :: DB es => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
-updateTeam pid tid TeamDetails{..} = PG.execute q (name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices, pid, tid)
-  where
-    q =
-      [sql| UPDATE projects.teams
-               SET name = ?, description = ?, handle = ?, members = ?::uuid[], notify_emails = ?, slack_channels = ?, discord_channels = ?, phone_numbers = ?, pagerduty_services = ?
-               WHERE project_id = ? AND id = ? |]
+updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices} = Hasql.interpExecute
+  [HI.sql| UPDATE projects.teams
+           SET name = #{name}, description = #{description}, handle = #{handle}, members = #{members}::uuid[], notify_emails = #{notifyEmails}, slack_channels = #{slackChannels}, discord_channels = #{discordChannels}, phone_numbers = #{phoneNumbers}, pagerduty_services = #{pagerdutyServices}
+           WHERE project_id = #{pid} AND id = #{tid} |]
 
 
 data Team = Team
@@ -272,25 +260,18 @@ data Team = Team
   , is_everyone :: Bool
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
+  deriving (Entity) via (GenericEntity '[Schema "projects", TableName "teams", PrimaryKey "id"] Team)
 
 
 getTeams :: DB es => Projects.ProjectId -> Eff es [Team]
-getTeams pid = PG.query q (Only pid)
-  where
-    q =
-      [sql|
-      SELECT t.id, t.name, t.description, t.handle, t.members, t.created_by, t.created_at, t.updated_at, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
-      FROM projects.teams t
-      WHERE t.project_id = ? AND t.deleted_at IS NULL
-    |]
+getTeams pid = Hasql.interp
+  (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND deleted_at IS NULL |])
 
 
 getTeamsVM :: DB es => Projects.ProjectId -> Eff es [TeamVM]
-getTeamsVM pid = PG.query q (Only pid)
-  where
-    q =
-      [sql|
+getTeamsVM pid = Hasql.interp
+  [HI.sql|
       SELECT
         t.id,
         t.created_at,
@@ -319,7 +300,7 @@ getTeamsVM pid = PG.query q (Only pid)
       FROM projects.teams t
       LEFT JOIN unnest(t.members) AS mid ON true
       LEFT JOIN users.users u ON u.id = mid
-      WHERE t.project_id = ? AND t.deleted_at IS NULL
+      WHERE t.project_id = #{pid} AND t.deleted_at IS NULL
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
                t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
       ORDER BY t.is_everyone DESC, t.created_at ASC
@@ -343,7 +324,7 @@ data TeamVM = TeamVM
   , members :: V.Vector TeamMemberVM
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
 data TeamMemberVM = TeamMemberVM
@@ -355,6 +336,7 @@ data TeamMemberVM = TeamMemberVM
   deriving stock (Eq, Generic, Show)
   deriving anyclass (AE.FromJSON, NFData)
   deriving (FromField) via Aeson TeamMemberVM
+  deriving (HI.DecodeValue) via HI.AsJsonb TeamMemberVM
 
 
 getTeamByHandle :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe TeamVM)
@@ -366,44 +348,20 @@ deleteTeams pid tids
   | V.null tids = pass
   | otherwise = do
       now <- Time.currentTime
-      void $ PG.execute q (now, pid, tids)
-  where
-    q =
-      [sql| UPDATE projects.teams SET deleted_at = ? WHERE project_id = ? AND id = ANY(?::uuid[]) AND is_everyone = FALSE |]
+      Hasql.interpExecute_
+        [HI.sql| UPDATE projects.teams SET deleted_at = #{now} WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND is_everyone = FALSE |]
 
 
 getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
-getTeamsById pid tids = if V.null tids then pure [] else PG.query q (pid, tids)
-  where
-    q =
-      [sql|
-      SELECT
-        t.id,
-        t.name,
-        t.description,
-        t.handle,
-        t.members,
-        t.created_by,
-        t.created_at,
-        t.updated_at,
-        t.notify_emails,
-        t.slack_channels,
-        t.discord_channels,
-        t.phone_numbers,
-        t.pagerduty_services,
-        t.is_everyone
-      FROM projects.teams t
-      WHERE t.project_id = ? AND t.id = ANY(?::uuid[]) AND t.deleted_at IS NULL
-    |]
+getTeamsById pid tids = if V.null tids then pure [] else Hasql.interp
+  (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
 
 
 -- | Bulk fetch teams by handles - more efficient than mapping getTeamByHandle
 getTeamsByHandles :: DB es => Projects.ProjectId -> [Text] -> Eff es [TeamVM]
 getTeamsByHandles _ [] = pure []
-getTeamsByHandles pid handles = PG.query q (pid, V.fromList handles)
-  where
-    q =
-      [sql|
+getTeamsByHandles pid handles = Hasql.interp $ let handlesVec = V.fromList handles in
+  [HI.sql|
       SELECT
         t.id,
         t.created_at,
@@ -432,7 +390,7 @@ getTeamsByHandles pid handles = PG.query q (pid, V.fromList handles)
       FROM projects.teams t
       LEFT JOIN unnest(t.members) AS mid ON true
       LEFT JOIN users.users u ON u.id = mid
-      WHERE t.project_id = ? AND t.handle = ANY(?) AND t.deleted_at IS NULL
+      WHERE t.project_id = #{pid} AND t.handle = ANY(#{handlesVec}) AND t.deleted_at IS NULL
       GROUP BY t.id, t.created_at, t.updated_at, t.created_by, t.name, t.handle,
                t.description, t.notify_emails, t.slack_channels, t.discord_channels, t.phone_numbers, t.pagerduty_services, t.is_everyone
     |]

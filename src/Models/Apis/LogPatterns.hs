@@ -37,24 +37,21 @@ where
 
 import Control.Lens (view, _1, _2, _3, _4, _5, _6)
 import Data.Aeson qualified as AE
+import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
-import Data.Time (UTCTime, ZonedTime)
-import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_select, _selectWhere)
-import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Entity.Types qualified as DAT
-import Database.PostgreSQL.Simple (FromRow, Only (Only, fromOnly), ToRow, (:.) (..))
-
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
+import Data.Time (UTCTime, ZonedTime)
+import Data.Vector qualified as V
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..))
 import Relude hiding (id)
@@ -63,7 +60,8 @@ import Utils (truncateHour)
 
 newtype LogPatternId = LogPatternId {unLogPatternId :: Int64}
   deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Eq, FromField, NFData, Ord, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Eq, FromField, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField)
+  deriving anyclass (HI.DecodeRow)
 
 
 data LogPatternState
@@ -72,7 +70,7 @@ data LogPatternState
   | LPSIgnored
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "LPS" LogPatternState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "LPS" LogPatternState
 
 
 data LogPattern = LogPattern
@@ -87,10 +85,10 @@ data LogPattern = LogPattern
   , logLevel :: Maybe Text
   , sampleMessage :: Maybe Text
   , traceId :: Maybe Text
+  , state :: LogPatternState
   , firstSeenAt :: ZonedTime
   , lastSeenAt :: ZonedTime
   , occurrenceCount :: Int64
-  , state :: LogPatternState
   , acknowledgedBy :: Maybe Projects.UserId
   , acknowledgedAt :: Maybe ZonedTime
   , baselineState :: BaselineState
@@ -100,7 +98,7 @@ data LogPattern = LogPattern
   , baselineUpdatedAt :: Maybe ZonedTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "log_patterns", PrimaryKey "id", FieldModifiers '[CamelToSnake]] LogPattern)
@@ -121,25 +119,25 @@ data UpsertPattern = UpsertPattern
   , eventCount :: Int64
   }
   deriving stock (Generic)
-  deriving anyclass (ToRow)
+  deriving anyclass (HI.EncodeRow, ToRow)
 
 
 -- | Get all log patterns for a project (excludes merged patterns)
 getLogPatterns :: DB es => Projects.ProjectId -> Int -> Int -> Eff es [LogPattern]
-getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field| project_id |]] <> " AND canonical_id IS NULL ORDER BY last_seen_at DESC LIMIT ? OFFSET ?") (pid, limit, offset)
+getLogPatterns pid limit offset = Hasql.interp [HI.sql| SELECT * FROM apis.log_patterns WHERE project_id = #{pid} AND canonical_id IS NULL ORDER BY last_seen_at DESC LIMIT #{limit} OFFSET #{offset} |]
 
 
 -- | All pattern templates for a source field, used to seed Drain trees.
 -- Capped at 5000: the DrainTree's maxLogGroups=1000, so loading more is wasteful.
 -- ORDER BY last_seen_at DESC keeps the most recently active patterns as seeds.
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
-getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT LEFT(log_pattern, 2000) FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|] (pid, sourceField)
+getLogPatternTexts pid sourceField = Hasql.interp [HI.sql| SELECT LEFT(log_pattern, 2000) FROM apis.log_patterns WHERE project_id = #{pid} AND source_field = #{sourceField} AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|]
 
 
 -- | Per-service variant with MAX(last_seen_at) for change detection.
 getLogPatternTextsByService :: DB es => Projects.ProjectId -> Text -> Text -> Eff es ([Text], Maybe UTCTime)
 getLogPatternTextsByService pid sourceField svcName = do
-  rows <- PG.query [sql| SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND service_name = ? AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|] (pid, sourceField, svcName)
+  rows :: [(Text, Maybe UTCTime)] <- Hasql.interp [HI.sql| SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns WHERE project_id = #{pid} AND source_field = #{sourceField} AND service_name = #{svcName} AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|]
   let texts = map (view _1) rows
       maxSeen = viaNonEmpty head [t | (_, Just t) <- rows]
   pure (texts, maxSeen)
@@ -147,7 +145,7 @@ getLogPatternTextsByService pid sourceField svcName = do
 
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
 getLogPatternByHash :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe LogPattern)
-getLogPatternByHash pid sourceField hash = listToMaybe <$> PG.query (_selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| source_field |], [DAT.field| pattern_hash |]]) (pid, sourceField, hash)
+getLogPatternByHash pid sourceField patHash = Hasql.interpOne [HI.sql| SELECT * FROM apis.log_patterns WHERE project_id = #{pid} AND source_field = #{sourceField} AND pattern_hash = #{patHash} |]
 
 
 -- | Get new (unprocessed) log patterns for a project, for batch issue creation.
@@ -156,11 +154,7 @@ getLogPatternByHash pid sourceField hash = listToMaybe <$> PG.query (_selectWher
 getNewLogPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Int -> Eff es [LogPattern]
 getNewLogPatterns pid limit = do
   now <- Time.currentTime
-  PG.query
-    ( _selectWhere @LogPattern [[DAT.field| project_id |], [DAT.field| state |]]
-        <> " AND canonical_id IS NULL AND created_at < ?::timestamptz - INTERVAL '10 minutes' ORDER BY created_at ASC LIMIT ?"
-    )
-    (pid, LPSNew, now, limit)
+  Hasql.interp [HI.sql| SELECT * FROM apis.log_patterns WHERE project_id = #{pid} AND state = #{LPSNew} AND canonical_id IS NULL AND created_at < #{now}::timestamptz - INTERVAL '10 minutes' ORDER BY created_at ASC LIMIT #{limit} |]
 
 
 -- | Acknowledge log patterns. Pass Nothing for system-triggered acknowledgments.
@@ -172,13 +166,10 @@ acknowledgeLogPatterns pid uid fieldHashPairs
   | otherwise = do
       now <- Time.currentTime
       let (fields, hashes) = V.unzip fieldHashPairs
-      PG.execute q (LPSAcknowledged, uid, now, pid, fields, hashes)
-  where
-    q =
-      [sql|
+      Hasql.interpExecute [HI.sql|
         UPDATE apis.log_patterns
-        SET state = ?, acknowledged_by = ?, acknowledged_at = ?
-        WHERE project_id = ? AND (source_field, pattern_hash) IN (SELECT unnest(?::text[]), unnest(?::text[]))
+        SET state = #{LPSAcknowledged}, acknowledged_by = #{uid}, acknowledged_at = #{now}
+        WHERE project_id = #{pid} AND (source_field, pattern_hash) IN (SELECT unnest(#{fields}::text[]), unnest(#{hashes}::text[]))
       |]
 
 
@@ -187,10 +178,8 @@ acknowledgeLogPatterns pid uid fieldHashPairs
 acknowledgeMergedPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Eff es Int64
 acknowledgeMergedPatterns pid = do
   now <- Time.currentTime
-  PG.execute
-    [sql|UPDATE apis.log_patterns SET state = ?, acknowledged_at = ?
-    WHERE project_id = ? AND state = ? AND canonical_id IS NOT NULL|]
-    (LPSAcknowledged, now, pid, LPSNew)
+  Hasql.interpExecute [HI.sql|UPDATE apis.log_patterns SET state = #{LPSAcknowledged}, acknowledged_at = #{now}
+    WHERE project_id = #{pid} AND state = #{LPSNew} AND canonical_id IS NOT NULL|]
 
 
 upsertLogPattern :: (DB es, Time :> es) => UpsertPattern -> Eff es Int64
@@ -210,18 +199,16 @@ updateBaselineBatch pid rows
           means = V.map (view _4) rows
           mads = V.map (view _5) rows
           samples = V.map (view _6) rows
-      PG.execute
-        [sql|
+      Hasql.interpExecute [HI.sql|
               UPDATE apis.log_patterns lp
               SET baseline_state = v.state,
                   baseline_volume_hourly_mean = v.mean,
                   baseline_volume_hourly_mad = v.mad,
                   baseline_samples = v.samples,
-                  baseline_updated_at = ?
-              FROM (SELECT unnest(?::text[]) AS source_field, unnest(?::text[]) AS hash, unnest(?::text[]) AS state, unnest(?::float8[]) AS mean, unnest(?::float8[]) AS mad, unnest(?::int[]) AS samples) v
-              WHERE lp.project_id = ? AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash
+                  baseline_updated_at = #{now}
+              FROM (SELECT unnest(#{srcFields}::text[]) AS source_field, unnest(#{hashes}::text[]) AS hash, unnest(#{states}::text[]) AS state, unnest(#{means}::float8[]) AS mean, unnest(#{mads}::float8[]) AS mad, unnest(#{samples}::int[]) AS samples) v
+              WHERE lp.project_id = #{pid} AND lp.source_field = v.source_field AND lp.pattern_hash = v.hash
             |]
-        (now, srcFields, hashes, states, means, mads, samples, pid)
 
 
 -- | Batch version of upsertLogPattern using executeMany.
@@ -231,9 +218,12 @@ upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
 upsertLogPatternBatch [] = pure 0
 upsertLogPatternBatch ups = do
   now <- Time.currentTime
-  PG.executeMany
-    [sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  sum <$> forM (dedup ups) (\u' -> do
+    let (u :: UpsertPattern) = cap u'
+    let (uPid, uPat, uHash, uSrc, uSvc, uLvl, uTid, uMsg, uCnt) =
+          (u.projectId, u.logPattern, u.hash, u.sourceField, u.serviceName, u.logLevel, u.traceId, u.sampleMessage, u.eventCount)
+    Hasql.interpExecute [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at)
+        VALUES (#{uPid}, #{uPat}, #{uHash}, #{uSrc}, #{uSvc}, #{uLvl}, #{uTid}, #{uMsg}, #{uCnt}, #{now})
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = EXCLUDED.last_seen_at,
           occurrence_count = apis.log_patterns.occurrence_count + EXCLUDED.occurrence_count,
@@ -241,8 +231,7 @@ upsertLogPatternBatch ups = do
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
           log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
-  |]
-    (map ((:. Only now) . cap) (dedup ups))
+  |])
   where
     maxTextLen = 32000
     cap u = u{logPattern = T.take maxTextLen u.logPattern, sampleMessage = T.take maxTextLen <$> u.sampleMessage} :: UpsertPattern
@@ -264,12 +253,11 @@ upsertHourlyStat pid sourceField patHash hourBucket count =
 upsertHourlyStatBatch :: DB es => [(Projects.ProjectId, Text, Text, UTCTime, Int64)] -> Eff es Int64
 upsertHourlyStatBatch [] = pure 0
 upsertHourlyStatBatch rows =
-  PG.executeMany
-    [sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
-        VALUES (?, ?, ?, ?, ?)
+  sum <$> forM (Map.toList deduped) (\((pid, sf, ph, hb), ec) ->
+    Hasql.interpExecute [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
+        VALUES (#{pid}, #{sf}, #{ph}, #{hb}, #{ec})
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
-    [(pid, sf, ph, hb, ec) | ((pid, sf, ph, hb), ec) <- Map.toList deduped]
+        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |])
   where
     deduped = Map.fromListWith (+) [((pid, sf, ph, truncateHour hb), ec) | (pid, sf, ph, hb, ec) <- rows]
 
@@ -285,17 +273,17 @@ data BatchPatternStats = BatchPatternStats
   , totalEvents :: Int64
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, HI.DecodeRow)
 
 
 getBatchPatternStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es [BatchPatternStats]
-getBatchPatternStats pid now hoursBack = PG.query q (pid, now, hoursBack)
+getBatchPatternStats pid now hoursBack = Hasql.interp q
   where
     q =
-      [sql|
+      [HI.sql|
         WITH hourly_counts AS (
           SELECT source_field, pattern_hash, hour_bucket, event_count FROM apis.log_pattern_hourly_stats
-          WHERE project_id = ? AND hour_bucket >= ?::timestamptz - INTERVAL '1 hour' * ?
+          WHERE project_id = #{pid} AND hour_bucket >= #{now}::timestamptz - INTERVAL '1 hour' * #{hoursBack}
         ),
         median_calc AS (
           SELECT source_field, pattern_hash, PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY event_count) AS median_val
@@ -335,7 +323,7 @@ data LogPatternWithRate = LogPatternWithRate
   , currentHourCount :: Int64
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow)
+  deriving anyclass (FromRow, HI.DecodeRow)
 
 
 -- | Get all established patterns with their current hour counts for spike detection.
@@ -345,10 +333,10 @@ data LogPatternWithRate = LogPatternWithRate
 -- Scale ceiling: established patterns grow slowly (~weeks); expect <1k per project at steady state.
 getPatternsWithCurrentRates :: DB es => Projects.ProjectId -> UTCTime -> Eff es [LogPatternWithRate]
 getPatternsWithCurrentRates pid now =
-  PG.query q (now, now, pid, BSEstablished)
+  Hasql.interp q
   where
     q =
-      [sql|
+      [HI.sql|
         SELECT lp.id, lp.project_id, LEFT(lp.log_pattern, 2000), lp.pattern_hash, lp.source_field,
           lp.service_name, lp.log_level, LEFT(lp.sample_message, 2000),
           lp.baseline_state, lp.baseline_volume_hourly_mean, lp.baseline_volume_hourly_mad,
@@ -356,17 +344,17 @@ getPatternsWithCurrentRates pid now =
         FROM apis.log_patterns lp
         LEFT JOIN apis.log_pattern_hourly_stats hs
           ON hs.project_id = lp.project_id AND hs.source_field = lp.source_field
-          AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', ?::timestamptz)
+          AND hs.pattern_hash = lp.pattern_hash AND hs.hour_bucket = date_trunc('hour', #{now}::timestamptz)
         LEFT JOIN LATERAL (
           SELECT COALESCE(SUM(mh.event_count), 0) AS member_count
           FROM apis.log_patterns m
           JOIN apis.log_pattern_hourly_stats mh
             ON mh.project_id = m.project_id AND mh.source_field = m.source_field
-            AND mh.pattern_hash = m.pattern_hash AND mh.hour_bucket = date_trunc('hour', ?::timestamptz)
+            AND mh.pattern_hash = m.pattern_hash AND mh.hour_bucket = date_trunc('hour', #{now}::timestamptz)
           WHERE m.canonical_id = lp.id
         ) mhs ON TRUE
-        WHERE lp.project_id = ?
-          AND lp.baseline_state = ?
+        WHERE lp.project_id = #{pid}
+          AND lp.baseline_state = #{BSEstablished}
           AND lp.canonical_id IS NULL
       |]
 
@@ -375,7 +363,7 @@ getPatternsWithCurrentRates pid now =
 getLogPatternsByIds :: DB es => V.Vector LogPatternId -> Eff es (V.Vector LogPattern)
 getLogPatternsByIds ids
   | V.null ids = pure V.empty
-  | otherwise = V.fromList <$> PG.query (_select @LogPattern <> " WHERE id = ANY(?)") (Only ids)
+  | otherwise = V.fromList <$> Hasql.interp [HI.sql| SELECT * FROM apis.log_patterns WHERE id = ANY(#{ids}) |]
 
 
 -- | Canonical mapping of source field identifiers to human-readable labels.
@@ -399,20 +387,20 @@ sourceFieldLabel f = fromMaybe f $ lookup f knownPatternFields
 -- | Total event count across all patterns for a project within a time window.
 getTotalEventCount :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
 getTotalEventCount pid now hoursBack =
-  maybe 0 fromOnly . listToMaybe <$> PG.query [sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket >= ?::timestamptz - INTERVAL '1 hour' * ? |] (pid, now, hoursBack)
+  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT COALESCE(SUM(event_count), 0)::BIGINT FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND hour_bucket >= #{now}::timestamptz - INTERVAL '1 hour' * #{hoursBack} |]
 
 
 -- | Delete acknowledged patterns not seen in staleDays
 pruneStalePatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
-pruneStalePatterns pid now staleDays = PG.execute [sql| DELETE FROM apis.log_patterns WHERE project_id = ? AND last_seen_at < ?::timestamptz - INTERVAL '1 day' * ? AND state = ? |] (pid, now, staleDays, LPSAcknowledged)
+pruneStalePatterns pid now staleDays = Hasql.interpExecute [HI.sql| DELETE FROM apis.log_patterns WHERE project_id = #{pid} AND last_seen_at < #{now}::timestamptz - INTERVAL '1 day' * #{staleDays} AND state = #{LPSAcknowledged} |]
 
 
 -- | Delete hourly stats older than hoursBack (keeps baseline window + buffer)
 pruneOldHourlyStats :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
-pruneOldHourlyStats pid now hoursBack = PG.execute [sql| DELETE FROM apis.log_pattern_hourly_stats WHERE project_id = ? AND hour_bucket < ?::timestamptz - INTERVAL '1 hour' * ? |] (pid, now, hoursBack)
+pruneOldHourlyStats pid now hoursBack = Hasql.interpExecute [HI.sql| DELETE FROM apis.log_pattern_hourly_stats WHERE project_id = #{pid} AND hour_bucket < #{now}::timestamptz - INTERVAL '1 hour' * #{hoursBack} |]
 
 
 -- | Auto-acknowledge patterns stuck in 'new' state longer than staleDays.
 -- Prevents unbounded accumulation for low-volume projects that never trigger processNewLogPatterns.
 autoAcknowledgeStaleNewPatterns :: DB es => Projects.ProjectId -> UTCTime -> Int -> Eff es Int64
-autoAcknowledgeStaleNewPatterns pid now staleDays = PG.execute [sql| UPDATE apis.log_patterns SET state = ?, acknowledged_at = ? WHERE project_id = ? AND state = ? AND created_at < ?::timestamptz - INTERVAL '1 day' * ? |] (LPSAcknowledged, now, pid, LPSNew, now, staleDays)
+autoAcknowledgeStaleNewPatterns pid now staleDays = Hasql.interpExecute [HI.sql| UPDATE apis.log_patterns SET state = #{LPSAcknowledged}, acknowledged_at = #{now} WHERE project_id = #{pid} AND state = #{LPSNew} AND created_at < #{now}::timestamptz - INTERVAL '1 day' * #{staleDays} |]

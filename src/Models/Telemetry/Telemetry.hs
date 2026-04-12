@@ -69,6 +69,7 @@ import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L (groupBy)
+import Data.List.Extra (chunksOf)
 import Data.Map qualified as Map
 import Data.Text qualified as T
 import Data.Text.Display (Display)
@@ -76,17 +77,15 @@ import Data.Time (UTCTime)
 import Data.Time.Clock (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..), ResultError (ConversionFailed), (:.) (..))
+import Database.PostgreSQL.Simple (ResultError (ConversionFailed))
 
 import Data.Effectful.Hasql (Hasql)
 import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), returnError)
 import Database.PostgreSQL.Simple.FromRow
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField (toField))
 import Database.PostgreSQL.Simple.ToRow
-import Database.PostgreSQL.Simple.Types (Query (..))
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful
@@ -94,7 +93,6 @@ import Effectful.Concurrent (Concurrent, threadDelay)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Time qualified as Time
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param)
@@ -106,7 +104,6 @@ import Hasql.Transaction qualified as Tx
 import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, textArrayEnc, unAesonTextMaybe)
 import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
@@ -114,7 +111,7 @@ import System.IO (hPutStrLn)
 import System.Logging qualified as Log
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
-import Utils (extractMessageFromLog, formatUTC, getDurationNSMS, lookupValueText)
+import Utils (extractMessageFromLog, getDurationNSMS, lookupValueText)
 
 
 -- Helper function to get nested value from a map using dot notation
@@ -172,19 +169,19 @@ spanServiceName s = atMapText "service.name" (unAesonTextMaybe s.resource)
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
   deriving (Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "SL" SeverityLevel
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "SL" SeverityLevel
 
 
 data SpanStatus = SSOk | SSError | SSUnset
   deriving (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "SS" SpanStatus
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "SS" SpanStatus
 
 
 data SpanKind = SKInternal | SKServer | SKClient | SKProducer | SKConsumer | SKUnspecified
   deriving (Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, ToField) via WrappedEnumSC "SK" SpanKind
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "SK" SpanKind
 
 
 data Trace = Trace
@@ -385,6 +382,7 @@ data MetricValue
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson MetricValue
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricValue
+  deriving (HI.EncodeValue, HI.DecodeValue) via Aeson MetricValue
 
 
 newtype GaugeSum = GaugeSum
@@ -488,6 +486,7 @@ data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSum
   deriving (Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, NFData)
   deriving (FromField, ToField) via WrappedEnum "MT" MetricType
+  deriving (HI.EncodeValue, HI.DecodeValue) via WrappedEnum "MT" MetricType
 
 
 data AggregationTemporality = ATUnspecified | ATDelta | ATCumulative
@@ -497,6 +496,7 @@ data AggregationTemporality = ATUnspecified | ATDelta | ATCumulative
 
 
 instance ToField AggregationTemporality where toField = toField . fromEnum
+instance HI.EncodeValue AggregationTemporality where encodeValue = contramap fromEnum HI.encodeValue
 
 
 instance FromField AggregationTemporality where
@@ -505,6 +505,7 @@ instance FromField AggregationTemporality where
       if n >= fromEnum (minBound @AggregationTemporality) && n <= fromEnum (maxBound @AggregationTemporality)
         then pure (toEnum n)
         else returnError ConversionFailed f ("Invalid aggregation_temporality: " <> show n)
+instance HI.DecodeValue AggregationTemporality where decodeValue = toEnum <$> HI.decodeValue
 
 
 data MetricDataPoint = MetricDataPoint
@@ -517,7 +518,7 @@ data MetricDataPoint = MetricDataPoint
   , metricLabels :: V.Vector Text
   }
   deriving (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
 
 
 data MetricChartListData = MetricChartListData
@@ -528,7 +529,7 @@ data MetricChartListData = MetricChartListData
   , lastSeen :: UTCTime
   }
   deriving (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
 
 
 getTraceDetails :: (Hasql :> es, IOE :> es) => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es (Maybe Trace)
@@ -554,233 +555,170 @@ getTraceDetails pid trId tme now = do
 
 
 logRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-logRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (createdAt, pid.toText, rdId)
-  where
-    q =
-      [sql|SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-             FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
+logRecordByProjectAndId pid createdAt rdId = do
+  let pidTxt = pid.toText
+  Hasql.interpOne
+    [HI.sql|SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
+                COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
+           FROM otel_logs_and_spans where (timestamp=#{createdAt})  and project_id=#{pidTxt} and id=#{rdId} LIMIT 1|]
 
 
 getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]
-getSpanRecordsByTraceId pid trId tme now = PG.query q (pid.toText, start, end, trId)
-  where
-    (start, end) = case tme of
-      Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
-      Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
-    q =
-      [sql|
+getSpanRecordsByTraceId pid trId tme now = do
+  let pidTxt = pid.toText
+      (start, end) = case tme of
+        Nothing -> (addUTCTime (-(14 * 24 * 3600)) now, now)
+        Just ts -> (addUTCTime (-(60 * 5)) ts, addUTCTime (60 * 5) ts)
+  Hasql.interp
+    [HI.sql|
       SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
                   COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and timestamp BETWEEN ? AND ? and context___trace_id=? ORDER BY start_time ASC;
-        |]
+              FROM otel_logs_and_spans where project_id=#{pidTxt} and timestamp BETWEEN #{start} AND #{end} and context___trace_id=#{trId} ORDER BY start_time ASC
+    |]
 
 
 getSpanRecordsByTraceIds :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Maybe UTCTime -> Eff es [OtelLogsAndSpans]
 getSpanRecordsByTraceIds pid traceIds tme = do
   now <- Time.currentTime
-  let (start, end) = case tme of
-        Nothing -> (formatUTC $ addUTCTime (-86400) now, formatUTC now)
-        Just ts -> (formatUTC $ addUTCTime (-300) ts, formatUTC $ addUTCTime 300 ts)
-      q =
-        [text|
-          SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
+  let (start, end') = case tme of
+        Nothing -> (addUTCTime (-86400) now, now)
+        Just ts -> (addUTCTime (-300) ts, addUTCTime 300 ts)
+      pidText = pid.toText
+      traceIdsList = V.toList traceIds
+  Hasql.interp
+    [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
                  body, attributes, resource, COALESCE(hashes, '{}'), kind, status_code, status_message,
                  COALESCE(start_time, timestamp), end_time, events, links, duration, name,
                  parent_id, summary, date::timestamptz
           FROM otel_logs_and_spans
-          WHERE project_id = ?
-            AND timestamp >= '${start}'
-            AND timestamp <= '${end}'
-            AND context___trace_id = ANY(?)
-          ORDER BY context___trace_id ASC, start_time ASC;
-        |]
-  PG.query (Query $ encodeUtf8 q) (pid.toText, traceIds)
+          WHERE project_id = #{pidText}
+            AND timestamp >= #{start}
+            AND timestamp <= #{end'}
+            AND context___trace_id = ANY(#{traceIdsList})
+          ORDER BY context___trace_id ASC, start_time ASC |]
 
 
 spanRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByProjectAndId pid createdAt rdId = listToMaybe <$> PG.query q (createdAt, pid.toText, rdId)
-  where
-    q =
-      [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where (timestamp=?)  and project_id=? and id=? LIMIT 1|]
+spanRecordByProjectAndId pid createdAt rdId = do
+  let pidTxt = pid.toText
+  Hasql.interpOne
+    [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
+                COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
+            FROM otel_logs_and_spans where (timestamp=#{createdAt})  and project_id=#{pidTxt} and id=#{rdId} LIMIT 1|]
 
 
 spanRecordByName :: DB es => Projects.ProjectId -> Text -> Text -> Eff es (Maybe OtelLogsAndSpans)
-spanRecordByName pid trId spanName = listToMaybe <$> PG.query q (pid.toText, trId, spanName)
-  where
-    q =
-      [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-                  COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
-              FROM otel_logs_and_spans where project_id=? and context___trace_id = ? and name=? LIMIT 1|]
+spanRecordByName pid trId spanName = do
+  let pidTxt = pid.toText
+  Hasql.interpOne
+    [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
+                COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
+            FROM otel_logs_and_spans where project_id=#{pidTxt} and context___trace_id = #{trId} and name=#{spanName} LIMIT 1|]
 
 
 getDataPointsData :: (DB es, Time.Time :> es) => Projects.ProjectId -> (Maybe UTCTime, Maybe UTCTime) -> Eff es [MetricDataPoint]
 getDataPointsData pid dateRange = do
   now <- Time.currentTime
-  let nowStr = formatUTC now
-      dateRangeStr = case dateRange of
-        (Nothing, Just b) -> "AND timestamp BETWEEN '" <> nowStr <> "' AND '" <> formatUTC b <> "'"
-        (Just a, Just b) -> "AND timestamp BETWEEN '" <> formatUTC a <> "' AND '" <> formatUTC b <> "'"
-        _ -> ""
-      q =
-        [text|
-WITH metrics_aggregated AS (
-    SELECT
-        project_id,
-        metric_name,
-        COUNT(*) AS data_points
-    FROM telemetry.metrics
-    WHERE project_id = ? $dateRangeStr
-    GROUP BY project_id, metric_name
-)
-SELECT
-    mm.metric_name,
-    mm.metric_type,
-    mm.metric_unit,
-    mm.metric_description,
-    COALESCE(ma.data_points, 0) AS data_points,
-    ARRAY_AGG(mm.service_name) AS service_names,
-    '{}'::text[] AS labels
-FROM telemetry.metrics_meta mm
-LEFT JOIN metrics_aggregated ma
-    ON mm.project_id = ma.project_id
-    AND mm.metric_name = ma.metric_name
-WHERE mm.project_id = ?
-GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, ma.data_points;
-|]
-  PG.query (Query $ Relude.encodeUtf8 q) (pid, pid)
+  let dateFilter = case dateRange of
+        (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{now} AND #{b} |]
+        (Just a, Just b) -> [HI.sql| AND timestamp BETWEEN #{a} AND #{b} |]
+        _ -> mempty
+  Hasql.interp $
+    [HI.sql| WITH metrics_aggregated AS (
+        SELECT project_id, metric_name, COUNT(*)::int AS data_points
+        FROM telemetry.metrics
+        WHERE project_id = #{pid} |] <> dateFilter <> [HI.sql|
+        GROUP BY project_id, metric_name
+    )
+    SELECT mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description,
+           COALESCE(ma.data_points, 0) AS data_points,
+           ARRAY_AGG(mm.service_name) AS service_names, '{}'::text[] AS labels
+    FROM telemetry.metrics_meta mm
+    LEFT JOIN metrics_aggregated ma ON mm.project_id = ma.project_id AND mm.metric_name = ma.metric_name
+    WHERE mm.project_id = #{pid}
+    GROUP BY mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description, ma.data_points |]
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
-getMetricData pid metricName = listToMaybe <$> PG.query q (pid, metricName, pid, metricName)
-  where
-    q =
-      [sql|
-      SELECT
-            mm.metric_name,
-            mm.metric_type,
-            mm.metric_unit,
-            mm.metric_description,
-            COALESCE(m.data_points, 0) AS data_points,
-            COALESCE(m.service_names, ARRAY[mm.service_name]::text[]) AS service_names,
-            COALESCE(m.metric_labels, ARRAY[]::text[]) AS metric_labels
+getMetricData pid metricName = Hasql.interpOne
+  [HI.sql| SELECT mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description,
+           COALESCE(m.data_points, 0) AS data_points,
+           COALESCE(m.service_names, ARRAY[mm.service_name]::text[]) AS service_names,
+           COALESCE(m.metric_labels, ARRAY[]::text[]) AS metric_labels
       FROM telemetry.metrics_meta mm
       LEFT JOIN LATERAL (
-          SELECT
-              COUNT(*) AS data_points,
+          SELECT COUNT(*)::int AS data_points,
               ARRAY_AGG(DISTINCT COALESCE(resource->>'service.name', 'unknown'))::text[] AS service_names,
               COALESCE(
-                  (SELECT ARRAY_AGG(DISTINCT key) 
-                   FROM (
-                       SELECT DISTINCT jsonb_object_keys(attributes) AS key 
-                       FROM telemetry.metrics 
-                       WHERE project_id = ? AND metric_name = ? AND attributes IS NOT NULL
-                   ) AS unique_keys
-                  ),
+                  (SELECT ARRAY_AGG(DISTINCT key)
+                   FROM (SELECT DISTINCT jsonb_object_keys(attributes) AS key
+                         FROM telemetry.metrics
+                         WHERE project_id = #{pid} AND metric_name = #{metricName} AND attributes IS NOT NULL
+                   ) AS unique_keys),
                   ARRAY[]::text[]
               ) AS metric_labels
           FROM telemetry.metrics
           WHERE project_id = mm.project_id AND metric_name = mm.metric_name
       ) m ON true
-      WHERE mm.project_id = ? AND mm.metric_name = ?
-      LIMIT 1;
-        |]
+      WHERE mm.project_id = #{pid} AND mm.metric_name = #{metricName}
+      LIMIT 1 |]
 
 
 getTotalEventsToReport :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
 getTotalEventsToReport pid lastReported = do
-  result <- PG.query q (pid.toText, lastReported)
-  case result of
-    [Only c] -> return c
-    v -> return $ length v
-  where
-    q =
-      [sql| SELECT count(*) FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?|]
+  let pidText = pid.toText
+  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::int FROM otel_logs_and_spans WHERE project_id=#{pidText} AND timestamp > #{lastReported}|]
 
 
 getTotalMetricsCount :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int
-getTotalMetricsCount pid lastReported = do
-  result <- PG.query q (pid, lastReported)
-  case result of
-    [Only c] -> return c
-    v -> return $ length v
-  where
-    q =
-      [sql| SELECT count(*) FROM telemetry.metrics WHERE project_id=? AND timestamp > ?|]
+getTotalMetricsCount pid lastReported =
+  fromMaybe 0 <$> Hasql.interpOne [HI.sql| SELECT count(*)::int FROM telemetry.metrics WHERE project_id=#{pid} AND timestamp > #{lastReported}|]
 
 
 getMetricChartListData :: DB es => Projects.ProjectId -> Maybe Text -> Maybe Text -> Eff es [MetricChartListData]
 getMetricChartListData pid sourceM prefixM = do
   let sourceFilter = case sourceM of
-        Nothing -> ""
-        Just source -> if source == "" || source == "all" then "" else "AND service_name = '" <> source <> "'"
+        Just source | source /= "" && source /= "all" -> [HI.sql| AND service_name = #{source}|]
+        _ -> mempty
       prefixFilter = case prefixM of
-        Nothing -> ""
-        Just prefix -> if prefix == "" || prefix == "all" then "" else "AND metric_name LIKE '" <> prefix <> "%'"
-      q =
-        [text|
-          SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
-                 MAX(metric_description) as metric_description, MAX(updated_at) as last_seen
-          FROM telemetry.metrics_meta WHERE project_id = ? $sourceFilter $prefixFilter
-          GROUP BY metric_name
-          ORDER BY MAX(updated_at) DESC, metric_name;
-       |]
-  PG.query (Query $ Relude.encodeUtf8 q) pid
+        Just prefix | prefix /= "" && prefix /= "all" -> let pat = prefix <> "%" in [HI.sql| AND metric_name LIKE #{pat}|]
+        _ -> mempty
+  Hasql.interp $
+    [HI.sql| SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
+             MAX(metric_description) as metric_description, MAX(updated_at) as last_seen
+      FROM telemetry.metrics_meta WHERE project_id = #{pid} |] <> sourceFilter <> prefixFilter
+      <> [HI.sql| GROUP BY metric_name ORDER BY MAX(updated_at) DESC, metric_name |]
 
 
 getMetricLabelValues :: DB es => Projects.ProjectId -> Text -> Text -> Eff es [Text]
-getMetricLabelValues pid metricName labelName = coerce @[Only Text] @[Text] <$> PG.query q (labelName, pid, metricName)
-  where
-    q = [sql| SELECT DISTINCT attributes->>? FROM telemetry.metrics WHERE project_id = ? AND metric_name = ?|]
+getMetricLabelValues pid metricName labelName =
+  Hasql.interp [HI.sql| SELECT DISTINCT attributes->>#{labelName} FROM telemetry.metrics WHERE project_id = #{pid} AND metric_name = #{metricName}|]
 
 
 getMetricServiceNames :: DB es => Projects.ProjectId -> Eff es [Text]
-getMetricServiceNames pid = coerce @[Only Text] @[Text] <$> PG.query q pid
-  where
-    q =
-      [sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = ?|]
+getMetricServiceNames pid =
+  Hasql.interp [HI.sql| SELECT DISTINCT service_name FROM telemetry.metrics_meta WHERE project_id = #{pid}|]
 
 
 bulkInsertMetrics :: DB es => V.Vector MetricRecord -> Eff es ()
-bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ do
-  void $ PG.executeMany q (V.toList $ V.map metricToRow metrics)
-  void $ PG.executeMany q2 (removeDuplic $ V.toList $ V.map metaToTuple metrics)
+bulkInsertMetrics metrics = checkpoint "bulkInsertMetrics" $ unless (V.null metrics) do
+  -- 23 params per row; PostgreSQL limit is 65535 params → max ~2849 rows per INSERT
+  forM_ (chunksOf 2800 $ V.toList metrics) \chunk -> do
+    let metricRows = map metricRowSql chunk
+    Hasql.interpExecute_ $ "INSERT INTO telemetry.metrics (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp, attributes, resource, instrumentation_scope, metric_value, exemplars, flags, value, metric_sum, metric_count, bucket_counts, explicit_bounds, point_min, point_max, quantiles, aggregation_temporality, is_monotonic) VALUES " <> mconcat (intersperse ", " metricRows)
+  let metas = map metaRowSql $ removeDuplic $ V.toList $ V.map metaTuple metrics
+  unless (null metas) $ Hasql.interpExecute_ $ "INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description, service_name) VALUES " <> mconcat (intersperse ", " metas) <> " ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description, updated_at = current_timestamp"
   where
-    q =
-      [sql|
-        INSERT INTO telemetry.metrics
-        (project_id, metric_name, metric_type, metric_unit, metric_description, metric_time, timestamp,
-         attributes, resource, instrumentation_scope, metric_value, exemplars, flags,
-         value, metric_sum, metric_count, bucket_counts, explicit_bounds, point_min, point_max, quantiles,
-         aggregation_temporality, is_monotonic)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-     |]
-    q2 =
-      [sql|
-       INSERT INTO telemetry.metrics_meta (project_id, metric_name, metric_type, metric_unit, metric_description, service_name) VALUES (?, ?, ?, ?, ?, ?)
-       ON CONFLICT (project_id, metric_name, service_name) DO UPDATE SET metric_type = EXCLUDED.metric_type, metric_unit = EXCLUDED.metric_unit, metric_description = EXCLUDED.metric_description, updated_at = current_timestamp
-    |]
-
-    metaToTuple entry = (entry.projectId, entry.metricName, entry.metricType, entry.metricUnit, entry.metricDescription, fromMaybe "unknown" $ lookupValueText entry.resource "service.name")
-    metricToRow entry =
-      ( entry.projectId
-      , entry.metricName
-      , entry.metricType
-      , entry.metricUnit
-      , entry.metricDescription
-      , entry.metricTime
-      , entry.timestamp
-      , entry.attributes
-      , entry.resource
-      , entry.instrumentationScope
-      , entry.metricValue
-      , entry.exemplars
-      , entry.flags
-      )
-        :. metricValueToNative entry.metricValue
-        :. (entry.aggregationTemporality, entry.isMonotonic)
+    metricRowSql (m :: MetricRecord) =
+      let NativeMetricColumns{nValue, nSum, nCount, nBucketCounts, nExplicitBounds, nPointMin, nPointMax, nQuantiles} = metricValueToNative m.metricValue
+          MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription, metricTime, timestamp, attributes, resource, instrumentationScope, metricValue, exemplars, flags, aggregationTemporality, isMonotonic} = m
+       in [HI.sql|(#{projectId}, #{metricName}, #{metricType}, #{metricUnit}, #{metricDescription}, #{metricTime}, #{timestamp}, #{attributes}, #{resource}, #{instrumentationScope}, #{metricValue}, #{exemplars}, #{flags}, #{nValue}, #{nSum}, #{nCount}, #{nBucketCounts}, #{nExplicitBounds}, #{nPointMin}, #{nPointMax}, #{nQuantiles}, #{aggregationTemporality}, #{isMonotonic})|]
+    metaTuple (m :: MetricRecord) =
+      let svc = fromMaybe "unknown" $ lookupValueText m.resource "service.name"
+          MetricRecord{projectId, metricName, metricType, metricUnit, metricDescription} = m
+       in (projectId, metricName, metricType, metricUnit, metricDescription, svc)
+    metaRowSql (pid, mName, mType, mUnit, mDesc, svc) =
+      [HI.sql|(#{pid}, #{mName}, #{mType}, #{mUnit}, #{mDesc}, #{svc})|]
 
 
 -- | Mint a fresh UUID for every row's `id` field. Call this once at the ingestion
@@ -1109,6 +1047,7 @@ data Severity = Severity
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (FromField, ToField) via AesonText Severity
+  deriving (HI.DecodeValue, HI.EncodeValue) via AesonText Severity
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Severity
 
 
@@ -1122,6 +1061,7 @@ data Context = Context
   deriving (Generic, Show)
   deriving anyclass (FromRow, NFData, ToRow)
   deriving (FromField, ToField) via AesonText Context
+  deriving (HI.DecodeValue, HI.EncodeValue) via AesonText Context
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake Context
 
 
@@ -1156,12 +1096,45 @@ data OtelLogsAndSpans = OtelLogsAndSpans
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake OtelLogsAndSpans
 
 
--- Custom FromRow instance that matches the column order in specific SELECT queries
+-- Custom FromRow/DecodeRow instances match the column order in SELECT queries:
+-- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
+-- hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
+instance HI.DecodeRow OtelLogsAndSpans where
+  decodeRow = do
+    project_id' <- HI.decodeRow
+    id' <- HI.decodeRow
+    timestamp' <- HI.decodeRow
+    observed_timestamp' <- HI.decodeRow
+    context' <- HI.decodeRow
+    level' <- HI.decodeRow
+    severity' <- HI.decodeRow
+    body' <- HI.decodeRow
+    attributes' <- HI.decodeRow
+    resource' <- HI.decodeRow
+    hashes' <- HI.decodeRow
+    kind' <- HI.decodeRow
+    status_code' <- HI.decodeRow
+    status_message' <- HI.decodeRow
+    start_time' <- HI.decodeRow
+    end_time' <- HI.decodeRow
+    events' <- HI.decodeRow
+    links' <- HI.decodeRow
+    duration' <- HI.decodeRow
+    name' <- HI.decodeRow
+    parent_id' <- HI.decodeRow
+    summary' <- HI.decodeRow
+    date' <- HI.decodeRow
+    pure OtelLogsAndSpans
+      { id = id', project_id = project_id', timestamp = timestamp', parent_id = parent_id'
+      , observed_timestamp = observed_timestamp', hashes = hashes', name = name', kind = kind'
+      , status_code = status_code', status_message = status_message', level = level', severity = severity'
+      , body = body', duration = duration', start_time = start_time', end_time = end_time'
+      , context = context', events = events', links = links', attributes = attributes'
+      , resource = resource', summary = summary', date = date', errors = Nothing
+      }
+
 instance FromRow OtelLogsAndSpans where
   fromRow = do
-    -- Order from SELECT queries in this file:
-    -- project_id, id, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
-    -- hashes, kind, status_code, status_message, start_time, end_time, events, links, duration, name, parent_id, summary, date
     project_id' <- field
     id' <- field
     timestamp' <- field
@@ -1338,22 +1311,22 @@ extractATError _ _ = Nothing
 
 
 getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsForReport projectId start end = PG.query q (projectId.toText, start, end)
-  where
-    q =
-      [sql| SELECT resource___service___name AS service_name,  COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL) AS total_error_events, COUNT(*) AS total_events
-           FROM otel_logs_and_spans
-           WHERE project_id = ? AND timestamp >= ? AND timestamp <= ? AND resource___service___name is not null
-           GROUP BY resource___service___name 
-           ORDER BY total_events DESC;
-        |]
+getProjectStatsForReport projectId start end = do
+  let pidTxt = projectId.toText
+  Hasql.interp
+    [HI.sql| SELECT resource___service___name AS service_name,  (COUNT(*) FILTER ( WHERE status_code = 'ERROR' OR attributes___exception___type IS NOT NULL))::int AS total_error_events, COUNT(*)::int AS total_events
+         FROM otel_logs_and_spans
+         WHERE project_id = #{pidTxt} AND timestamp >= #{start} AND timestamp <= #{end} AND resource___service___name is not null
+         GROUP BY resource___service___name
+         ORDER BY total_events DESC
+      |]
 
 
 getProjectStatsBySpanType :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]
-getProjectStatsBySpanType projectId start end = PG.query q (projectId.toText, start, end)
-  where
-    q =
-      [sql|
+getProjectStatsBySpanType projectId start end = do
+  let pidTxt = projectId.toText
+  Hasql.interp
+    [HI.sql|
         SELECT
           CASE
             WHEN attributes___http___request___method IS NOT NULL THEN 'http'
@@ -1363,39 +1336,38 @@ getProjectStatsBySpanType projectId start end = PG.query q (projectId.toText, st
             WHEN kind = 'internal' THEN 'internal'
             ELSE 'other'
           END AS span_type,
-          COUNT(*) AS total_events,
-          AVG(duration)::BIGINT AS avg_duration
+          COUNT(*)::int AS total_events,
+          AVG(duration)::int AS avg_duration
         FROM otel_logs_and_spans
-        WHERE project_id = ?
-          AND timestamp >= ?
-          AND timestamp <= ?
+        WHERE project_id = #{pidTxt}
+          AND timestamp >= #{start}
+          AND timestamp <= #{end}
           AND kind != 'log'
         GROUP BY span_type
-        ORDER BY total_events DESC;
+        ORDER BY total_events DESC
       |]
 
 
 getEndpointStats :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Text, Text, Int, Int)]
-getEndpointStats projectId start end = PG.query q (projectId, start, end)
-  where
-    q =
-      [sql|
+getEndpointStats projectId start end = do
+  Hasql.interp
+    [HI.sql|
 SELECT
     COALESCE(attributes___server___address, attributes->'net'->'host'->>'name', attributes->'http'->>'host', NULLIF(split_part(split_part(split_part(attributes___url___full, '://', 2), '/', 1), ':', 1), ''), resource___service___name, '') AS host,
     COALESCE(attributes___http___request___method, 'GET') AS method,
     COALESCE(attributes___url___path, '') AS url_path,
-    CAST(ROUND(AVG(COALESCE(duration, 0))) AS BIGINT) AS average_duration,
-    COUNT(*) AS request_count
+    CAST(ROUND(AVG(COALESCE(duration, 0))) AS INT) AS average_duration,
+    COUNT(*)::int AS request_count
 FROM otel_logs_and_spans
-WHERE 
-    project_id = ?::text
-    AND timestamp > ? AND timestamp < ?
+WHERE
+    project_id = #{projectId}::text
+    AND timestamp > #{start} AND timestamp < #{end}
     AND attributes___http___request___method IS NOT NULL
 GROUP BY
     host, method, url_path
 ORDER BY
     request_count DESC,
-    average_duration DESC;
+    average_duration DESC
     |]
 
 
@@ -1423,16 +1395,15 @@ getDBQueryStats projectId start end = do
 getTraceShapes :: (DB es, Time.Time :> es) => Projects.ProjectId -> V.Vector Text -> Eff es [(Text, Text, Int, Int)]
 getTraceShapes pid trIds = do
   now <- Time.currentTime
-  PG.query q (pid.toText, now, trIds, pid.toText, now, pid.toText, now)
-  where
-    q =
-      [sql|
+  let pidTxt = pid.toText
+  Hasql.interp
+    [HI.sql|
       WITH target_trace_spans AS (
         SELECT DISTINCT context___trace_id, name
         FROM otel_logs_and_spans
-        WHERE project_id = ?
-          AND timestamp > ?::timestamptz - interval '1 hour'
-          AND context___trace_id = ANY(?)
+        WHERE project_id = #{pidTxt}
+          AND timestamp > #{now}::timestamptz - interval '1 hour'
+          AND context___trace_id = ANY(#{trIds})
       ),
       target_shapes AS (
         SELECT
@@ -1446,8 +1417,8 @@ getTraceShapes pid trIds = do
           context___trace_id AS trace_id,
           ARRAY_AGG(DISTINCT name ORDER BY name) AS span_names
         FROM otel_logs_and_spans
-        WHERE project_id = ?
-          AND timestamp > ?::timestamptz - interval '1 hour'
+        WHERE project_id = #{pidTxt}
+          AND timestamp > #{now}::timestamptz - interval '1 hour'
           AND context___trace_id IS NOT NULL
         GROUP BY context___trace_id
       ),
@@ -1462,16 +1433,16 @@ getTraceShapes pid trIds = do
       SELECT
         m.target_trace_id,
         s.name,
-        AVG(s.duration)::BIGINT AS avg_duration,
-        COUNT(*) AS span_count
+        AVG(s.duration)::int AS avg_duration,
+        COUNT(*)::int AS span_count
       FROM otel_logs_and_spans s
       JOIN matching_traces m
         ON s.context___trace_id = m.trace_id
-      WHERE s.project_id = ?
-        AND s.timestamp > ?::timestamptz - interval '1 hour' and s.name IS NOT NULL
+      WHERE s.project_id = #{pidTxt}
+        AND s.timestamp > #{now}::timestamptz - interval '1 hour' and s.name IS NOT NULL
       GROUP BY m.target_trace_id, s.name
-      ORDER BY m.target_trace_id, s.name;
-      |]
+      ORDER BY m.target_trace_id, s.name
+    |]
 
 
 mkSystemLog

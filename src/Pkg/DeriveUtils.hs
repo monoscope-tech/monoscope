@@ -13,7 +13,6 @@ module Pkg.DeriveUtils (
   WrappedEnumShow (..),
   addKeepaliveParams,
   connectPostgreSQL,
-  runConnectionPool,
   idToText,
   idFromText,
   unAesonText,
@@ -23,18 +22,20 @@ module Pkg.DeriveUtils (
   showPGFloatArray,
   textArrayEnc,
   mkHasqlPool,
-  withTimefusion,
+  rawSql,
+  selectFrom,
 ) where
 
 import Control.Exception (throwIO)
 import Control.Lens ((?~))
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
 import Data.CaseInsensitive (CI, FoldCase)
-import Data.CaseInsensitive qualified as CI (mk)
+import Data.CaseInsensitive qualified as CI (mk, original)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
-import Data.Effectful.Hasql qualified as EHasql
+import Data.Effectful.Hasql (Hasql)
 import Data.IntMap qualified as IntMap
 import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
 import Data.OpenApi qualified as OpenApi
@@ -42,24 +43,25 @@ import Data.OpenApi.Internal.Schema (GToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display (..))
 import Data.Text.Lazy qualified as TL
-import Data.Time (UTCTime, ZonedTime)
+import Data.Time (UTCTime, ZonedTime, utc, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Entity (_select)
+import Database.PostgreSQL.Entity.Types (Entity)
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple (Connection, FromRow, ResultError (..), ToRow)
+import Database.PostgreSQL.Simple.Types (PGArray (..), Query (..))
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Effectful (Eff, IOE, type (:>))
-import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift)
-import Effectful.Labeled (Labeled)
-import Effectful.PostgreSQL.Connection (WithConnection (..))
+import Effectful (IOE, type (:>))
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
 import GHC.TypeLits (KnownSymbol, Symbol, symbolVal)
 import Hasql.Connection.Setting qualified as HCS
 import Hasql.Connection.Setting.Connection qualified as HCSC
+import Hasql.Decoders qualified as D
 import Hasql.Encoders qualified as E
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HPool
@@ -72,19 +74,10 @@ import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (FromHttpApiData (..))
 import Text.Casing (fromSnake, quietSnake, toPascal)
-import UnliftIO.Pool qualified as Pool
 
 
-type DB es = (WithConnection :> es, IOE :> es)
+type DB es = (Hasql :> es, IOE :> es)
 
-
--- | Route a WithConnection action through the timefusion pool when enabled,
--- otherwise use the main pool. Lives here (rather than `System.Types`) so
--- leaf modules like `Telemetry` / `LogQueries` can call it without pulling
--- in `AuthContext` — that import path is part of the cycle that keeps the
--- extraction worker from naming `OtelLogsAndSpans` concretely.
-withTimefusion :: (DB es, Labeled "timefusion" WithConnection :> es) => Bool -> Eff (WithConnection ': es) a -> Eff es a
-withTimefusion = EHasql.withLabeled @"timefusion" @WithConnection
 
 
 -- | Newtype wrapper for JSON fields that can handle JSONB, ByteString, and varchar/text columns
@@ -119,6 +112,12 @@ instance (AE.FromJSON a, Typeable a) => FromField (AesonText a) where
 instance AE.ToJSON a => ToField (AesonText a) where
   toField (AesonText v) = toField (Aeson v)
 
+instance AE.FromJSON a => HI.DecodeValue (AesonText a) where
+  decodeValue = coerce (HI.decodeValue @(HI.AsJsonb a))
+
+instance AE.ToJSON a => HI.EncodeValue (AesonText a) where
+  encodeValue = coerce (HI.encodeValue @(HI.AsJsonb a))
+
 
 -- | Unwrap an AesonText value
 unAesonText :: AesonText a -> a
@@ -141,7 +140,7 @@ newtype PGTextArray = PGTextArray (V.Vector Text)
 newtype UUIDId (name :: Symbol) = UUIDId {unUUIDId :: UUID.UUID}
   deriving stock (Generic, Read, Show, THS.Lift)
   deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Hashable, NFData, Ord, ToField)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
 
 
 instance KnownSymbol name => ToSchema (UUIDId name) where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
@@ -184,6 +183,17 @@ instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnum pref
             Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
+instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnum prefix a) where
+  encodeValue = E.enum (\(WrappedEnum a) -> T.toUpper $ toText $ drop (length $ symbolVal (Proxy @prefix)) $ show a)
+
+
+instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnum prefix a) where
+  decodeValue = D.enum \t -> WrappedEnum <$> readMaybe (symbolVal (Proxy @prefix) <> toString (T.toTitle t))
+
+instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnum prefix a) where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+
 newtype WrappedEnumSC (prefix :: Symbol) a = WrappedEnumSC a
   deriving (Generic)
 
@@ -206,6 +216,31 @@ instance (KnownSymbol prefix, Read a, Typeable a) => FromField (WrappedEnumSC pr
     Just bss -> maybe (returnError ConversionFailed f $ "Cannot parse: " <> str) (pure . WrappedEnumSC) $ decodeEnumSC @prefix str
       where
         str = toString @Text (decodeUtf8 bss)
+
+
+instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnumSC prefix a) where
+  encodeValue = E.enum (\(WrappedEnumSC a) -> toText $ encodeEnumSC @prefix a)
+
+
+instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnumSC prefix a) where
+  decodeValue = D.enum (fmap WrappedEnumSC . decodeEnumSC @prefix . toString)
+
+instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC prefix a) where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+
+instance HI.DecodeValue ZonedTime where
+  decodeValue = utcToZonedTime utc <$> D.timestamptz
+
+instance (HI.DecodeValue a) => HI.DecodeValue (PGArray a) where
+  decodeValue = PGArray . V.toList <$> HI.decodeValue
+
+instance (HI.EncodeValue a) => HI.EncodeValue (PGArray a) where
+  encodeValue = contramap (\(PGArray xs) -> V.fromList xs) HI.encodeValue
+
+
+instance HI.EncodeValue ZonedTime where
+  encodeValue = contramap zonedTimeToUTC E.timestamptz
 
 
 instance (KnownSymbol prefix, Show a) => Display (WrappedEnumSC prefix a) where
@@ -265,10 +300,18 @@ instance (Read a, Typeable a) => FromField (WrappedEnumShow a) where
             Nothing -> returnError ConversionFailed f $ "Cannot parse: " <> str
 
 
+instance Show a => HI.EncodeValue (WrappedEnumShow a) where
+  encodeValue = E.enum (\(WrappedEnumShow a) -> toText $ show a)
+
+
+instance Read a => HI.DecodeValue (WrappedEnumShow a) where
+  decodeValue = D.enum (fmap WrappedEnumShow . readMaybe . toString)
+
+
 data BaselineState = BSLearning | BSEstablished
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "BS" BaselineState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "BS" BaselineState
 
 
 addKeepaliveParams :: ByteString -> ByteString
@@ -277,12 +320,6 @@ addKeepaliveParams connStr =
       sep = if T.isInfixOf "?" (decodeUtf8 connStr) then "&" else "?"
    in connStr <> sep <> params
 
-
-runConnectionPool :: (HasCallStack, IOE :> es) => Pool.Pool Connection -> Eff (WithConnection ': es) a -> Eff es a
-runConnectionPool pool = interpret $ \env -> \case
-  WithConnection f ->
-    localSeqUnlift env $ \unlift ->
-      Pool.withResource pool (unlift . f)
 
 
 connectPostgreSQL :: ByteString -> IO Connection
@@ -359,6 +396,85 @@ instance ToSchema AET.Value where
   declareNamedSchema _ = pure $ NamedSchema (Just "JSONValue") mempty
 
 
+-- Types without Generic need explicit DecodeRow via OneColumn.
+instance HI.DecodeRow UUID.UUID where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeValue a => HI.DecodeRow (V.Vector a) where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeRow Text where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeRow Int64 where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeRow Int where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeRow Bool where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeRow UTCTime where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeRow Double where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+instance HI.DecodeValue a => HI.DecodeRow (Maybe a) where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+
+-- Int has no hasql instances (uses Int32/Int64). Map to int8 to match postgresql-simple.
+instance HI.DecodeValue Int where
+  decodeValue = fromIntegral <$> D.int8
+
+instance HI.EncodeValue Int where
+  encodeValue = contramap (fromIntegral @Int @Int64) E.int8
+
+instance HI.DecodeValue Integer where
+  decodeValue = fromIntegral <$> D.int8
+
+instance HI.EncodeValue Integer where
+  encodeValue = contramap (fromIntegral @Integer @Int64) E.int8
+
+
+instance HI.DecodeValue AET.Value where
+  decodeValue = D.jsonb
+
+instance HI.DecodeRow AET.Value where
+  decodeRow = HI.getOneColumn <$> HI.decodeRow
+
+
+instance HI.EncodeValue AET.Value where
+  encodeValue = E.jsonb
+
+
+instance HI.DecodeValue (Map Text AET.Value) where
+  decodeValue = D.refine toMap D.jsonb
+    where
+      toMap (AET.Object o) = Right $ KEM.toMapText o
+      toMap other = Left $ "Expected JSON object, got: " <> show other
+
+
+instance HI.EncodeValue (Map Text AET.Value) where
+  encodeValue = contramap (AET.Object . KEM.fromMapText) E.jsonb
+
+
+instance (AET.FromJSON a) => HI.DecodeValue (Aeson a) where
+  decodeValue = D.refine (\v -> bimap toText Aeson $ AET.parseEither AET.parseJSON v) D.jsonb
+
+instance (AET.ToJSON a) => HI.EncodeValue (Aeson a) where
+  encodeValue = contramap (\(Aeson a) -> AET.toJSON a) E.jsonb
+
+
+instance HI.DecodeValue (CI Text) where
+  decodeValue = CI.mk <$> D.text
+
+instance HI.EncodeValue (CI Text) where
+  encodeValue = contramap CI.original E.text
+
+
 instance (Default s, FoldCase s) => Default (CI s) where
   def = CI.mk def
   {-# INLINE def #-}
@@ -396,3 +512,16 @@ mkHasqlPool sz cstr =
       , HPC.idlenessTimeout 1800
       , HPC.staticConnectionSettings [HCS.connection (HCSC.string (decodeUtf8 cstr))]
       ]
+
+
+-- | Embed a raw @Text@ value as a literal SQL fragment (no escaping/parameterization).
+-- Use only for column/table names and other trusted fragments, never user input.
+rawSql :: Text -> HI.Sql
+rawSql = fromString . toString
+
+
+-- | Convert pg-entity's @_select \@Entity@ to an @HI.Sql@ fragment.
+-- Produces @SELECT col1, col2, ... FROM schema.table@, ready to append
+-- a WHERE clause via @<> [HI.sql| WHERE ... |]@.
+selectFrom :: forall e. Entity e => HI.Sql
+selectFrom = rawSql $ decodeUtf8 $ fromQuery (_select @e)

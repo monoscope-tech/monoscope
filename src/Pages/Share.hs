@@ -4,10 +4,8 @@ import Data.Default (def)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.Labeled (labeled)
-import Effectful.PostgreSQL (WithConnection)
-import Effectful.PostgreSQL qualified as PG
+import Data.Effectful.Hasql qualified as Hasql
+import Hasql.Interpolate qualified as HI
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Lucid
@@ -37,11 +35,10 @@ shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
   let eventType = fromMaybe "request" reqTypeM
   shareId <- liftIO UUIDV4.nextRandom
-  res <-
-    PG.execute
-      [sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
-                              VALUES (?,?,?,?,?) |]
-      (shareId, pid, eventId, eventType, createdAt)
+  void
+    $ Hasql.interpExecute
+      [HI.sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
+                              VALUES (#{shareId},#{pid},#{eventId},#{eventType},#{createdAt}) |]
   addRespHeaders $ ShareLinkPost $ show shareId
 
 
@@ -88,7 +85,7 @@ shareLinkGetH sid = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   -- FIXME: handle errors
   now <- Time.currentTime
-  r <- listToMaybe <$> PG.query [sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=? and created_at > ?::timestamptz - interval '48 hours' limit 1|] (sid, now)
+  r <- Hasql.interpOne [HI.sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=#{sid} and created_at > #{now}::timestamptz - interval '48 hours' limit 1|]
   uiM <- do
     case r of
       Just (pid, eventId, eventType, createdAt) -> do
@@ -100,10 +97,8 @@ shareLinkGetH sid = do
               Nothing -> Nothing
           -- Also "span"
           _ -> do
-            spanItem <-
-              if authCtx.env.enableTimefusionReads
-                then labeled @"timefusion" @WithConnection $ Telemetry.spanRecordByProjectAndId pid createdAt eventId
-                else Telemetry.spanRecordByProjectAndId pid createdAt eventId
+            spanItem <- Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads $
+              Telemetry.spanRecordByProjectAndId pid createdAt eventId
             pure case spanItem of
               Just spn -> Just $ LogItem.expandedItemView pid spn Nothing Nothing Nothing
               Nothing -> Nothing

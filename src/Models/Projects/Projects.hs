@@ -88,30 +88,29 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Default
+import Data.Effectful.Hasql qualified as EHasql
+import Hasql.Interpolate qualified as HI
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.UUID qualified as UUID
-import Data.Pool (Pool)
+import Hasql.Pool qualified as HPool
 import Data.Text qualified as T
 import Data.Text.Display
 import Data.Time (UTCTime, ZonedTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only, fromOnly), ToRow)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Error.Static (throwError)
 import Effectful.Error.Static qualified as EffError
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, runConnectionPool)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
@@ -131,9 +130,9 @@ instance AE.ToJSON (CI.CI Text) where
 newtype UserId = UserId {getUserId :: UUID.UUID}
   deriving stock (Eq, Generic, Show)
   deriving newtype (NFData)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
   deriving
-    (AE.FromJSON, AE.ToJSON, Default, FromField, FromHttpApiData, Ord, ToField)
+    (AE.FromJSON, AE.ToJSON, Default, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Ord, ToField)
     via UUID.UUID
 
 
@@ -151,11 +150,11 @@ data User = User
   , lastName :: Text
   , displayImageUrl :: Text
   , email :: CI.CI Text
-  , phoneNumber :: Maybe Text
   , isSudo :: Bool
+  , phoneNumber :: Maybe Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "users", PrimaryKey "id", FieldModifiers '[CamelToSnake]] User)
@@ -189,27 +188,26 @@ createUser firstName lastName picture email = do
 
 
 insertUser :: DB es => User -> Eff es ()
-insertUser user = void $ PG.execute (_insert @User) user
+insertUser u = do
+  let (uId, uCr, uUp, uDel, uAct, uFn, uLn, uImg, uEm, uPh, uSudo) =
+        (u.id, u.createdAt, u.updatedAt, u.deletedAt, u.active, u.firstName, u.lastName, u.displayImageUrl, u.email, u.phoneNumber, u.isSudo)
+  EHasql.interpExecute_ [HI.sql| INSERT INTO users.users (id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo) VALUES (#{uId}, #{uCr}, #{uUp}, #{uDel}, #{uAct}, #{uFn}, #{uLn}, #{uImg}, #{uEm}, #{uPh}, #{uSudo}) |]
 
 
 userById :: DB es => UserId -> Eff es (Maybe User)
-userById userId = listToMaybe <$> PG.query (_selectWhere @User [[field| id |]]) (Only userId)
+userById uid = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE id = #{uid} |]
 
 
 userByEmail :: DB es => Text -> Eff es (Maybe User)
-userByEmail email = listToMaybe <$> PG.query (_selectWhere @User [[field| email |]]) (Only email)
+userByEmail email = EHasql.interpOne [HI.sql| SELECT * FROM users.users WHERE email = #{email} |]
 
 
 userIdByEmail :: DB es => Text -> Eff es (Maybe UserId)
-userIdByEmail email = listToMaybe <$> PG.query q (Only email)
-  where
-    q = [sql|select id from users.users where email=?|]
+userIdByEmail email = EHasql.interpOne [HI.sql|select id from users.users where email=#{email}|]
 
 
 createEmptyUser :: DB es => Text -> Eff es (Maybe UserId)
-createEmptyUser email = listToMaybe <$> PG.query q (Only email)
-  where
-    q = [sql| insert into users.users (email, active) values (?, TRUE) on conflict do nothing returning id |]
+createEmptyUser email = EHasql.interpOne [HI.sql| insert into users.users (email, active) values (#{email}, TRUE) on conflict do nothing returning id |]
 
 
 ---------------------------------
@@ -228,7 +226,7 @@ data NotificationChannel
   | NPagerduty
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "N" NotificationChannel
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "N" NotificationChannel
 
 
 instance HasField "toText" NotificationChannel Text where
@@ -273,7 +271,7 @@ data Project = Project
   , errorAlerts :: Bool
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "projects", TableName "projects", PrimaryKey "id", FieldModifiers '[CamelToSnake]] Project)
@@ -316,7 +314,7 @@ data Project' = Project'
   , usersDisplayImages :: V.Vector Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData)
 
 
 data ProjectS3Bucket = ProjectS3Bucket
@@ -329,6 +327,9 @@ data ProjectS3Bucket = ProjectS3Bucket
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm, NFData)
   deriving (FromField, ToField) via Aeson ProjectS3Bucket
+
+deriving via Aeson ProjectS3Bucket instance HI.DecodeValue ProjectS3Bucket
+deriving via Aeson ProjectS3Bucket instance HI.EncodeValue ProjectS3Bucket
 
 
 data ProjectCache = ProjectCache
@@ -354,7 +355,7 @@ data ProjectCache = ProjectCache
     canonicalPaths :: V.Vector Text
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData)
 
 
 defaultProjectCache :: ProjectCache
@@ -386,193 +387,170 @@ data CreateProject = CreateProject
 projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es (Maybe ProjectCache)
 projectCacheById pid = do
   now <- currentTime
-  listToMaybe <$> PG.query q (pid, now, pid, now, pid, pid, pid)
-  where
-    q =
-      [sql| select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
-                    coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
-                    coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
-                    coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
-                    ( SELECT count(*) FROM otel_logs_and_spans
-                     WHERE project_id=? AND timestamp > ?::timestamptz - INTERVAL '1' DAY
-                    ) daily_event_count,
-                    ( SELECT count(*) FROM telemetry.metrics
-                     WHERE project_id=? AND timestamp > ?::timestamptz - INTERVAL '1' DAY
-                    ) daily_metric_count,
-                    (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = ?),'Free')) payment_plan,
-                    (SELECT COALESCE(ARRAY_AGG(DISTINCT method || '|' || host || '|' || canonical_path), '{}')
-                     FROM apis.endpoints WHERE project_id = ? AND canonical_path IS NOT NULL
-                    ) canonical_paths
-            from
-              (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
-                from apis.endpoints e
-                left join apis.shapes sh ON sh.endpoint_hash = e.hash
-                left join projects.redacted_fields rf ON rf.project_id = e.project_id
-                where e.project_id = ? AND sh.hash IS NOT null
-               ) enp; |]
+  let pidText = pid.toText
+  EHasql.interpOne [HI.sql|
+    select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
+            coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
+            coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
+            coalesce(ARRAY_AGG(DISTINCT paths ORDER BY paths ASC),'{}') redacted_fields,
+            ( SELECT count(*)::int FROM otel_logs_and_spans
+             WHERE project_id=#{pidText} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
+            ) daily_event_count,
+            ( SELECT count(*)::int FROM telemetry.metrics
+             WHERE project_id=#{pid} AND timestamp > #{now}::timestamptz - INTERVAL '1' DAY
+            ) daily_metric_count,
+            (SELECT COALESCE((SELECT payment_plan FROM projects.projects WHERE id = #{pid}),'Free')) payment_plan,
+            (SELECT COALESCE(ARRAY_AGG(DISTINCT method || '|' || host || '|' || canonical_path), '{}')
+             FROM apis.endpoints WHERE project_id = #{pid} AND canonical_path IS NOT NULL
+            ) canonical_paths
+    from
+      (select e.host hosts, e.hash endpoint_hashes, sh.hash shape_hashes, concat(rf.endpoint_hash,'<>', rf.field_category,'<>', rf.path) paths
+        from apis.endpoints e
+        left join apis.shapes sh ON sh.endpoint_hash = e.hash
+        left join projects.redacted_fields rf ON rf.project_id = e.project_id
+        where e.project_id = #{pid} AND sh.hash IS NOT null
+       ) enp; |]
 
 
-projectCacheByIdIO :: Pool Connection -> ProjectId -> IO (Maybe ProjectCache)
-projectCacheByIdIO pool pid = runEff $ runConnectionPool pool $ runTime $ projectCacheById pid
+projectCacheByIdIO :: HPool.Pool -> ProjectId -> IO (Maybe ProjectCache)
+projectCacheByIdIO hpool pid = runEff $ EHasql.runHasqlPool hpool $ runTime $ projectCacheById pid
 
 
 insertProject :: DB es => CreateProject -> Eff es ()
-insertProject p = void $ PG.execute (_insert @CreateProject) p
+insertProject p = do
+  let (pId, pT, pD, pPP, pTZ, pSub, pFSI, pOrd, pDN, pWN, pEA, pErA) =
+        (p.id, p.title, p.description, p.paymentPlan, p.timeZone, p.subId, p.firstSubItemId, p.orderId, p.dailyNotif, p.weeklyNotif, p.endpointAlerts, p.errorAlerts)
+  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.projects (id, title, description, payment_plan, time_zone, sub_id, first_sub_item_id, order_id, daily_notif, weekly_notif, endpoint_alerts, error_alerts) VALUES (#{pId}, #{pT}, #{pD}, #{pPP}, #{pTZ}, #{pSub}, #{pFSI}, #{pOrd}, #{pDN}, #{pWN}, #{pEA}, #{pErA}) |]
 
 
 projectById :: DB es => ProjectId -> Eff es (Maybe Project)
-projectById pid = listToMaybe <$> PG.query q (Only pid)
-  where
-    q = [sql| select p.* from projects.projects p where id=?|]
+projectById pid = EHasql.interpOne [HI.sql| select p.* from projects.projects p where id=#{pid}|]
 
 
 projectByOrderId :: DB es => Text -> Eff es (Maybe Project)
-projectByOrderId oid = listToMaybe <$> PG.query q (Only oid)
-  where
-    q = [sql| select p.* from projects.projects p where order_id=?|]
+projectByOrderId oid = EHasql.interpOne [HI.sql| select p.* from projects.projects p where order_id=#{oid}|]
 
 
 projectBySubId :: DB es => Text -> Eff es (Maybe Project)
-projectBySubId subId = listToMaybe <$> PG.query q (Only subId)
-  where
-    q = [sql| select p.* from projects.projects p where sub_id=?|]
+projectBySubId subId = EHasql.interpOne [HI.sql| select p.* from projects.projects p where sub_id=#{subId}|]
 
 
 updateSubItemIdBySubId :: DB es => Text -> Text -> Eff es Int64
 updateSubItemIdBySubId newItemId subId =
-  PG.execute [sql| update projects.projects set first_sub_item_id=? where sub_id=?|] (newItemId, subId)
+  EHasql.interpExecute [HI.sql| update projects.projects set first_sub_item_id=#{newItemId} where sub_id=#{subId}|]
 
 
 getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
-getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
-  where
-    q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
+getProjectByPhoneNumber number = EHasql.interpOne [HI.sql| select p.* from projects.projects p where #{number}=Any(p.whatsapp_numbers) |]
 
 
 activeProjects :: DB es => Eff es [Project]
-activeProjects = PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|] ()
+activeProjects = EHasql.interp [HI.sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|]
 
 
 activeNonOnboardingProjectIds :: DB es => Eff es (V.Vector ProjectId)
 activeNonOnboardingProjectIds =
-  V.fromList . map fromOnly <$> PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING'|] ()
+  V.fromList <$> EHasql.interp [HI.sql|SELECT DISTINCT p.id FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING'|]
 
 
 recentlyActiveProjectIds :: DB es => UTCTime -> Eff es [ProjectId]
 recentlyActiveProjectIds since =
-  map fromOnly
-    <$> PG.query
-      [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text
-           WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > ?::timestamptz - interval '24 hours'|]
-      (Only since)
+  EHasql.interp [HI.sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text
+           WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > #{since}::timestamptz - interval '24 hours'|]
 
 
 newProjectsSince :: DB es => UTCTime -> Eff es [Project]
 newProjectsSince since =
-  PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= ?::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|] (Only since)
+  EHasql.interp [HI.sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= #{since}::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|]
 
 
 selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [Project']
 selectProjectsForUser uid = do
   now <- currentTime
-  PG.query q (now, uid)
-  where
-    q =
-      [sql|
+  EHasql.interp [HI.sql|
         SELECT pp.*,
                EXISTS (
                     SELECT 1 FROM otel_logs_and_spans ols
                     WHERE ols.project_id = pp.id::text
-                    AND ols.timestamp >= ?::timestamptz - INTERVAL '30 days'
+                    AND ols.timestamp >= #{now}::timestamptz - INTERVAL '30 days'
                     LIMIT 1
                 ) as has_integrated,
                ARRAY_AGG('/api/avatar/' || us.id::text) OVER (PARTITION BY pp.id)
         FROM projects.projects AS pp
         JOIN projects.project_members AS ppm ON (pp.id = ppm.project_id)
         JOIN users.users AS us ON (us.id = ppm.user_id)
-        WHERE ppm.user_id = ? AND pp.deleted_at IS NULL AND ppm.active = TRUE
+        WHERE ppm.user_id = #{uid} AND pp.deleted_at IS NULL AND ppm.active = TRUE
         ORDER BY updated_at DESC
       |]
 
 
 usersByProjectId :: DB es => ProjectId -> Eff es [User]
-usersByProjectId pid = PG.query q (Only pid)
-  where
-    q =
-      [sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.phone_number, u.is_sudo
-                from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=? and u.active IS True and pm.active = TRUE;|]
+usersByProjectId pid =
+  EHasql.interp
+    [HI.sql| select u.id, u.created_at, u.updated_at, u.deleted_at, u.active, u.first_name, u.last_name, u.display_image_url, u.email, u.is_sudo, u.phone_number
+                from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=#{pid} and u.active IS True and pm.active = TRUE;|]
 
 
 updateProject :: DB es => CreateProject -> Eff es Int64
-updateProject cp = PG.execute q (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
-  where
-    q =
-      [sql|
-       UPDATE projects.projects SET title=?, description=?,
-        payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?,
-        time_zone=?, weekly_notif=?, daily_notif=?, endpoint_alerts=?, error_alerts=? where id=?;
+updateProject cp = do
+  let (cT, cD, cPP, cSub, cFSI, cOrd, cTZ, cWN, cDN, cEA, cErA, cId) =
+        (cp.title, cp.description, cp.paymentPlan, cp.subId, cp.firstSubItemId, cp.orderId, cp.timeZone, cp.weeklyNotif, cp.dailyNotif, cp.endpointAlerts, cp.errorAlerts, cp.id)
+  EHasql.interpExecute
+    [HI.sql|
+       UPDATE projects.projects SET title=#{cT}, description=#{cD},
+        payment_plan=#{cPP}, sub_id=#{cSub}, first_sub_item_id=#{cFSI}, order_id=#{cOrd},
+        time_zone=#{cTZ}, weekly_notif=#{cWN}, daily_notif=#{cDN}, endpoint_alerts=#{cEA}, error_alerts=#{cErA} where id=#{cId};
         |]
 
 
 updateProjectPricing :: DB es => ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Eff es Int64
 updateProjectPricing pid paymentPlan subId firstSubItemId orderId stepsCompleted =
-  PG.execute q (paymentPlan, subId, firstSubItemId, orderId, stepsCompleted, pid)
-  where
-    q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=?, onboarding_steps_completed=? where id=?;|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId}, onboarding_steps_completed=#{stepsCompleted} where id=#{pid};|]
 
 
 updateProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
 updateProjectBilling pid paymentPlan subId firstSubItemId orderId =
-  PG.execute q (paymentPlan, subId, firstSubItemId, orderId, pid)
-  where
-    q = [sql| UPDATE projects.projects SET payment_plan=?, sub_id=?, first_sub_item_id=?, order_id=? WHERE id=? AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET payment_plan=#{paymentPlan}, sub_id=#{subId}, first_sub_item_id=#{firstSubItemId}, order_id=#{orderId} WHERE id=#{pid} AND (first_sub_item_id IS NULL OR first_sub_item_id = '');|]
 
 
 updateProjectReportNotif :: DB es => ProjectId -> Text -> Eff es Int64
-updateProjectReportNotif pid report_type = PG.execute q (Only pid)
-  where
-    q =
-      if report_type == "daily"
-        then [sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=?;|]
-        else [sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=?;|]
+updateProjectReportNotif pid report_type =
+  if report_type == "daily"
+    then EHasql.interpExecute [HI.sql| UPDATE projects.projects SET daily_notif=(not daily_notif) WHERE id=#{pid};|]
+    else EHasql.interpExecute [HI.sql| UPDATE projects.projects SET weekly_notif=(not weekly_notif) WHERE id=#{pid};|]
 
 
 deleteProject :: (DB es, Time :> es) => ProjectId -> Eff es Int64
 deleteProject pid = do
   now <- currentTime
-  PG.execute q (now, pid)
-  where
-    q =
-      [sql| UPDATE projects.projects SET deleted_at=?, active=False where id=?;|]
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET deleted_at=#{now}, active=False where id=#{pid};|]
 
 
 updateNotificationsChannel :: DB es => ProjectId -> [Text] -> [Text] -> [Text] -> Eff es Int64
-updateNotificationsChannel pid channels phones emails = PG.execute q (list, V.fromList phones, V.fromList emails, pid)
-  where
-    list = V.fromList channels
-    q = [sql| UPDATE projects.projects SET notifications_channel=?::notification_channel_enum[], whatsapp_numbers=?, notify_emails=? WHERE id=?;|]
+updateNotificationsChannel pid channels phones emails = do
+  let list = V.fromList channels
+      vPhones = V.fromList phones
+      vEmails = V.fromList emails
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET notifications_channel=#{list}::notification_channel_enum[], whatsapp_numbers=#{vPhones}, notify_emails=#{vEmails} WHERE id=#{pid};|]
 
 
 -- | Idempotently append a channel (e.g. NSlack) to projects.notifications_channel.
 enableNotificationChannel :: DB es => ProjectId -> NotificationChannel -> Eff es Int64
-enableNotificationChannel pid ch = PG.execute q (ch, pid, ch)
-  where
-    q =
-      [sql| UPDATE projects.projects
-            SET notifications_channel = notifications_channel || ARRAY[?::notification_channel_enum]
-            WHERE id = ? AND NOT (?::notification_channel_enum = ANY(notifications_channel)); |]
+enableNotificationChannel pid ch =
+  EHasql.interpExecute
+    [HI.sql| UPDATE projects.projects
+            SET notifications_channel = notifications_channel || ARRAY[#{ch}::notification_channel_enum]
+            WHERE id = #{pid} AND NOT (#{ch}::notification_channel_enum = ANY(notifications_channel)); |]
 
 
 updateUsageLastReported :: DB es => ProjectId -> ZonedTime -> Eff es Int64
-updateUsageLastReported pid lastReported = PG.execute q (lastReported, pid)
-  where
-    q = [sql| UPDATE projects.projects SET usage_last_reported=? WHERE id=?;|]
+updateUsageLastReported pid lastReported =
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET usage_last_reported=#{lastReported} WHERE id=#{pid};|]
 
 
 updateProjectS3Bucket :: DB es => ProjectId -> Maybe ProjectS3Bucket -> Eff es Int64
-updateProjectS3Bucket pid bucket = PG.execute q (bucket, pid)
-  where
-    q = [sql| UPDATE projects.projects SET s3_bucket=? WHERE id=?|]
+updateProjectS3Bucket pid bucket =
+  EHasql.interpExecute [HI.sql| UPDATE projects.projects SET s3_bucket=#{bucket} WHERE id=#{pid}|]
 
 
 ---------------------------------
@@ -581,7 +559,7 @@ type QueryLibItemId = UUIDId "querylib"
 
 data QueryLibType = QLTHistory | QLTSaved
   deriving (Eq, Generic, NFData, Read, Show)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, ToField) via WrappedEnumSC "QLT" QueryLibType
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "QLT" QueryLibType
 
 
 data QueryLibItem = QueryLibItem
@@ -597,34 +575,33 @@ data QueryLibItem = QueryLibItem
   , byMe :: Bool
   }
   deriving (Eq, Generic, Show)
-  deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, NFData, ToRow)
+  deriving anyclass (AE.FromJSON, AE.ToJSON, FromRow, HI.DecodeRow, NFData, ToRow)
 
 
 queryLibHistoryForUser :: DB es => ProjectId -> UserId -> Eff es [QueryLibItem]
-queryLibHistoryForUser pid uid = PG.query q (uid, uid, pid, uid, uid, pid, uid, pid, uid)
-  where
-    q =
-      [sql|
+queryLibHistoryForUser pid uid =
+  EHasql.interp
+    [HI.sql|
 (
-  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title,  user_id=?::uuid as byMe
+  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title,  user_id=#{uid}::uuid as byMe
   FROM projects.query_library
-  WHERE user_id = ?::uuid AND project_id = ?::uuid AND query_type = 'history'
+  WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'history'
   ORDER BY created_at DESC
   LIMIT 50
 )
 UNION ALL
 (
-  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title, user_id=?::uuid as byMe
+  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast, title, user_id=#{uid}::uuid as byMe
   FROM projects.query_library
-  WHERE user_id = ?::uuid AND project_id = ?::uuid AND query_type = 'saved'
+  WHERE user_id = #{uid}::uuid AND project_id = #{pid}::uuid AND query_type = 'saved'
   ORDER BY created_at DESC
   LIMIT 50
 )
 UNION ALL
 (
-  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast,title, user_id=?::uuid as byMe
+  SELECT id, project_id, created_at, updated_at, user_id, query_type, query_text, query_ast,title, user_id=#{uid}::uuid as byMe
   FROM projects.query_library
-  WHERE project_id = ?::uuid AND user_id != ?::uuid AND query_type = 'saved'
+  WHERE project_id = #{pid}::uuid AND user_id != #{uid}::uuid AND query_type = 'saved'
   ORDER BY created_at DESC
   LIMIT 50
 );
@@ -632,27 +609,27 @@ UNION ALL
 
 
 queryLibInsert :: DB es => QueryLibType -> ProjectId -> UserId -> Text -> [Section] -> Maybe Text -> Eff es ()
-queryLibInsert qKind pid uid qt qast title = void $ PG.execute q (pid, uid, qKind, pid, uid, qKind, qt, Aeson qast, title, pid, uid, qKind, qt)
-  where
-    q =
-      [sql|
+queryLibInsert qKind pid uid qt qast title = do
+  let qastJson = HI.AsJsonb qast
+  EHasql.interpExecute_
+    [HI.sql|
 WITH removed_old AS (
   DELETE FROM projects.query_library
   WHERE id IN (
     SELECT id
     FROM projects.query_library
-    WHERE project_id = ? AND user_id = ? AND query_type = ?
+    WHERE project_id = #{pid} AND user_id = #{uid} AND query_type = #{qKind}::projects.query_library_kind
     ORDER BY created_at ASC
     OFFSET 49
   )
 )
 INSERT INTO projects.query_library (project_id, user_id, query_type, query_text, query_ast, title)
-SELECT ?, ?, ?, ?, ?, ?
+SELECT #{pid}, #{uid}, #{qKind}::projects.query_library_kind, #{qt}, #{qastJson}, #{title}
 WHERE NOT EXISTS (
   SELECT 1
   FROM projects.query_library
-  WHERE project_id = ? AND user_id = ? AND query_type = ?
-  AND query_text = ?
+  WHERE project_id = #{pid} AND user_id = #{uid} AND query_type = #{qKind}::projects.query_library_kind
+  AND query_text = #{qt}
   ORDER BY created_at DESC
   LIMIT 1
 )
@@ -661,22 +638,18 @@ ON CONFLICT DO NOTHING;
 
 
 queryLibTitleEdit :: DB es => ProjectId -> UserId -> Text -> Text -> Eff es ()
-queryLibTitleEdit pid uid qId title = void $ PG.execute q (title, pid, uid, qId)
-  where
-    q = [sql|UPDATE projects.query_library SET title=? where project_id=? AND user_id=? AND id=?::uuid|]
+queryLibTitleEdit pid uid qId title = EHasql.interpExecute_ [HI.sql|UPDATE projects.query_library SET title=#{title} where project_id=#{pid} AND user_id=#{uid} AND id=#{qId}::uuid|]
 
 
 queryLibItemDelete :: DB es => ProjectId -> UserId -> Text -> Eff es ()
-queryLibItemDelete pid uid qId = void $ PG.execute q (pid, uid, qId)
-  where
-    q = [sql|DELETE from projects.query_library where project_id=? AND user_id=? AND id=?::uuid|]
+queryLibItemDelete pid uid qId = EHasql.interpExecute_ [HI.sql|DELETE from projects.query_library where project_id=#{pid} AND user_id=#{uid} AND id=#{qId}::uuid|]
 
 
 ---------------------------------
 -- LemonSqueezy subscription management
 newtype LemonSubId = LemonSubId {lemonSubId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, NFData, Ord, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, Ord, ToField)
 
 
 instance HasField "toText" LemonSubId Text where
@@ -700,35 +673,35 @@ data LemonSub = LemonSub
 
 
 addSubscription :: DB es => LemonSub -> Eff es ()
-addSubscription sub = void $ PG.execute (_insert @LemonSub) sub
+addSubscription s = do
+  let (sId, sCr, sUp, sPid, sSub, sOrd, sFSub, sProd, sEmail) =
+        (s.id, s.createdAt, s.updatedAt, s.projectId, s.subscriptionId, s.orderId, s.firstSubId, s.productName, s.userEmail)
+  EHasql.interpExecute_ [HI.sql| INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, subscription_id, order_id, first_sub_id, product_name, user_email) VALUES (#{sId}, #{sCr}, #{sUp}, #{sPid}, #{sSub}, #{sOrd}, #{sFSub}, #{sProd}, #{sEmail}) |]
 
 
 addDailyUsageReport :: DB es => ProjectId -> Int -> Eff es Int64
-addDailyUsageReport pid total_requests = PG.execute q (pid, total_requests)
-  where
-    q = [sql|INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (?, ?) |]
+addDailyUsageReport pid total_requests =
+  EHasql.interpExecute [HI.sql|INSERT INTO apis.daily_usage (project_id, total_requests) VALUES (#{pid}, #{total_requests}) |]
 
 
 getTotalUsage :: DB es => ProjectId -> UTCTime -> Eff es Int64
 getTotalUsage pid start = do
-  results <- PG.query q (pid, start)
+  results :: [Int64] <- EHasql.interp [HI.sql|SELECT COALESCE(SUM(total_requests), 0) FROM apis.daily_usage WHERE project_id = #{pid} AND created_at >= #{start}|]
   case results of
-    [Only count] -> pure count
+    [count] -> pure count
     _ -> pure 0
-  where
-    q = [sql|SELECT COALESCE(SUM(total_requests), 0) FROM apis.daily_usage WHERE project_id = ? AND created_at >= ?|]
 
 
 downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
-downgradeToFree orderId' _subId _subItemId = PG.execute q (Only $ show orderId')
-  where
-    q = [sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE order_id = ?|]
+downgradeToFree orderId' _subId _subItemId = do
+  let oid = show orderId' :: Text
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE order_id = #{oid}|]
 
 
 upgradeToPaid :: DB es => Int -> Int -> Int -> Eff es Int64
-upgradeToPaid orderId' subId subItemId = PG.execute q (show subId, show subItemId, show orderId')
-  where
-    q = [sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing', sub_id = ?, first_sub_item_id = ? WHERE order_id = ?|]
+upgradeToPaid orderId' subId subItemId = do
+  let (sId, sItemId, oId) = (show subId :: Text, show subItemId :: Text, show orderId' :: Text)
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing', sub_id = #{sId}, first_sub_item_id = #{sItemId} WHERE order_id = #{oId}|]
 
 
 -- | >>> billingProvider (Just "sub_abc123")
@@ -752,17 +725,14 @@ billingProvider = \case
 
 
 downgradeToFreeBySubId :: DB es => Text -> Eff es Int64
-downgradeToFreeBySubId sid = PG.execute q (Only sid)
-  where
-    q = [sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE sub_id = ?|]
+downgradeToFreeBySubId sid =
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE sub_id = #{sid}|]
 
 
 -- order_id stores Stripe customer_id for Stripe users (semantic mismatch, TODO: add customer_id column)
 updateStripeProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
 updateStripeProjectBilling pid plan subId firstSubItemId customerId =
-  PG.execute q (plan, subId, firstSubItemId, customerId, pid)
-  where
-    q = [sql|UPDATE projects.projects SET payment_plan = ?, sub_id = ?, first_sub_item_id = ?, order_id = ? WHERE id = ?|]
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, order_id = #{customerId} WHERE id = #{pid}|]
 
 
 -- Sessions
@@ -771,7 +741,7 @@ newtype PersistentSessionId = PersistentSessionId {getPersistentSessionId :: UUI
   deriving newtype (NFData)
   deriving (Display) via ShowInstance UUID.UUID
   deriving
-    (Default, Eq, FromField, FromHttpApiData, Show, ToField, ToHttpApiData)
+    (Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Show, ToField, ToHttpApiData)
     via UUID.UUID
 
 
@@ -783,6 +753,9 @@ newtype SessionData = SessionData {getSessionData :: Map Text Text}
     (FromField, ToField)
     via Aeson (Map Text Text)
 
+deriving via Aeson (Map Text Text) instance HI.DecodeValue SessionData
+deriving via Aeson (Map Text Text) instance HI.EncodeValue SessionData
+
 
 newtype PSUser = PSUser {getUser :: User}
   deriving stock (Generic, Show)
@@ -792,6 +765,9 @@ newtype PSUser = PSUser {getUser :: User}
     (FromField, ToField)
     via Aeson User
 
+deriving via Aeson User instance HI.DecodeValue PSUser
+deriving via Aeson User instance HI.EncodeValue PSUser
+
 
 newtype PSProjects = PSProjects {getProjects :: V.Vector Project}
   deriving stock (Generic, Show)
@@ -800,6 +776,9 @@ newtype PSProjects = PSProjects {getProjects :: V.Vector Project}
   deriving
     (FromField, ToField)
     via Aeson (V.Vector Project)
+
+deriving via Aeson (V.Vector Project) instance HI.DecodeValue PSProjects
+deriving via Aeson (V.Vector Project) instance HI.EncodeValue PSProjects
 
 
 data PersistentSession = PersistentSession
@@ -813,7 +792,7 @@ data PersistentSession = PersistentSession
   , projects :: PSProjects
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
   deriving
     (Entity)
     via (GenericEntity '[Schema "users", TableName "persistent_sessions", PrimaryKey "id"] PersistentSession)
@@ -824,24 +803,20 @@ newPersistentSessionId = PersistentSessionId <$> UUID.genUUID
 
 
 insertSession :: DB es => PersistentSessionId -> UserId -> SessionData -> Eff es ()
-insertSession pid userId sessionData = void $ PG.execute q (pid, userId, sessionData)
-  where
-    q = [sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (?, ?, ?) |]
+insertSession psId uid sd = EHasql.interpExecute_ [HI.sql| insert into users.persistent_sessions(id, user_id, session_data) VALUES (#{psId}, #{uid}, #{sd}) |]
 
 
 getPersistentSession :: DB es => PersistentSessionId -> Eff es (Maybe PersistentSession)
-getPersistentSession sessionId = listToMaybe <$> PG.query q value
-  where
-    q =
-      [sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, row_to_json(u) as user, u.is_sudo,
-        COALESCE(json_agg(pp.* ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
+getPersistentSession sessionId =
+  EHasql.interpOne
+    [HI.sql| select ps.id, ps.created_at, ps.updated_at, ps.user_id, ps.session_data, to_jsonb(u) as user, u.is_sudo,
+        COALESCE(jsonb_agg(to_jsonb(pp.*) ORDER BY pp.updated_at DESC) FILTER (WHERE pp.id is not NULL AND pp.deleted_at IS NULL),'[]') as projects
         from users.persistent_sessions as ps
         left join users.users u on (u.id=ps.user_id)
         left join projects.project_members ppm on (ps.user_id=ppm.user_id AND ppm.active = TRUE)
         left join projects.projects pp on (pp.id=ppm.project_id)
-        where ps.id=?
+        where ps.id=#{sessionId}
         GROUP BY ps.created_at, ps.updated_at, ps.id, ps.user_id, ps.session_data, u.* ,u.is_sudo; |]
-    value = Only sessionId
 
 
 getSession
@@ -930,15 +905,13 @@ data AuditEvent
   | AEPlanChanged
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, ToField) via WrappedEnumSC "AE" AuditEvent
+  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "AE" AuditEvent
 
 
 logAudit :: DB es => ProjectId -> AuditEvent -> Maybe UserId -> Maybe Text -> Maybe AE.Value -> Eff es ()
-logAudit pid event actorId actorEmail metadataM =
-  void
-    $ PG.execute
-      [sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (?, ?, ?, ?, ?) |]
-      (pid, event, actorId, actorEmail, Aeson <$> metadataM)
+logAudit pid event actorId actorEmail metadataM = do
+  let metaJson = HI.AsJsonb <$> metadataM
+  EHasql.interpExecute_ [HI.sql| INSERT INTO projects.audit_log (project_id, event, actor_id, actor_email, metadata) VALUES (#{pid}, #{event}, #{actorId}, #{actorEmail}, #{metaJson}) |]
 
 
 logAuditS :: DB es => ProjectId -> AuditEvent -> Session -> Maybe AE.Value -> Eff es ()

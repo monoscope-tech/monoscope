@@ -179,7 +179,7 @@ computeDurationChanges current prev =
 renderWeeklyEmail :: Text -> Projects.Project -> Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Int -> Int -> Double -> Double -> V.Vector Issues.IssueSummary -> V.Vector (Text, Text, Text, Int, Double, Int, Double) -> V.Vector (Text, Int, Int) -> V.Vector (Text, Int64, Text) -> Bool -> ATAuthCtx (Text, Text)
 renderWeeklyEmail reportUrl project pid userName startTime endTime totalEvents totalErrors eventsChangePct errorsChangePct anomalies performance slowQueries topPatterns freeTierExceeded = do
   ctx <- ask @AuthContext
-  tz <- liftIO $ loadTZFromDB (toString project.timeZone)
+  tz <- liftIO $ loadTZFromDB (toString $ if T.null project.timeZone then "UTC" else project.timeZone)
   let reportUrl' = ctx.env.hostUrl <> reportUrl
       dayStart = show $ localDay (utcToLocalTimeTZ tz startTime)
       dayEnd = show $ localDay (utcToLocalTimeTZ tz endTime)

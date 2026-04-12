@@ -50,13 +50,12 @@ import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (Only))
+import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
-import Effectful.PostgreSQL qualified as PG
+import Hasql.Interpolate qualified as HI
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField)
@@ -124,10 +123,8 @@ acknowledgeAnomalyGetH pid aid hostM = do
 unAcknowledgeAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 unAcknowledgeAnomalyGetH pid aid = do
   (sess, project) <- Projects.sessionAndProject pid
-  let q = [sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=? |]
-  let qI = [sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=? |]
-  _ <- PG.execute qI (Only aid)
-  _ <- PG.execute q (Only aid)
+  _ <- Hasql.interpExecute [HI.sql| update apis.issues set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
+  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set acknowledged_by=null, acknowledged_at=null where id=#{aid} |]
   Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEUnacknowledged (Just sess.user.id) Nothing
   addRespHeaders $ Acknowlege pid (UUIDId aid.unUUIDId) False
 
@@ -136,10 +133,8 @@ archiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (Re
 archiveAnomalyGetH pid aid = do
   (sess, project) <- Projects.sessionAndProject pid
   now <- Time.currentTime
-  let q = [sql| update apis.anomalies set archived_at=? where id=? |]
-  let qI = [sql| update apis.issues set archived_at=? where id=? |]
-  _ <- PG.execute qI (now, aid)
-  _ <- PG.execute q (now, aid)
+  _ <- Hasql.interpExecute [HI.sql| update apis.issues set archived_at=#{now} where id=#{aid} |]
+  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=#{now} where id=#{aid} |]
   Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEArchived (Just sess.user.id) Nothing
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) True
 
@@ -147,10 +142,8 @@ archiveAnomalyGetH pid aid = do
 unArchiveAnomalyGetH :: Projects.ProjectId -> Anomalies.AnomalyId -> ATAuthCtx (RespHeaders AnomalyAction)
 unArchiveAnomalyGetH pid aid = do
   (sess, project) <- Projects.sessionAndProject pid
-  let q = [sql| update apis.anomalies set archived_at=null where id=? |]
-  let qI = [sql| update apis.issues set archived_at=null where id=? |]
-  _ <- PG.execute qI (Only aid)
-  _ <- PG.execute q (Only aid)
+  _ <- Hasql.interpExecute [HI.sql| update apis.issues set archived_at=null where id=#{aid} |]
+  _ <- Hasql.interpExecute [HI.sql| update apis.anomalies set archived_at=null where id=#{aid} |]
   Issues.logIssueActivity (UUIDId aid.unUUIDId) Issues.IEUnarchived (Just sess.user.id) Nothing
   addRespHeaders $ Archive pid (UUIDId aid.unUUIDId) False
 
@@ -185,10 +178,12 @@ anomalyBulkActionsPostH pid action items = do
           pure Issues.IEAcknowledged
         "archive" -> do
           now <- Time.currentTime
-          void $ PG.execute [sql| update apis.anomalies set archived_at=? where id=ANY(?::uuid[]) |] (now, V.fromList items.anomalyId)
+          let vIds = V.fromList items.anomalyId
+          Hasql.interpExecute_ [HI.sql| update apis.anomalies set archived_at=#{now} where id=ANY(#{vIds}::uuid[]) |]
           pure Issues.IEArchived
         _ -> throwError err400{errBody = "unhandled anomaly bulk action: " <> encodeUtf8 action}
-      issueIds <- map (\(Only i) -> i :: Issues.IssueId) <$> PG.query [sql| SELECT DISTINCT issue_id FROM apis.anomalies WHERE id=ANY(?::uuid[]) AND issue_id IS NOT NULL |] (Only $ PGArray items.anomalyId)
+      let vAnomalyIds = V.fromList items.anomalyId
+      issueIds :: [Issues.IssueId] <- Hasql.interp [HI.sql| SELECT DISTINCT issue_id FROM apis.anomalies WHERE id=ANY(#{vAnomalyIds}::uuid[]) AND issue_id IS NOT NULL |]
       forM_ issueIds \iid -> Issues.logIssueActivity iid eventType (Just sess.user.id) Nothing
       addSuccessToast (action <> "d items Successfully") Nothing
       addRespHeaders Bulk
@@ -1128,8 +1123,8 @@ anomalyListGetH pid layoutM filterTM sortM timeFilter pageM perPageM loadM endpo
     concurrently
       (Issues.selectIssues pid Nothing ackd archived perPage (pageInt * perPage) Nothing (Just currentSort) period serviceFilters typeFilters)
       ( concurrently
-          (map (\(Only s) -> s) <$> PG.query [sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = ? AND service IS NOT NULL |] (Only pid))
-          (map (\(Only t) -> t) <$> PG.query [sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = ? |] (Only pid))
+          (Hasql.interp [HI.sql| SELECT DISTINCT service FROM apis.issues WHERE project_id = #{pid} AND service IS NOT NULL |])
+          (Hasql.interp [HI.sql| SELECT DISTINCT issue_type::text FROM apis.issues WHERE project_id = #{pid} |])
       )
 
   let filterParams = foldMap ("&service=" <>) serviceFilters <> foldMap ("&type=" <>) typeFilters
@@ -1524,7 +1519,9 @@ issueActivityGetH pid issueId = do
   activities <- Issues.selectIssueActivity pid issueId
   now <- Time.currentTime
   let userIds = ordNub $ mapMaybe (.createdBy) activities
-  users :: [Projects.User] <- if null userIds then pure [] else PG.query [sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, phone_number, is_sudo FROM users.users WHERE id = ANY(?::uuid[]) |] (Only $ V.fromList userIds)
+  users :: [Projects.User] <- if null userIds then pure [] else do
+    let vUserIds = V.fromList userIds
+    Hasql.interp [HI.sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number FROM users.users WHERE id = ANY(#{vUserIds}::uuid[]) |]
   let userMap = Map.fromList $ map (\u -> (u.id, u)) users
   addRespHeaders $ issueActivityTimeline_ userMap now activities
 

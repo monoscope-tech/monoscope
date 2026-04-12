@@ -20,8 +20,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Effectful.Labeled (labeled)
-import Effectful.PostgreSQL (WithConnection)
+import Data.Effectful.Hasql qualified as Hasql
 import Effectful.Reader.Static qualified
 import Lucid
 import Lucid.Aria qualified as Aria
@@ -140,10 +139,8 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
   authCtx <- Effectful.Reader.Static.ask @AuthContext
   -- sourceM parameter is preserved for future use but not used in current logic
   -- Query the unified table using timestamp and id
-  item <-
-    if authCtx.env.enableTimefusionReads
-      then labeled @"timefusion" @WithConnection $ Telemetry.logRecordByProjectAndId pid timestamp rdId
-      else Telemetry.logRecordByProjectAndId pid timestamp rdId
+  item <- Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads $
+    Telemetry.logRecordByProjectAndId pid timestamp rdId
 
   case item of
     Just record -> do
@@ -161,9 +158,8 @@ expandAPIlogItemH pid rdId timestamp sourceM = do
                 && isNothing (atMapText "http.request.method" (unAesonTextMaybe record.attributes))
                 then case trIdM of
                   Just trId ->
-                    if authCtx.env.enableTimefusionReads
-                      then labeled @"timefusion" @WithConnection $ Telemetry.spanRecordByName pid trId "monoscope.http"
-                      else Telemetry.spanRecordByName pid trId "monoscope.http"
+                    Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads $
+                      Telemetry.spanRecordByName pid trId "monoscope.http"
                   _ -> pure Nothing
                 else pure Nothing
             _ -> pure Nothing

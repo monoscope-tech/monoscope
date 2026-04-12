@@ -1,16 +1,14 @@
 module Pages.Projects.IntegrationsSpec (spec) where
 
 import Data.Aeson qualified as AE
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify (Notification (..))
 import Data.Effectful.Notify qualified as Notify
-import Data.Pool (withResource)
+import Data.Effectful.UUID qualified as UUID
 import Data.Text qualified as T
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (Only (..))
-import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL qualified as DB
+import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pages.Bots.BotTestHelpers (setupSlackData)
 import Pages.Settings (TestForm (..))
@@ -41,9 +39,9 @@ spec = aroundAll withTestResources $ do
           _ -> pure ()
 
         -- Verify history was recorded
-        tests <- runQueryEffect tr $
-          DB.query [sql|SELECT status, issue_type, channel FROM apis.notification_test_history WHERE project_id = ? AND channel = 'slack' ORDER BY created_at DESC LIMIT 1|] (Only testPid)
-        tests `shouldSatisfy` elem (("sent" :: Text, "runtime_exception" :: Text, "slack" :: Text))
+        tests :: [(Text, Text, Text)] <- runQueryEffect tr $
+          Hasql.interp [HI.sql|SELECT status, issue_type, channel FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = 'slack' ORDER BY created_at DESC LIMIT 1|]
+        tests `shouldSatisfy` elem ("sent", "runtime_exception", "slack")
 
       it "sends test notification to Discord" \tr -> do
         clearTestHistory tr testPid
@@ -60,9 +58,9 @@ spec = aroundAll withTestResources $ do
           _ -> pure ()
 
         -- Verify history
-        tests <- runQueryEffect tr $
-          DB.query [sql|SELECT status FROM apis.notification_test_history WHERE project_id = ? AND channel = 'discord' ORDER BY created_at DESC LIMIT 1|] (Only testPid)
-        tests `shouldBe` [Only ("sent" :: Text)]
+        tests :: [Text] <- runQueryEffect tr $
+          Hasql.interp [HI.sql|SELECT status FROM apis.notification_test_history WHERE project_id = #{testPid} AND channel = 'discord' ORDER BY created_at DESC LIMIT 1|]
+        tests `shouldBe` ["sent"]
 
       it "sends test notification to WhatsApp" \tr -> do
         clearTestHistory tr testPid
@@ -166,47 +164,45 @@ isPagerdutyNotification = isNotificationType \case PagerdutyNotification n -> Ju
 
 createTestTeam :: TestResources -> Projects.ProjectId -> [Text] -> IO UUID.UUID
 createTestTeam tr pid slackChannels = do
-  teamId <- runQueryEffect tr $ DB.query_ [sql|SELECT gen_random_uuid()|] <&> fromMaybe UUID.nil . listToMaybe . fmap fromOnly
-  runTestBg frozenTime tr $ void $ DB.execute
-    [sql|INSERT INTO projects.teams (id, project_id, name, description, handle, members, slack_channels, discord_channels, phone_numbers, pagerduty_services)
-         VALUES (?, ?, 'Test Team', 'Test team', 'test-team', '{}', ?, '{}', '{}', '{}')
+  teamId <- runTestBg frozenTime tr UUID.genUUID
+  let channels = V.fromList slackChannels
+  runTestBg frozenTime tr $ Hasql.interpExecute_
+    [HI.sql|INSERT INTO projects.teams (id, project_id, name, description, handle, members, slack_channels, discord_channels, phone_numbers, pagerduty_services)
+         VALUES (#{teamId}, #{pid}, 'Test Team', 'Test team', 'test-team', '{}', #{channels}, '{}', '{}', '{}')
          ON CONFLICT (id) DO UPDATE SET slack_channels = EXCLUDED.slack_channels|]
-    (teamId, pid, V.fromList slackChannels)
   pure teamId
 
 
 createTestTeamWithPagerduty :: TestResources -> Projects.ProjectId -> [Text] -> IO UUID.UUID
 createTestTeamWithPagerduty tr pid pagerdutyServices = do
-  teamId <- runQueryEffect tr $ DB.query_ [sql|SELECT gen_random_uuid()|] <&> fromMaybe UUID.nil . listToMaybe . fmap fromOnly
-  runTestBg frozenTime tr $ void $ DB.execute
-    [sql|INSERT INTO projects.teams (id, project_id, name, description, handle, members, slack_channels, discord_channels, phone_numbers, pagerduty_services)
-         VALUES (?, ?, 'PD Test Team', 'PagerDuty test team', 'pd-test-team', '{}', '{}', '{}', '{}', ?)
+  teamId <- runTestBg frozenTime tr UUID.genUUID
+  let services = V.fromList pagerdutyServices
+  runTestBg frozenTime tr $ Hasql.interpExecute_
+    [HI.sql|INSERT INTO projects.teams (id, project_id, name, description, handle, members, slack_channels, discord_channels, phone_numbers, pagerduty_services)
+         VALUES (#{teamId}, #{pid}, 'PD Test Team', 'PagerDuty test team', 'pd-test-team', '{}', '{}', '{}', '{}', #{services})
          ON CONFLICT (id) DO UPDATE SET pagerduty_services = EXCLUDED.pagerduty_services|]
-    (teamId, pid, V.fromList pagerdutyServices)
   pure teamId
 
 
 setupWhatsappNumber :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupWhatsappNumber tr pid number = void $ withResource tr.trPool \conn ->
-  PGS.execute conn [sql|UPDATE projects.projects SET whatsapp_numbers = ARRAY[?] WHERE id = ?|] (number, pid)
+setupWhatsappNumber tr pid number = runTestBg frozenTime tr $ Hasql.interpExecute_
+  [HI.sql|UPDATE projects.projects SET whatsapp_numbers = ARRAY[#{number}] WHERE id = #{pid}|]
 
 
 setupPagerdutyData :: TestResources -> Projects.ProjectId -> Text -> IO ()
-setupPagerdutyData tr pid integrationKey = runTestBg frozenTime tr $ void $ DB.execute
-  [sql|INSERT INTO apis.pagerduty (project_id, integration_key) VALUES (?, ?) ON CONFLICT (project_id) DO UPDATE SET integration_key = EXCLUDED.integration_key|]
-  (pid, integrationKey)
+setupPagerdutyData tr pid integrationKey = runTestBg frozenTime tr $ Hasql.interpExecute_
+  [HI.sql|INSERT INTO apis.pagerduty (project_id, integration_key) VALUES (#{pid}, #{integrationKey}) ON CONFLICT (project_id) DO UPDATE SET integration_key = EXCLUDED.integration_key|]
 
 
 setupDiscordDataWithChannel :: TestResources -> Projects.ProjectId -> Text -> Text -> IO ()
-setupDiscordDataWithChannel tr pid guildId channelId = runTestBg frozenTime tr $ void $ DB.execute
-  [sql|INSERT INTO apis.discord (project_id, guild_id, notifs_channel_id) VALUES (?, ?, ?)
+setupDiscordDataWithChannel tr pid guildId channelId = runTestBg frozenTime tr $ Hasql.interpExecute_
+  [HI.sql|INSERT INTO apis.discord (project_id, guild_id, notifs_channel_id) VALUES (#{pid}, #{guildId}, #{channelId})
        ON CONFLICT (project_id) DO UPDATE SET guild_id = EXCLUDED.guild_id, notifs_channel_id = EXCLUDED.notifs_channel_id|]
-  (pid, guildId, channelId)
 
 
 clearTestHistory :: TestResources -> Projects.ProjectId -> IO ()
-clearTestHistory tr pid = runTestBg frozenTime tr $ void $ DB.execute
-  [sql|DELETE FROM apis.notification_test_history WHERE project_id = ?|] (Only pid)
+clearTestHistory tr pid = runTestBg frozenTime tr $ Hasql.interpExecute_
+  [HI.sql|DELETE FROM apis.notification_test_history WHERE project_id = #{pid}|]
 
 
 payloadText :: AE.Value -> Text

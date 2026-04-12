@@ -34,9 +34,10 @@ import Control.Exception.Annotated (checkpoint)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
+import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID qualified as UUID
 import Data.HashMap.Strict qualified as HM
-import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Time (UTCTime, ZonedTime, addUTCTime, diffUTCTime)
 import Data.Vector qualified as V
@@ -44,17 +45,14 @@ import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, G
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.ToField (Action, ToField, toField)
-import Database.PostgreSQL.Simple.Types (Only (..), Query)
+import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Labeled (Labeled)
-import Effectful.PostgreSQL (WithConnection)
-import Effectful.PostgreSQL qualified as PG
 import GHC.Records (HasField (getField))
+import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), withTimefusion)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), rawSql)
 import Relude
 import Web.HttpApiData (FromHttpApiData)
 
@@ -69,7 +67,7 @@ import Web.HttpApiData (FromHttpApiData)
 newtype FieldId = FieldId {unFieldId :: UUID.UUID}
   deriving stock (Generic, Show)
   deriving newtype (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, Ord, ToField) via UUID.UUID
+  deriving (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, Ord, ToField) via UUID.UUID
 
 
 data FieldTypes
@@ -83,6 +81,7 @@ data FieldTypes
   deriving stock (Eq, Generic, Read, Show)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via WrappedEnumSC "FT" FieldTypes
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "FT" FieldTypes
 
 
 instance AE.FromJSON FieldTypes where
@@ -128,6 +127,7 @@ data FieldCategoryEnum
   deriving stock (Eq, Generic, Ord, Read, Show)
   deriving anyclass (Default, NFData)
   deriving (Display, FromField, ToField) via WrappedEnumSC "FC" FieldCategoryEnum
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "FC" FieldCategoryEnum
 
 
 instance AE.FromJSON FieldCategoryEnum where
@@ -205,6 +205,7 @@ newtype FacetData = FacetData (HM.HashMap Text [FacetValue])
   deriving stock (Eq, Generic, Show)
   deriving newtype (NFData)
   deriving (FromField, ToField) via Aeson FacetData
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb FacetData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] FacetData
 
 
@@ -215,7 +216,7 @@ data FacetSummary = FacetSummary
   , facetJson :: FacetData
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (Entity) via (GenericEntity '[Schema "apis", TableName "facet_summaries", PrimaryKey "id", FieldModifiers '[CamelToSnake]] FacetSummary)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] FacetSummary
 
@@ -229,27 +230,21 @@ instance Eq Field where
 
 
 bulkInsertFields :: DB es => V.Vector Field -> Eff es ()
-bulkInsertFields fields = void $ PG.executeMany q (V.toList rowsToInsert)
+bulkInsertFields flds | V.null flds = pass
+bulkInsertFields flds = Hasql.interpExecute_
+  [HI.sql| INSERT INTO apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash)
+           SELECT * FROM unnest(#{pids}::uuid[], #{ehs}::text[], #{keys}::text[], #{fts}::apis.field_type[], #{fmts}::text[], #{descs}::text[], #{kps}::text[], #{fcs}::apis.field_category[], #{hs}::text[])
+           ON CONFLICT DO NOTHING |]
   where
-    q =
-      [sql| INSERT into apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING; |]
-    rowsToInsert :: V.Vector (Projects.ProjectId, Text, Text, FieldTypes, Text, Text, Text, FieldCategoryEnum, Text)
-    rowsToInsert =
-      V.map
-        ( \fld ->
-            ( fld.projectId
-            , fld.endpointHash
-            , fld.key
-            , fld.fieldType
-            , fld.format
-            , fld.description
-            , fld.keyPath
-            , fld.fieldCategory
-            , fld.hash
-            )
-        )
-        fields
+    pids = V.map (.projectId) flds
+    ehs = V.map (.endpointHash) flds
+    keys = V.map (.key) flds
+    fts = V.map (.fieldType) flds
+    fmts = V.map (.format) flds
+    descs = V.map (.description) flds
+    kps = V.map (.keyPath) flds
+    fcs = V.map (.fieldCategory) flds
+    hs = V.map (.hash) flds
 
 
 ---------------------------------
@@ -276,19 +271,13 @@ data Format = Format
 
 
 bulkInsertFormat :: DB es => V.Vector Format -> Eff es ()
-bulkInsertFormat formats = void $ PG.executeMany q $ V.toList rowsToInsert
-  where
-    q =
-      [sql|
-      insert into apis.formats (project_id, field_hash, field_type, field_format, examples, hash)
-        VALUES (?, ?, ?, ?, ?, ?)
-        ON CONFLICT (project_id, field_hash, field_format)
-        DO
-          UPDATE SET field_type= EXCLUDED.field_type, hash = EXCLUDED.hash, examples = ARRAY(SELECT DISTINCT e from unnest(apis.formats.examples || excluded.examples) as e order by e limit 20);
-      |]
-    rowsToInsert =
-      formats <&> \fmt ->
-        (fmt.projectId, fmt.fieldHash, fmt.fieldType, fmt.fieldFormat, fmt.examples, fmt.hash)
+bulkInsertFormat = V.mapM_ \Format{projectId, fieldHash, fieldType, fieldFormat, examples, hash} ->
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO apis.formats (project_id, field_hash, field_type, field_format, examples, hash)
+             VALUES (#{projectId}, #{fieldHash}, #{fieldType}, #{fieldFormat}, #{examples}, #{hash})
+             ON CONFLICT (project_id, field_hash, field_format)
+             DO UPDATE SET field_type = EXCLUDED.field_type, hash = EXCLUDED.hash,
+                examples = ARRAY(SELECT DISTINCT e FROM unnest(apis.formats.examples || excluded.examples) AS e ORDER BY e LIMIT 20) |]
 
 
 data SwFormat = SwFormat
@@ -360,7 +349,7 @@ facetColumns =
 
 
 generateAndSaveFacets
-  :: (DB es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es)
+  :: (DB es, Labeled "timefusion" Hasql :> es, UUID.UUIDEff :> es)
   => Bool
   -- ^ enableTimefusionReads (caller passes it to keep this module a leaf of
   -- `System.Config` — breaks the `Config ↔ Telemetry` cycle).
@@ -373,33 +362,24 @@ generateAndSaveFacets enableTfReads pid tableName maxValues timestamp = do
   let dayEnd = timestamp
       dayStart = addUTCTime (-86400) dayEnd
 
-  let q = buildOptimizedFacetQuery tableName
-      params = concatMap (const [toField pid.toText, toField dayStart, toField dayEnd, toField maxValues]) facetColumns :: [Action]
+  let pidText = pid.toText
+      facetSql = mconcat $ intersperse (fromString "\nUNION ALL\n") $ map (buildFacetColumnSql tableName pidText dayStart dayEnd maxValues) facetColumns
   facetMap <- do
-    values <- checkpoint (toAnnotation q) $ withTimefusion enableTfReads $ PG.query q params
+    values <- checkpoint (toAnnotation ("facet-query" :: Text)) $ Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp facetSql
     pure $ processQueryResults $ V.fromList values
+  existingIdM <- Hasql.interpOne
+    [HI.sql| SELECT id FROM apis.facet_summaries WHERE project_id = #{pidText} AND table_name = #{tableName} LIMIT 1 |]
 
-  existingIdM <-
-    PG.query
-      [sql| SELECT id FROM apis.facet_summaries WHERE project_id = ? AND table_name = ? LIMIT 1 |]
-      (pid.toText, tableName)
-      <&> \case
-        [] -> Nothing
-        (v : _) -> Just v
+  facetId <- maybe UUID.genUUID pure existingIdM
 
-  facetId <- case existingIdM of
-    Just (Only uuid) -> pure uuid
-    Nothing -> UUID.genUUID
+  let facetData = FacetData facetMap
+      summary = FacetSummary{id = facetId, projectId = pidText, tableName = tableName, facetJson = facetData}
 
-  let summary = FacetSummary{id = facetId, projectId = pid.toText, tableName = tableName, facetJson = FacetData facetMap}
-
-  _ <-
-    PG.execute
-      [sql| INSERT INTO apis.facet_summaries (id, project_id, table_name, facet_json)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT (project_id, table_name)
-            DO UPDATE SET facet_json = EXCLUDED.facet_json |]
-      (summary.id, pid.toText, summary.tableName, summary.facetJson)
+  _ <- Hasql.interpExecute
+    [HI.sql| INSERT INTO apis.facet_summaries (id, project_id, table_name, facet_json)
+             VALUES (#{facetId}, #{pidText}, #{tableName}, #{facetData})
+             ON CONFLICT (project_id, table_name)
+             DO UPDATE SET facet_json = EXCLUDED.facet_json |]
 
   pure summary
 
@@ -419,22 +399,13 @@ processQueryResults =
       | otherwise = x : insertSorted newVal xs
 
 
-buildFacetColumnQuery :: Text -> Text -> Text
-buildFacetColumnQuery tableName colName =
-  "(SELECT '"
-    <> colName
-    <> "' as column_name, "
-    <> colName
-    <> "::text as value, COUNT(*) as count FROM "
-    <> tableName
-    <> " WHERE project_id = ?::text AND timestamp >= ? AND timestamp < ? AND "
-    <> colName
-    <> " IS NOT NULL GROUP BY value ORDER BY count DESC LIMIT ?)"
-
-
-buildOptimizedFacetQuery :: Text -> Query
-buildOptimizedFacetQuery tableName =
-  fromString $ toString $ T.intercalate "\nUNION ALL\n" $ map (buildFacetColumnQuery tableName) facetColumns
+buildFacetColumnSql :: Text -> Text -> UTCTime -> UTCTime -> Int -> Text -> HI.Sql
+buildFacetColumnSql tableName pidText dayStart dayEnd maxValues colName =
+  rawSql ("(SELECT '" <> colName <> "' as column_name, " <> colName <> "::text as value, COUNT(*)::INT as count FROM " <> tableName <> " WHERE project_id = ")
+    <> [HI.sql|#{pidText}::text|]
+    <> [HI.sql| AND timestamp >= #{dayStart} AND timestamp < #{dayEnd} AND |]
+    <> rawSql (colName <> " IS NOT NULL GROUP BY value ORDER BY count DESC LIMIT ")
+    <> [HI.sql|#{maxValues})|]
 
 
 getFacetSummary :: DB es => Projects.ProjectId -> Text -> UTCTime -> UTCTime -> Eff es (Maybe FacetSummary)
@@ -443,16 +414,12 @@ getFacetSummary projectId tableName fromTime toTime = checkpoint "getFacetSummar
       timeSpanSeconds = max 1 $ floor $ diffUTCTime toTime fromTime
       timeSpanMinutes = (timeSpanSeconds + 59) `div` 60
 
-  summaryVec <-
+  summaryM <-
     checkpoint "Fetching facet summary"
-      $ PG.query
-        [sql| SELECT id, project_id, table_name, facet_json FROM apis.facet_summaries WHERE project_id = ? AND table_name = ? LIMIT 1 |]
-        (projectIdText, tableName)
+      $ Hasql.interpOne
+        [HI.sql| SELECT id, project_id, table_name, facet_json FROM apis.facet_summaries WHERE project_id = #{projectIdText} AND table_name = #{tableName} LIMIT 1 |]
 
-  pure $ case summaryVec of
-    [] -> Nothing
-    [summary] -> Just $ scaleFacetSummary summary timeSpanMinutes
-    _ -> error "Multiple facet summaries found for same project/table (should be impossible)"
+  pure $ scaleFacetSummary <$> summaryM <*> pure timeSpanMinutes
   where
     scaleFacetSummary :: FacetSummary -> Int -> FacetSummary
     scaleFacetSummary summary timeSpanMinutes =
@@ -511,31 +478,12 @@ data Shape = Shape
 
 
 bulkInsertShapes :: DB es => V.Vector Shape -> Eff es ()
-bulkInsertShapes shapes = void $ PG.executeMany q $ V.toList rowsToInsert
-  where
-    q =
-      [sql|
-        INSERT INTO apis.shapes
-            (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING|]
-    rowsToInsert =
-      V.map
-        ( \shape ->
-            ( shape.projectId
-            , shape.endpointHash
-            , shape.queryParamsKeypaths
-            , shape.requestBodyKeypaths
-            , shape.responseBodyKeypaths
-            , shape.requestHeadersKeypaths
-            , shape.responseHeadersKeypaths
-            , shape.fieldHashes
-            , shape.hash
-            , fromIntegral shape.statusCode
-            , ""
-            , ""
-            )
-        )
-        shapes
+bulkInsertShapes = V.mapM_ \Shape{projectId, endpointHash, queryParamsKeypaths, requestBodyKeypaths, responseBodyKeypaths, requestHeadersKeypaths, responseHeadersKeypaths, fieldHashes, hash, statusCode} ->
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO apis.shapes
+             (project_id, endpoint_hash, query_params_keypaths, request_body_keypaths, response_body_keypaths, request_headers_keypaths, response_headers_keypaths, field_hashes, hash, status_code, request_description, response_description)
+             VALUES (#{projectId}, #{endpointHash}, #{queryParamsKeypaths}, #{requestBodyKeypaths}, #{responseBodyKeypaths}, #{requestHeadersKeypaths}, #{responseHeadersKeypaths}, #{fieldHashes}, #{hash}, #{statusCode}, '', '')
+             ON CONFLICT DO NOTHING |]
 
 
 data SwShape = SwShape

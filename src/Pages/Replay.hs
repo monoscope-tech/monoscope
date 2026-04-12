@@ -14,12 +14,11 @@ import Data.Pool (Pool, withResource)
 import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple (Connection)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Database.PostgreSQL.Simple.Types (Only (..), PGArray (..))
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Log (Log)
-import Effectful.PostgreSQL qualified as PG
+import Hasql.Interpolate qualified as HI
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
@@ -239,11 +238,8 @@ getSessionEvents conn pid bucket sessionId = do
 -- Empty list if the row doesn't exist (new session) or has a NULL/empty column.
 sessionFileKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [Text]
 sessionFileKeys pid sessionId = do
-  rows <-
-    PG.query
-      [sql| SELECT COALESCE(file_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = ? AND project_id = ? LIMIT 1 |]
-      (sessionId, pid)
-  pure $ maybe [] (\(Only (PGArray ks)) -> ks) (listToMaybe rows)
+  rows :: [V.Vector Text] <- Hasql.interp [HI.sql| SELECT COALESCE(file_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
+  pure $ maybe [] V.toList (listToMaybe rows)
 
 
 -- | Merge multiple already-sorted event arrays by sorting arrays based on their first event's timestamp, then concatenating
@@ -279,20 +275,20 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
                 Minio.putObject bucket objKey (CC.sourceLazy body) (Just bodySize) Minio.defaultPutObjectOptions
               case res of
                 Right _ -> do
-                  countRows <-
-                    PG.query
-                      [sql|
+                  let (rSid, rPid) = (replayData.sessionId, replayData.projectId)
+                  countRows :: [Int] <-
+                    Hasql.interp
+                      [HI.sql|
                     INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys)
-                    VALUES (?, ?, ?, 1, ARRAY[?]::text[])
+                    VALUES (#{rSid}, #{rPid}, #{now}, 1, ARRAY[#{objKeyText}]::text[])
                     ON CONFLICT (session_id) DO UPDATE SET
-                      last_event_at = ?, merged = FALSE,
+                      last_event_at = #{now}, merged = FALSE,
                       event_file_count = projects.replay_sessions.event_file_count + 1,
-                      file_keys = array_append(projects.replay_sessions.file_keys, ?),
-                      updated_at = ?
+                      file_keys = array_append(projects.replay_sessions.file_keys, #{objKeyText}),
+                      updated_at = #{now}
                     RETURNING event_file_count
                   |]
-                      (replayData.sessionId, replayData.projectId, now, objKeyText, now, objKeyText, now)
-                  let fileCount = maybe 0 fromOnly (listToMaybe (countRows :: [Only Int]))
+                  let fileCount = fromMaybe 0 (listToMaybe countRows)
                   when (fileCount >= mergeFileCountThreshold) $ do
                     let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON replayData.projectId, AE.toJSON replayData.sessionId] :: [AE.Value])]
                     liftIO $ withResource jobsPool \conn' ->
@@ -337,24 +333,20 @@ mergeReplaySession pid sessionId = mergeOneSessionByKeys pid sessionId "(file co
 compressAndMergeReplaySessions :: ATBackgroundCtx ()
 compressAndMergeReplaySessions = do
   now <- Time.currentTime
-  sessions <-
-    PG.query
-      [sql|
+  sessions :: [(UUID.UUID, Projects.ProjectId)] <-
+    Hasql.interp
+      [HI.sql|
     SELECT session_id, project_id FROM projects.replay_sessions
-    WHERE merged = FALSE AND last_event_at < ?::timestamptz - interval '30 minutes'
+    WHERE merged = FALSE AND last_event_at < #{now}::timestamptz - interval '30 minutes'
     LIMIT 100
   |]
-      (Only now)
 
-  Log.logInfo "Starting replay session merge job" ("sessions_count", length (sessions :: [(UUID.UUID, Projects.ProjectId)]))
+  Log.logInfo "Starting replay session merge job" ("sessions_count", length sessions)
 
   -- Process each session independently; a single failure must not stall the batch.
   forM_ sessions $ \(sessionId, projectId) -> do
     r <- tryAny $ mergeOneSessionByKeys projectId sessionId "" $ \_ ->
-      void
-        $ PG.execute
-          [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? |]
-          (now, sessionId)
+      Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now} WHERE session_id = #{sessionId} |]
     whenLeft_ r $ \err ->
       Log.logAttention "Replay session merge threw; continuing batch" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", projectId.toText), ("error", toText $ displayException err)])
 
@@ -376,10 +368,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
       -- Orphaned row (project gone). Flip merged=TRUE so we stop re-picking it every run.
       Log.logAttention "Project not found for replay session merge; marking merged" logCtx
       now' <- Time.currentTime
-      void
-        $ PG.execute
-          [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? AND project_id = ? |]
-          (now', sessionId, pid)
+      Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now'} WHERE session_id = #{sessionId} AND project_id = #{pid} |]
     Just p -> do
       let (s3Conn, bucket) = projectMinioConn ctx.config p
       fileKeys <- sessionFileKeys pid sessionId
@@ -388,10 +377,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
           -- No tracked files: reset counter so the threshold path doesn't re-trigger
           -- on a stale value, then finalize.
           now' <- Time.currentTime
-          void
-            $ PG.execute
-              [sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = ? WHERE session_id = ? AND project_id = ? |]
-              (now', sessionId, pid)
+          Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET event_file_count = 0, updated_at = #{now'} WHERE session_id = #{sessionId} AND project_id = #{pid} |]
           afterMerge now'
           Log.logInfo "Replay session merge skipped (no tracked file keys)" ("session_id", UUID.toText sessionId)
         else do
@@ -405,10 +391,7 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
                 MergeDecodeFailed _ -> do
                   Log.logError "Replay session merge aborted due to corrupt data; marking merged to stop retries" ctxWithErr
                   now' <- Time.currentTime
-                  void
-                    $ PG.execute
-                      [sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = ? WHERE session_id = ? AND project_id = ? |]
-                      (now', sessionId, pid)
+                  Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now'} WHERE session_id = #{sessionId} AND project_id = #{pid} |]
                 -- Transient: leave row untouched so next batch retries.
                 MergeFetchFailed _ -> Log.logAttention "Replay session merge transient fetch failure; will retry" ctxWithErr
                 MergePutFailed _ -> Log.logAttention "Replay session merge transient put failure; will retry" ctxWithErr
@@ -416,22 +399,22 @@ mergeOneSessionByKeys pid sessionId logSuffix afterMerge = do
               now' <- Time.currentTime
               -- Only remove keys we actually merged; concurrent `array_append` writers
               -- may have added more keys between snapshot and update.
+              let vFileKeys = V.fromList fileKeys
               rowsAffected <-
-                PG.execute
-                  [sql|
+                Hasql.interpExecute
+                  [HI.sql|
                     UPDATE projects.replay_sessions SET
                       file_keys = COALESCE(
-                        (SELECT array_agg(k) FROM unnest(file_keys) AS k WHERE k <> ALL(?::text[])),
+                        (SELECT array_agg(k) FROM unnest(file_keys) AS k WHERE k <> ALL(#{vFileKeys}::text[])),
                         '{}'::text[]
                       ),
                       event_file_count = COALESCE(
-                        (SELECT count(*) FROM unnest(file_keys) AS k WHERE k <> ALL(?::text[]))::int,
+                        (SELECT count(*) FROM unnest(file_keys) AS k WHERE k <> ALL(#{vFileKeys}::text[]))::int,
                         0
                       ),
-                      updated_at = ?
-                    WHERE session_id = ? AND project_id = ?
+                      updated_at = #{now'}
+                    WHERE session_id = #{sessionId} AND project_id = #{pid}
                   |]
-                  (PGArray fileKeys, PGArray fileKeys, now', sessionId, pid)
               if rowsAffected == 0
                 then Log.logAttention "Post-merge UPDATE affected 0 rows; row vanished, skipping afterMerge" logCtx
                 else do

@@ -1,5 +1,4 @@
--- | Effectful effect for hasql sessions, sitting alongside the existing
--- `WithConnection` postgresql-simple effect during the migration.
+-- | Effectful effect for hasql database sessions.
 module Data.Effectful.Hasql (
   Hasql (..),
   HasqlException (..),
@@ -9,6 +8,9 @@ module Data.Effectful.Hasql (
   statement,
   transaction,
   interp,
+  interpOne,
+  interpExecute,
+  interpExecute_,
   withHasqlTimefusion,
   withLabeled,
 ) where
@@ -81,6 +83,21 @@ statement p st = session (Session.statement p st)
 -- | Run a `hasql-interpolate` `Sql` value as a prepared statement.
 interp :: (HI.DecodeResult a, Hasql :> es, IOE :> es) => HI.Sql -> Eff es a
 interp s = statement () (HI.interp True s)
+
+
+-- | Run a query expecting at most one row.
+interpOne :: (HI.DecodeRow a, Hasql :> es, IOE :> es) => HI.Sql -> Eff es (Maybe a)
+interpOne s = listToMaybe <$> interp s
+
+
+-- | Run an INSERT/UPDATE/DELETE and return the number of rows affected.
+interpExecute :: (Hasql :> es, IOE :> es) => HI.Sql -> Eff es Int64
+interpExecute s = HI.getRowsAffected <$> interp s
+
+
+-- | Run an INSERT/UPDATE/DELETE, discarding the row count.
+interpExecute_ :: (Hasql :> es, IOE :> es) => HI.Sql -> Eff es ()
+interpExecute_ s = void $ interpExecute s
 
 
 transaction :: (Hasql :> es, IOE :> es) => TxS.IsolationLevel -> TxS.Mode -> Tx.Transaction a -> Eff es a

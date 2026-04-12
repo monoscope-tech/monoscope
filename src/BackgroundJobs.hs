@@ -11,6 +11,7 @@ import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Hasql (Hasql, withHasqlTimefusion)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.UUID qualified as UUID
@@ -43,8 +44,6 @@ import Effectful.Concurrent.Async (concurrently, forConcurrently)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection)
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
@@ -86,7 +85,7 @@ import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
 import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
-import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
+import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
@@ -101,7 +100,7 @@ import System.Clock (Clock (Monotonic), diffTimeSpec, getTime, toNanoSecs)
 import System.Config qualified as Config
 import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
-import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
+import System.Types (ATBackgroundCtx, DB, runBackground)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
 import Utils (formatUTC, freeTierDailyMaxEvents, toXXHash)
 
@@ -508,9 +507,8 @@ processBackgroundJob authCtx bgJob =
       -- Section 4: New issues
       tryLog "newIssues" do
         issueCounts :: [(Projects.ProjectId, Text, Int)] <-
-          PG.query
-            [sql|SELECT project_id::uuid, issue_type, COUNT(*)::int FROM apis.issues WHERE created_at > ?::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
-            (Only since)
+          Hasql.interp
+            [HI.sql|SELECT project_id::uuid, issue_type, COUNT(*)::int FROM apis.issues WHERE created_at > #{since}::timestamptz GROUP BY project_id, issue_type ORDER BY COUNT(*) DESC|]
         unless (null issueCounts) do
           let total = sum $ map (view _3) issueCounts
               byProject = Map.toDescList $ Map.fromListWith (<>) $ map (\(pid, itype, cnt) -> (pid, [(itype, cnt)])) issueCounts
@@ -530,11 +528,10 @@ processBackgroundJob authCtx bgJob =
       -- Section 5: Monitor alerts
       tryLog "monitorAlerts" do
         alertCounts :: [(Projects.ProjectId, Text, Int)] <-
-          PG.query
-            [sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::int FROM monitors.query_monitors m
+          Hasql.interp
+            [HI.sql|SELECT m.project_id::uuid, m.current_status, COUNT(*)::int FROM monitors.query_monitors m
                WHERE m.deactivated_at IS NULL AND m.deleted_at IS NULL AND m.current_status != 'normal'
                GROUP BY m.project_id, m.current_status|]
-            ()
         unless (null alertCounts) do
           let totalAlerting = sum [c | (_, s, c) <- alertCounts, s == "alerting"]
               totalWarning = sum [c | (_, s, c) <- alertCounts, s == "warning"]
@@ -553,10 +550,11 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 6: Background job health
       tryLog "jobHealth" do
-        jobStats :: [(Text, Int)] <- PG.query [sql|SELECT status, COUNT(*)::int FROM background_jobs WHERE created_at >= ?::timestamptz GROUP BY status|] (Only since)
-        stuckJobs :: [Only Int] <- PG.query [sql|SELECT COUNT(*)::int FROM background_jobs WHERE status = 'locked' AND locked_at < ?::timestamptz|] (Only (addUTCTime (-1800) now))
+        jobStats :: [(Text, Int)] <- Hasql.interp [HI.sql|SELECT status, COUNT(*)::int FROM background_jobs WHERE created_at >= #{since}::timestamptz GROUP BY status|]
+        let stuckThreshold = addUTCTime (-1800) now
+        stuckJobs :: [Int] <- Hasql.interp [HI.sql|SELECT COUNT(*)::int FROM background_jobs WHERE status = 'locked' AND locked_at < #{stuckThreshold}::timestamptz|]
         let statsLine = T.intercalate " | " $ map (\(s, c) -> s <> ": " <> show c) jobStats
-            stuck = maybe 0 (.fromOnly) $ listToMaybe stuckJobs
+            stuck = fromMaybe 0 $ listToMaybe stuckJobs
         send
           $ "**Job Health** (last 24h)\n"
           <> statsLine
@@ -565,13 +563,12 @@ processBackgroundJob authCtx bgJob =
       -- Section 7: Top growing projects (day-over-day)
       tryLog "topGrowing" do
         growthData :: [(Projects.ProjectId, Int, Int)] <-
-          PG.query
-            [sql|SELECT du.project_id::uuid,
-                 COALESCE(SUM(CASE WHEN du.created_at >= (?::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::int as yesterday,
-                 COALESCE(SUM(CASE WHEN du.created_at < (?::date - interval '1 day') AND du.created_at >= (?::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::int as day_before
-               FROM apis.daily_usage du WHERE du.created_at >= (?::date - interval '2 days')
+          Hasql.interp
+            [HI.sql|SELECT du.project_id::uuid,
+                 COALESCE(SUM(CASE WHEN du.created_at >= (#{now}::date - interval '1 day') THEN du.total_requests ELSE 0 END), 0)::int as yesterday,
+                 COALESCE(SUM(CASE WHEN du.created_at < (#{now}::date - interval '1 day') AND du.created_at >= (#{now}::date - interval '2 days') THEN du.total_requests ELSE 0 END), 0)::int as day_before
+               FROM apis.daily_usage du WHERE du.created_at >= (#{now}::date - interval '2 days')
                GROUP BY du.project_id|]
-            (now, now, now, now)
         let withGrowth = sortOn (\(_, _, _, g) -> negate g) [(pid, y, db, y - db) | (pid, y, db) <- growthData, y > db, db > 0]
             fmtGrowth (pid, y, db, _) =
               let pct = show (round @Double @Int $ fromIntegral (y - db) / fromIntegral db * 100)
@@ -583,17 +580,17 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 8: Active users (last 24h)
       tryLog "activeUsers" do
-        activeUsers :: [(Text, Text, Text, PGArray Projects.ProjectId)] <-
-          PG.query
-            [sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
+        activeUsers :: [(Text, Text, Text, V.Vector Projects.ProjectId)] <-
+          Hasql.interp
+            [HI.sql|SELECT u.email, u.first_name, u.last_name, array_agg(DISTINCT pm.project_id)::uuid[] as project_ids
                FROM users.persistent_sessions ps
                JOIN users.users u ON u.id = ps.user_id
                LEFT JOIN projects.project_members pm ON pm.user_id = ps.user_id AND pm.active = TRUE
-               WHERE ps.updated_at >= ?::timestamptz
+               WHERE ps.updated_at >= #{since}::timestamptz
                GROUP BY u.id, u.email, u.first_name, u.last_name ORDER BY u.email|]
-            (Only since)
-        let fmtUser (email, _, _, PGArray pids) =
-              let projs = T.intercalate ", " $ map lookupTitle $ filter (`Map.member` projectMap) pids
+        let fmtUser (email, _, _, pidsVec) =
+              let pids = V.toList pidsVec
+                  projs = T.intercalate ", " $ map lookupTitle $ filter (`Map.member` projectMap) pids
                in "- " <> email <> bool (" -- " <> projs) "" (T.null projs)
         send
           $ "**Active Users** ("
@@ -618,13 +615,11 @@ runHourlyJob scheduledTime hour = do
   ctx <- ask @Config.AuthContext
   let oneHourAgo = addUTCTime (-3600) scheduledTime
   activeProjects <-
-    coerce @[Only Projects.ProjectId] @[Projects.ProjectId]
-      <$> PG.query
-        [sql| SELECT DISTINCT project_id::uuid
+    Hasql.interp
+      [HI.sql| SELECT DISTINCT project_id::uuid
               FROM otel_logs_and_spans ols
-              WHERE ols.timestamp >= ?::timestamptz
-                AND ols.timestamp <= ?::timestamptz |]
-        (oneHourAgo, scheduledTime)
+              WHERE ols.timestamp >= #{oneHourAgo}::timestamptz
+                AND ols.timestamp <= #{scheduledTime}::timestamptz |]
 
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
   let projectBatches = chunksOf 10 activeProjects
@@ -640,10 +635,10 @@ runHourlyJob scheduledTime hour = do
   deletedCount <- QueryCache.cleanupExpiredCache
   Relude.when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
 
-  deviceCodesDeleted <- PG.execute [sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |] ()
+  deviceCodesDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |]
   Relude.when (deviceCodesDeleted > 0) $ Log.logInfo "Cleaned up expired device auth codes" ("deleted_count", AE.toJSON deviceCodesDeleted)
 
-  staleMetricsDeleted <- PG.execute [sql| DELETE FROM telemetry.metrics_meta WHERE updated_at < now() - interval '3 months' |] ()
+  staleMetricsDeleted <- Hasql.interpExecute [HI.sql| DELETE FROM telemetry.metrics_meta WHERE updated_at < now() - interval '3 months' |]
   Relude.when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
 
   liftIO $ withResource ctx.jobsPool \conn ->
@@ -670,11 +665,9 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
     Relude.when (warning || exceeded) do
       -- Dedup: skip if we already logged this event for this project today
       alreadyNotified <-
-        maybe False fromOnly
-          . listToMaybe
-          <$> PG.query
-            [sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=? AND name=? AND timestamp > ?::timestamptz - interval '1 day') |]
-            (pid.toText, eventName, now)
+        let pidText = pid.toText
+         in fromMaybe False <$> Hasql.interpOne
+            [HI.sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=#{pidText} AND name=#{eventName} AND timestamp > #{now}::timestamptz - interval '1 day') |]
       Relude.unless alreadyNotified do
         ctx <- ask @Config.AuthContext
         let sev = if exceeded then SLError else SLWarn
@@ -688,7 +681,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
         forM_ users \user -> sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
 
 
-generateOtelFacetsBatch :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
+generateOtelFacetsBatch :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
   ctx <- ask @Config.AuthContext
   let enableTfReads = ctx.env.enableTimefusionReads
@@ -765,7 +758,7 @@ data ErrorSubscriptionDue = ErrorSubscriptionDue
   , occurrences1h :: Int
   }
   deriving stock (Generic, Show)
-  deriving anyclass (FromRow, NFData)
+  deriving anyclass (FromRow, HI.DecodeRow, NFData)
 
 
 -- | Send alerts to all configured notification channels for a project, threading Slack/Discord messages.
@@ -819,27 +812,26 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
   Relude.unless ctx.config.pauseNotifications do
     now <- Time.currentTime
     dueErrors :: [ErrorSubscriptionDue] <-
-      PG.query
-        [sql|
+      Hasql.interp
+        [HI.sql|
           SELECT DISTINCT ON (e.id)
                  e.id, e.error_data, e.state, i.id, i.title,
                  e.slack_thread_ts, e.discord_message_id, e.occurrences_1h
           FROM apis.error_patterns e
           JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
-          WHERE e.project_id = ?
-            AND e.hash = ANY(?::text[])
+          WHERE e.project_id = #{pid}
+            AND e.hash = ANY(#{errorHashes}::text[])
             AND e.state != 'resolved'
-            AND i.issue_type = ? -- error patterns always create RuntimeException issues; alert type derives from error state
+            AND i.issue_type = #{Issues.RuntimeException}::apis.issue_type
             AND (
-              (e.last_notified_at IS NULL AND e.created_at >= ?::timestamptz - INTERVAL '60 minutes')
+              (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '60 minutes')
               OR (e.subscribed = TRUE
-                  AND ?::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
+                  AND #{now}::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
               OR (e.state = 'regressed'
                   AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
             )
           ORDER BY e.id, i.created_at DESC
         |]
-        (pid, errorHashes, Issues.RuntimeException, now, now)
     unless (null dueErrors) do
       Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
       projectM <- Projects.projectById pid
@@ -942,40 +934,40 @@ safetyNetReprocess pid = do
   ctx <- ask @Config.AuthContext
   let cutoff = ctx.config.processedAtCutoff
   projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid \pid' -> do
-    mpjCache <- Projects.projectCacheByIdIO ctx.jobsPool pid'
+    mpjCache <- Projects.projectCacheByIdIO ctx.hasqlJobsPool pid'
     pure $ fromMaybe Projects.defaultProjectCache mpjCache
   let caches = one (pid, projectCacheVal)
   -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
+  let pidText = pid.toText
   rows <-
     V.fromList
-      <$> PG.query
-        [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
+      <$> Hasql.interp
+        [HI.sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
                      body, attributes, resource, COALESCE(hashes, '{}'::text[]) AS hashes,
                      kind, status_code, status_message, start_time, end_time, events,
                      links, duration, name, parent_id, COALESCE(summary, '{}'::text[]) AS summary, date
               FROM otel_logs_and_spans
-              WHERE project_id = ?
+              WHERE project_id = #{pidText}
                 AND processed_at IS NULL
-                AND timestamp >= ?
+                AND timestamp >= #{cutoff}
                 AND timestamp <  now() - interval '10 minutes'
                 AND timestamp >  now() - interval '24 hours'
               ORDER BY timestamp
               LIMIT 1000 |]
-        (pid.toText, cutoff)
   Relude.unless (V.null rows) $ do
     Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
     liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows
 
 
 -- | Dual-fork an UPDATE to Postgres (blocking) + TimeFusion (best-effort, circuit-broken).
-dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, SimplePG.ToRow q, Time.Time :> es) => Config.AuthContext -> SimplePG.Query -> q -> Eff es Int64
-dualExecPgTf ctx sql' params = Ki.scoped \scope -> do
-  mainThread <- Ki.fork scope $ PG.execute sql' params
+dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
+dualExecPgTf ctx sql' = Ki.scoped \scope -> do
+  mainThread <- Ki.fork scope $ Hasql.interpExecute sql'
   _ <- Ki.fork scope $ Relude.when ctx.config.enableTimefusionWrites $ do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
     Relude.when shouldAttempt
-      $ tryAny (withTimefusion True $ PG.execute sql' params)
+      $ tryAny (withHasqlTimefusion True $ Hasql.interpExecute sql')
       >>= \case
         Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
         Left e -> do
@@ -1086,13 +1078,14 @@ processEagerBatch batch shard
           Ki.atomically $ Ki.awaitAll scope
 
         -- UPDATE-1: non-destructive hash merge, dual-forked to PG + TimeFusion.
-        let dbSpanIds = PGArray $ V.toList spanIdsV
-            dbTraceIds = PGArray $ V.toList traceIdsV
-            dbHashesJson = PGArray $ V.toList perRowHashesJson
-            dbErrorsJson = PGArray $ V.toList perRowErrorsJson
-            dbNormPaths = PGArray $ V.toList normalizedPaths
+        let dbSpanIds = V.toList spanIdsV
+            dbTraceIds = V.toList traceIdsV
+            dbHashesJson = V.toList perRowHashesJson
+            dbErrorsJson = V.toList perRowErrorsJson
+            dbNormPaths = V.toList normalizedPaths
+            pidText = pid.toText
             update1Sql =
-              [sql| UPDATE otel_logs_and_spans o
+              [HI.sql| UPDATE otel_logs_and_spans o
                     SET hashes = ARRAY(
                           SELECT DISTINCT h
                           FROM unnest(COALESCE(o.hashes, '{}'::text[]) || u.new_hashes) AS h
@@ -1110,20 +1103,19 @@ processEagerBatch batch shard
                       SELECT span_id, trace_id, errors, norm_path,
                              ARRAY(SELECT jsonb_array_elements_text(hashes_json)) AS new_hashes
                       FROM (
-                        SELECT unnest(?::text[])  AS span_id,
-                               unnest(?::text[])  AS trace_id,
-                               unnest(?::jsonb[]) AS hashes_json,
-                               unnest(?::jsonb[]) AS errors,
-                               unnest(?::text[])  AS norm_path
+                        SELECT unnest(#{dbSpanIds}::text[])  AS span_id,
+                               unnest(#{dbTraceIds}::text[])  AS trace_id,
+                               unnest(#{dbHashesJson}::jsonb[]) AS hashes_json,
+                               unnest(#{dbErrorsJson}::jsonb[]) AS errors,
+                               unnest(#{dbNormPaths}::text[])  AS norm_path
                       ) raw
                     ) u
-                    WHERE o.project_id = ?
-                      AND o.timestamp >= ?
-                      AND o.timestamp <  ?
+                    WHERE o.project_id = #{pidText}
+                      AND o.timestamp >= #{batchMinTs}
+                      AND o.timestamp <  #{batchMaxTsPad}
                       AND o.context___span_id = u.span_id
                       AND o.context___trace_id = u.trace_id |]
-            update1Params = (dbSpanIds, dbTraceIds, dbHashesJson, dbErrorsJson, dbNormPaths, pid.toText, batchMinTs, batchMaxTsPad)
-        rowsUpdated <- dualExecPgTf ctx update1Sql update1Params
+        rowsUpdated <- dualExecPgTf ctx update1Sql
         Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated])
 
         -- TODO(otel-metrics): emit counters for batches_processed, spans_processed here.
@@ -1350,25 +1342,26 @@ flushDrainTask shard task
             , Just tag <- [HM.lookup bs.spanCtxId tagByCtx]
             ]
       whenJust (nonEmpty taggedSpans) \taggedNE -> do
-        let spanIds' = PGArray [sid | (sid, _, _, _) <- taggedSpans]
-            traceIds' = PGArray [tid | (_, tid, _, _) <- taggedSpans]
-            tagArr = PGArray [t | (_, _, t, _) <- taggedSpans]
+        let spanIds' = [sid | (sid, _, _, _) <- taggedSpans]
+            traceIds' = [tid | (_, tid, _, _) <- taggedSpans]
+            tagArr = [t | (_, _, t, _) <- taggedSpans]
             tsList = fmap (\(_, _, _, ts) -> ts) taggedNE
             (minTs, maxTs) = foldl' (\(!lo, !hi) t -> (min lo t, max hi t)) (head tsList, head tsList) tsList
             maxTsPad = addUTCTime 1 maxTs
+            pidText = pid.toText
             update2Sql =
-              [sql| UPDATE otel_logs_and_spans o
+              [HI.sql| UPDATE otel_logs_and_spans o
                     SET hashes = COALESCE(o.hashes, '{}'::text[]) || ARRAY[u.tag]
-                    FROM (SELECT unnest(?::text[]) AS span_id,
-                                 unnest(?::text[]) AS trace_id,
-                                 unnest(?::text[]) AS tag) u
-                    WHERE o.project_id = ?
-                      AND o.timestamp >= ?
-                      AND o.timestamp <  ?
+                    FROM (SELECT unnest(#{spanIds'}::text[]) AS span_id,
+                                 unnest(#{traceIds'}::text[]) AS trace_id,
+                                 unnest(#{tagArr}::text[]) AS tag) u
+                    WHERE o.project_id = #{pidText}
+                      AND o.timestamp >= #{minTs}
+                      AND o.timestamp <  #{maxTsPad}
                       AND o.context___span_id = u.span_id
                       AND o.context___trace_id = u.trace_id
                       AND NOT (COALESCE(o.hashes, '{}'::text[]) @> ARRAY[u.tag]) |]
-        void $ dualExecPgTf ctx update2Sql (spanIds', traceIds', tagArr, pid.toText, minTs, maxTsPad)
+        void $ dualExecPgTf ctx update2Sql
       -- TODO(otel-metrics): emit counters for drain_flushes_completed, spans_flushed, patterns_persisted.
       Log.logTrace "Drain-flush complete" (AE.object ["project_id" AE..= pid.toText, "service" AE..= svcName, "span_count" AE..= length task.spans, "pattern_count" AE..= length ups])
 
@@ -1716,14 +1709,13 @@ processAPIChangeAnomalies pid targetHashes = do
   -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do
     now <- Time.currentTime
-    recentIssueCount :: [Only Int] <-
-      PG.query
-        [sql| SELECT COUNT(*)::int FROM apis.issues
-            WHERE project_id = ? AND issue_type = 'api_change'
-              AND created_at >= ?::timestamptz - INTERVAL '30 minutes'
-              AND created_at < ?::timestamptz - INTERVAL '1 minute' |]
-        (pid, now, now)
-    Relude.unless (any ((> 0) . fromOnly) recentIssueCount) do
+    recentIssueCount :: [Int] <-
+      Hasql.interp
+        [HI.sql| SELECT COUNT(*)::int FROM apis.issues
+            WHERE project_id = #{pid} AND issue_type = 'api_change'
+              AND created_at >= #{now}::timestamptz - INTERVAL '30 minutes'
+              AND created_at < #{now}::timestamptz - INTERVAL '1 minute' |]
+    Relude.unless (any (> 0) recentIssueCount) do
       projectM <- Projects.projectById pid
       whenJust projectM \project -> do
         users <- Projects.usersByProjectId pid
@@ -1766,16 +1758,15 @@ processIssuesEnhancement scheduledTime = do
   -- Find issues created in the last hour that haven't been enhanced yet
   issuesToEnhance <-
     V.fromList
-      <$> PG.query
-        [sql| SELECT id, project_id
+      <$> Hasql.interp
+        [HI.sql| SELECT id, project_id
               FROM apis.issues
-              WHERE created_at >= ? AND created_at < ?
+              WHERE created_at >= #{oneHourAgo} AND created_at < #{scheduledTime}
                 AND llm_enhanced_at IS NULL
                 AND acknowledged_at IS NULL
                 AND archived_at IS NULL
               ORDER BY project_id
               LIMIT 100 |]
-        (oneHourAgo, scheduledTime)
 
   Log.logTrace "Found issues to enhance with LLM" (V.length issuesToEnhance)
 
@@ -2272,7 +2263,7 @@ evaluateQueryMonitor monitor startWall = do
           pure monitor.logQueryAsSql
   let isOtelQuery = "otel_logs_and_spans" `T.isInfixOf` freshSql
   start <- liftIO $ getTime Monotonic
-  results <- withTimefusion (tfEnabled && isOtelQuery) $ PG.query (Query $ encodeUtf8 freshSql) ()
+  results <- Hasql.withHasqlTimefusion (tfEnabled && isOtelQuery) $ Hasql.interp (rawSql freshSql)
   end <- liftIO $ getTime Monotonic
 
   -- No rows in the lookback window:
@@ -2280,7 +2271,7 @@ evaluateQueryMonitor monitor startWall = do
   --   * otherwise skip, to avoid spuriously firing (triggerLessThan=True) or
   --     spuriously recovering when data is simply missing.
   let durationNs = toNanoSecs (diffTimeSpec end start)
-  case [v | Only v <- results] of
+  case results :: [Double] of
     []
       | not monitor.triggerLessThan && monitor.currentStatus /= Monitors.MSNormal ->
           evaluateWithResults monitor startWall title 0 durationNs
@@ -2353,14 +2344,14 @@ evaluateWithResults monitor startWall title total durationNs = do
         | shouldNotify && not isMuted = monitor.notificationCount + 1
         | otherwise = monitor.notificationCount
 
+  let monId = monitor.id
   void
-    $ PG.execute
-      [sql| UPDATE monitors.query_monitors
-          SET current_status = ?, current_value = ?, last_evaluated = ?,
-              warning_last_triggered = ?, alert_last_triggered = ?,
-              notification_count = ?
-          WHERE id = ? |]
-      (status, total, startWall, finalWarningAt, finalAlertAt, newNotifCount, monitor.id)
+    $ Hasql.interpExecute
+      [HI.sql| UPDATE monitors.query_monitors
+          SET current_status = #{status}, current_value = #{total}, last_evaluated = #{startWall},
+              warning_last_triggered = #{finalWarningAt}, alert_last_triggered = #{finalAlertAt},
+              notification_count = #{newNotifCount}
+          WHERE id = #{monId} |]
 
   let reason :: Text
       reason

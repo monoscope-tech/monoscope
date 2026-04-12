@@ -58,13 +58,14 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Data.Effectful.Hasql qualified as Hasql
+import Database.PostgreSQL.Simple (FromRow, ToRow)
+import Hasql.Interpolate qualified as HI
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
-import Effectful.PostgreSQL qualified as DB
+
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -451,7 +452,7 @@ data TestHistory = TestHistory
   , createdAt :: UTCTime
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (FromRow, ToRow)
+  deriving anyclass (FromRow, HI.DecodeRow, ToRow)
 
 
 newtype NotificationTestHistoryGet = NotificationTestHistoryGet {tests :: [TestHistory]}
@@ -467,8 +468,8 @@ notificationsTestPostH :: Projects.ProjectId -> TestForm -> ATAuthCtx (RespHeade
 notificationsTestPostH pid TestForm{..} = do
   -- Rate limit: check if test was sent in last 60 seconds
   now <- Time.currentTime
-  recentTests <- DB.query [sql|SELECT COUNT(*) FROM apis.notification_test_history WHERE project_id = ? AND created_at > ?::timestamptz - interval '60 seconds'|] (pid, now)
-  when (maybe 0 fromOnly (listToMaybe recentTests) > (0 :: Int))
+  recentCount <- fromMaybe (0 :: Int) <$> Hasql.interpOne [HI.sql|SELECT COUNT(*)::INT FROM apis.notification_test_history WHERE project_id = #{pid} AND created_at > #{now}::timestamptz - interval '60 seconds'|]
+  when (recentCount > 0)
     $ throwError err400{errBody = "Rate limit: Please wait 60 seconds between test notifications"}
 
   (_, project) <- Projects.sessionAndProject pid
@@ -511,9 +512,8 @@ notificationsTestPostH pid TestForm{..} = do
     _ -> throwError err400{errBody = "Unknown notification channel"}
 
   void
-    $ DB.execute
-      [sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (?, ?, ?, ?, ?, ?)|]
-      (pid, issueType, channel, "" :: Text, "sent" :: Text, Nothing :: Maybe Text)
+    $ Hasql.interpExecute
+      [HI.sql|INSERT INTO apis.notification_test_history (project_id, issue_type, channel, target, status, error) VALUES (#{pid}, #{issueType}, #{channel}, #{("" :: Text)}, #{("sent" :: Text)}, #{(Nothing :: Maybe Text)})|]
 
   Log.logTrace "Test notification sent" (channel, pid)
   let msg = if channel == "all" then "Test notification sent to all channels!" else "Test " <> channel <> " notification sent!"
@@ -522,7 +522,7 @@ notificationsTestPostH pid TestForm{..} = do
 
 notificationsTestHistoryGetH :: Projects.ProjectId -> ATAuthCtx (RespHeaders NotificationTestHistoryGet)
 notificationsTestHistoryGetH pid = do
-  tests <- DB.query [sql|SELECT * FROM apis.notification_test_history WHERE project_id = ? ORDER BY created_at DESC LIMIT 20|] (Only pid)
+  tests <- Hasql.interp [HI.sql|SELECT * FROM apis.notification_test_history WHERE project_id = #{pid} ORDER BY created_at DESC LIMIT 20|]
   addRespHeaders $ NotificationTestHistoryGet tests
 
 

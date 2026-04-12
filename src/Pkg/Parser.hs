@@ -244,7 +244,7 @@ sqlFromQueryComponents sqlCfg qc =
     nq = normalizeQuery sqlCfg qc
     timestampCol = "timestamp"
 
-    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "to_json(summary)" else col) $ colsNoAsClause nq.nqSelectCols
+    processedCols = map (\col -> if "summary" == col || "summary" `T.isSuffixOf` col then "to_jsonb(summary)" else col) $ colsNoAsClause nq.nqSelectCols
     selectClause = T.intercalate "," processedCols
 
     -- Use pre-computed values from NormalizedQuery

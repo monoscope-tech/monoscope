@@ -31,10 +31,9 @@ import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, toList)
-import Database.PostgreSQL.Simple (Only (Only))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Data.Effectful.Hasql qualified as Hasql
+import Hasql.Interpolate qualified as HI
 import Effectful (Eff, (:>))
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
 import Lucid
@@ -250,7 +249,7 @@ onboardingStepSkipped pid stepM = do
     Just step -> do
       let stepsCompleted = project.onboardingStepsCompleted
           newCompleted = insertIfNotExist step stepsCompleted
-      _ <- PG.execute [sql| update projects.projects set onboarding_steps_completed=? where id=? |] (newCompleted, pid)
+      _ <- Hasql.interpExecute [HI.sql| update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
 
       redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=" <> getNextStep step
       addRespHeaders ""
@@ -263,7 +262,7 @@ dismissChecklistH :: Projects.ProjectId -> ATAuthCtx (RespHeaders (Html ()))
 dismissChecklistH pid = do
   (_, project) <- Projects.sessionAndProject pid
   let newCompleted = insertIfNotExist "checklist_dismissed" project.onboardingStepsCompleted
-  void $ PG.execute [sql| UPDATE projects.projects SET onboarding_steps_completed=? WHERE id=? |] (newCompleted, pid)
+  Hasql.interpExecute_ [HI.sql| UPDATE projects.projects SET onboarding_steps_completed=#{newCompleted} WHERE id=#{pid} |]
   addRespHeaders ""
 
 
@@ -284,10 +283,11 @@ phoneEmailPostH pid form = do
       notifsTxt = ordNub notifs'
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "NotifChannel" stepsCompleted
-      q = [sql| update projects.projects set notifications_channel=?::notification_channel_enum[], notify_phone_number=?, notify_emails=?::text[],onboarding_steps_completed=? where id=? |]
+      notifsVec = V.fromList notifsTxt
+      emailsVec = V.fromList emails
   projectMembers <- Projects.usersByProjectId pid
   let emails' = (\u -> CI.original u.email) <$> projectMembers
-  _ <- PG.execute q (V.fromList notifsTxt, phone, V.fromList emails, newCompleted, pid)
+  _ <- Hasql.interpExecute [HI.sql| update projects.projects set notifications_channel=#{notifsVec}::notification_channel_enum[], notify_phone_number=#{phone}, notify_emails=#{emailsVec}::text[],onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
   addRespHeaders $ OnboardingPhoneEmailsPost pid (V.fromList $ ordNub $ emails <> emails') envCfg.enableFreetier
 
 
@@ -296,10 +296,11 @@ checkIntegrationGet pid languageM = do
   (sess, project) <- Projects.sessionAndProject pid
   let stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Integration" stepsCompleted
-  v :: Maybe (Only Text) <- listToMaybe <$> PG.query [sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = ? LIMIT 1|] (Only pid.toText)
+  let pidText = pid.toText
+  v :: Maybe Text <- Hasql.interpOne [HI.sql|SELECT context___span_id FROM otel_logs_and_spans WHERE project_id = #{pidText} LIMIT 1|]
   if isJust v
     then do
-      _ <- PG.execute [sql|update projects.projects set onboarding_steps_completed=? where id=?|] (newCompleted, pid)
+      _ <- Hasql.interpExecute [HI.sql|update projects.projects set onboarding_steps_completed=#{newCompleted} where id=#{pid}|]
       case languageM of
         Just lg -> addRespHeaders verifiedCheck
         _ -> do
@@ -330,11 +331,13 @@ onboardingInfoPostH pid form = do
       questions = case project.questions of
         Just (AE.Object o) -> AE.Object $ infoJson <> o
         _ -> AE.Object infoJson
-      jsonBytes = AE.encode questions
+      jsonBytes = HI.AsJsonb questions
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Info" stepsCompleted
-  _ <- PG.execute [sql| update projects.projects set title=?,questions=?,onboarding_steps_completed=? where id=? |] (form.companyName, jsonBytes, newCompleted, pid)
-  _ <- PG.execute [sql| update users.users set first_name= ?, last_name=? where id=? |] (firstName, lastName, sess.user.id)
+  let companyName = form.companyName
+      userId = sess.user.id
+  _ <- Hasql.interpExecute [HI.sql| update projects.projects set title=#{companyName},questions=#{jsonBytes},onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
+  _ <- Hasql.interpExecute [HI.sql| update users.users set first_name=#{firstName}, last_name=#{lastName} where id=#{userId} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Survey"
   addRespHeaders $ OnboardingInfoPost ()
 
@@ -350,10 +353,10 @@ onboardingConfPostH pid form = do
       questions = case project.questions of
         Just (AE.Object o) -> AE.Object $ infoJson <> o
         _ -> AE.Object infoJson
-      jsonBytes = AE.encode questions
+      jsonBytes = HI.AsJsonb questions
       stepsCompleted = project.onboardingStepsCompleted
       newCompleted = insertIfNotExist "Survey" stepsCompleted
-  _ <- PG.execute [sql| update projects.projects set questions=?, onboarding_steps_completed=? where id=? |] (jsonBytes, newCompleted, pid)
+  _ <- Hasql.interpExecute [HI.sql| update projects.projects set questions=#{jsonBytes}, onboarding_steps_completed=#{newCompleted} where id=#{pid} |]
   redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=NotifChannel"
   addRespHeaders $ OnboardingConfPost ()
 
@@ -714,7 +717,22 @@ integrationsPage pid apikey =
       div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
 
     -- Mobile overlay for docs panel
-    style_ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}}"
+    style_ $ T.unlines
+      [ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}}"
+      , ".ai-menu-wrap{position:relative}"
+      , ".ai-menu{position:absolute;right:0;top:100%;z-index:50;min-width:260px;margin-top:6px;background:var(--color-bgRaised);border:1px solid var(--color-strokeWeak);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:6px;opacity:0;transform:scale(0.95) translateY(-4px);pointer-events:none;transition:opacity 150ms ease,transform 150ms ease}"
+      , ".ai-menu.open{opacity:1;transform:scale(1) translateY(0);pointer-events:auto}"
+      , ".ai-menu-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:0.8125rem;color:var(--color-text);text-decoration:none;border:none;background:none;width:100%;text-align:left;transition:background 100ms ease}"
+      , ".ai-menu-item:hover{background:var(--color-fillWeak)}"
+      , ".ai-menu-item.disabled{opacity:0.4;pointer-events:none}"
+      , ".ai-menu-item svg{width:16px;height:16px;flex-shrink:0}"
+      , ".ai-menu-item .ai-menu-label{flex:1}"
+      , ".ai-menu-item .ai-menu-sub{font-size:0.6875rem;color:var(--color-textWeak)}"
+      , ".ai-menu-sep{height:1px;background:var(--color-strokeWeak);margin:4px 8px}"
+      , ".ai-menu-item .ai-menu-check{display:none;color:oklch(0.65 0.2 145)}"
+      , ".ai-menu-item.copied .ai-menu-check{display:block}"
+      , ".ai-menu-item.copied svg:first-child{display:none}"
+      ]
 
     -- Highlight.js for syntax highlighting (v11.11.1)
     link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]
@@ -737,6 +755,48 @@ integrationsPage pid apikey =
         // Initialize highlight.js
         hljs.highlightAll();
         
+        function initAIMenu(container) {
+          var trigger = container.querySelector('#ai-menu-trigger');
+          var menu = container.querySelector('#ai-menu');
+          if (!trigger || !menu) return;
+          var mcpItems = menu.querySelectorAll('[data-action="copy-mcp"],[data-action="connect-cursor"],[data-action="connect-vscode"]');
+          mcpItems.forEach(function(el) { el.classList.add('disabled'); });
+          var pageUrl = window.location.href;
+          var title = container.querySelector('h1');
+          var pageTitle = title ? title.textContent.replace(/#/g, '').trim() : document.title;
+          var prompt = 'Read this Monoscope docs page and help me understand it: ' + pageUrl;
+          var chatgpt = menu.querySelector('[data-action="open-chatgpt"]');
+          if (chatgpt) chatgpt.href = 'https://chatgpt.com/?hints=search&q=' + encodeURIComponent(prompt);
+          var claude = menu.querySelector('[data-action="open-claude"]');
+          if (claude) claude.href = 'https://claude.ai/new?q=' + encodeURIComponent(prompt);
+          var perplexity = menu.querySelector('[data-action="open-perplexity"]');
+          if (perplexity) perplexity.href = 'https://www.perplexity.ai/search?q=' + encodeURIComponent(prompt);
+          trigger.onclick = function(e) { e.stopPropagation(); menu.classList.toggle('open'); };
+          document.addEventListener('click', function(e) {
+            if (!menu.contains(e.target) && e.target !== trigger) menu.classList.remove('open');
+          });
+          document.addEventListener('keydown', function(e) { if (e.key === 'Escape') menu.classList.remove('open'); });
+          var copyPage = menu.querySelector('[data-action="copy-page"]');
+          if (copyPage) copyPage.onclick = function() {
+            var clone = container.cloneNode(true);
+            clone.querySelectorAll('.ai-menu-wrap, .code-header').forEach(function(el) { el.remove(); });
+            var text = '# ' + pageTitle + '\n\nSource: ' + pageUrl + '\n\n' + clone.innerText;
+            navigator.clipboard.writeText(text).then(function() { showCopied(menu, 'copy-page'); });
+          };
+          var viewMd = menu.querySelector('[data-action="view-markdown"]');
+          if (viewMd) viewMd.onclick = function() {
+            var clone = container.cloneNode(true);
+            clone.querySelectorAll('.ai-menu-wrap, .code-header').forEach(function(el) { el.remove(); });
+            var text = '# ' + pageTitle + '\n\nSource: ' + pageUrl + '\n\n' + clone.innerText;
+            window.open(URL.createObjectURL(new Blob([text], { type: 'text/plain' })), '_blank');
+          };
+          function showCopied(m, action) {
+            var item = m.querySelector('[data-action="' + action + '"]');
+            item.classList.add('copied');
+            setTimeout(function() { item.classList.remove('copied'); }, 2000);
+          }
+        }
+
         // Re-highlight after HTMX swaps content
         document.body.addEventListener('htmx:afterSwap', function(event) {
           // Only highlight content in the integration documentation area
@@ -745,6 +805,7 @@ integrationsPage pid apikey =
             target.querySelectorAll('pre code').forEach((block) => {
               hljs.highlightElement(block);
             });
+            initAIMenu(target);
           }
         });
       |]

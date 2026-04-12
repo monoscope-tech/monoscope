@@ -4,7 +4,6 @@ module System.Types (
   ATBackgroundCtx,
   DB,
   runBackground,
-  withTimefusion,
   withHasqlTimefusion,
   addRespHeaders,
   addTriggerEvent,
@@ -43,14 +42,13 @@ import Effectful.Error.Static (Error, runErrorNoCallStack)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, runLabeled)
 import Effectful.Log (Log)
-import Effectful.PostgreSQL (WithConnection)
 import Effectful.Reader.Static qualified
 import Effectful.State.Static.Local qualified as State
 import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (DB, runConnectionPool, withTimefusion)
+import Pkg.DeriveUtils (DB)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
@@ -85,8 +83,6 @@ type CommonWebEffects =
    , Effectful.Reader.Static.Reader AuthContext
    , UUIDEff
    , HTTP
-   , WithConnection
-   , Labeled "timefusion" WithConnection
    , Hasql
    , Labeled "timefusion" Hasql
    , Time
@@ -142,8 +138,6 @@ effToServantHandler env logger tp app =
     & Effectful.Reader.Static.runReader env
     & runUUID
     & runHTTPWreq
-    & runConnectionPool env.pool
-    & runLabeled @"timefusion" (runConnectionPool env.timefusionPgPool)
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
     & runTime
@@ -163,8 +157,6 @@ effToServantHandlerTest env logger tp app =
     & Effectful.Reader.Static.runReader env
     & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
     & runHTTPGolden "./tests/golden/"
-    & runConnectionPool env.pool
-    & runLabeled @"timefusion" (runConnectionPool env.timefusionPgPool)
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
     & runFrozenTime (Unsafe.read "2025-01-01 00:00:00 UTC" :: UTCTime)
@@ -190,8 +182,6 @@ type ATBackgroundCtx =
   Effectful.Eff
     '[ Data.Effectful.Notify.Notify
      , Effectful.Reader.Static.Reader AuthContext
-     , WithConnection
-     , Labeled "timefusion" WithConnection
      , Hasql
      , Labeled "timefusion" Hasql
      , Time
@@ -211,8 +201,6 @@ runBackground logger appCtx tp process =
   process
     & Data.Effectful.Notify.runNotifyProduction
     & Effectful.Reader.Static.runReader appCtx
-    & runConnectionPool appCtx.pool
-    & runLabeled @"timefusion" (runConnectionPool appCtx.timefusionPgPool)
     & runHasqlPool appCtx.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool appCtx.hasqlTimefusionPool)
     & runTime
@@ -226,7 +214,7 @@ runBackground logger appCtx tp process =
     & Effectful.runEff
 
 
--- | Hasql twin of `withTimefusion`. Re-exported here so call sites can import a single module.
+-- | Route Hasql through the timefusion pool when enabled. Re-exported here so call sites can import a single module.
 withHasqlTimefusion
   :: (Hasql :> es, Labeled "timefusion" Hasql :> es)
   => Bool

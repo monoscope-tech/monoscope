@@ -27,23 +27,23 @@ where
 import Data.Aeson qualified as AE
 import Data.ByteString.Char8 qualified as BSC
 import Data.Default (Default, def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Text qualified as T
 import Data.Text.Display (Display)
 import Data.Time
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
-import Database.PostgreSQL.Simple (FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField, ResultError (ConversionFailed, UnexpectedNull), fromField, returnError)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
-import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.Time (parseUTCTime)
 import Database.PostgreSQL.Simple.ToField (ToField)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, type (:>))
-import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.Fields qualified as Fields (
@@ -79,6 +79,7 @@ data AnomalyTypes
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyTypes
   deriving (Display, FromField, ToField) via WrappedEnumSC "AT" AnomalyTypes
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "AT" AnomalyTypes
 
 
 parseAnomalyTypes :: (Eq s, IsString s) => s -> Maybe AnomalyTypes
@@ -100,6 +101,7 @@ data AnomalyActions
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.StripPrefix "FT", DAE.CamelToSnake]] AnomalyActions
   deriving (Display, FromField, ToField) via WrappedEnumSC "AA" AnomalyActions
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "AA" AnomalyActions
 
 
 data AnomalyVM = AnomalyVM
@@ -137,7 +139,7 @@ data AnomalyVM = AnomalyVM
   , lastSeen :: ZonedTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (Default, FromRow, NFData)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData)
   deriving
     (Entity)
     via (GenericEntity '[Schema "apis", TableName "anomalies_vm", PrimaryKey "id", FieldModifiers '[CamelToSnake]] AnomalyVM)
@@ -148,10 +150,8 @@ getAnomaliesVM pid hash
   | V.null hash = pure []
   | otherwise = do
       now <- Time.currentTime
-      PG.query q (now, pid, hash)
-  where
-    q =
-      [sql|
+      Hasql.interp
+        [HI.sql|
 SELECT
     an.id,
     an.created_at,
@@ -178,7 +178,7 @@ SELECT
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
     an.archived_at,
-    COALESCE(iss.affected_requests, 0),?::timestamptz
+    COALESCE(iss.affected_requests, 0),#{now}::timestamptz
 from
     apis.anomalies an
     LEFT JOIN apis.issues iss ON iss.target_hash = an.target_hash AND iss.project_id = an.project_id
@@ -194,7 +194,7 @@ where
     OR (an.anomaly_type = 'shape' AND endpoints.project_id = an.project_id AND endpoints.created_at != an.created_at)
     OR (an.anomaly_type = 'format' AND fields.project_id = an.project_id AND fields.created_at != an.created_at)
     OR NOT (an.anomaly_type = ANY('{"endpoint","shape","field","format"}'::apis.anomaly_type[]))
-  ) AND an.project_id=? AND an.target_hash=ANY(?)
+  ) AND an.project_id=#{pid} AND an.target_hash=ANY(#{hash})
       |]
 
 
@@ -204,22 +204,18 @@ acknowledgeAnomalies uid aids
   | otherwise = do
       now <- Time.currentTime
       -- Get anomaly hashes from the issues being acknowledged
-      anomalyHashesResult :: [Only (V.Vector Text)] <- PG.query qGetHashes (Only aids)
-      let allAnomalyHashes = V.concat $ coerce @[Only (V.Vector Text)] @[V.Vector Text] anomalyHashesResult
+      anomalyHashesResult :: [V.Vector Text] <- Hasql.interp
+        [HI.sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(#{aids}::uuid[]) |]
+      let allAnomalyHashes = V.concat anomalyHashesResult
       -- Update issues
-      (_ :: [Only Text]) <- PG.query qIssues (uid, now, aids)
-      -- Update anomalies - both directly referenced and those tracked by the issues
-      (_ :: [Only Text]) <- PG.query q (uid, now, aids)
+      (_ :: [Text]) <- Hasql.interp
+        [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE id=ANY(#{aids}::uuid[]) RETURNING target_hash |]
       -- Also update anomalies referenced by the issues' anomaly_hashes arrays
-      unless (V.null allAnomalyHashes) $ do
-        _ <- PG.execute qAnomaliesByHash (uid, now, allAnomalyHashes)
-        pass
-      coerce @[Only Text] @[Text] <$> PG.query q (uid, now, aids)
-  where
-    qGetHashes = [sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(?::uuid[]) |]
-    qIssues = [sql| update apis.issues set acknowledged_by=?, acknowledged_at=? where id=ANY(?::uuid[]) RETURNING target_hash; |]
-    q = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=? where id=ANY(?::uuid[]) RETURNING target_hash; |]
-    qAnomaliesByHash = [sql| update apis.anomalies set acknowledged_by=?, acknowledged_at=? where target_hash=ANY(?) |]
+      unless (V.null allAnomalyHashes) $ Hasql.interpExecute_
+        [HI.sql| UPDATE apis.anomalies SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE target_hash=ANY(#{allAnomalyHashes}) |]
+      -- Update anomalies - both directly referenced and those tracked by the issues
+      Hasql.interp
+        [HI.sql| UPDATE apis.anomalies SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE id=ANY(#{aids}::uuid[]) RETURNING target_hash |]
 
 
 acknowlegeCascade :: (DB es, Time :> es) => Projects.UserId -> V.Vector Text -> Eff es Int64
@@ -227,12 +223,9 @@ acknowlegeCascade uid targets
   | V.null targets = pure 0
   | otherwise = do
       now <- Time.currentTime
-      _ <- PG.execute qIssues (uid, now, hashes)
-      PG.execute q (uid, now, hashes)
-  where
-    hashes = (<> "%") <$> targets
-    qIssues = [sql| UPDATE apis.issues SET acknowledged_by = ?, acknowledged_at = ? WHERE target_hash=ANY (?); |]
-    q = [sql| UPDATE apis.anomalies SET acknowledged_by = ?, acknowledged_at = ? WHERE target_hash LIKE ANY (?); |]
+      let hashes = (<> "%") <$> targets
+      _ <- Hasql.interpExecute [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash=ANY(#{hashes}) |]
+      Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
 
 
 -------------------------------------------------------------------------------------------

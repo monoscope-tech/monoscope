@@ -12,9 +12,9 @@ import GHC.TypeLits (Symbol)
 import Relude hiding (ask)
 
 -- Database imports
-import Database.PostgreSQL.Simple qualified as PGS
-import Database.PostgreSQL.Simple.SqlQQ (sql)
-import Effectful.PostgreSQL qualified as PG
+import Data.Effectful.Hasql qualified as Hasql
+import Database.PostgreSQL.Simple (Connection)
+import Hasql.Interpolate qualified as HI
 
 -- Effectful imports
 import Data.Effectful.Notify qualified as Notify
@@ -440,7 +440,7 @@ data ProjectsRoutes' mode = ProjectsRoutes'
 -- =============================================================================
 
 -- Main server for the root routes
-server :: Pool PGS.Connection -> Routes (AsServerT ATBaseCtx)
+server :: Pool Connection -> Routes (AsServerT ATBaseCtx)
 server pool =
   Routes
     { public = Servant.serveDirectoryWebApp "./static/public"
@@ -704,10 +704,10 @@ data Status = Status
 
 statusH :: ATBaseCtx Status
 statusH = do
-  versionM <- listToMaybe <$> PG.query_ [sql| select version(); |]
+  versionM <- Hasql.interpOne [HI.sql| select version() |]
   hash <- maybe "dev" toText <$> lookupEnv "GIT_HASH"
   commitDate <- maybe "dev" toText <$> lookupEnv "GIT_COMMIT_DATE"
-  pure Status{dbVersion = versionM <&> \(PGS.Only v) -> v, gitHash = hash, gitCommitDate = commitDate}
+  pure Status{dbVersion = versionM, gitHash = hash, gitCommitDate = commitDate}
 
 
 pingH :: ATBaseCtx Text
