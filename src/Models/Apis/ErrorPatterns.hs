@@ -242,7 +242,7 @@ propagateMergedCountsBatch pids =
     WITH snapshot AS (
       SELECT id, canonical_id, occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
       FROM apis.error_patterns
-      WHERE project_id = ANY(?) AND canonical_id IS NOT NULL
+      WHERE project_id = ANY(?::uuid[]) AND canonical_id IS NOT NULL
         AND (occurrences_1m > 0 OR occurrences_5m > 0 OR occurrences_1h > 0 OR occurrences_24h > 0)
     ),
     zeroed AS (
@@ -257,7 +257,7 @@ propagateMergedCountsBatch pids =
     FROM (SELECT canonical_id, SUM(occurrences_1m) as sum_1m, SUM(occurrences_5m) as sum_5m,
             SUM(occurrences_1h) as sum_1h, SUM(occurrences_24h) as sum_24h
           FROM snapshot GROUP BY canonical_id) m
-    WHERE c.id = m.canonical_id AND c.project_id = ANY(?) |]
+    WHERE c.id = m.canonical_id AND c.project_id = ANY(?::uuid[]) |]
     (PGArray (V.toList pids), PGArray (V.toList pids))
 
 
@@ -282,7 +282,7 @@ updateOccurrenceCountsBatch pids now =
           WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN ?
           ELSE resolved_at
         END
-      WHERE project_id = ANY(?) AND (state != 'resolved' OR occurrences_24h > 0)
+      WHERE project_id = ANY(?::uuid[]) AND (state != 'resolved' OR occurrences_24h > 0)
     |]
     (now, now, PGArray (V.toList pids))
 
