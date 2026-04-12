@@ -379,7 +379,7 @@ expandedItemView pid item aptSp leftM rightM = do
             _ -> False
           borderClass = "border-b-strokeWeak"
       let tabCls extra = "http-tab cursor-pointer border-b-2 " <> borderClass <> " px-4 py-1.5 text-sm " <> extra
-          tabBtn cls target label = button_ [class_ $ tabCls cls, onclick_ $ "navigatable(this, '#" <> target <> "', '#" <> tabContainerId <> "', 't-tab-active', 'http')"] label
+          tabBtn cls target = button_ [class_ $ tabCls cls, onclick_ $ "navigatable(this, '#" <> target <> "', '#" <> tabContainerId <> "', 't-tab-active', 'http')"]
       div_ [class_ "flex", [__|on click halt|]] $ do
         when ((isLog || isAlert) && isJust item.body) $ tabBtn "t-tab-active" "body-content" "Body"
         when isHttp $ tabBtn "t-tab-active" "request-content" "Request"

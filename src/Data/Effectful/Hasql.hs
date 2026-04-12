@@ -34,7 +34,7 @@ data Hasql :: Effect where
 type instance DispatchOf Hasql = 'Dynamic
 
 
-data HasqlException = HasqlException UsageError
+newtype HasqlException = HasqlException UsageError
   deriving stock (Show)
 
 

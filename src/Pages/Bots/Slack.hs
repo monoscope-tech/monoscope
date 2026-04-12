@@ -168,7 +168,7 @@ slackInteractionsH interaction = do
   case interaction.command of
     "/monoscope-here" -> do
       resp <-
-        withSlackDataByTeam "/monoscope-here" interaction.team_id (\sd -> runMonoscopeHere interaction sd)
+        withSlackDataByTeam "/monoscope-here" interaction.team_id (runMonoscopeHere interaction)
           <&> fromMaybe workspaceNotLinkedResp
       Log.logTrace ("Slack interaction response" :: Text) resp
       pure resp

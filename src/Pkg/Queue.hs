@@ -116,12 +116,12 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         pullResp <- Google.send env $ PubSub.newPubSubProjectsSubscriptionsPull pullReq subscription
         let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
         let !validMsgs =
-              catMaybes
-                $ messages
-                & map \msg -> do
+              mapMaybe
+                (\msg -> do
                   ackId <- msg.ackId
                   b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-                  Just (ackId, b64Msg)
+                  Just (ackId, b64Msg))
+                messages
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
         let ceType = HM.lookup "ce-type" (maybeToMonoid firstAttrs)
 
@@ -299,7 +299,7 @@ kafkaService appLogger appCtx tp kafkaTopics fn = checkpoint "kafkaService" do
     consumerRecordToTuple record = (record.crTopic.unTopicName, fromMaybe "" record.crValue)
 
     consumerRecordHeadersToHashMap :: K.ConsumerRecord (Maybe ByteString) (Maybe ByteString) -> HashMap Text Text
-    consumerRecordHeadersToHashMap record = HM.fromList $ map (\(k, v) -> (decodeUtf8 k, decodeUtf8 v)) (K.headersToList record.crHeaders)
+    consumerRecordHeadersToHashMap record = HM.fromList $ map (bimap decodeUtf8 decodeUtf8) (K.headersToList record.crHeaders)
 
     consumerProps :: EnvConfig -> Text -> K.ConsumerProperties
     consumerProps cfg clientId =

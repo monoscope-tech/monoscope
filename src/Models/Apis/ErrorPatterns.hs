@@ -54,7 +54,7 @@ import Database.PostgreSQL.Simple.FromRow qualified as FR
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
 import Database.PostgreSQL.Simple.ToField (ToField)
-import Database.PostgreSQL.Simple.Types (In (..))
+import Database.PostgreSQL.Simple.Types (PGArray (..))
 
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff)
@@ -230,7 +230,7 @@ propagateMergedCounts pid = propagateMergedCountsBatch (V.singleton pid)
 
 
 updateOccurrenceCounts :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
-updateOccurrenceCounts pid now = updateOccurrenceCountsBatch (V.singleton pid) now
+updateOccurrenceCounts pid = updateOccurrenceCountsBatch (V.singleton pid)
 
 
 -- | Batch version: propagate merged counts for all given projects in a single query.
@@ -258,7 +258,7 @@ propagateMergedCountsBatch pids =
             SUM(occurrences_1h) as sum_1h, SUM(occurrences_24h) as sum_24h
           FROM snapshot GROUP BY canonical_id) m
     WHERE c.id = m.canonical_id AND c.project_id = ANY(?) |]
-    (In (V.toList pids), In (V.toList pids))
+    (PGArray (V.toList pids), PGArray (V.toList pids))
 
 
 -- | Batch version: decay occurrence counts for all given projects in a single query.
@@ -284,7 +284,7 @@ updateOccurrenceCountsBatch pids now =
         END
       WHERE project_id = ANY(?) AND (state != 'resolved' OR occurrences_24h > 0)
     |]
-    (now, now, In (V.toList pids))
+    (now, now, PGArray (V.toList pids))
 
 
 updateErrorPatternState :: DB es => ErrorPatternId -> ErrorState -> UTCTime -> Eff es Int64

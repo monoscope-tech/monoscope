@@ -314,7 +314,7 @@ updateNotificationsChannel pid NotifListForm{notificationsChannel, phones, email
             addedChannels = S.difference newChannelsSet oldChannels
             teamDetails = (ProjectMembers.teamToDetails team){ProjectMembers.slackChannels = V.fromList slackChannels} :: ProjectMembers.TeamDetails
         void $ ProjectMembers.updateTeam pid team.id teamDetails
-        case ((,) <$> projectM <*> slackInfoM) of
+        case (,) <$> projectM <*> slackInfoM of
           Just (project, slackInfo) ->
             forM_ addedChannels \channelId -> do
               result <- tryAny $ SlackP.sendSlackWelcomeMessage slackInfo.botToken channelId project.title

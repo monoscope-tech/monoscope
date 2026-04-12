@@ -1216,7 +1216,7 @@ maybeSpawnRehydration logger ctx tp shard key@(pid, svcName) = do
         full <- isFullTBQueue shard.rehydrationQ
         if full
           then pure False
-          else writeTBQueue shard.rehydrationQ job >> pure True
+          else writeTBQueue shard.rehydrationQ job $> True
       unless enqueued
         $ atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.delete key s, ())
 

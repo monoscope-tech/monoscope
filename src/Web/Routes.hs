@@ -497,8 +497,7 @@ server pool =
 apiV1Server :: Projects.ProjectId -> Servant.ServerT (NamedRoutes ApiV1Routes) ATBaseCtx
 apiV1Server pid =
   ApiV1Routes
-    { eventsSearch = \queryM sinceM fromM toM sourceM limitM ->
-        Log.queryEvents pid queryM sinceM fromM toM sourceM limitM
+    { eventsSearch = Log.queryEvents pid
     , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
         Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
     , schemaGet = pure Schema.telemetrySchema

@@ -67,7 +67,7 @@ instance ToSchema DataType where
       & type_
       ?~ OpenApi.OpenApiString
         & enum_
-      ?~ [AE.toJSON @DataType v | v <- [minBound .. maxBound]]
+      ?~ [AE.toJSON @DataType v | v <- universe]
 
 
 instance ToParamSchema DataType where

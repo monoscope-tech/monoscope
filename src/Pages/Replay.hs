@@ -330,7 +330,7 @@ replaySessionGetH pid sessionId = do
 
 -- | Merge a specific replay session's S3 event files (triggered when file count exceeds threshold)
 mergeReplaySession :: Projects.ProjectId -> UUID.UUID -> ATBackgroundCtx ()
-mergeReplaySession pid sessionId = mergeOneSessionByKeys pid sessionId "(file count threshold)" $ \_ -> pass
+mergeReplaySession pid sessionId = mergeOneSessionByKeys pid sessionId "(file count threshold)" $ const pass
 
 
 -- | Find inactive sessions and compress & merge their S3 event files

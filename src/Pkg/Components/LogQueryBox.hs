@@ -350,7 +350,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
 
 -- | HTMX partial response wrapper — hxSelect extracts #queryLibraryContent from the rendered popover
 queryLibrary_ :: Projects.ProjectId -> V.Vector Projects.QueryLibItem -> V.Vector Projects.QueryLibItem -> Html ()
-queryLibrary_ _pid queryLibSaved queryLibRecent = queryLibraryDropdown_ queryLibSaved queryLibRecent
+queryLibrary_ _pid = queryLibraryDropdown_
 
 
 -- | Shared dropdown content for the query library (Popular + Saved + Recent tabs)
@@ -390,7 +390,7 @@ queryLibraryDropdown_ queryLibSaved queryLibRecent =
             do
               div_ [class_ "text-sm text-textStrong"] $ toHtml label
               code_ [class_ "text-xs text-textWeak line-clamp-2 break-all block mt-0.5"] $ toHtml query
-              whenJust desc \d -> small_ [class_ "text-xs text-textDisabled mt-0.5 block"] $ toHtml d
+              whenJust desc $ small_ [class_ "text-xs text-textDisabled mt-0.5 block"] . toHtml
 
     searchBar_ :: Text -> Html ()
     searchBar_ label = div_ [class_ "flex gap-2 sticky top-0 px-3 py-2 bg-bgBase border-b border-strokeWeak z-20"] do
