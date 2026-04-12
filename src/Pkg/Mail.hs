@@ -346,8 +346,9 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
 -- different SDKs populate different fields, so we OR them to mirror that fallback.
 --
 -- >>> import qualified Data.Vector as V
+-- >>> import qualified Data.Text as T
 -- >>> import Network.HTTP.Types (urlDecode)
--- >>> let decode u = decodeUtf8 (urlDecode True (encodeUtf8 (T.drop (T.length "https://app/log_explorer?query=") u)))
+-- >>> let decode u = decodeUtf8 @Text (urlDecode True (encodeUtf8 (T.drop (T.length "https://app/log_explorer?query=") u)))
 -- >>> decode (newEndpointsExplorerUrl "https://app" (V.fromList ["GET /home"]))
 -- "(attributes.http.route == \"/home\" OR attributes.url.path == \"/home\")"
 -- >>> decode (newEndpointsExplorerUrl "https://app" (V.fromList ["GET /home", "POST /users"]))
