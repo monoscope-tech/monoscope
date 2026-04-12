@@ -49,6 +49,7 @@ import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
 import Data.Default
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Notify qualified as Notify
 import Data.Text qualified as T
 import Data.Time (UTCTime (..), getZonedTime, timeOfDayToTime, timeToTimeOfDay)
@@ -58,13 +59,12 @@ import Data.Time.Format (defaultTimeLocale, formatTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple (FromRow, ToRow)
-import Hasql.Interpolate qualified as HI
 import Deriving.Aeson qualified as DAE
 import Deriving.Aeson.Stock qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
+import Hasql.Interpolate qualified as HI
 
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time

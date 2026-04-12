@@ -15,17 +15,17 @@ module Pkg.QueryCache (
 ) where
 
 import Data.Char (isDigit)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Map.Strict qualified as M
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Vector qualified as V
 import Data.Vector.Algorithms.Intro qualified as VA
-import Data.Effectful.Hasql qualified as Hasql
 import Effectful (Eff, type (:>))
-import Hasql.Interpolate qualified as HI
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
 import Pages.Charts.Types (MetricsData (..), MetricsStats (..))
 import Pkg.DeriveUtils (AesonText (..), DB)
@@ -173,7 +173,7 @@ updateCache key (fromTime, toTime) metricsData originalQuery = do
   let (kPid, kSrc, kHash, kBin) = (key.projectId, key.source, key.queryHash, key.binInterval)
       cd = AesonText metricsData
   Hasql.interpExecute_
-      [HI.sql|
+    [HI.sql|
     INSERT INTO query_cache (project_id, source, query_hash, bin_interval, original_query,
                              cached_from, cached_to, cached_data, hit_count, last_accessed_at)
     VALUES (#{kPid}, #{kSrc}, #{kHash}, #{kBin}, #{originalQuery}, #{fromTime}, #{toTime}, #{cd}, 1, #{now})

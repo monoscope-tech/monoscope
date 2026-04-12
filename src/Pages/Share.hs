@@ -1,13 +1,13 @@
 module Pages.Share (ReqForm (..), shareLinkPostH, shareLinkGetH, ShareLinkGet (..), ShareLinkPost (..)) where
 
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
-import Data.Effectful.Hasql qualified as Hasql
-import Hasql.Interpolate qualified as HI
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
@@ -97,8 +97,9 @@ shareLinkGetH sid = do
               Nothing -> Nothing
           -- Also "span"
           _ -> do
-            spanItem <- Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads $
-              Telemetry.spanRecordByProjectAndId pid createdAt eventId
+            spanItem <-
+              Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
+                $ Telemetry.spanRecordByProjectAndId pid createdAt eventId
             pure case spanItem of
               Just spn -> Just $ LogItem.expandedItemView pid spn Nothing Nothing Nothing
               Nothing -> Nothing

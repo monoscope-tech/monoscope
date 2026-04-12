@@ -205,8 +205,8 @@ newtype FacetData = FacetData (HM.HashMap Text [FacetValue])
   deriving stock (Eq, Generic, Show)
   deriving newtype (NFData)
   deriving (FromField, ToField) via Aeson FacetData
-  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb FacetData
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields] FacetData
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb FacetData
 
 
 data FacetSummary = FacetSummary
@@ -231,8 +231,9 @@ instance Eq Field where
 
 bulkInsertFields :: DB es => V.Vector Field -> Eff es ()
 bulkInsertFields flds | V.null flds = pass
-bulkInsertFields flds = Hasql.interpExecute_
-  [HI.sql| INSERT INTO apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash)
+bulkInsertFields flds =
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.fields (project_id, endpoint_hash, key, field_type, format, description, key_path, field_category, hash)
            SELECT * FROM unnest(#{pids}::uuid[], #{ehs}::text[], #{keys}::text[], #{fts}::apis.field_type[], #{fmts}::text[], #{descs}::text[], #{kps}::text[], #{fcs}::apis.field_category[], #{hs}::text[])
            ON CONFLICT DO NOTHING |]
   where
@@ -367,16 +368,18 @@ generateAndSaveFacets enableTfReads pid tableName maxValues timestamp = do
   facetMap <- do
     values <- checkpoint (toAnnotation ("facet-query" :: Text)) $ Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp facetSql
     pure $ processQueryResults $ V.fromList values
-  existingIdM <- Hasql.interpOne
-    [HI.sql| SELECT id FROM apis.facet_summaries WHERE project_id = #{pidText} AND table_name = #{tableName} LIMIT 1 |]
+  existingIdM <-
+    Hasql.interpOne
+      [HI.sql| SELECT id FROM apis.facet_summaries WHERE project_id = #{pidText} AND table_name = #{tableName} LIMIT 1 |]
 
   facetId <- maybe UUID.genUUID pure existingIdM
 
   let facetData = FacetData facetMap
       summary = FacetSummary{id = facetId, projectId = pidText, tableName = tableName, facetJson = facetData}
 
-  _ <- Hasql.interpExecute
-    [HI.sql| INSERT INTO apis.facet_summaries (id, project_id, table_name, facet_json)
+  _ <-
+    Hasql.interpExecute
+      [HI.sql| INSERT INTO apis.facet_summaries (id, project_id, table_name, facet_json)
              VALUES (#{facetId}, #{pidText}, #{tableName}, #{facetData})
              ON CONFLICT (project_id, table_name)
              DO UPDATE SET facet_json = EXCLUDED.facet_json |]

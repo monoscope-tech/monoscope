@@ -18,18 +18,18 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types qualified as AET
 import Data.Containers.ListUtils (nubOrd)
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime)
 import Data.Vector qualified as V
-import Data.Effectful.Hasql qualified as Hasql
-import Hasql.Interpolate qualified as HI
 import Effectful (Eff, (:>))
 import Effectful.Error.Static (Error, throwError)
 import Effectful.Log qualified as ELog
 import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))
@@ -606,8 +606,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
   -- Skip table load on initial page load unless it's a JSON request
   let shouldSkipLoad = hadParseError || isNothing layoutM && isNothing hxRequestM && jsonM /= Just "true"
-      fetchLogs = Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads $
-        LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
+      fetchLogs =
+        Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
+          $ LogQueries.selectLogTable pid queryAST queryText cursorM' (fromD, toD) summaryCols (parseMaybe pSource =<< sourceM) targetSpansM
 
   -- JSON fast path: skip side queries (facets, teams, queryLib, patterns)
   let isJsonFastPath = jsonM == Just "true" && layoutM /= Just "SaveQuery"

@@ -42,6 +42,7 @@ import Data.Base64.Types (extractBase64)
 import Data.ByteString qualified as BS
 import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..), def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq qualified as W
 import Data.Generics.Labels ()
 import Data.Map.Strict qualified as M
@@ -50,16 +51,15 @@ import Data.Time (UTCTime (..), fromGregorian, secondsToDiffTime)
 import Data.Time.Clock.POSIX (getPOSIXTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Data.Effectful.Hasql qualified as Hasql
 import Data.Yaml qualified as Yaml
-import Database.PostgreSQL.Entity.Types (Entity, CamelToSnake, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Deriving.Aeson qualified as DAE
 import Effectful (Eff, IOE, (:>))
 import Effectful.Log (Log)
-import Hasql.Interpolate qualified as HI
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Jose.Jwa (JwsAlg (RS256))
 import Jose.Jws qualified as Jws
 import Jose.Jwt (Jwt (..))
@@ -155,8 +155,9 @@ decryptSync encKey sync = case sync.accessToken of
 
 -- DB Operations
 getGitHubSync :: DB es => ProjectId -> Eff es (Maybe GitHubSync)
-getGitHubSync pid = Hasql.interp
-  (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} |])
+getGitHubSync pid =
+  Hasql.interp
+    (selectFrom @GitHubSync <> [HI.sql| WHERE project_id = #{pid} |])
 
 
 -- | Helper to decrypt sync config, logging on failure
@@ -170,8 +171,9 @@ getGitHubSyncDecrypted encKey pid = withDecryption encKey pid $ getGitHubSync pi
 
 
 getGitHubSyncByRepo :: DB es => Text -> Text -> Eff es (Maybe GitHubSync)
-getGitHubSyncByRepo owner repo = Hasql.interp
-  (selectFrom @GitHubSync <> [HI.sql| WHERE owner = #{owner} AND repo = #{repo} |])
+getGitHubSyncByRepo owner repo =
+  Hasql.interp
+    (selectFrom @GitHubSync <> [HI.sql| WHERE owner = #{owner} AND repo = #{repo} |])
 
 
 -- | Insert a new GitHub sync config using PAT authentication
@@ -185,8 +187,9 @@ insertGitHubSync encKey pid ownerVal repoVal branchVal token webhookSecretVal pr
 
 -- | Insert a new GitHub sync config using GitHub App installation
 insertGitHubAppSync :: DB es => ProjectId -> Int64 -> Text -> Text -> Text -> Text -> Eff es (Maybe GitHubSync)
-insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix = Hasql.interp
-  [HI.sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, installation_id, path_prefix)
+insertGitHubAppSync pid instId ownerVal repoVal branchVal prefix =
+  Hasql.interp
+    [HI.sql| INSERT INTO projects.github_sync (project_id, owner, repo, branch, installation_id, path_prefix)
            VALUES (#{pid}, #{ownerVal}, #{repoVal}, #{branchVal}, #{instId}, #{prefix}) RETURNING * |]
 
 
@@ -223,13 +226,17 @@ updateLastTreeSha sid treeSha = do
 
 
 deleteGitHubSync :: DB es => GitHubSyncId -> Eff es Int64
-deleteGitHubSync sid = Hasql.interpExecute
-  [HI.sql| DELETE FROM projects.github_sync WHERE id = #{sid} |]
+deleteGitHubSync sid =
+  Hasql.interpExecute
+    [HI.sql| DELETE FROM projects.github_sync WHERE id = #{sid} |]
 
 
 getDashboardGitState :: DB es => ProjectId -> Eff es (M.Map Text (DashboardId, Text))
-getDashboardGitState pid = M.fromList . fmap (\(did, path, fsha) -> (path, (did, fsha))) <$> Hasql.interp
-  [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND file_path IS NOT NULL AND file_sha IS NOT NULL |]
+getDashboardGitState pid =
+  M.fromList
+    . fmap (\(did, path, fsha) -> (path, (did, fsha)))
+    <$> Hasql.interp
+      [HI.sql| SELECT id, file_path, file_sha FROM projects.dashboards WHERE project_id = #{pid} AND file_path IS NOT NULL AND file_sha IS NOT NULL |]
 
 
 updateDashboardGitInfo :: (DB es, Time :> es) => DashboardId -> Text -> Text -> Eff es Int64

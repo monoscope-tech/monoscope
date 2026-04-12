@@ -50,11 +50,11 @@ import Database.PostgreSQL.Entity (_select)
 import Database.PostgreSQL.Entity.Types (Entity)
 import Database.PostgreSQL.LibPQ qualified as PQ
 import Database.PostgreSQL.Simple (Connection, FromRow, ResultError (..), ToRow)
-import Database.PostgreSQL.Simple.Types (PGArray (..), Query (..))
 import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fromField, returnError)
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Database.PostgreSQL.Simple.Types (PGArray (..), Query (..))
 import Effectful (IOE, type (:>))
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
@@ -77,7 +77,6 @@ import Text.Casing (fromSnake, quietSnake, toPascal)
 
 
 type DB es = (Hasql :> es, IOE :> es)
-
 
 
 -- | Newtype wrapper for JSON fields that can handle JSONB, ByteString, and varchar/text columns
@@ -112,8 +111,10 @@ instance (AE.FromJSON a, Typeable a) => FromField (AesonText a) where
 instance AE.ToJSON a => ToField (AesonText a) where
   toField (AesonText v) = toField (Aeson v)
 
+
 instance AE.FromJSON a => HI.DecodeValue (AesonText a) where
   decodeValue = coerce (HI.decodeValue @(HI.AsJsonb a))
+
 
 instance AE.ToJSON a => HI.EncodeValue (AesonText a) where
   encodeValue = coerce (HI.encodeValue @(HI.AsJsonb a))
@@ -190,6 +191,7 @@ instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnum prefix a) w
 instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnum prefix a) where
   decodeValue = D.enum \t -> WrappedEnum <$> readMaybe (symbolVal (Proxy @prefix) <> toString (T.toTitle t))
 
+
 instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnum prefix a) where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
@@ -225,6 +227,7 @@ instance (KnownSymbol prefix, Show a) => HI.EncodeValue (WrappedEnumSC prefix a)
 instance (KnownSymbol prefix, Read a) => HI.DecodeValue (WrappedEnumSC prefix a) where
   decodeValue = D.enum (fmap WrappedEnumSC . decodeEnumSC @prefix . toString)
 
+
 instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC prefix a) where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
@@ -232,10 +235,12 @@ instance (KnownSymbol prefix, Read a) => HI.DecodeRow (WrappedEnumSC prefix a) w
 instance HI.DecodeValue ZonedTime where
   decodeValue = utcToZonedTime utc <$> D.timestamptz
 
-instance (HI.DecodeValue a) => HI.DecodeValue (PGArray a) where
+
+instance HI.DecodeValue a => HI.DecodeValue (PGArray a) where
   decodeValue = PGArray . V.toList <$> HI.decodeValue
 
-instance (HI.EncodeValue a) => HI.EncodeValue (PGArray a) where
+
+instance HI.EncodeValue a => HI.EncodeValue (PGArray a) where
   encodeValue = contramap (\(PGArray xs) -> V.fromList xs) HI.encodeValue
 
 
@@ -321,7 +326,6 @@ addKeepaliveParams connStr =
    in connStr <> sep <> params
 
 
-
 connectPostgreSQL :: ByteString -> IO Connection
 connectPostgreSQL connstr = do
   conn <- PGI.connectdb connstr
@@ -400,26 +404,34 @@ instance ToSchema AET.Value where
 instance HI.DecodeRow UUID.UUID where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
+
 instance HI.DecodeValue a => HI.DecodeRow (V.Vector a) where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
+
 
 instance HI.DecodeRow Text where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
+
 instance HI.DecodeRow Int64 where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
+
 
 instance HI.DecodeRow Int where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
+
 instance HI.DecodeRow Bool where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
+
 
 instance HI.DecodeRow UTCTime where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
+
 instance HI.DecodeRow Double where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
+
 
 instance HI.DecodeValue a => HI.DecodeRow (Maybe a) where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
@@ -429,11 +441,14 @@ instance HI.DecodeValue a => HI.DecodeRow (Maybe a) where
 instance HI.DecodeValue Int where
   decodeValue = fromIntegral <$> D.int8
 
+
 instance HI.EncodeValue Int where
   encodeValue = contramap (fromIntegral @Int @Int64) E.int8
 
+
 instance HI.DecodeValue Integer where
   decodeValue = fromIntegral <$> D.int8
+
 
 instance HI.EncodeValue Integer where
   encodeValue = contramap (fromIntegral @Integer @Int64) E.int8
@@ -441,6 +456,7 @@ instance HI.EncodeValue Integer where
 
 instance HI.DecodeValue AET.Value where
   decodeValue = D.jsonb
+
 
 instance HI.DecodeRow AET.Value where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
@@ -461,15 +477,17 @@ instance HI.EncodeValue (Map Text AET.Value) where
   encodeValue = contramap (AET.Object . KEM.fromMapText) E.jsonb
 
 
-instance (AET.FromJSON a) => HI.DecodeValue (Aeson a) where
+instance AET.FromJSON a => HI.DecodeValue (Aeson a) where
   decodeValue = D.refine (\v -> bimap toText Aeson $ AET.parseEither AET.parseJSON v) D.jsonb
 
-instance (AET.ToJSON a) => HI.EncodeValue (Aeson a) where
+
+instance AET.ToJSON a => HI.EncodeValue (Aeson a) where
   encodeValue = contramap (\(Aeson a) -> AET.toJSON a) E.jsonb
 
 
 instance HI.DecodeValue (CI Text) where
   decodeValue = CI.mk <$> D.text
+
 
 instance HI.EncodeValue (CI Text) where
   encodeValue = contramap CI.original E.text

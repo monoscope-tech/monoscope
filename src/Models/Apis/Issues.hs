@@ -333,7 +333,8 @@ insertIssue (i :: Issue) = do
         (i.acknowledgedAt, i.acknowledgedBy, i.archivedAt, i.title, i.service, i.environment, i.critical, i.severity)
       (iAction, iComplex, iData, iReqP, iResP, iLlmAt, iLlmVer, iSeq) =
         (i.recommendedAction, i.migrationComplexity, i.issueData, i.requestPayloads, i.responsePayloads, i.llmEnhancedAt, i.llmEnhancementVersion, i.seqNum)
-  Hasql.interpExecute_ [HI.sql|
+  Hasql.interpExecute_
+    [HI.sql|
 INSERT INTO apis.issues (
   id, created_at, updated_at, project_id, issue_type, target_hash, parent_hash, is_framework, endpoint_hash,
   acknowledged_at, acknowledged_by, archived_at,
@@ -380,7 +381,8 @@ selectLatestIssueByHash pid tgtHash =
 reopenIssue :: (DB es, Time :> es) => IssueId -> Eff es ()
 reopenIssue issueId = do
   now <- Time.currentTime
-  Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.issues SET
             acknowledged_at = NULL, acknowledged_by = NULL, archived_at = NULL, updated_at = #{now},
             issue_data = issue_data || jsonb_build_object('occurrence_count',
               COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
@@ -391,7 +393,8 @@ reopenIssue issueId = do
 bumpIssueUpdatedAt :: (DB es, Time :> es) => IssueId -> Eff es ()
 bumpIssueUpdatedAt issueId = do
   now <- Time.currentTime
-  Hasql.interpExecute_ [HI.sql| UPDATE apis.issues SET updated_at = #{now},
+  Hasql.interpExecute_
+    [HI.sql| UPDATE apis.issues SET updated_at = #{now},
             issue_data = issue_data || jsonb_build_object('occurrence_count',
               COALESCE((issue_data->>'occurrence_count')::int, 1) + 1)
           WHERE id = #{issueId} |]
@@ -479,7 +482,21 @@ selectIssues pid _typeM isAcknowledged isArchived limit offset timeRangeM sortM 
         WHERE a.issue_id = i.id AND a.event IN ('resolved', 'auto_resolved', 'reopened', 'regressed', 'escalated')
         ORDER BY a.created_at DESC LIMIT 1
       ) lat ON TRUE
-      WHERE i.project_id = |] <> "'" <> pidTxt <> "'::uuid " <> timefilter <> " " <> ackF <> " " <> archF <> " " <> svcF <> " " <> typF <> " " <> orderBy
+      WHERE i.project_id = |]
+        <> "'"
+        <> pidTxt
+        <> "'::uuid "
+        <> timefilter
+        <> " "
+        <> ackF
+        <> " "
+        <> archF
+        <> " "
+        <> svcF
+        <> " "
+        <> typF
+        <> " "
+        <> orderBy
     countQ = "SELECT COUNT(*)::INT FROM apis.issues WHERE project_id = '" <> pidTxt <> "'::uuid " <> cTimefilter <> " " <> cAckF <> " " <> cArchF <> " " <> cSvcF <> " " <> cTypF
 
 
@@ -494,7 +511,8 @@ updateIssueWithNewAnomaly :: (DB es, Time :> es) => IssueId -> APIChangeData -> 
 updateIssueWithNewAnomaly issueId newData = do
   now <- Time.currentTime
   let jdata = Aeson newData
-  Hasql.interpExecute_ [HI.sql|
+  Hasql.interpExecute_
+    [HI.sql|
       UPDATE apis.issues SET
         issue_data = issue_data || #{jdata}::jsonb,
         affected_requests = affected_requests + 1,
@@ -505,7 +523,8 @@ updateIssueWithNewAnomaly issueId newData = do
 updateIssueEnhancement :: (DB es, Time :> es) => IssueId -> Text -> Text -> Text -> Eff es ()
 updateIssueEnhancement issueId iTitle action complexity = do
   now <- Time.currentTime
-  Hasql.interpExecute_ [HI.sql|
+  Hasql.interpExecute_
+    [HI.sql|
       UPDATE apis.issues SET
         title = #{iTitle}, recommended_action = #{action},
         migration_complexity = #{complexity}, updated_at = #{now}
@@ -515,7 +534,8 @@ updateIssueEnhancement issueId iTitle action complexity = do
 -- | Update issue criticality and severity
 updateIssueCriticality :: DB es => IssueId -> Bool -> Text -> Eff es ()
 updateIssueCriticality issueId isCritical sev =
-  Hasql.interpExecute_ [HI.sql|
+  Hasql.interpExecute_
+    [HI.sql|
       UPDATE apis.issues SET critical = #{isCritical}, severity = #{sev} WHERE id = #{issueId} |]
 
 
@@ -523,7 +543,8 @@ updateIssueCriticality issueId isCritical sev =
 acknowledgeIssue :: (DB es, Time :> es) => IssueId -> Projects.UserId -> Eff es ()
 acknowledgeIssue issueId userId = do
   now <- Time.currentTime
-  Hasql.interpExecute_ [HI.sql|
+  Hasql.interpExecute_
+    [HI.sql|
       UPDATE apis.issues SET acknowledged_at = #{now}, acknowledged_by = #{userId} WHERE id = #{issueId} |]
 
 
@@ -638,7 +659,9 @@ getOrCreateConversation :: (DB es, Error ServerError :> es, Time :> es) => Proje
 getOrCreateConversation pid convId convType ctx = do
   now <- Time.currentTime
   let ctxJ = Aeson ctx
-  result <- Hasql.interp [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
+  result <-
+    Hasql.interp
+      [HI.sql| INSERT INTO apis.ai_conversations (project_id, conversation_id, conversation_type, context)
               VALUES (#{pid}, #{convId}, #{convType}, #{ctxJ}) ON CONFLICT (project_id, conversation_id) DO UPDATE SET updated_at = #{now}
               RETURNING id, project_id, conversation_id, conversation_type, context, created_at, updated_at |]
   maybe (throwError err500{errBody = "getOrCreateConversation: RETURNING clause must return a row"}) pure $ listToMaybe result
@@ -649,14 +672,16 @@ insertChatMessage :: DB es => Projects.ProjectId -> UUIDId "conversation" -> Tex
 insertChatMessage pid convId chatRole chatContent widgetsM metadataM = do
   let widgetsJ = Aeson <$> widgetsM
       metaJ = Aeson <$> metadataM
-  Hasql.interpExecute_ [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.ai_chat_messages (project_id, conversation_id, role, content, widgets, metadata)
             VALUES (#{pid}, #{convId}, #{chatRole}, #{chatContent}, #{widgetsJ}, #{metaJ}) |]
 
 
 -- | Select chat history for a conversation (oldest first)
 selectChatHistory :: DB es => UUIDId "conversation" -> Eff es [AIChatMessage]
 selectChatHistory convId =
-  Hasql.interp [HI.sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
+  Hasql.interp
+    [HI.sql| SELECT id, project_id, conversation_id, role, content, widgets, metadata, created_at
             FROM apis.ai_chat_messages
             WHERE conversation_id = #{convId}
             ORDER BY created_at ASC
@@ -931,7 +956,8 @@ logIssueActivity issueId event createdBy metadataM = do
 
 selectIssueActivity :: DB es => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]
 selectIssueActivity pid issueId =
-  Hasql.interp [HI.sql| SELECT a.id, a.issue_id, a.event, a.created_by, a.metadata, a.created_at
+  Hasql.interp
+    [HI.sql| SELECT a.id, a.issue_id, a.event, a.created_by, a.metadata, a.created_at
         FROM apis.issue_activity_log a
         JOIN apis.issues i ON i.id = a.issue_id
         WHERE a.issue_id = #{issueId} AND i.project_id = #{pid}
@@ -973,7 +999,8 @@ addReport :: DB es => Report -> Eff es ()
 addReport (r :: Report) = do
   let (rId, rCreated, rUpdated, rPid, rType, rJson, rStart, rEnd) =
         (r.id, r.createdAt, r.updatedAt, r.projectId, r.reportType, r.reportJson, r.startTime, r.endTime)
-  Hasql.interpExecute_ [HI.sql| INSERT INTO apis.reports (id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time)
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO apis.reports (id, created_at, updated_at, project_id, report_type, report_json, start_time, end_time)
       VALUES (#{rId}, #{rCreated}, #{rUpdated}, #{rPid}, #{rType}, #{rJson}, #{rStart}, #{rEnd}) |]
 
 

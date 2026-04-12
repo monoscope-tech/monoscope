@@ -22,7 +22,7 @@ import Data.Effectful.Hasql qualified as Hasql
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Database.PostgreSQL.Entity.Types (Entity, GenericEntity (..), FieldModifiers, Schema, TableName, PrimaryKey, CamelToSnake)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity (..), PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -81,14 +81,16 @@ newProjectApiKeys projectId projectKeyUUID title keyPrefix = do
 
 
 insertProjectApiKey :: DB es => ProjectApiKey -> Eff es ()
-insertProjectApiKey ProjectApiKey{id = kid, createdAt, updatedAt, deletedAt, active, projectId, title, keyPrefix} = Hasql.interpExecute_
-  [HI.sql| INSERT INTO projects.project_api_keys (id, created_at, updated_at, deleted_at, active, project_id, title, key_prefix)
+insertProjectApiKey ProjectApiKey{id = kid, createdAt, updatedAt, deletedAt, active, projectId, title, keyPrefix} =
+  Hasql.interpExecute_
+    [HI.sql| INSERT INTO projects.project_api_keys (id, created_at, updated_at, deleted_at, active, project_id, title, key_prefix)
            VALUES (#{kid}, #{createdAt}, #{updatedAt}, #{deletedAt}, #{active}, #{projectId}, #{title}, #{keyPrefix}) |]
 
 
 projectApiKeysByProjectId :: DB es => Projects.ProjectId -> Eff es [ProjectApiKey]
-projectApiKeysByProjectId projectId = Hasql.interp
-  (selectFrom @ProjectApiKey <> [HI.sql| WHERE project_id = #{projectId} |])
+projectApiKeysByProjectId projectId =
+  Hasql.interp
+    (selectFrom @ProjectApiKey <> [HI.sql| WHERE project_id = #{projectId} |])
 
 
 revokeApiKey :: (DB es, Time :> es) => ProjectApiKeyId -> Eff es Int64
@@ -98,13 +100,15 @@ revokeApiKey kid = do
 
 
 activateApiKey :: DB es => ProjectApiKeyId -> Eff es Int64
-activateApiKey kid = Hasql.interpExecute
-  [HI.sql| UPDATE projects.project_api_keys SET deleted_at = null, active = true WHERE id = #{kid} |]
+activateApiKey kid =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.project_api_keys SET deleted_at = null, active = true WHERE id = #{kid} |]
 
 
 getProjectApiKey :: DB es => ProjectApiKeyId -> Eff es (Maybe ProjectApiKey)
-getProjectApiKey kid = Hasql.interp
-  (selectFrom @ProjectApiKey <> [HI.sql| WHERE id = #{kid} AND active = true |])
+getProjectApiKey kid =
+  Hasql.interp
+    (selectFrom @ProjectApiKey <> [HI.sql| WHERE id = #{kid} AND active = true |])
 
 
 getProjectIdByApiKey :: (DB es, Effectful.Reader Config.AuthContext :> es) => Text -> Eff es (Maybe Projects.ProjectId)

@@ -30,6 +30,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens (key, _String)
 import Data.Aeson.Types (FromJSON, ToJSON)
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as EHasql
 import Data.Effectful.UUID (UUIDEff, runUUID)
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
 import Data.List qualified as L
@@ -39,7 +40,6 @@ import Data.Time (addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
-import Hasql.Interpolate qualified as HI
 import Deriving.Aeson qualified as DAE
 import Effectful (
   Eff,
@@ -54,6 +54,7 @@ import Effectful.Log (Log)
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, currentTime, runTime)
+import Hasql.Interpolate qualified as HI
 import Log (Logger)
 import Lucid (Html, renderBS, toHtml)
 import Lucid.Html5
@@ -64,7 +65,6 @@ import Network.HTTP.Types (Status, hAuthorization, hCookie, statusCode)
 import Network.Wai (Request (rawPathInfo, rawQueryString, requestHeaders))
 import Network.Wreq (FormParam ((:=)), defaults, getWith, header, post, responseBody)
 import Pages.BodyWrapper (BWConfig (..), bodyWrapper)
-import Data.Effectful.Hasql qualified as EHasql
 import Pkg.Mail (addConvertKitUser)
 import Relude hiding (ask, asks)
 import Servant (Header, Headers, NoContent (..), addHeader)

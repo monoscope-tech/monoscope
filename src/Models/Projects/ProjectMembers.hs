@@ -110,8 +110,9 @@ data CreateProjectMembers = CreateProjectMembers
 
 insertProjectMembers :: DB es => [CreateProjectMembers] -> Eff es Int64
 insertProjectMembers [] = pure 0
-insertProjectMembers members = Hasql.interpExecute
-  [HI.sql| INSERT INTO projects.project_members(project_id, user_id, permission)
+insertProjectMembers members =
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO projects.project_members(project_id, user_id, permission)
            SELECT * FROM unnest(#{pidsV}::uuid[], #{uidsV}::uuid[], #{permsV}::projects.project_permissions[])
            ON CONFLICT (project_id, user_id) DO UPDATE SET active = TRUE, deleted_at = NULL |]
   where
@@ -134,23 +135,26 @@ data ProjectMemberVM = ProjectMemberVM
 
 
 selectActiveProjectMembers :: DB es => Projects.ProjectId -> Eff es [ProjectMemberVM]
-selectActiveProjectMembers pid = Hasql.interp
-  [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name FROM projects.project_members pm
+selectActiveProjectMembers pid =
+  Hasql.interp
+    [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name FROM projects.project_members pm
            JOIN users.users us ON (pm.user_id=us.id)
            WHERE pm.project_id=#{pid}::uuid AND pm.active=TRUE
            ORDER BY pm.created_at ASC |]
 
 
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
-getUserPermission pid uid = Hasql.interp
-  [HI.sql| SELECT permission FROM projects.project_members
+getUserPermission pid uid =
+  Hasql.interp
+    [HI.sql| SELECT permission FROM projects.project_members
            WHERE project_id = #{pid} AND user_id = #{uid} AND active = TRUE |]
 
 
 updateProjectMembersPermissons :: DB es => [(UUID.UUID, Permissions)] -> Eff es ()
 updateProjectMembersPermissons [] = pass
-updateProjectMembersPermissons vals = Hasql.interpExecute_
-  [HI.sql| UPDATE projects.project_members pm
+updateProjectMembersPermissons vals =
+  Hasql.interpExecute_
+    [HI.sql| UPDATE projects.project_members pm
            SET permission = u.perm::projects.project_permissions
            FROM unnest(#{idsV}::uuid[], #{permsV}::text[]) AS u(id, perm)
            WHERE pm.id = u.id |]
@@ -168,14 +172,16 @@ softDeleteProjectMembers ids = do
 
 
 deactivateNonOwnerMembers :: DB es => Projects.ProjectId -> Eff es Int64
-deactivateNonOwnerMembers pid = Hasql.interpExecute
-  [HI.sql| UPDATE projects.project_members SET active = FALSE WHERE project_id = #{pid}
+deactivateNonOwnerMembers pid =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.project_members SET active = FALSE WHERE project_id = #{pid}
            AND user_id != (SELECT user_id FROM projects.project_members WHERE project_id = #{pid} ORDER BY created_at LIMIT 1) |]
 
 
 activateAllMembers :: DB es => Projects.ProjectId -> Eff es Int64
-activateAllMembers pid = Hasql.interpExecute
-  [HI.sql| UPDATE projects.project_members SET active = TRUE WHERE project_id = #{pid} |]
+activateAllMembers pid =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.project_members SET active = TRUE WHERE project_id = #{pid} |]
 
 
 data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
@@ -192,8 +198,9 @@ data ProjectMemberWithStatusVM = ProjectMemberWithStatusVM
 
 
 selectAllProjectMembers :: DB es => Projects.ProjectId -> Eff es [ProjectMemberWithStatusVM]
-selectAllProjectMembers pid = Hasql.interp
-  [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name, pm.active
+selectAllProjectMembers pid =
+  Hasql.interp
+    [HI.sql| SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name, pm.active
            FROM projects.project_members pm JOIN users.users us ON (pm.user_id=us.id)
            WHERE pm.project_id=#{pid}::uuid AND pm.deleted_at IS NULL AND pm.active = TRUE ORDER BY pm.created_at ASC |]
 
@@ -215,16 +222,18 @@ data TeamDetails = TeamDetails
 createTeam :: DB es => Projects.ProjectId -> Projects.UserId -> TeamDetails -> Eff es Int64
 createTeam pid uid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices}
   | handle == "everyone" = pure 0 -- Prevent creating team with reserved handle
-  | otherwise = Hasql.interpExecute
-      [HI.sql| INSERT INTO projects.teams
+  | otherwise =
+      Hasql.interpExecute
+        [HI.sql| INSERT INTO projects.teams
                (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
                VALUES (#{pid}, #{uid}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices})
                ON CONFLICT (project_id, handle) DO NOTHING |]
 
 
 createEveryoneTeam :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es Int64
-createEveryoneTeam pid uid = Hasql.interpExecute
-  [HI.sql| INSERT INTO projects.teams
+createEveryoneTeam pid uid =
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO projects.teams
            (project_id, created_by, name, description, handle, is_everyone, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
            VALUES (#{pid}, #{uid}, 'Everyone', 'All project members and configured integrations', 'everyone', TRUE,
                    '{}'::uuid[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[], '{}'::text[])
@@ -232,13 +241,15 @@ createEveryoneTeam pid uid = Hasql.interpExecute
 
 
 getEveryoneTeam :: DB es => Projects.ProjectId -> Eff es (Maybe Team)
-getEveryoneTeam pid = Hasql.interp
-  (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL |])
+getEveryoneTeam pid =
+  Hasql.interp
+    (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND is_everyone = TRUE AND deleted_at IS NULL |])
 
 
 updateTeam :: DB es => Projects.ProjectId -> UUID.UUID -> TeamDetails -> Eff es Int64
-updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices} = Hasql.interpExecute
-  [HI.sql| UPDATE projects.teams
+updateTeam pid tid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices} =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.teams
            SET name = #{name}, description = #{description}, handle = #{handle}, members = #{members}::uuid[], notify_emails = #{notifyEmails}, slack_channels = #{slackChannels}, discord_channels = #{discordChannels}, phone_numbers = #{phoneNumbers}, pagerduty_services = #{pagerdutyServices}
            WHERE project_id = #{pid} AND id = #{tid} |]
 
@@ -265,13 +276,15 @@ data Team = Team
 
 
 getTeams :: DB es => Projects.ProjectId -> Eff es [Team]
-getTeams pid = Hasql.interp
-  (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND deleted_at IS NULL |])
+getTeams pid =
+  Hasql.interp
+    (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND deleted_at IS NULL |])
 
 
 getTeamsVM :: DB es => Projects.ProjectId -> Eff es [TeamVM]
-getTeamsVM pid = Hasql.interp
-  [HI.sql|
+getTeamsVM pid =
+  Hasql.interp
+    [HI.sql|
       SELECT
         t.id,
         t.created_at,
@@ -353,15 +366,21 @@ deleteTeams pid tids
 
 
 getTeamsById :: DB es => Projects.ProjectId -> V.Vector UUID.UUID -> Eff es [Team]
-getTeamsById pid tids = if V.null tids then pure [] else Hasql.interp
-  (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
+getTeamsById pid tids =
+  if V.null tids
+    then pure []
+    else
+      Hasql.interp
+        (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
 
 
 -- | Bulk fetch teams by handles - more efficient than mapping getTeamByHandle
 getTeamsByHandles :: DB es => Projects.ProjectId -> [Text] -> Eff es [TeamVM]
 getTeamsByHandles _ [] = pure []
-getTeamsByHandles pid handles = Hasql.interp $ let handlesVec = V.fromList handles in
-  [HI.sql|
+getTeamsByHandles pid handles =
+  Hasql.interp
+    $ let handlesVec = V.fromList handles
+       in [HI.sql|
       SELECT
         t.id,
         t.created_at,

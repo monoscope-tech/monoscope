@@ -26,16 +26,16 @@ import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KM
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.Wreq (HTTP)
 import Data.Effectful.Wreq qualified as W (get, responseBody)
 import Data.Text qualified as T
 import Data.Tuple.Extra (thd3)
 import Data.Vector qualified as V (Vector, fromList, toList)
-import Data.Effectful.Hasql qualified as Hasql
-import Hasql.Interpolate qualified as HI
 import Effectful (Eff, (:>))
 import Effectful.Reader.Static (ask)
 import Effectful.State.Static.Local qualified as State
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx
@@ -717,22 +717,23 @@ integrationsPage pid apikey =
       div_ [class_ "modal-action"] $ label_ [Lucid.for_ "telemetrygen-modal", class_ "btn"] "Close"
 
     -- Mobile overlay for docs panel
-    style_ $ T.unlines
-      [ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}}"
-      , ".ai-menu-wrap{position:relative}"
-      , ".ai-menu{position:absolute;right:0;top:100%;z-index:50;min-width:260px;margin-top:6px;background:var(--color-bgRaised);border:1px solid var(--color-strokeWeak);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:6px;opacity:0;transform:scale(0.95) translateY(-4px);pointer-events:none;transition:opacity 150ms ease,transform 150ms ease}"
-      , ".ai-menu.open{opacity:1;transform:scale(1) translateY(0);pointer-events:auto}"
-      , ".ai-menu-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:0.8125rem;color:var(--color-text);text-decoration:none;border:none;background:none;width:100%;text-align:left;transition:background 100ms ease}"
-      , ".ai-menu-item:hover{background:var(--color-fillWeak)}"
-      , ".ai-menu-item.disabled{opacity:0.4;pointer-events:none}"
-      , ".ai-menu-item svg{width:16px;height:16px;flex-shrink:0}"
-      , ".ai-menu-item .ai-menu-label{flex:1}"
-      , ".ai-menu-item .ai-menu-sub{font-size:0.6875rem;color:var(--color-textWeak)}"
-      , ".ai-menu-sep{height:1px;background:var(--color-strokeWeak);margin:4px 8px}"
-      , ".ai-menu-item .ai-menu-check{display:none;color:oklch(0.65 0.2 145)}"
-      , ".ai-menu-item.copied .ai-menu-check{display:block}"
-      , ".ai-menu-item.copied svg:first-child{display:none}"
-      ]
+    style_
+      $ T.unlines
+        [ "@media(max-width:767px){#docs-panel{display:none}#docs-panel.open{display:flex;flex-direction:column;position:fixed;inset:0;z-index:50;background:var(--color-bgBase);overflow-y:auto}}"
+        , ".ai-menu-wrap{position:relative}"
+        , ".ai-menu{position:absolute;right:0;top:100%;z-index:50;min-width:260px;margin-top:6px;background:var(--color-bgRaised);border:1px solid var(--color-strokeWeak);border-radius:12px;box-shadow:0 8px 24px rgba(0,0,0,0.12);padding:6px;opacity:0;transform:scale(0.95) translateY(-4px);pointer-events:none;transition:opacity 150ms ease,transform 150ms ease}"
+        , ".ai-menu.open{opacity:1;transform:scale(1) translateY(0);pointer-events:auto}"
+        , ".ai-menu-item{display:flex;align-items:center;gap:10px;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:0.8125rem;color:var(--color-text);text-decoration:none;border:none;background:none;width:100%;text-align:left;transition:background 100ms ease}"
+        , ".ai-menu-item:hover{background:var(--color-fillWeak)}"
+        , ".ai-menu-item.disabled{opacity:0.4;pointer-events:none}"
+        , ".ai-menu-item svg{width:16px;height:16px;flex-shrink:0}"
+        , ".ai-menu-item .ai-menu-label{flex:1}"
+        , ".ai-menu-item .ai-menu-sub{font-size:0.6875rem;color:var(--color-textWeak)}"
+        , ".ai-menu-sep{height:1px;background:var(--color-strokeWeak);margin:4px 8px}"
+        , ".ai-menu-item .ai-menu-check{display:none;color:oklch(0.65 0.2 145)}"
+        , ".ai-menu-item.copied .ai-menu-check{display:block}"
+        , ".ai-menu-item.copied svg:first-child{display:none}"
+        ]
 
     -- Highlight.js for syntax highlighting (v11.11.1)
     link_ [rel_ "stylesheet", href_ $(hashAssetFile "/public/assets/deps/highlightjs/atom-one-dark.min.css")]

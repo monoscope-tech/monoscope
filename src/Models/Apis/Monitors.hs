@@ -65,6 +65,7 @@ data MonitorStatus = MSNormal | MSWarning | MSAlerting
   deriving anyclass (Default, NFData)
   deriving (AE.FromJSON, AE.ToJSON, Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "MS" MonitorStatus
 
+
 instance HI.DecodeRow MonitorStatus where
   decodeRow = HI.getOneColumn <$> HI.decodeRow
 
@@ -86,6 +87,7 @@ data MonitorAlertConfig = MonitorAlertConfig
   deriving (FromField, ToField) via Aeson MonitorAlertConfig
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] MonitorAlertConfig
   deriving (ToSchema) via SnakeSchema MonitorAlertConfig
+
 
 deriving via Aeson MonitorAlertConfig instance HI.DecodeValue MonitorAlertConfig
 deriving via Aeson MonitorAlertConfig instance HI.EncodeValue MonitorAlertConfig

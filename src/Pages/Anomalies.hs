@@ -39,6 +39,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Types (Parser, parseMaybe)
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Ord (clamp)
@@ -50,15 +51,14 @@ import Data.Time.Clock.POSIX qualified as POSIX
 import Data.Time.LocalTime (ZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
-import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..), getAeson)
 import Database.PostgreSQL.Simple.Types (PGArray (..))
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Error.Static (throwError)
-import Hasql.Interpolate qualified as HI
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import GHC.Records (HasField)
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw), makeAttribute)
@@ -1519,9 +1519,12 @@ issueActivityGetH pid issueId = do
   activities <- Issues.selectIssueActivity pid issueId
   now <- Time.currentTime
   let userIds = ordNub $ mapMaybe (.createdBy) activities
-  users :: [Projects.User] <- if null userIds then pure [] else do
-    let vUserIds = V.fromList userIds
-    Hasql.interp [HI.sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number FROM users.users WHERE id = ANY(#{vUserIds}::uuid[]) |]
+  users :: [Projects.User] <-
+    if null userIds
+      then pure []
+      else do
+        let vUserIds = V.fromList userIds
+        Hasql.interp [HI.sql| SELECT id, created_at, updated_at, deleted_at, active, first_name, last_name, display_image_url, email, is_sudo, phone_number FROM users.users WHERE id = ANY(#{vUserIds}::uuid[]) |]
   let userMap = Map.fromList $ map (\u -> (u.id, u)) users
   addRespHeaders $ issueActivityTimeline_ userMap now activities
 

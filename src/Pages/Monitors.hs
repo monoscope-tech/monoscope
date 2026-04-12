@@ -29,6 +29,7 @@ import Control.Lens (view, _2, _3)
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.Either.Extra (fromRight')
 import Data.Map.Strict qualified as Map
 import Data.Text qualified as T
@@ -36,11 +37,10 @@ import Data.Time (UTCTime, diffUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUID
 import Data.Vector qualified as V
-import Data.Effectful.Hasql qualified as Hasql
-import Hasql.Interpolate qualified as HI
 import Effectful.Concurrent.Async (concurrently)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (TermRaw (termRaw))

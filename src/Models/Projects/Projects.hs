@@ -89,10 +89,8 @@ import Data.CaseInsensitive qualified as CI
 import Data.Char (isDigit)
 import Data.Default
 import Data.Effectful.Hasql qualified as EHasql
-import Hasql.Interpolate qualified as HI
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Effectful.UUID qualified as UUID
-import Hasql.Pool qualified as HPool
 import Data.Text qualified as T
 import Data.Text.Display
 import Data.Time (UTCTime, ZonedTime)
@@ -110,6 +108,8 @@ import Effectful.Error.Static qualified as EffError
 import Effectful.Reader.Static qualified as EffReader
 import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
+import Hasql.Interpolate qualified as HI
+import Hasql.Pool qualified as HPool
 import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText)
 import Pkg.Parser.Stats (Section)
 import Relude
@@ -328,6 +328,7 @@ data ProjectS3Bucket = ProjectS3Bucket
   deriving anyclass (AE.FromJSON, AE.ToJSON, FromForm, NFData)
   deriving (FromField, ToField) via Aeson ProjectS3Bucket
 
+
 deriving via Aeson ProjectS3Bucket instance HI.DecodeValue ProjectS3Bucket
 deriving via Aeson ProjectS3Bucket instance HI.EncodeValue ProjectS3Bucket
 
@@ -388,7 +389,8 @@ projectCacheById :: (DB es, Time :> es) => ProjectId -> Eff es (Maybe ProjectCac
 projectCacheById pid = do
   now <- currentTime
   let pidText = pid.toText
-  EHasql.interpOne [HI.sql|
+  EHasql.interpOne
+    [HI.sql|
     select  coalesce(ARRAY_AGG(DISTINCT hosts ORDER BY hosts ASC),'{}') hosts,
             coalesce(ARRAY_AGG(DISTINCT endpoint_hashes ORDER BY endpoint_hashes ASC),'{}') endpoint_hashes,
             coalesce(ARRAY_AGG(DISTINCT shape_hashes ORDER BY shape_hashes ASC),'{}'::text[]) shape_hashes,
@@ -455,7 +457,8 @@ activeNonOnboardingProjectIds =
 
 recentlyActiveProjectIds :: DB es => UTCTime -> Eff es [ProjectId]
 recentlyActiveProjectIds since =
-  EHasql.interp [HI.sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text
+  EHasql.interp
+    [HI.sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text
            WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > #{since}::timestamptz - interval '24 hours'|]
 
 
@@ -467,7 +470,8 @@ newProjectsSince since =
 selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [Project']
 selectProjectsForUser uid = do
   now <- currentTime
-  EHasql.interp [HI.sql|
+  EHasql.interp
+    [HI.sql|
         SELECT pp.*,
                EXISTS (
                     SELECT 1 FROM otel_logs_and_spans ols
@@ -753,6 +757,7 @@ newtype SessionData = SessionData {getSessionData :: Map Text Text}
     (FromField, ToField)
     via Aeson (Map Text Text)
 
+
 deriving via Aeson (Map Text Text) instance HI.DecodeValue SessionData
 deriving via Aeson (Map Text Text) instance HI.EncodeValue SessionData
 
@@ -765,6 +770,7 @@ newtype PSUser = PSUser {getUser :: User}
     (FromField, ToField)
     via Aeson User
 
+
 deriving via Aeson User instance HI.DecodeValue PSUser
 deriving via Aeson User instance HI.EncodeValue PSUser
 
@@ -776,6 +782,7 @@ newtype PSProjects = PSProjects {getProjects :: V.Vector Project}
   deriving
     (FromField, ToField)
     via Aeson (V.Vector Project)
+
 
 deriving via Aeson (V.Vector Project) instance HI.DecodeValue PSProjects
 deriving via Aeson (V.Vector Project) instance HI.EncodeValue PSProjects

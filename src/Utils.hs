@@ -73,6 +73,7 @@ import Data.ByteString qualified as BS
 import Data.Char (isAlpha, isAlphaNum, isDigit)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.HashSet qualified as HS
 import Data.Scientific (toBoundedInteger)
@@ -84,13 +85,12 @@ import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.Time.Format (formatTime)
 import Data.Time.Format.ISO8601 (iso8601ParseM)
 import Data.Vector qualified as V
-import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Hasql.Interpolate qualified as HI
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
+import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Htmx (hxBoost_, hxSelect_, hxSwap_, hxTarget_)
@@ -503,7 +503,7 @@ freeTierUsageBanner pid = \case
   _ -> pass
 
 
-checkFreeTierStatus :: (IOE :> es, Time :> es, Hasql.Hasql :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
+checkFreeTierStatus :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es FreeTierStatus
 checkFreeTierStatus pid paymentPlan =
   if paymentPlan == "Free"
     then do
@@ -515,7 +515,7 @@ checkFreeTierStatus pid paymentPlan =
     else pure NotFreeTier
 
 
-checkFreeTierExceeded :: (IOE :> es, Time :> es, Hasql.Hasql :> es) => Projects.ProjectId -> Text -> Eff es Bool
+checkFreeTierExceeded :: (Hasql.Hasql :> es, IOE :> es, Time :> es) => Projects.ProjectId -> Text -> Eff es Bool
 checkFreeTierExceeded pid pp = isExceeded <$> checkFreeTierStatus pid pp
   where
     isExceeded (FreeTierExceeded _ _) = True

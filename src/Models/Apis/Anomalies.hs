@@ -204,15 +204,18 @@ acknowledgeAnomalies uid aids
   | otherwise = do
       now <- Time.currentTime
       -- Get anomaly hashes from the issues being acknowledged
-      anomalyHashesResult :: [V.Vector Text] <- Hasql.interp
-        [HI.sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(#{aids}::uuid[]) |]
+      anomalyHashesResult :: [V.Vector Text] <-
+        Hasql.interp
+          [HI.sql| SELECT anomaly_hashes FROM apis.issues WHERE id=ANY(#{aids}::uuid[]) |]
       let allAnomalyHashes = V.concat anomalyHashesResult
       -- Update issues
-      (_ :: [Text]) <- Hasql.interp
-        [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE id=ANY(#{aids}::uuid[]) RETURNING target_hash |]
+      (_ :: [Text]) <-
+        Hasql.interp
+          [HI.sql| UPDATE apis.issues SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE id=ANY(#{aids}::uuid[]) RETURNING target_hash |]
       -- Also update anomalies referenced by the issues' anomaly_hashes arrays
-      unless (V.null allAnomalyHashes) $ Hasql.interpExecute_
-        [HI.sql| UPDATE apis.anomalies SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE target_hash=ANY(#{allAnomalyHashes}) |]
+      unless (V.null allAnomalyHashes)
+        $ Hasql.interpExecute_
+          [HI.sql| UPDATE apis.anomalies SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE target_hash=ANY(#{allAnomalyHashes}) |]
       -- Update anomalies - both directly referenced and those tracked by the issues
       Hasql.interp
         [HI.sql| UPDATE apis.anomalies SET acknowledged_by=#{uid}, acknowledged_at=#{now} WHERE id=ANY(#{aids}::uuid[]) RETURNING target_hash |]

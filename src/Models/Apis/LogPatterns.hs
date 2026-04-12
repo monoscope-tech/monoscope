@@ -166,7 +166,8 @@ acknowledgeLogPatterns pid uid fieldHashPairs
   | otherwise = do
       now <- Time.currentTime
       let (fields, hashes) = V.unzip fieldHashPairs
-      Hasql.interpExecute [HI.sql|
+      Hasql.interpExecute
+        [HI.sql|
         UPDATE apis.log_patterns
         SET state = #{LPSAcknowledged}, acknowledged_by = #{uid}, acknowledged_at = #{now}
         WHERE project_id = #{pid} AND (source_field, pattern_hash) IN (SELECT unnest(#{fields}::text[]), unnest(#{hashes}::text[]))
@@ -178,7 +179,8 @@ acknowledgeLogPatterns pid uid fieldHashPairs
 acknowledgeMergedPatterns :: (DB es, Time :> es) => Projects.ProjectId -> Eff es Int64
 acknowledgeMergedPatterns pid = do
   now <- Time.currentTime
-  Hasql.interpExecute [HI.sql|UPDATE apis.log_patterns SET state = #{LPSAcknowledged}, acknowledged_at = #{now}
+  Hasql.interpExecute
+    [HI.sql|UPDATE apis.log_patterns SET state = #{LPSAcknowledged}, acknowledged_at = #{now}
     WHERE project_id = #{pid} AND state = #{LPSNew} AND canonical_id IS NOT NULL|]
 
 
@@ -199,7 +201,8 @@ updateBaselineBatch pid rows
           means = V.map (view _4) rows
           mads = V.map (view _5) rows
           samples = V.map (view _6) rows
-      Hasql.interpExecute [HI.sql|
+      Hasql.interpExecute
+        [HI.sql|
               UPDATE apis.log_patterns lp
               SET baseline_state = v.state,
                   baseline_volume_hourly_mean = v.mean,
@@ -218,11 +221,15 @@ upsertLogPatternBatch :: (DB es, Time :> es) => [UpsertPattern] -> Eff es Int64
 upsertLogPatternBatch [] = pure 0
 upsertLogPatternBatch ups = do
   now <- Time.currentTime
-  sum <$> forM (dedup ups) (\u' -> do
-    let (u :: UpsertPattern) = cap u'
-    let (uPid, uPat, uHash, uSrc, uSvc, uLvl, uTid, uMsg, uCnt) =
-          (u.projectId, u.logPattern, u.hash, u.sourceField, u.serviceName, u.logLevel, u.traceId, u.sampleMessage, u.eventCount)
-    Hasql.interpExecute [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at)
+  sum
+    <$> forM
+      (dedup ups)
+      ( \u' -> do
+          let (u :: UpsertPattern) = cap u'
+          let (uPid, uPat, uHash, uSrc, uSvc, uLvl, uTid, uMsg, uCnt) =
+                (u.projectId, u.logPattern, u.hash, u.sourceField, u.serviceName, u.logLevel, u.traceId, u.sampleMessage, u.eventCount)
+          Hasql.interpExecute
+            [HI.sql| INSERT INTO apis.log_patterns (project_id, log_pattern, pattern_hash, source_field, service_name, log_level, trace_id, sample_message, occurrence_count, last_seen_at)
         VALUES (#{uPid}, #{uPat}, #{uHash}, #{uSrc}, #{uSvc}, #{uLvl}, #{uTid}, #{uMsg}, #{uCnt}, #{now})
         ON CONFLICT (project_id, source_field, pattern_hash) DO UPDATE SET
           last_seen_at = EXCLUDED.last_seen_at,
@@ -231,7 +238,8 @@ upsertLogPatternBatch ups = do
           service_name = COALESCE(EXCLUDED.service_name, apis.log_patterns.service_name),
           log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
-  |])
+  |]
+      )
   where
     maxTextLen = 32000
     cap u = u{logPattern = T.take maxTextLen u.logPattern, sampleMessage = T.take maxTextLen <$> u.sampleMessage} :: UpsertPattern
@@ -253,11 +261,16 @@ upsertHourlyStat pid sourceField patHash hourBucket count =
 upsertHourlyStatBatch :: DB es => [(Projects.ProjectId, Text, Text, UTCTime, Int64)] -> Eff es Int64
 upsertHourlyStatBatch [] = pure 0
 upsertHourlyStatBatch rows =
-  sum <$> forM (Map.toList deduped) (\((pid, sf, ph, hb), ec) ->
-    Hasql.interpExecute [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
+  sum
+    <$> forM
+      (Map.toList deduped)
+      ( \((pid, sf, ph, hb), ec) ->
+          Hasql.interpExecute
+            [HI.sql| INSERT INTO apis.log_pattern_hourly_stats (project_id, source_field, pattern_hash, hour_bucket, event_count)
         VALUES (#{pid}, #{sf}, #{ph}, #{hb}, #{ec})
         ON CONFLICT (project_id, source_field, pattern_hash, hour_bucket)
-        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |])
+        DO UPDATE SET event_count = apis.log_pattern_hourly_stats.event_count + EXCLUDED.event_count |]
+      )
   where
     deduped = Map.fromListWith (+) [((pid, sf, ph, truncateHour hb), ec) | (pid, sf, ph, hb, ec) <- rows]
 

@@ -666,8 +666,9 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
       -- Dedup: skip if we already logged this event for this project today
       alreadyNotified <-
         let pidText = pid.toText
-         in fromMaybe False <$> Hasql.interpOne
-            [HI.sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=#{pidText} AND name=#{eventName} AND timestamp > #{now}::timestamptz - interval '1 day') |]
+         in fromMaybe False
+              <$> Hasql.interpOne
+                [HI.sql| SELECT EXISTS(SELECT 1 FROM otel_logs_and_spans WHERE project_id=#{pidText} AND name=#{eventName} AND timestamp > #{now}::timestamptz - interval '1 day') |]
       Relude.unless alreadyNotified do
         ctx <- ask @Config.AuthContext
         let sev = if exceeded then SLError else SLWarn

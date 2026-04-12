@@ -19,6 +19,8 @@ import Control.Lens (view, _5)
 import Data.Aeson qualified as AE
 import Data.Annotation (toAnnotation)
 import Data.Default
+import Data.Effectful.Hasql (Hasql)
+import Data.Effectful.Hasql qualified as Hasql
 import Data.HashMap.Strict qualified as HM
 import Data.Set qualified as S
 import Data.Text qualified as T
@@ -27,8 +29,6 @@ import Data.Time.Clock.POSIX (posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.Vector qualified as V
-import Data.Effectful.Hasql (Hasql)
-import Data.Effectful.Hasql qualified as Hasql
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField)
@@ -36,8 +36,8 @@ import Deriving.Aeson qualified as DAE
 import Effectful
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
-import Hasql.Interpolate qualified as HI
 import Effectful.Time qualified as Time
+import Hasql.Interpolate qualified as HI
 import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
@@ -185,13 +185,16 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
         ]
 
 
-
 -- | Execute arbitrary SQL query and return results as vector of vectors.
 -- Wraps in row_to_json + json_each to preserve column order via hasql.
 executeArbitraryQuery :: DB es => Text -> Eff es (V.Vector (V.Vector AE.Value))
 executeArbitraryQuery queryText = do
-  results :: [AE.Value] <- Hasql.interp $ rawSql $
-    "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM (" <> queryText <> ") AS sub"
+  results :: [AE.Value] <-
+    Hasql.interp
+      $ rawSql
+      $ "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM ("
+      <> queryText
+      <> ") AS sub"
   pure $ V.fromList $ mapMaybe jsonArrayToVector results
 
 
@@ -446,4 +449,3 @@ getRequestCountForInterval interval pid = do
   now <- Time.currentTime
   let pidText = pid.toText
   fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=#{pidText}::text AND timestamp > #{now}::timestamptz - interval |] <> rawSql ("'" <> interval <> "'"))
-

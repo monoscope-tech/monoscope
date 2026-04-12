@@ -41,7 +41,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.Vector qualified as V
 import Data.Yaml qualified as Yml
-import Database.PostgreSQL.Entity.Types (Entity, GenericEntity (..), FieldModifiers, Schema, TableName, PrimaryKey, CamelToSnake)
+import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity (..), PrimaryKey, Schema, TableName)
 import Database.PostgreSQL.Simple (FromRow, ToRow)
 import Database.PostgreSQL.Simple.FromField
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -166,8 +166,9 @@ data Tab = Tab
 
 
 insert :: DB es => DashboardVM -> Eff es Int64
-insert DashboardVM{id = did, projectId, createdAt, updatedAt, createdBy, baseTemplate, schema, starredSince, homepageSince, tags, title, teams, filePath, fileSha} = Hasql.interpExecute
-  [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
+insert DashboardVM{id = did, projectId, createdAt, updatedAt, createdBy, baseTemplate, schema, starredSince, homepageSince, tags, title, teams, filePath, fileSha} =
+  Hasql.interpExecute
+    [HI.sql| INSERT INTO projects.dashboards (id, project_id, created_at, updated_at, created_by, base_template, schema, starred_since, homepage_since, tags, title, teams, file_path, file_sha)
            VALUES (#{did}, #{projectId}, #{createdAt}, #{updatedAt}, #{createdBy}, #{baseTemplate}, #{schema}, #{starredSince}, #{homepageSince}, #{tags}, #{title}, #{teams}::uuid[], #{filePath}, #{fileSha}) |]
 
 
@@ -226,65 +227,82 @@ replaceConstantVariables pid mf mt allParams currentTime c = c & #sql . _Just %~
 
 
 getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
-getDashboardById did = Hasql.interpOne
-  (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
+getDashboardById did =
+  Hasql.interpOne
+    (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
 
 
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64
-deleteDashboardsByIds pid dids = Hasql.interpExecute
-  [HI.sql| DELETE FROM projects.dashboards WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
+deleteDashboardsByIds pid dids =
+  Hasql.interpExecute
+    [HI.sql| DELETE FROM projects.dashboards WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
 
 
 addTeamsToDashboards :: DB es => Projects.ProjectId -> V.Vector DashboardId -> V.Vector UUID.UUID -> Eff es Int64
-addTeamsToDashboards pid dids teamIds = Hasql.interpExecute
-  [HI.sql| UPDATE projects.dashboards SET teams = teams || #{teamIds}::uuid[]
+addTeamsToDashboards pid dids teamIds =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards SET teams = teams || #{teamIds}::uuid[]
            WHERE project_id = #{pid} AND id = ANY(#{dids}::uuid[]) |]
 
 
 selectDashboardsByTeam :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [DashboardVM]
-selectDashboardsByTeam pid teamId = Hasql.interp
-  (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND teams @> ARRAY[#{teamId}::uuid]
-           ORDER BY starred_since DESC NULLS LAST, updated_at DESC |])
+selectDashboardsByTeam pid teamId =
+  Hasql.interp
+    ( selectFrom @DashboardVM
+        <> [HI.sql| WHERE project_id = #{pid} AND teams @> ARRAY[#{teamId}::uuid]
+           ORDER BY starred_since DESC NULLS LAST, updated_at DESC |]
+    )
 
 
 selectDashboardsSortedBy :: DB es => Projects.ProjectId -> Text -> Eff es [DashboardVM]
-selectDashboardsSortedBy pid orderByParam = Hasql.interp $
-  selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, |] <> orderClause
+selectDashboardsSortedBy pid orderByParam =
+  Hasql.interp
+    $ selectFrom @DashboardVM
+    <> [HI.sql| WHERE project_id = #{pid} ORDER BY starred_since DESC NULLS LAST, |]
+    <> orderClause
   where
     sortFields = [("title", "title ASC"), ("created_at", "created_at DESC"), ("updated_at", "updated_at DESC")] :: [(Text, HI.Sql)]
     orderClause = fromMaybe "updated_at DESC" (L.lookup (T.toLower $ T.strip orderByParam) sortFields)
 
 
 updateSchema :: DB es => DashboardId -> Dashboard -> Eff es Int64
-updateSchema dashId dashboard = Hasql.interpExecute
-  [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} WHERE id = #{dashId} |]
+updateSchema dashId dashboard =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard} WHERE id = #{dashId} |]
 
 
 updateTitle :: DB es => DashboardId -> Text -> Eff es Int64
-updateTitle dashId title = Hasql.interpExecute
-  [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE id = #{dashId} |]
+updateTitle dashId title =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards SET title = #{title} WHERE id = #{dashId} |]
 
 
 updateTags :: DB es => DashboardId -> V.Vector Text -> Eff es Int64
-updateTags dashId tags = Hasql.interpExecute
-  [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE id = #{dashId} |]
+updateTags dashId tags =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards SET tags = #{tags} WHERE id = #{dashId} |]
 
 
 updateSchemaAndUpdatedAt :: DB es => DashboardId -> Dashboard -> UTCTime -> Eff es Int64
-updateSchemaAndUpdatedAt dashId dashboard updatedAt = Hasql.interpExecute
-  [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard}, updated_at = #{updatedAt} WHERE id = #{dashId} |]
+updateSchemaAndUpdatedAt dashId dashboard updatedAt =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards SET schema = #{dashboard}, updated_at = #{updatedAt} WHERE id = #{dashId} |]
 
 
 updateStarredSince :: DB es => DashboardId -> Maybe UTCTime -> Eff es Int64
-updateStarredSince dashId starredSince = Hasql.interpExecute
-  [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE id = #{dashId} |]
+updateStarredSince dashId starredSince =
+  Hasql.interpExecute
+    [HI.sql| UPDATE projects.dashboards SET starred_since = #{starredSince} WHERE id = #{dashId} |]
 
 
 deleteDashboard :: DB es => DashboardId -> Eff es Int64
-deleteDashboard dashId = Hasql.interpExecute
-  [HI.sql| DELETE FROM projects.dashboards WHERE id = #{dashId} |]
+deleteDashboard dashId =
+  Hasql.interpExecute
+    [HI.sql| DELETE FROM projects.dashboards WHERE id = #{dashId} |]
 
 
 getDashboardByBaseTemplate :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardId)
-getDashboardByBaseTemplate pid baseTemplate = fmap (.id) <$> Hasql.interpOne @DashboardVM
-  (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND base_template = #{baseTemplate} |])
+getDashboardByBaseTemplate pid baseTemplate =
+  fmap (.id)
+    <$> Hasql.interpOne @DashboardVM
+      (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND base_template = #{baseTemplate} |])

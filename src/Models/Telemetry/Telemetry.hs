@@ -381,8 +381,8 @@ data MetricValue
   deriving (Generic, Show)
   deriving anyclass (NFData)
   deriving (FromField, ToField) via Aeson MetricValue
+  deriving (HI.DecodeValue, HI.EncodeValue) via Aeson MetricValue
   deriving (AE.FromJSON, AE.ToJSON) via DAE.Snake MetricValue
-  deriving (HI.EncodeValue, HI.DecodeValue) via Aeson MetricValue
 
 
 newtype GaugeSum = GaugeSum
@@ -486,7 +486,7 @@ data MetricType = MTGauge | MTSum | MTHistogram | MTExponentialHistogram | MTSum
   deriving (Generic, Read, Show)
   deriving (AE.FromJSON, AE.ToJSON, NFData)
   deriving (FromField, ToField) via WrappedEnum "MT" MetricType
-  deriving (HI.EncodeValue, HI.DecodeValue) via WrappedEnum "MT" MetricType
+  deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnum "MT" MetricType
 
 
 data AggregationTemporality = ATUnspecified | ATDelta | ATCumulative
@@ -623,11 +623,13 @@ getDataPointsData pid dateRange = do
         (Nothing, Just b) -> [HI.sql| AND timestamp BETWEEN #{now} AND #{b} |]
         (Just a, Just b) -> [HI.sql| AND timestamp BETWEEN #{a} AND #{b} |]
         _ -> mempty
-  Hasql.interp $
-    [HI.sql| WITH metrics_aggregated AS (
+  Hasql.interp
+    $ [HI.sql| WITH metrics_aggregated AS (
         SELECT project_id, metric_name, COUNT(*)::int AS data_points
         FROM telemetry.metrics
-        WHERE project_id = #{pid} |] <> dateFilter <> [HI.sql|
+        WHERE project_id = #{pid} |]
+    <> dateFilter
+    <> [HI.sql|
         GROUP BY project_id, metric_name
     )
     SELECT mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description,
@@ -640,8 +642,9 @@ getDataPointsData pid dateRange = do
 
 
 getMetricData :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe MetricDataPoint)
-getMetricData pid metricName = Hasql.interpOne
-  [HI.sql| SELECT mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description,
+getMetricData pid metricName =
+  Hasql.interpOne
+    [HI.sql| SELECT mm.metric_name, mm.metric_type, mm.metric_unit, mm.metric_description,
            COALESCE(m.data_points, 0) AS data_points,
            COALESCE(m.service_names, ARRAY[mm.service_name]::text[]) AS service_names,
            COALESCE(m.metric_labels, ARRAY[]::text[]) AS metric_labels
@@ -683,11 +686,13 @@ getMetricChartListData pid sourceM prefixM = do
       prefixFilter = case prefixM of
         Just prefix | prefix /= "" && prefix /= "all" -> let pat = prefix <> "%" in [HI.sql| AND metric_name LIKE #{pat}|]
         _ -> mempty
-  Hasql.interp $
-    [HI.sql| SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
+  Hasql.interp
+    $ [HI.sql| SELECT metric_name, MAX(metric_type) as metric_type, MAX(metric_unit) as metric_unit,
              MAX(metric_description) as metric_description, MAX(updated_at) as last_seen
-      FROM telemetry.metrics_meta WHERE project_id = #{pid} |] <> sourceFilter <> prefixFilter
-      <> [HI.sql| GROUP BY metric_name ORDER BY MAX(updated_at) DESC, metric_name |]
+      FROM telemetry.metrics_meta WHERE project_id = #{pid} |]
+    <> sourceFilter
+    <> prefixFilter
+    <> [HI.sql| GROUP BY metric_name ORDER BY MAX(updated_at) DESC, metric_name |]
 
 
 getMetricLabelValues :: DB es => Projects.ProjectId -> Text -> Text -> Eff es [Text]
@@ -1124,14 +1129,34 @@ instance HI.DecodeRow OtelLogsAndSpans where
     parent_id' <- HI.decodeRow
     summary' <- HI.decodeRow
     date' <- HI.decodeRow
-    pure OtelLogsAndSpans
-      { id = id', project_id = project_id', timestamp = timestamp', parent_id = parent_id'
-      , observed_timestamp = observed_timestamp', hashes = hashes', name = name', kind = kind'
-      , status_code = status_code', status_message = status_message', level = level', severity = severity'
-      , body = body', duration = duration', start_time = start_time', end_time = end_time'
-      , context = context', events = events', links = links', attributes = attributes'
-      , resource = resource', summary = summary', date = date', errors = Nothing
-      }
+    pure
+      OtelLogsAndSpans
+        { id = id'
+        , project_id = project_id'
+        , timestamp = timestamp'
+        , parent_id = parent_id'
+        , observed_timestamp = observed_timestamp'
+        , hashes = hashes'
+        , name = name'
+        , kind = kind'
+        , status_code = status_code'
+        , status_message = status_message'
+        , level = level'
+        , severity = severity'
+        , body = body'
+        , duration = duration'
+        , start_time = start_time'
+        , end_time = end_time'
+        , context = context'
+        , events = events'
+        , links = links'
+        , attributes = attributes'
+        , resource = resource'
+        , summary = summary'
+        , date = date'
+        , errors = Nothing
+        }
+
 
 instance FromRow OtelLogsAndSpans where
   fromRow = do

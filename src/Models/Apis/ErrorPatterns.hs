@@ -151,6 +151,7 @@ data ErrorPatternL = ErrorPatternL
 instance FromRow ErrorPatternL where
   fromRow = ErrorPatternL <$> FR.fromRow <*> FR.field <*> FR.field <*> FR.field
 
+
 instance HI.DecodeRow ErrorPatternL where
   decodeRow = ErrorPatternL <$> HI.decodeRow <*> (HI.getOneColumn <$> HI.decodeRow) <*> (HI.getOneColumn <$> HI.decodeRow) <*> (HI.getOneColumn <$> HI.decodeRow)
 
@@ -184,10 +185,10 @@ data ATError = ATError
   deriving stock (Generic, Show)
   deriving anyclass (Default, NFData)
   deriving (FromField, ToField) via Aeson ATError
-  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb ATError
   deriving
     (AE.FromJSON, AE.ToJSON)
     via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] ATError
+  deriving (HI.DecodeValue, HI.EncodeValue) via HI.AsJsonb ATError
 
 
 -- | Get error patterns for a project with optional state filter (excludes merged patterns)
@@ -216,7 +217,9 @@ getErrorPatternsByParentHash pid pHash =
 
 
 getErrorPatternLByHash :: DB es => Projects.ProjectId -> Text -> UTCTime -> Eff es (Maybe ErrorPatternL)
-getErrorPatternLByHash pid eHash now = Hasql.interpOne [HI.sql|
+getErrorPatternLByHash pid eHash now =
+  Hasql.interpOne
+    [HI.sql|
     SELECT e.*, COALESCE(ev.occurrences, 0)::INT, COALESCE(ev.user_count, 0)::INT, ev.last_occurred_at
     FROM apis.error_patterns e LEFT JOIN LATERAL (
       SELECT SUM(event_count) AS occurrences, SUM(user_count) AS user_count, MAX(hour_bucket) AS last_occurred_at
@@ -236,7 +239,8 @@ updateOccurrenceCounts pid = updateOccurrenceCountsBatch (V.singleton pid)
 propagateMergedCountsBatch :: DB es => V.Vector Projects.ProjectId -> Eff es Int64
 propagateMergedCountsBatch pids | V.null pids = pure 0
 propagateMergedCountsBatch pids =
-  Hasql.interpExecute [HI.sql|
+  Hasql.interpExecute
+    [HI.sql|
     WITH snapshot AS (
       SELECT id, canonical_id, occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
       FROM apis.error_patterns
@@ -262,7 +266,8 @@ propagateMergedCountsBatch pids =
 updateOccurrenceCountsBatch :: DB es => V.Vector Projects.ProjectId -> UTCTime -> Eff es Int64
 updateOccurrenceCountsBatch pids _ | V.null pids = pure 0
 updateOccurrenceCountsBatch pids now =
-  Hasql.interpExecute [HI.sql|
+  Hasql.interpExecute
+    [HI.sql|
       UPDATE apis.error_patterns SET
         occurrences_1m = 0,
         occurrences_5m = GREATEST(0, occurrences_5m - occurrences_1m),
@@ -294,7 +299,8 @@ resolveErrorPattern eid now =
 
 setErrorPatternAssignee :: DB es => ErrorPatternId -> Maybe Projects.UserId -> UTCTime -> Eff es Int64
 setErrorPatternAssignee eid assigneeIdM now =
-  Hasql.interpExecute [HI.sql|
+  Hasql.interpExecute
+    [HI.sql|
         UPDATE apis.error_patterns SET
           assignee_id = #{assigneeIdM},
           assigned_at = CASE WHEN #{assigneeIdM} IS NOT NULL THEN #{now}::timestamptz ELSE NULL END,
@@ -310,7 +316,8 @@ updateErrorPatternAnalysis eid rc eCat =
 
 updateErrorPatternSubscription :: DB es => ErrorPatternId -> Bool -> Int -> UTCTime -> Eff es Int64
 updateErrorPatternSubscription eid sub notifyMins now =
-  Hasql.interpExecute [HI.sql|
+  Hasql.interpExecute
+    [HI.sql|
         UPDATE apis.error_patterns SET
           subscribed = #{sub},
           notify_every_minutes = #{notifyMins},
@@ -326,7 +333,8 @@ updateErrorPatternThreadIdsAndNotifiedAt = updateErrorPatternThreadIds' True
 
 updateErrorPatternThreadIds' :: DB es => Bool -> ErrorPatternId -> Maybe Text -> Maybe Text -> UTCTime -> Eff es Int64
 updateErrorPatternThreadIds' updateNotifiedAt eid slackTs discordMsgId now =
-  Hasql.interpExecute [HI.sql| UPDATE apis.error_patterns SET
+  Hasql.interpExecute
+    [HI.sql| UPDATE apis.error_patterns SET
         slack_thread_ts = COALESCE(#{slackTs}, slack_thread_ts),
         discord_message_id = COALESCE(#{discordMsgId}, discord_message_id),
         last_notified_at = CASE WHEN #{updateNotifiedAt} THEN #{now} ELSE last_notified_at END,
@@ -339,7 +347,8 @@ updateErrorPatternThreadIds' updateNotifiedAt eid slackTs discordMsgId now =
 -- which only contains non-resolved errors (filtered via state != 'resolved' in the stats CTE).
 bulkCalculateAndUpdateBaselines :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
 bulkCalculateAndUpdateBaselines pid now =
-  Hasql.interpExecute [HI.sql|
+  Hasql.interpExecute
+    [HI.sql|
       WITH stats AS (
         SELECT ehs.error_id,
           PERCENTILE_CONT(0.5) WITHIN GROUP (ORDER BY ehs.event_count) AS median_val,
@@ -490,7 +499,8 @@ batchUpsertErrorPatterns pid errors now =
 upsertErrorPatternHourlyStats :: DB es => Projects.ProjectId -> UTCTime -> V.Vector (Text, Int, Int) -> Eff es Int64
 upsertErrorPatternHourlyStats _pid _now stats | V.null stats = pure 0
 upsertErrorPatternHourlyStats pid now stats =
-  Hasql.interpExecute [HI.sql|
+  Hasql.interpExecute
+    [HI.sql|
           INSERT INTO apis.error_hourly_stats (project_id, error_id, hour_bucket, event_count, user_count)
           SELECT e.project_id, e.id, #{hourBucket}, u.event_count, u.user_count
           FROM (SELECT unnest(#{hashes}::text[]) AS hash, unnest(#{eventCounts}::int[]) AS event_count, unnest(#{userCounts}::int[]) AS user_count) u
