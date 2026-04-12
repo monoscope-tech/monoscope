@@ -154,11 +154,11 @@ data EnvConfig = EnvConfig
   , drainRehydrateIntervalSecs :: Int
   , maxBufferedSpans :: Int
   , maxDrainTrees :: Int
-  , -- | Must match the `timestamp >=` literal in migration 0064's partial index.
-    -- The safety-net query and the partial-index WHERE clause both filter
-    -- rows by this cutoff so pre-deploy rows stay invisible to the worker
-    -- and the post-deploy rows get stamped via UPDATE-1.
-    processedAtCutoff :: UTCTime
+  , processedAtCutoff :: UTCTime
+  -- ^ Must match the `timestamp >=` literal in migration 0064's partial index.
+  -- The safety-net query and the partial-index WHERE clause both filter
+  -- rows by this cutoff so pre-deploy rows stay invisible to the worker
+  -- and the post-deploy rows get stamped via UPDATE-1.
   }
   deriving stock (Generic, Show)
   deriving anyclass (Default, FromEnv)

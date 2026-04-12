@@ -56,9 +56,8 @@ where
 
 import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
-import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
-import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Control.Concurrent (threadDelay)
+import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Control.Exception (finally, throwIO, try)
 import Control.Exception.Safe qualified as Safe
 import Control.Lens ((.~), (^.))
@@ -119,6 +118,7 @@ import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool, runConnectionPool)
+import Pkg.ExtractionWorker qualified as ExtractionWorker
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -897,12 +897,14 @@ drainExtractionWorker TestResources{..} = do
   now <- getCurrentTime
   ExtractionWorker.forceFlushAllBuffers trATCtx.extractionWorker now
   for_ shards \shard ->
-    drainSTM (isEmptyTBQueue shard.drainFlushQ) (readTBQueue shard.drainFlushQ)
+    drainSTM
+      (isEmptyTBQueue shard.drainFlushQ)
+      (readTBQueue shard.drainFlushQ)
       (runTestBackgroundWithLogger frozenTime trLogger trATCtx . BackgroundJobs.flushDrainTask shard)
- where
-  drainSTM isEmpty pop process = do
-    mItem <- atomically $ isEmpty >>= \case True -> pure Nothing; False -> Just <$> pop
-    for_ mItem \item -> process item >> drainSTM isEmpty pop process
+  where
+    drainSTM isEmpty pop process = do
+      mItem <- atomically $ isEmpty >>= \case True -> pure Nothing; False -> Just <$> pop
+      for_ mItem \item -> process item >> drainSTM isEmpty pop process
 
 
 processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO ()

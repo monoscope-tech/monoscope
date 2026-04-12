@@ -257,7 +257,7 @@ processList msgs !attrs = checkpoint "processList" $ do
             ( \caches v ->
                 Telemetry.mintOtelLogIds v
                   >>= checkpoint "processList:logs:bulkInsert"
-                    . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
+                  . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
             )
         Just "org.opentelemetry.otlp.traces.v1" ->
           processBatchPipeline @TS.ExportTraceServiceRequest
@@ -276,7 +276,7 @@ processList msgs !attrs = checkpoint "processList" $ do
             ( \caches v ->
                 Telemetry.mintOtelLogIds v
                   >>= checkpoint "processList:traces:bulkInsert"
-                    . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
+                  . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
             )
         Just "org.opentelemetry.otlp.metrics.v1" ->
           processBatchPipeline @MS.ExportMetricsServiceRequest

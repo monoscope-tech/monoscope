@@ -219,10 +219,18 @@ mergeByJaccard threshold results = V.fromList $ map (\(dr, _, _) -> dr) $ toList
   where
     tagged = V.toList results <&> \dr -> let toks = contentTokens dr.templateStr in (dr, toks, S.size toks)
     tryMerge acc (x, xToks, xLen) =
-      case Seq.findIndexL (\(_, aToks, aLen) ->
-              let lo = min aLen xLen; hi = max aLen xLen
-              in lo > 0 && fromIntegral lo / fromIntegral hi >= threshold
-                 && jaccardOnSets aToks xToks >= threshold) acc of
+      case Seq.findIndexL
+        ( \(_, aToks, aLen) ->
+            let lo = min aLen xLen; hi = max aLen xLen
+             in lo
+                  > 0
+                  && fromIntegral lo
+                  / fromIntegral hi
+                  >= threshold
+                  && jaccardOnSets aToks xToks
+                  >= threshold
+        )
+        acc of
         Just idx -> let (a, aToks, aLen) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency}, aToks, aLen) acc
         Nothing -> acc Seq.|> (x, xToks, xLen)
 

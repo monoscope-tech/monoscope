@@ -3,12 +3,12 @@ module System.Server (runMonoscope) where
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent (threadDelay)
-import Data.Time.Clock qualified
 import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
+import Data.Time.Clock qualified
 import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (runConcurrent)
@@ -165,12 +165,12 @@ shutdownMonoscope env =
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool
     Pool.destroyAllResources env.timefusionPgPool
- where
-  awaitDrained worker delayUs budget
-    | budget <= (0 :: Int) = pass
-    | otherwise = do
-        drained <- ExtractionWorker.allQueuesDrained worker
-        unless drained $ threadDelay delayUs >> awaitDrained worker delayUs (budget - 1)
+  where
+    awaitDrained worker delayUs budget
+      | budget <= (0 :: Int) = pass
+      | otherwise = do
+          drained <- ExtractionWorker.allQueuesDrained worker
+          unless drained $ threadDelay delayUs >> awaitDrained worker delayUs (budget - 1)
 
 
 logException :: Text -> LogBase.Logger -> LogLevel -> Text -> Text -> IO ()

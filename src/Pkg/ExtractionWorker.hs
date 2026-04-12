@@ -53,9 +53,10 @@ newCircuitBreaker = newTVarIO (CircuitClosed 0)
 
 
 shouldAttemptCircuit :: CircuitBreaker -> UTCTime -> IO Bool
-shouldAttemptCircuit cb now = atomically $ readTVar cb >>= \case
-  CircuitClosed _ -> pure True
-  CircuitOpen openedAt -> pure (diffUTCTime now openedAt >= 60)
+shouldAttemptCircuit cb now =
+  atomically $ readTVar cb >>= \case
+    CircuitClosed _ -> pure True
+    CircuitOpen openedAt -> pure (diffUTCTime now openedAt >= 60)
 
 
 recordCircuitSuccess :: CircuitBreaker -> IO ()
@@ -260,12 +261,13 @@ enforceBufferBound :: WorkerState s -> Int -> UTCTime -> IO ()
 enforceBufferBound st maxSpans now = go
   where
     go = do
-      candidates <- concat <$> V.forM st.shards \shard -> do
-        bufs <- readIORef shard.drainBuffers
-        pure [(shard, k, sb) | (k, sb) <- HM.toList bufs]
+      candidates <-
+        concat <$> V.forM st.shards \shard -> do
+          bufs <- readIORef shard.drainBuffers
+          pure [(shard, k, sb) | (k, sb) <- HM.toList bufs]
       let totalSpans = sum [sb.spanCount | (_, _, sb) <- candidates]
-      when (totalSpans > maxSpans) $
-        for_ (viaNonEmpty Relude.last $ sortOn (\(_, _, sb) -> sb.spanCount) candidates) \(shard, (pid, svcName), _) -> do
+      when (totalSpans > maxSpans)
+        $ for_ (viaNonEmpty Relude.last $ sortOn (\(_, _, sb) -> sb.spanCount) candidates) \(shard, (pid, svcName), _) -> do
           evicted <- atomicModifyIORef' shard.drainBuffers \bufs ->
             let key = (pid, svcName)
              in case HM.lookup key bufs of
@@ -313,17 +315,26 @@ forceFlushAllBuffers st now =
 enqueueFlush :: ShardState s -> Projects.ProjectId -> Text -> ServiceBuffer -> UTCTime -> IO Bool
 enqueueFlush shard pid svcName sb now = atomically do
   full <- isFullTBQueue shard.drainFlushQ
-  if full then pure False
-  else do
-    writeTBQueue shard.drainFlushQ DrainFlushTask
-      { projectId = pid, serviceName = svcName, spans = reverse sb.pendingSpans, flushedAt = now }
-    pure True
+  if full
+    then pure False
+    else do
+      writeTBQueue
+        shard.drainFlushQ
+        DrainFlushTask
+          { projectId = pid
+          , serviceName = svcName
+          , spans = reverse sb.pendingSpans
+          , flushedAt = now
+          }
+      pure True
 
 
 -- | Check if all ingress + drain-flush queues are empty across shards.
 allQueuesDrained :: WorkerState s -> IO Bool
-allQueuesDrained st = atomically $
-  V.and <$> V.forM st.shards \shard -> do
-    depth <- readTVar shard.queueDepth
-    drainEmpty <- isEmptyTBQueue shard.drainFlushQ
-    pure (depth == 0 && drainEmpty)
+allQueuesDrained st =
+  atomically
+    $ V.and
+    <$> V.forM st.shards \shard -> do
+      depth <- readTVar shard.queueDepth
+      drainEmpty <- isEmptyTBQueue shard.drainFlushQ
+      pure (depth == 0 && drainEmpty)

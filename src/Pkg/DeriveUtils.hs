@@ -34,6 +34,7 @@ import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk)
 import Data.Default (Default (..))
 import Data.Digest.XXHash (xxHash)
+import Data.Effectful.Hasql qualified as EHasql
 import Data.IntMap qualified as IntMap
 import Data.OpenApi (NamedSchema (..), ToParamSchema (..), ToSchema (..), enum_, genericDeclareNamedSchema, type_)
 import Data.OpenApi qualified as OpenApi
@@ -50,7 +51,6 @@ import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fr
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
-import Data.Effectful.Hasql qualified as EHasql
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift)
 import Effectful.Labeled (Labeled)

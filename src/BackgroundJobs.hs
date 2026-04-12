@@ -88,8 +88,8 @@ import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
-import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.EmailTemplates qualified as ET
+import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -728,8 +728,6 @@ generateOtelFacetsBatch projectIds timestamp = do
       ]
 
 
-
-
 -- | Input for Drain tree processing.
 -- SeedPattern: re-inserts existing templates with no sample (Nothing). When a real log
 -- later matches, updateLogGroupWithTemplate replaces the sample with actual content.
@@ -756,8 +754,6 @@ processBatchWithMapping isSummary batch now initial = Drain.buildDrainTreeWithMa
 -- Error Detection Strategy:
 -- 1. Query spans with error indicators (status, events, attributes)
 -- 2. Extract error details from span events using OpenTelemetry conventions
-
-
 data ErrorSubscriptionDue = ErrorSubscriptionDue
   { errorId :: ErrorPatterns.ErrorPatternId
   , errorData :: ErrorPatterns.ATError
@@ -972,14 +968,15 @@ safetyNetReprocess pid = do
 
 
 -- | Dual-fork an UPDATE to Postgres (blocking) + TimeFusion (best-effort, circuit-broken).
-dualExecPgTf :: (DB es, Labeled "timefusion" WithConnection :> es, Ki.StructuredConcurrency :> es, Log :> es, Time.Time :> es, SimplePG.ToRow q) => Config.AuthContext -> SimplePG.Query -> q -> Eff es Int64
+dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, SimplePG.ToRow q, Time.Time :> es) => Config.AuthContext -> SimplePG.Query -> q -> Eff es Int64
 dualExecPgTf ctx sql' params = Ki.scoped \scope -> do
   mainThread <- Ki.fork scope $ PG.execute sql' params
   _ <- Ki.fork scope $ Relude.when ctx.config.enableTimefusionWrites $ do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
-    Relude.when shouldAttempt $
-      tryAny (withTimefusion True $ PG.execute sql' params) >>= \case
+    Relude.when shouldAttempt
+      $ tryAny (withTimefusion True $ PG.execute sql' params)
+      >>= \case
         Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
         Left e -> do
           opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
@@ -1181,8 +1178,9 @@ runDrainFlusher logger ctx tp shard = forever $ do
     Right () -> pass
     Left e -> logExc "drain-flusher:task" e
   where
-    logExc label e = runLogT (show ctx.config.environment) logger ctx.config.logLevel
-      $ LogLegacy.logAttention label (show @Text e)
+    logExc label e =
+      runLogT (show ctx.config.environment) logger ctx.config.logLevel
+        $ LogLegacy.logAttention label (show @Text e)
 
 
 -- | Spawn async rehydration for a (project, service) tree if stale and not
@@ -1209,16 +1207,18 @@ maybeSpawnRehydration logger ctx tp shard key@(pid, svcName) = do
       let job = do
             tryAny (runBackground logger ctx tp $ rehydrateTree shard key now existing) >>= \case
               Right () -> pass
-              Left e -> runLogT (show ctx.config.environment) logger ctx.config.logLevel
-                $ LogLegacy.logAttention "drain-rehydrate failed" (show @Text e)
+              Left e ->
+                runLogT (show ctx.config.environment) logger ctx.config.logLevel
+                  $ LogLegacy.logAttention "drain-rehydrate failed" (show @Text e)
             atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.delete key s, ())
       atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.insert key s, ())
       enqueued <- atomically $ do
         full <- isFullTBQueue shard.rehydrationQ
-        if full then pure False
-        else writeTBQueue shard.rehydrationQ job >> pure True
-      unless enqueued $
-        atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.delete key s, ())
+        if full
+          then pure False
+          else writeTBQueue shard.rehydrationQ job >> pure True
+      unless enqueued
+        $ atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.delete key s, ())
 
 
 rehydrateTree
@@ -1245,17 +1245,22 @@ rehydrateTree shard key@(pid, svcName) now existing = do
 seedDrainTreeFromDB
   :: DB es
   => ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
-  -> (Projects.ProjectId, Text) -> UTCTime
+  -> (Projects.ProjectId, Text)
+  -> UTCTime
   -> Eff es Drain.DrainTree
 seedDrainTreeFromDB shard key@(pid, svcName) now = do
   (texts, maxSeen) <- LogPatterns.getLogPatternTextsByService pid "summary" svcName
   seedFromPatterns shard key now texts maxSeen
 
+
 -- | Build a drain tree from pre-fetched patterns and insert into shard state.
 seedFromPatterns
   :: IOE :> es
   => ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
-  -> (Projects.ProjectId, Text) -> UTCTime -> [Text] -> Maybe UTCTime
+  -> (Projects.ProjectId, Text)
+  -> UTCTime
+  -> [Text]
+  -> Maybe UTCTime
   -> Eff es Drain.DrainTree
 seedFromPatterns shard key now texts maxSeen = do
   let freshTree = processBatch True (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
@@ -1297,11 +1302,12 @@ flushDrainTask shard task
       -- the existing entry (async rehydration owns those fields).
       liftIO $ atomicModifyIORef' shard.drainTrees \m ->
         let prev = HM.lookup key m
-            newEntry = ExtractionWorker.ServiceDrainTree
-              { tree = mergedTree
-              , lastSeededAt = maybe now (.lastSeededAt) prev
-              , maxPatternSeenAt = prev >>= (.maxPatternSeenAt)
-              }
+            newEntry =
+              ExtractionWorker.ServiceDrainTree
+                { tree = mergedTree
+                , lastSeededAt = maybe now (.lastSeededAt) prev
+                , maxPatternSeenAt = prev >>= (.maxPatternSeenAt)
+                }
          in (HM.insert key newEntry m, ())
 
       -- Build a spanCtxId → patternHash tag map so each row can have its own
@@ -1377,10 +1383,12 @@ runDrainAgeFlushTimer logger ctx = forever $ do
   threadDelay 10_000_000 -- 10 s
   now <- getCurrentTime
   let worker = ctx.extractionWorker
-      tryOp name action = tryAny action >>= \case
-        Right () -> pass
-        Left e -> runLogT (show ctx.config.environment) logger ctx.config.logLevel
-          $ LogLegacy.logAttention ("drain-age-flush:" <> name) (show @Text e)
+      tryOp name action =
+        tryAny action >>= \case
+          Right () -> pass
+          Left e ->
+            runLogT (show ctx.config.environment) logger ctx.config.logLevel
+              $ LogLegacy.logAttention ("drain-age-flush:" <> name) (show @Text e)
   tryOp "collectAgedFlushes" $ ExtractionWorker.collectAgedFlushes worker ctx.config.drainFlushMaxAgeSecs now
   tryOp "enforceBufferBound" $ ExtractionWorker.enforceBufferBound worker ctx.config.maxBufferedSpans now
   tryOp "evictStaleTrees" $ ExtractionWorker.evictStaleTrees worker ctx.config.maxDrainTrees now
