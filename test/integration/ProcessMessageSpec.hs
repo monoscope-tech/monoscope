@@ -1,6 +1,5 @@
 module ProcessMessageSpec (spec) where
 
-import BackgroundJobs (processFiveMinuteSpans)
 import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HashMap
 import Data.Time (defaultTimeLocale, formatTime, getCurrentTime)
@@ -53,7 +52,7 @@ spec = aroundAll withTestResources do
             , ("m2", toStrict $ AE.encode reqMsg2)
             ]
       f <- runTestBg frozenTime tr $ processMessages msgs HashMap.empty
-      _ <- runTestBg frozenTime tr $ processFiveMinuteSpans currentTime pid
+      drainExtractionWorker tr
       pendingJobs <- getPendingBackgroundJobs tr.trATCtx
       logBackgroundJobsInfo tr.trLogger pendingJobs
 

@@ -1,7 +1,5 @@
 module Opentelemetry.StandardOtelSpansSpec (spec) where
 
-import BackgroundJobs qualified
-import Data.Time (UTCTime, addUTCTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
 import Data.Vector qualified as V
@@ -20,11 +18,6 @@ import Test.Hspec (Spec, aroundAll, describe, it, shouldBe, shouldSatisfy)
 
 pid :: Projects.ProjectId
 pid = UUIDId UUID.nil
-
--- processFiveMinuteSpans queries timestamp >= (scheduledTime - 300s) AND timestamp < scheduledTime
--- So we ingest at frozenTime and run the job at frozenTime + 60s
-jobTime :: UTCTime
-jobTime = addUTCTime 60 frozenTime
 
 
 -- | Ingest a standard OTel HTTP span (as produced by auto-instrumentation, NOT our SDK).
@@ -63,7 +56,7 @@ spec = aroundAll withTestResources do
       replicateM_ 3 $ ingestStdOtelSpan tr apiKey "GET /api/orders" "GET" "/api/orders/12345" 200 "orders.example.com"
       replicateM_ 3 $ ingestStdOtelSpan tr apiKey "POST /api/payments" "POST" "/api/payments" 201 "orders.example.com"
 
-      void $ runTestBg frozenTime tr $ BackgroundJobs.processFiveMinuteSpans jobTime pid
+      drainExtractionWorker tr
 
       endpoints <- withPool tr.trPool $ DBT.query [sql|
         SELECT url_path, method, host FROM apis.endpoints
@@ -80,7 +73,7 @@ spec = aroundAll withTestResources do
       apiKey <- createTestAPIKey tr pid "std-otel-uuid-key"
       replicateM_ 3 $ ingestStdOtelSpan tr apiKey "GET" "GET" "/admin/companies/ec8213d0-20e6-4225-bf05-5d8215193d9b/employee-details" 200 "admin.example.com"
 
-      void $ runTestBg frozenTime tr $ BackgroundJobs.processFiveMinuteSpans jobTime pid
+      drainExtractionWorker tr
 
       endpoints <- withPool tr.trPool $ DBT.query [sql|
         SELECT url_path FROM apis.endpoints

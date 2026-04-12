@@ -37,6 +37,8 @@ module Models.Telemetry.Telemetry (
   getMetricData,
   bulkInsertMetrics,
   bulkInsertOtelLogsAndSpansTF,
+  insertAndHandOff,
+  handOffBatches,
   mintOtelLogIds,
   getMetricChartListData,
   getMetricLabelValues,
@@ -46,6 +48,7 @@ module Models.Telemetry.Telemetry (
   SpanLink (..),
   atMapText,
   atMapInt,
+  spanServiceName,
   getProjectStatsBySpanType,
   getEndpointStats,
   getDBQueryStats,
@@ -64,6 +67,7 @@ import Data.ByteString.Base16 qualified as B16
 import Data.Default (Default (..))
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Generics.Labels ()
+import Data.HashMap.Strict qualified as HM
 import Data.List qualified as L (groupBy)
 import Data.Map qualified as Map
 import Data.Text qualified as T
@@ -91,7 +95,6 @@ import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled, labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL qualified as PG
-import Effectful.Reader.Static qualified as Eff
 import Effectful.Time qualified as Time
 import Hasql.Decoders qualified as D
 import Hasql.DynamicStatements.Snippet (Snippet, encoderAndParam, param)
@@ -104,12 +107,11 @@ import Hasql.Transaction.Sessions qualified as TxS
 import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (AesonText (..), UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, textArrayEnc, unAesonTextMaybe)
+import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), WrappedEnum (..), WrappedEnumSC (..), encodeEnumSC, idFromText, textArrayEnc, unAesonTextMaybe)
+import Pkg.ExtractionWorker qualified as EW
 import Relude hiding (ask)
-import System.Config (AuthContext)
-import System.Config qualified as SysConfig
+import System.IO (hPutStrLn)
 import System.Logging qualified as Log
-import System.Types (DB)
 import Text.Regex.TDFA.Text ()
 import UnliftIO (throwIO, tryAny)
 import Utils (extractMessageFromLog, formatUTC, getDurationNSMS, lookupValueText)
@@ -161,6 +163,10 @@ atMapInt key maybeMap = do
     AE.Number n -> Just $ round n
     AE.String t -> readMaybe $ toString t
     _ -> Nothing
+
+
+spanServiceName :: OtelLogsAndSpans -> Maybe Text
+spanServiceName s = atMapText "service.name" (unAesonTextMaybe s.resource)
 
 
 data SeverityLevel = SLTrace | SLDebug | SLInfo | SLWarn | SLError | SLFatal
@@ -787,19 +793,21 @@ mintOtelLogIds = V.mapM \r -> genUUID <&> \uid -> r & #id .~ UUID.toText uid
 
 bulkInsertOtelLogsAndSpansTF
   :: ( Concurrent :> es
-     , Eff.Reader AuthContext :> es
      , Hasql :> es
      , IOE :> es
      , Ki.StructuredConcurrency :> es
      , Labeled "timefusion" Hasql :> es
      , Log :> es
      )
-  => V.Vector OtelLogsAndSpans
+  => Bool
+  -- ^ enableTimefusionWrites (passed by caller to avoid a `Reader AuthContext`
+  -- constraint here — keeps this module a leaf of `System.Config` so the
+  -- extraction worker in `AuthContext` can be typed against `OtelLogsAndSpans`).
+  -> V.Vector OtelLogsAndSpans
   -> Eff es ()
-bulkInsertOtelLogsAndSpansTF records = do
-  appCtx <- Eff.ask @AuthContext
-  Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON appCtx.config.enableTimefusionWrites)]
-  if appCtx.config.enableTimefusionWrites
+bulkInsertOtelLogsAndSpansTF enableTf records = do
+  Log.logTrace "bulkInsertOtelLogsAndSpansTF called" $ AE.object [("record_count", AE.toJSON $ V.length records), ("enableTimefusionWrites", AE.toJSON enableTf)]
+  if enableTf
     then Ki.scoped \scope -> do
       mainThread <- Ki.fork scope $ void $ bulkInsertOtelLogsAndSpans records
       _ <- Ki.fork scope do
@@ -840,6 +848,77 @@ bulkInsertOtelLogsAndSpansTF records = do
         Left e -> throwIO e
 
 
+-- | Persist `records` to Postgres (+TimeFusion when enabled) and hand each
+-- per-project sub-batch to the in-process extraction worker. Every ingestion
+-- call site (Pub/Sub, Kafka, OTLP gRPC) routes through this helper so the
+-- eager-track derivation pipeline kicks off as soon as the rows land in
+-- storage. A drop from `submitBatch` is non-fatal: the row is durable in both
+-- stores, `processed_at` stays NULL, and the hourly `SafetyNetReprocess` job
+-- re-submits it on the next tick.
+insertAndHandOff
+  :: ( Concurrent :> es
+     , Hasql :> es
+     , IOE :> es
+     , Ki.StructuredConcurrency :> es
+     , Labeled "timefusion" Hasql :> es
+     , Log :> es
+     )
+  => Bool
+  -> EW.WorkerState OtelLogsAndSpans
+  -> HM.HashMap Projects.ProjectId Projects.ProjectCache
+  -> V.Vector OtelLogsAndSpans
+  -> Eff es ()
+insertAndHandOff enableTf worker caches records
+  | V.null records = pass
+  | otherwise = do
+      bulkInsertOtelLogsAndSpansTF enableTf records
+      liftIO $ handOffBatches worker caches records
+
+
+-- | Group `records` by `project_id`, build one `ExtractionBatch` per group, and
+-- submit via STM. Rows whose `project_id` is unparseable or whose project cache
+-- is absent are silently skipped — the safety-net picks them up on the next
+-- tick via `processed_at IS NULL`. Runs in IO (pure STM + one metric bump).
+handOffBatches
+  :: EW.WorkerState OtelLogsAndSpans
+  -> HM.HashMap Projects.ProjectId Projects.ProjectCache
+  -> V.Vector OtelLogsAndSpans
+  -> IO ()
+handOffBatches worker caches records = do
+  let groups :: HM.HashMap Text [OtelLogsAndSpans]
+      groups = V.foldr' (\r -> HM.insertWith (<>) r.project_id [r]) HM.empty records
+  forM_ (HM.toList groups) \(pidText, rowList) ->
+    case idFromText pidText of
+      Nothing -> hPutStrLn stderr $ "handOffBatches: unparseable project_id: " <> toString pidText
+      Just pid -> case HM.lookup pid caches of
+        Nothing -> pass -- safety-net picks these up via processed_at IS NULL
+        Just cache -> do
+          let rows = V.fromList rowList
+              extractSpanId r = fromMaybe "" (r.context >>= (.span_id))
+              extractTraceId r = fromMaybe "" (r.context >>= (.trace_id))
+              spanIds = V.map extractSpanId rows
+              traceIds = V.map extractTraceId rows
+              firstTs = (V.unsafeHead rows).timestamp
+              (minTs, maxTs) =
+                V.foldl'
+                  (\(lo, hi) r -> (min lo r.timestamp, max hi r.timestamp))
+                  (firstTs, firstTs)
+                  rows
+              batch =
+                EW.ExtractionBatch
+                  { projectId = pid
+                  , projectCache = cache
+                  , spans = rows
+                  , spanIds
+                  , traceIds
+                  , batchMinTs = minTs
+                  , batchMaxTs = maxTs
+                  }
+          ok <- atomically (EW.submitBatch worker batch)
+          -- TODO(otel-metrics): emit a counter for dropped batches when submitBatch fails.
+          unless ok $ atomicModifyIORef' worker.droppedBatches \n -> (n + 1, ())
+
+
 -- | Hasql-backed bulk insert for OtelLogsAndSpans.
 --
 -- Sends all 87 columns of every row as binary parameters via a multi-row VALUES
@@ -861,8 +940,8 @@ bulkInsertOtelLogsAndSpans records
           -- Multi-chunk insert: wrap in a single transaction so a mid-stream failure
           -- cannot leave a partial write.
           Hasql.transaction TxS.ReadCommitted TxS.Write
-            $ foldl' (+) 0
-            <$> traverse (\c -> Tx.statement () (chunkStmt c)) chunks
+            $ Relude.sum
+            <$> traverse (Tx.statement () . chunkStmt) chunks
 
 
 -- | Thrown when an OtelLogsAndSpans row reaches the bulk insert path with an
@@ -899,7 +978,7 @@ otelColumns =
       jp :: AE.ToJSON a => (OtelLogsAndSpans -> Maybe a) -> OtelRowCtx -> Snippet
       jp g = top (param . fmap (cleanNullBytesFromJSON . AE.toJSON) . g)
       aeson g = top (param . fmap cleanNullBytesFromJSON . unAesonTextMaybe . g)
-      arr g = top (\e -> encoderAndParam (E.nonNullable textArrayEnc) (V.map cleanNullBytes (g e)))
+      arr g = top (encoderAndParam (E.nonNullable textArrayEnc) . V.map cleanNullBytes . g)
       ctxT f = top (\e -> param (fmap cleanNullBytes (e.context >>= f)))
       sevText e = e.severity >>= \s -> cleanNullBytes . toText . encodeEnumSC @"SL" <$> s.severity_text
       sevNum :: OtelLogsAndSpans -> Maybe Int32
@@ -1444,12 +1523,14 @@ mkSystemLog (UUIDId pid) eventName sev bodyMsg attrs duration ts =
 
 
 insertSystemLog
-  :: (Concurrent :> es, Eff.Reader AuthContext :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, UUIDEff :> es)
-  => OtelLogsAndSpans
+  :: (Concurrent :> es, Hasql :> es, IOE :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, UUIDEff :> es)
+  => Bool
+  -- ^ enableTimefusionWrites
+  -> OtelLogsAndSpans
   -> Eff es ()
-insertSystemLog otelLog = do
+insertSystemLog enableTf otelLog = do
   minted <- mintOtelLogIds (V.singleton otelLog)
-  bulkInsertOtelLogsAndSpansTF minted
+  bulkInsertOtelLogsAndSpansTF enableTf minted
 
 
 -- | Generate summary array for an OtelLogsAndSpans record

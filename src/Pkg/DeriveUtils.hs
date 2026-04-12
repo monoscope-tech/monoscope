@@ -23,6 +23,7 @@ module Pkg.DeriveUtils (
   showPGFloatArray,
   textArrayEnc,
   mkHasqlPool,
+  withTimefusion,
 ) where
 
 import Control.Exception (throwIO)
@@ -49,8 +50,10 @@ import Database.PostgreSQL.Simple.FromField (Conversion (..), FromField (..), fr
 import Database.PostgreSQL.Simple.Internal qualified as PGI
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Database.PostgreSQL.Simple.ToField (ToField (..))
+import Data.Effectful.Hasql qualified as EHasql
 import Effectful (Eff, IOE, type (:>))
 import Effectful.Dispatch.Dynamic (interpret, localSeqUnlift)
+import Effectful.Labeled (Labeled)
 import Effectful.PostgreSQL.Connection (WithConnection (..))
 import GHC.Generics (Rep)
 import GHC.Records (HasField (getField))
@@ -73,6 +76,15 @@ import UnliftIO.Pool qualified as Pool
 
 
 type DB es = (WithConnection :> es, IOE :> es)
+
+
+-- | Route a WithConnection action through the timefusion pool when enabled,
+-- otherwise use the main pool. Lives here (rather than `System.Types`) so
+-- leaf modules like `Telemetry` / `LogQueries` can call it without pulling
+-- in `AuthContext` — that import path is part of the cycle that keeps the
+-- extraction worker from naming `OtelLogsAndSpans` concretely.
+withTimefusion :: (DB es, Labeled "timefusion" WithConnection :> es) => Bool -> Eff (WithConnection ': es) a -> Eff es a
+withTimefusion = EHasql.withLabeled @"timefusion" @WithConnection
 
 
 -- | Newtype wrapper for JSON fields that can handle JSONB, ByteString, and varchar/text columns

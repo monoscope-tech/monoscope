@@ -254,7 +254,11 @@ processList msgs !attrs = checkpoint "processList" $ do
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
-            (\v -> Telemetry.mintOtelLogIds v >>= checkpoint "processList:logs:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
+            ( \caches v ->
+                Telemetry.mintOtelLogIds v
+                  >>= checkpoint "processList:logs:bulkInsert"
+                    . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
+            )
         Just "org.opentelemetry.otlp.traces.v1" ->
           processBatchPipeline @TS.ExportTraceServiceRequest
             "traces"
@@ -269,7 +273,11 @@ processList msgs !attrs = checkpoint "processList" $ do
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
-            (\v -> Telemetry.mintOtelLogIds v >>= checkpoint "processList:traces:bulkInsert" . Telemetry.bulkInsertOtelLogsAndSpansTF)
+            ( \caches v ->
+                Telemetry.mintOtelLogIds v
+                  >>= checkpoint "processList:traces:bulkInsert"
+                    . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
+            )
         Just "org.opentelemetry.otlp.metrics.v1" ->
           processBatchPipeline @MS.ExportMetricsServiceRequest
             "metrics"
@@ -284,7 +292,7 @@ processList msgs !attrs = checkpoint "processList" $ do
                     !pid2M = Projects.projectIdFromText =<< getMetricAttributeValue "at-project-id" rms
                  in maybe V.empty (\pid -> V.fromList $ convertResourceMetricsToMetricRecords ft caches pid rms) (pidM <|> pid2M)
             )
-            (checkpoint "processList:metrics:bulkInsert" . Telemetry.bulkInsertMetrics)
+            (\_caches -> checkpoint "processList:metrics:bulkInsert" . Telemetry.bulkInsertMetrics)
         _ -> do
           Log.logAttention "processList: unsupported opentelemetry data type" (AE.object ["ce-type" AE..= HM.lookup "ce-type" attrs])
           pure ([], 0, 0)
@@ -300,7 +308,7 @@ processBatchPipeline
   -> (req -> V.Vector Text) -- extract project keys
   -> (req -> [Projects.ProjectId]) -- extract project IDs
   -> (UTCTime -> HM.HashMap Projects.ProjectId Projects.ProjectCache -> HM.HashMap Text Projects.ProjectId -> req -> V.Vector res) -- per-message converter
-  -> (V.Vector res -> Eff es ()) -- DB insert
+  -> (HM.HashMap Projects.ProjectId Projects.ProjectCache -> V.Vector res -> Eff es ()) -- DB insert (caches threaded for worker hand-off)
   -> Eff es ([Text], Int, Int)
 processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds convert dbInsert =
   checkpoint (cp "") $ do
@@ -349,7 +357,7 @@ processBatchPipeline !label msgs appCtx fallbackTime extractKeys extractIds conv
         then pure 0
         else do
           dbInsertStartTime <- liftIO getCurrentTime
-          dbInsert allOutput
+          dbInsert projectCachesMap allOutput
           dbInsertEndTime <- liftIO getCurrentTime
           pure $ diffUTCTime dbInsertEndTime dbInsertStartTime
 
@@ -717,7 +725,7 @@ resourceToJSON (Just resource) =
 
 -- Remove project metadata from JSON
 removeProjectId :: AE.Value -> AE.Value
-removeProjectId (AE.Object o) = AE.Object $ foldr KEM.delete o (map AEK.fromText projectSecretKeys)
+removeProjectId (AE.Object o) = AE.Object $ foldr (KEM.delete . AEK.fromText) o projectSecretKeys
 removeProjectId (AE.Array arr) = AE.Array $ V.map removeProjectId arr
 removeProjectId v = v
 
@@ -1290,7 +1298,7 @@ processTraceRequest metadataApiKey req = do
 
   unless (V.null spans') do
     mintedSpans <- Telemetry.mintOtelLogIds spans'
-    Telemetry.bulkInsertOtelLogsAndSpansTF mintedSpans
+    Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedSpans
     Log.logTrace
       "Traces: Successfully inserted spans into database"
       (AE.object ["inserted_count" AE..= V.length mintedSpans])
@@ -1360,7 +1368,7 @@ processLogsRequest metadataApiKey req = do
 
   unless (V.null logs) do
     mintedLogs <- Telemetry.mintOtelLogIds logs
-    Telemetry.bulkInsertOtelLogsAndSpansTF mintedLogs
+    Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedLogs
     Log.logTrace
       "Logs: Successfully inserted logs into database"
       (AE.object ["inserted_count" AE..= V.length mintedLogs])

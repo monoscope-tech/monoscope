@@ -27,6 +27,7 @@ module Pkg.TestUtils (
   runHasqlEffect,
   frozenTime,
   -- Helper functions for tests
+  drainExtractionWorker,
   processMessagesAndBackgroundJobs,
   createTestSpans,
   -- OTLP/Telemetry helpers
@@ -55,6 +56,7 @@ where
 
 import BackgroundJobs qualified
 import Configuration.Dotenv qualified as Dotenv
+import Control.Concurrent.STM.TBQueue (isEmptyTBQueue, readTBQueue)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Control.Concurrent (threadDelay)
 import Control.Exception (finally, throwIO, try)
@@ -77,7 +79,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.Pool (Pool, defaultPoolConfig, destroyAllResources, newPool, withResource)
 import Data.ProtoLens (defMessage)
 import Data.Text qualified as T
-import Data.Time (UTCTime, addUTCTime, getCurrentTime)
+import Data.Time (UTCTime, getCurrentTime)
 import Data.Time.Clock.POSIX (utcTimeToPOSIXSeconds)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 (nextRandom)
@@ -99,7 +101,6 @@ import Effectful.Labeled (runLabeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static qualified
 import Effectful.Time (Time, runFrozenTime, runTime)
-import Hasql.Pool qualified as HPool
 import Log qualified
 import Log.Backend.StandardOutput.Bulk qualified as LogBulk
 import Models.Projects.Projects qualified as Projects
@@ -608,6 +609,8 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   -- Load config from environment variables
   envConfig <- decodeWithDefaults defConfig
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
+  atomically $ writeTVar extractionWorker.acceptingBatches True
+  tfCircuit <- ExtractionWorker.newCircuitBreaker
 
   let atAuthCtx =
         AuthContext
@@ -622,6 +625,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
           logsPatternCache
           projectKeyCache
           extractionWorker
+          tfCircuit
           ( envConfig
               { -- Override to ensure test database is used (never production DB from .env)
                 databaseUrl = "test-db-connection-from-pool"
@@ -882,18 +886,29 @@ setBjRunAtInThePast now conn = void $ PGS.execute conn q (Only now)
     q = [sql|UPDATE background_jobs SET run_at = ?::timestamptz - INTERVAL '1 day' WHERE status = 'pending'|]
 
 
--- Helper function to process messages and run background jobs
+-- | Drain all queued extraction batches synchronously, then flush drain
+-- buffers and run pattern extraction.
+drainExtractionWorker :: TestResources -> IO ()
+drainExtractionWorker TestResources{..} = do
+  let shards = V.toList trATCtx.extractionWorker.shards
+  for_ shards \shard ->
+    drainSTM (isEmptyTBQueue shard.ingressQ) (readTBQueue shard.ingressQ <* modifyTVar' shard.queueDepth pred) \batch ->
+      runTestBackgroundWithLogger frozenTime trLogger trATCtx $ BackgroundJobs.processEagerBatch batch shard
+  now <- getCurrentTime
+  ExtractionWorker.forceFlushAllBuffers trATCtx.extractionWorker now
+  for_ shards \shard ->
+    drainSTM (isEmptyTBQueue shard.drainFlushQ) (readTBQueue shard.drainFlushQ)
+      (runTestBackgroundWithLogger frozenTime trLogger trATCtx . BackgroundJobs.flushDrainTask shard)
+ where
+  drainSTM isEmpty pop process = do
+    mItem <- atomically $ isEmpty >>= \case True -> pure Nothing; False -> Just <$> pop
+    for_ mItem \item -> process item >> drainSTM isEmpty pop process
+
+
 processMessagesAndBackgroundJobs :: TestResources -> [(Text, ByteString)] -> IO ()
 processMessagesAndBackgroundJobs tr@TestResources{..} msgs = do
-  currentTime <- getCurrentTime
-  let futureTime = addUTCTime 1 currentTime
-  let testProjectId = UUIDId UUID.nil
-
-  _ <- runTestBg frozenTime tr do
-    _ <- ProcessMessage.processMessages msgs HM.empty
-    _ <- BackgroundJobs.processOneMinuteErrors futureTime testProjectId
-    BackgroundJobs.processFiveMinuteSpans futureTime testProjectId
-
+  _ <- runTestBg frozenTime tr $ ProcessMessage.processMessages msgs HM.empty
+  drainExtractionWorker tr
   void $ runAllBackgroundJobs frozenTime trATCtx
 
 

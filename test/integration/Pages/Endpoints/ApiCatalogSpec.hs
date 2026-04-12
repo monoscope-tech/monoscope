@@ -26,7 +26,6 @@ import Pages.Endpoints qualified as ApiCatalog
 import Pkg.Components.Table qualified as Table
 import Pkg.TestUtils
 import ProcessMessage (processMessages)
-import BackgroundJobs (processFiveMinuteSpans, processBackgroundJob, processOneMinuteErrors)
 import BackgroundJobs qualified
 import Relude
 import Relude.Unsafe qualified as Unsafe

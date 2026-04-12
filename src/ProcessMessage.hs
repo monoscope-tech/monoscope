@@ -64,7 +64,7 @@ import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unAesonTextMaybe)
 import Relude hiding (ask)
 import Relude.Unsafe qualified as Unsafe
-import System.Config (AuthContext (..))
+import System.Config (AuthContext (..), EnvConfig (..))
 import System.Logging qualified as Log
 import System.Types (DB)
 import Text.RE.Replace (matched)
@@ -177,12 +177,11 @@ processMessages msgs attrs = do
                     spanId <- UUID.genUUID
                     trId <- UUID.toText <$> UUID.genUUID
                     let !span' = convertRequestMessageToSpan msg (spanId, trId)
-                    pure $! Just span'
+                    pure (Just span')
           Nothing -> pure Nothing
 
       let !spanVec = V.fromList (catMaybes spans)
-      unless (V.null spanVec)
-        $ Telemetry.bulkInsertOtelLogsAndSpansTF spanVec
+      Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches spanVec
 
       pure $ map fst rMsgs
 
@@ -898,7 +897,7 @@ parseUrlSegments (x : xs) (segs, vals) = case valueToFormatStr x of
 
 addNewSegment :: [Text] -> Text -> [Text]
 addNewSegment segs seg =
-  let pos = length $ filter (T.isPrefixOf ("{" <> seg)) segs
+  let pos = length (filter (T.isPrefixOf ("{" <> seg)) segs)
       newSeg = if pos > 0 then "{" <> seg <> "_" <> show pos <> "}" else "{" <> seg <> "}"
    in newSeg : segs
 

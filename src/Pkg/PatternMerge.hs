@@ -211,15 +211,20 @@ jaccardMergeThreshold = 0.90
 
 
 -- | Merge Drain results by Jaccard similarity of non-placeholder tokens.
--- Keeps the first match's templateStr; combines logIds.
+-- Keeps the first match's templateStr; combines frequencies.
+-- Size-pruned: skips pairs where min(|A|,|B|)/max(|A|,|B|) < threshold
+-- (necessary condition for Jaccard ≥ threshold), avoiding most comparisons.
 mergeByJaccard :: Double -> V.Vector Drain.DrainResult -> V.Vector Drain.DrainResult
-mergeByJaccard threshold results = V.fromList $ map fst $ toList $ foldl' tryMerge Seq.empty tagged
+mergeByJaccard threshold results = V.fromList $ map (\(dr, _, _) -> dr) $ toList $ foldl' tryMerge Seq.empty tagged
   where
-    tagged = V.toList results <&> \dr -> (dr, contentTokens dr.templateStr)
-    tryMerge acc (x, xToks) =
-      case Seq.findIndexL (\(_, aToks) -> jaccardOnSets aToks xToks >= threshold) acc of
-        Just idx -> let (a, aToks) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency}, aToks) acc
-        Nothing -> acc Seq.|> (x, xToks)
+    tagged = V.toList results <&> \dr -> let toks = contentTokens dr.templateStr in (dr, toks, S.size toks)
+    tryMerge acc (x, xToks, xLen) =
+      case Seq.findIndexL (\(_, aToks, aLen) ->
+              let lo = min aLen xLen; hi = max aLen xLen
+              in lo > 0 && fromIntegral lo / fromIntegral hi >= threshold
+                 && jaccardOnSets aToks xToks >= threshold) acc of
+        Just idx -> let (a, aToks, aLen) = Seq.index acc idx in Seq.update idx (a{Drain.frequency = a.frequency + x.frequency}, aToks, aLen) acc
+        Nothing -> acc Seq.|> (x, xToks, xLen)
 
 
 -- | Cluster-aware LLM judge prompt inspired by LogBatcher (batch-as-demonstration)

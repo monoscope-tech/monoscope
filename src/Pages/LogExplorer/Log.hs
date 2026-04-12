@@ -631,11 +631,11 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
   if isJsonFastPath
     then case effectiveVizType of
       Just "patterns" -> do
-        (totalPatterns, patternRows) <- LogQueries.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+        (totalPatterns, patternRows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
         addRespHeaders $ LogsPatternJson totalPatterns (V.fromList patternRows)
       _ -> do
         tableAsVecE <- fetchOrSkip
-        whenLeft_ (void tableAsVecE) \e -> Log.logAttention "Log explorer JSON query failed" (show @Text e)
+        whenLeft_ (void tableAsVecE) (Log.logAttention "Log explorer JSON query failed" . show @Text)
         case hush tableAsVecE of
           Just tableResult -> buildLogResult' tableResult >>= addRespHeaders . LogsGetJson
           Nothing -> buildLogResult' (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
@@ -649,12 +649,12 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         t4 <- Ki.fork scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
         t5 <- Ki.fork scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
         t6 <- Ki.fork scope $ tryAny $ case effectiveVizType of
-          Just "patterns" -> Just . second V.fromList <$> LogQueries.fetchLogPatterns pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+          Just "patterns" -> Just . second V.fromList <$> LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
           _ -> pure Nothing
         (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
       -- Log errors from non-critical queries but continue with defaults
-      let logErr label res = whenLeft_ (void res) \e -> Log.logAttention ("Log explorer " <> label <> " failed") (show @Text e)
+      let logErr label res = whenLeft_ (void res) (Log.logAttention ("Log explorer " <> label <> " failed") . show @Text)
       logErr "queryLib" queryLibE
       logErr "facets" facetSummaryE
       logErr "freeTierStatus" freeTierStatusE

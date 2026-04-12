@@ -1,9 +1,10 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, processFiveMinuteSpans, processOneMinuteErrors, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, logsPatternExtraction, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
+import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
 import Control.Lens (view, (.~), _1, _3)
 import Data.Aeson qualified as AE
 import Data.Aeson.QQ (aesonQQ)
@@ -16,6 +17,7 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Effectful.Wreq qualified as W
 import Data.Either qualified as Unsafe
 import Data.HashMap.Strict qualified as HM
+import Data.HashSet qualified as HashSet
 import Data.List as L (partition)
 import Data.List.Extra (chunksOf, groupBy)
 import Data.Map.Strict qualified as Map
@@ -25,7 +27,7 @@ import Data.Set qualified as S
 import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
-import Data.Time.Clock (NominalDiffTime, diffUTCTime)
+import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -40,7 +42,7 @@ import Effectful (Eff, IOE, (:>))
 import Effectful.Concurrent.Async (concurrently, forConcurrently)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
-import Effectful.Log (Log, object)
+import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
 import Effectful.Reader.Static (ask)
@@ -86,6 +88,7 @@ import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..))
 import Pkg.Drain qualified as Drain
+import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.EmailTemplates qualified as ET
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
@@ -100,7 +103,7 @@ import System.Logging qualified as Log
 import System.Tracing (SpanStatus (..), Tracing, addEvent, setStatus, withSpan)
 import System.Types (ATBackgroundCtx, DB, runBackground, withTimefusion)
 import UnliftIO.Exception (bracket, catch, throwIO, try, tryAny)
-import Utils (formatUTC, freeTierDailyMaxEvents, replaceAllFormats, toXXHash)
+import Utils (formatUTC, freeTierDailyMaxEvents, toXXHash)
 
 
 data BgJobs
@@ -124,12 +127,9 @@ data BgJobs
   | QueryMonitorsCheck
   | DeletedProject Projects.ProjectId
   | CleanupDemoProject
-  | FiveMinuteSpanProcessing UTCTime Projects.ProjectId
-  | OneMinuteErrorProcessing UTCTime Projects.ProjectId
   | SlackNotification Projects.ProjectId Text
   | EnhanceIssuesWithLLM Projects.ProjectId (V.Vector Issues.IssueId)
   | ProcessIssuesEnhancement UTCTime
-  | FiveMinuteLogPatternExtraction UTCTime Projects.ProjectId
   | GitSyncFromRepo Projects.ProjectId
   | GitSyncPushDashboard Projects.ProjectId UUID.UUID -- projectId, dashboardId
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
@@ -143,9 +143,9 @@ data BgJobs
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
   | MonoscopeAdminDaily
-  | -- | Hourly catch-up for rows the extraction worker missed. Scheduled only when
-    -- `enableExtractionWorker` is True. Re-drives rows where processed_at IS NULL
-    -- through the same submitBatch path as live ingestion.
+  | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
+    -- where processed_at IS NULL through the same submitBatch path as live
+    -- ingestion.
     SafetyNetReprocess Projects.ProjectId
   | -- | Per-batch odd-job fired from the extraction worker's eager track, carrying
     -- the error vector it decoded in-memory. Separated from the worker so
@@ -327,25 +327,25 @@ processBackgroundJob authCtx bgJob =
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
 
-          projectsRaw <-
-            Hasql.interp
-              [HI.sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > #{currentTime}::timestamptz - interval '24 hours'|]
-          let projects = HI.getOneColumn <$> (projectsRaw :: V.Vector (HI.OneColumn Projects.ProjectId))
+          projects <- Projects.recentlyActiveProjectIds currentTime
           Log.logInfo "Scheduling jobs for projects" ("project_count", length projects)
+          -- Only `SafetyNetReprocess` drives span derivation (hourly catch-up
+          -- for the extraction worker's live path).
+          let guardTag = "SafetyNetReprocess" :: Text
+              guardThreshold = 24 :: Int64
           forM_ projects \p -> do
-            -- Check if this project's jobs already scheduled for today (per-project idempotent check)
             let pTxt = p.toText
             projectJobsExistCount <-
               HI.getOneColumn
                 . HI.getOneRow
                 <$> Hasql.interp
                   [HI.sql|SELECT COUNT(*)::int8 FROM background_jobs
-                 WHERE payload->>'tag' = 'FiveMinuteSpanProcessing'
+                 WHERE payload->>'tag' = #{guardTag}
                    AND payload->>'projectId' = #{pTxt}
                    AND run_at >= date_trunc('day', #{currentTime}::timestamptz)
                    AND run_at < date_trunc('day', #{currentTime}::timestamptz) + interval '1 day'
                    AND status IN ('queued', 'locked')|]
-            let projectJobsExist = (projectJobsExistCount :: Int64) >= 288
+            let projectJobsExist = (projectJobsExistCount :: Int64) >= guardThreshold
 
             unless projectJobsExist
               $ liftIO
@@ -354,13 +354,16 @@ processBackgroundJob authCtx bgJob =
                 let sched count secs mkJob = forM_ [0 .. count - 1] \i -> do
                       let t = addUTCTime (fromIntegral @Int $ i * secs) currentTime
                       void $ scheduleJob conn "background_jobs" (mkJob t) t
-                sched 288 300 (`FiveMinuteLogPatternExtraction` p)
+                -- Derived-table maintenance jobs read from `apis.*` tables, not
+                -- the hypertable, and are unaffected by the derivation path.
                 sched 96 900 (`PatternEmbeddingAndMerge` p)
                 sched 96 900 (`LogPatternPeriodicProcessing` p)
                 sched 4 21600 (`EndpointTemplateDiscovery` p)
                 sched 24 3600 (`LogPatternHourlyProcessing` p)
-                sched 288 300 (`FiveMinuteSpanProcessing` p)
-                sched 1440 60 (`OneMinuteErrorProcessing` p)
+                -- The extraction worker owns live span/log/error derivation.
+                -- SafetyNetReprocess is the hourly catch-up for
+                -- `processed_at IS NULL` rows (near-empty steady state).
+                sched 24 3600 (\_ -> SafetyNetReprocess p)
 
             Relude.when projectJobsExist
               $ Log.logInfo "Jobs already scheduled for project today, skipping" ("project_id", p.toText)
@@ -412,12 +415,9 @@ processBackgroundJob authCtx bgJob =
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_members WHERE project_id = $1 :: uuid|]
         Tx.statement pid [resultlessStatement|DELETE FROM tests.collections WHERE project_id = $1 :: uuid AND title != 'Default Health check'|]
         Tx.statement pid [resultlessStatement|DELETE FROM projects.project_api_keys WHERE project_id = $1 :: uuid AND title != 'Default API Key'|]
-    FiveMinuteSpanProcessing scheduledTime pid -> unlessStale "FiveMinuteSpanProcessing" scheduledTime (15 * 60) $ processFiveMinuteSpans scheduledTime pid
-    OneMinuteErrorProcessing scheduledTime pid -> unlessStale "OneMinuteErrorProcessing" scheduledTime (5 * 60) $ processOneMinuteErrors scheduledTime pid
     SlackNotification pid message -> sendSlackMessage pid message
     EnhanceIssuesWithLLM pid issueIds -> enhanceIssuesWithLLM pid issueIds
     ProcessIssuesEnhancement scheduledTime -> unlessStale "ProcessIssuesEnhancement" scheduledTime (2 * 3600) $ processIssuesEnhancement scheduledTime
-    FiveMinuteLogPatternExtraction scheduledTime pid -> unlessStale "FiveMinuteLogPatternExtraction" scheduledTime (15 * 60) $ logsPatternExtraction scheduledTime pid
     GitSyncFromRepo pid -> gitSyncFromRepo pid
     GitSyncPushDashboard pid dashboardId -> gitSyncPushDashboard pid (UUIDId dashboardId)
     GitSyncPushAllDashboards pid -> gitSyncPushAllDashboards pid
@@ -436,22 +436,13 @@ processBackgroundJob authCtx bgJob =
       tryLog "calculateLogPatternBaselines" $ calculateLogPatternBaselines pid
       tryLog "processNewLogPatterns" $ processNewLogPatterns pid authCtx
       tryLog "pruneStaleLogPatterns" $ pruneStaleLogPatterns pid
-    SafetyNetReprocess pid ->
-      -- TODO(extraction-worker slice 2): Sweep `processed_at IS NULL` rows via
-      -- the time-scoped partial index and re-drive them through `submitBatch`.
-      -- Only scheduled when enableExtractionWorker is on (see runDailyJobScheduling).
-      -- See plan squishy-imagining-diffie.md "Safety net" section.
-      -- Until slice 2 lands, log loudly so a queued row is observable instead of
-      -- silently dropped — and so the handler can't be mistaken for complete in metrics.
-      Log.logAttention "TODO(slice 2): SafetyNetReprocess invoked but not yet implemented" pid
-    ProcessProjectErrorsJob pid errors _now ->
-      -- TODO(extraction-worker slice 2): Call processProjectErrors +
-      -- notifyErrorSubscriptions so the eager-track fork in the extraction worker
-      -- preserves today's issue-creation retry + alert-dispatch semantics. See plan
-      -- squishy-imagining-diffie.md "Error path — enqueue an odd-job".
-      Log.logAttention
-        "TODO(slice 2): ProcessProjectErrorsJob invoked but not yet implemented"
-        (AE.object ["project_id" AE..= pid, "error_count" AE..= V.length errors])
+    SafetyNetReprocess pid -> safetyNetReprocess pid
+    ProcessProjectErrorsJob pid errors now -> do
+      -- Preserves today's legacy issue-creation + alert-dispatch semantics, now
+      -- driven per-batch from the extraction worker instead of the 1-minute job.
+      -- Odd-jobs retries apply if either sub-call throws.
+      processProjectErrors pid errors now
+      notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) errors)
     MonoscopeAdminDaily -> do
       now <- Time.currentTime
       let since = addUTCTime (-86400) now
@@ -471,7 +462,7 @@ processBackgroundJob authCtx bgJob =
             | otherwise = show n
 
       -- Gather all projects and usage data
-      allProjects <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|] ()
+      allProjects <- Projects.activeProjects
       let projectMap = Map.fromList $ map (\(p :: Projects.Project) -> (p.id, p)) allProjects
           lookupTitle pid = maybe pid.toText (.title) $ Map.lookup pid projectMap
 
@@ -494,7 +485,7 @@ processBackgroundJob authCtx bgJob =
 
       -- Section 2: New projects (created in last 24h)
       tryLog "newProjects" do
-        newProjects :: [Projects.Project] <- PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= ?::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|] (Only since)
+        newProjects <- Projects.newProjectsSince since
         let fmtNew (p :: Projects.Project) =
               let hoursAgo = show (round (diffUTCTime now p.createdAt / 3600) :: Int)
                in "- " <> p.title <> " (" <> p.paymentPlan <> ") -- created " <> hoursAgo <> "h ago"
@@ -635,21 +626,12 @@ runHourlyJob scheduledTime hour = do
                 AND ols.timestamp <= ?::timestamptz |]
         (oneHourAgo, scheduledTime)
 
-  -- Log count of projects to process
   Log.logTrace "Projects with new data in the last hour window" ("count", AE.toJSON $ length activeProjects)
+  let projectBatches = chunksOf 10 activeProjects
 
-  -- Batch projects in groups of 10 (reduced from 100 to prevent timeouts)
-  let batchSize = 10
-      projectBatches = chunksOf batchSize activeProjects
-
-  -- For each batch, create a single job with multiple project IDs
-  liftIO $ withResource ctx.jobsPool \conn ->
-    forM_ projectBatches \batch -> do
-      let batchJob = BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
-      createJob conn "background_jobs" batchJob
-
-  -- Schedule baseline calculation and spike detection for active projects
-  liftIO $ withResource ctx.jobsPool \conn ->
+  liftIO $ withResource ctx.jobsPool \conn -> do
+    forM_ projectBatches \batch ->
+      createJob conn "background_jobs" $ BackgroundJobs.GenerateOtelFacetsBatch (V.fromList batch) scheduledTime
     forM_ activeProjects \pid -> do
       void $ createJob conn "background_jobs" $ ErrorBaselineCalculation pid
       void $ createJob conn "background_jobs" $ ErrorSpikeDetection pid
@@ -658,19 +640,15 @@ runHourlyJob scheduledTime hour = do
   deletedCount <- QueryCache.cleanupExpiredCache
   Relude.when (deletedCount > 0) $ Log.logInfo "Cleaned up expired query cache entries" ("deleted_count", AE.toJSON deletedCount)
 
-  -- Cleanup expired device auth codes
   deviceCodesDeleted <- PG.execute [sql| DELETE FROM users.device_auth_codes WHERE expires_at < now() - interval '1 hour' |] ()
   Relude.when (deviceCodesDeleted > 0) $ Log.logInfo "Cleaned up expired device auth codes" ("deleted_count", AE.toJSON deviceCodesDeleted)
 
-  -- Cleanup stale metrics metadata (not seen in 3 months)
   staleMetricsDeleted <- PG.execute [sql| DELETE FROM telemetry.metrics_meta WHERE updated_at < now() - interval '3 months' |] ()
   Relude.when (staleMetricsDeleted > 0) $ Log.logInfo "Cleaned up stale metrics metadata" ("deleted_count", AE.toJSON staleMetricsDeleted)
 
-  -- Compress & merge inactive replay sessions
   liftIO $ withResource ctx.jobsPool \conn ->
     void $ createJob conn "background_jobs" BackgroundJobs.CompressReplaySessions
 
-  -- Check free tier usage and notify projects approaching/exceeding limits
   checkFreeTierUsageNotifications activeProjects scheduledTime
 
   Log.logTrace "Completed hourly job scheduling for hour" ("hour", AE.toJSON hour)
@@ -682,7 +660,9 @@ checkFreeTierUsageNotifications :: [Projects.ProjectId] -> UTCTime -> ATBackgrou
 checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-check" do
   projectM <- Projects.projectById pid
   forM_ projectM \project -> Relude.when (project.paymentPlan == "Free") do
-    count <- maybe (0 :: Int) fromOnly . listToMaybe <$> PG.query [sql| SELECT count(*)::INT FROM otel_logs_and_spans WHERE project_id=? AND timestamp > ?::timestamptz - interval '1 day' |] (pid.toText, now)
+    -- Use the TTL-cached daily event count to avoid a full 24-hour count(*) scan.
+    cacheM <- Projects.projectCacheById pid
+    let count = maybe 0 (.dailyEventCount) cacheM :: Int
     let limit = fromInteger freeTierDailyMaxEvents
         exceeded = count >= limit
         warning = count >= (limit * 80) `div` 100
@@ -700,7 +680,7 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
         let sev = if exceeded then SLError else SLWarn
             bodyMsg = if exceeded then "Daily event limit reached — new events are being dropped." else "Approaching daily event limit (" <> show count <> " of " <> show limit <> " events used)."
             attrs = Map.fromList [("used", AE.toJSON count), ("limit", AE.toJSON limit), ("payment_plan", AE.String "Free")]
-        insertSystemLog $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
+        insertSystemLog ctx.env.enableTimefusionWrites $ mkSystemLog pid eventName sev bodyMsg attrs Nothing now
         -- Send email to all project members
         users <- Projects.usersByProjectId pid
         let billingUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
@@ -708,10 +688,10 @@ checkFreeTierUsageNotifications pids now = forM_ pids \pid -> tryLog "free-tier-
         forM_ users \user -> sendRenderedEmail (CI.original user.email) subj (ET.renderEmail subj html)
 
 
--- | Batch process facets generation for multiple projects using 24-hour window
--- Processes projects concurrently with individual error handling to prevent batch failures
 generateOtelFacetsBatch :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Tracing :> es, UUID.UUIDEff :> es) => V.Vector Projects.ProjectId -> UTCTime -> Eff es ()
 generateOtelFacetsBatch projectIds timestamp = do
+  ctx <- ask @Config.AuthContext
+  let enableTfReads = ctx.env.enableTimefusionReads
   Log.logTrace "Starting batch OTLP facets generation" ("project_count", AE.toJSON $ V.length projectIds)
 
   -- Process projects concurrently with individual error handling
@@ -725,7 +705,7 @@ generateOtelFacetsBatch projectIds timestamp = do
         ]
         $ \sp -> do
           addEvent sp "facet_generation.started" []
-          result <- try $ Fields.generateAndSaveFacets pid "otel_logs_and_spans" 50 timestamp
+          result <- try $ Fields.generateAndSaveFacets enableTfReads pid "otel_logs_and_spans" 50 timestamp
           case result of
             Left (e :: SomeException) -> do
               addEvent sp "facet_generation.failed" [("error", OA.toAttribute $ toText $ show e)]
@@ -748,144 +728,6 @@ generateOtelFacetsBatch projectIds timestamp = do
       ]
 
 
--- | Process HTTP spans to extract API entities and detect changes
--- This job runs every 5 minutes to analyze HTTP traffic and identify:
--- - New endpoints (API routes)
--- - New shapes (request/response structures)
--- - New fields and their formats
---
--- Processing Flow:
--- 1. Query HTTP spans from the last 5 minutes
--- 2. Group spans by project for batch processing
--- 3. Extract entities using processSpanToEntities
--- 4. Bulk insert new entities (triggers anomaly detection)
--- 5. Update spans with computed hashes for tracking
-processFiveMinuteSpans :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
-processFiveMinuteSpans scheduledTime pid = do
-  ctx <- ask @Config.AuthContext
-  let fiveMinutesAgo = addUTCTime (-300) scheduledTime
-  Relude.when ctx.config.enableEventsTableUpdates $ do
-    processSpansWithPagination fiveMinutesAgo 0
-  Log.logTrace "Completed 5-minute span processing" ()
-  where
-    perPage = 250
-    processSpansWithPagination :: UTCTime -> Int -> ATBackgroundCtx ()
-    processSpansWithPagination fiveMinutesAgo skip = do
-      -- Get APIToolkit-specific HTTP spans (excludes generic telemetry)
-      httpSpans <-
-        V.fromList
-          <$> PG.query
-            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes,
-                         NULL::jsonb as resource, '{}'::text[] as hashes, kind, status_code, status_message, start_time, end_time,
-                         NULL::jsonb as events, NULL::text as links, duration, name, parent_id, '{}'::text[] as summary, date
-                  FROM otel_logs_and_spans
-              WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND attributes___http___request___method IS NOT NULL OFFSET ? LIMIT ? |]
-            (pid, fiveMinutesAgo, scheduledTime, skip, perPage)
-      -- Only log if there are actually spans to process (reduces noise in tests)
-      Relude.when (V.length httpSpans > 0) $ do
-        Log.logTrace "Processing HTTP spans from 5-minute window" ("span_count", AE.toJSON $ V.length httpSpans)
-        processProjectSpans pid httpSpans fiveMinutesAgo scheduledTime
-        Log.logTrace "Processing complete for page" ("skip", skip)
-      Relude.when (V.length httpSpans == perPage) $ do
-        processSpansWithPagination fiveMinutesAgo (skip + perPage)
-
-
-logsPatternExtraction :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
-logsPatternExtraction scheduledTime pid = do
-  ctx <- ask @Config.AuthContext
-  let tfEnabled = ctx.config.enableTimefusionReads
-  Relude.when ctx.config.enableEventsTableUpdates $ do
-    let startTime = addUTCTime (-300) scheduledTime
-    extractSummaryPatterns tfEnabled startTime
-    extractFieldPatterns tfEnabled startTime
-  Log.logTrace "Completed logs pattern extraction for project" ("project_id", AE.toJSON pid.toText)
-  where
-    limitVal = 250
-    sourceField = "summary" :: Text
-    extractSummaryPatterns tfEnabled startTime = do
-      existingPatterns <- LogPatterns.getLogPatternTexts pid sourceField
-      Relude.when (length existingPatterns > 5000)
-        $ Log.logWarn "High pattern count for source field, consider pruning stale patterns" (pid, sourceField, length existingPatterns)
-      let seedTree = processBatch True (V.fromList $ map SeedPattern existingPatterns) scheduledTime Drain.emptyDrainTree
-      finalTree <- paginateTree tfEnabled seedTree 0 startTime
-      persistSummaryPatterns tfEnabled finalTree startTime
-
-    -- Tags otel events per-page using the mapping from buildDrainTreeWithMapping, avoiding unbounded accumulation
-    paginateTree :: Bool -> Drain.DrainTree -> Int -> UTCTime -> ATBackgroundCtx Drain.DrainTree
-    paginateTree tfEnabled tree offset startTime = do
-      otelEventsV :: V.Vector (Text, Text) <-
-        Hasql.withHasqlTimefusion tfEnabled
-          $ Hasql.interp
-            [HI.sql| SELECT id::text, coalesce(array_to_string(summary, ' '),'') FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} OFFSET #{fromIntegral offset :: Int64} LIMIT #{fromIntegral limitVal :: Int64}|]
-      let otelEvents = V.toList otelEventsV
-      if null otelEvents
-        then pure tree
-        else do
-          Log.logTrace "Fetching events for pattern extraction" ("offset", AE.toJSON offset, "count", AE.toJSON (length otelEvents))
-          let batch = V.fromList [NewEvent logId content | (logId, content) <- otelEvents]
-              (!tree', mapping) = processBatchWithMapping True batch scheduledTime tree
-          -- Tag otel events with pattern hashes per-page
-          let hashToIds = HM.toList $ V.foldl' (\acc (lid, tpl) -> let h = "pat:" <> toXXHash tpl in HM.insertWith (<>) h ([lid] :: [Text]) acc) HM.empty mapping
-          forM_ hashToIds \(hashTag, ids :: [Text]) -> do
-            (() :: ()) <-
-              Hasql.withHasqlTimefusion tfEnabled
-                $ Hasql.interp [HI.sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, #{hashTag}) WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND id = ANY(#{ids}::uuid[]) AND NOT (hashes @> ARRAY[#{hashTag}])|]
-            pass
-          if length otelEvents == limitVal
-            then paginateTree tfEnabled tree' (offset + limitVal) startTime
-            else pure tree'
-
-    persistSummaryPatterns tfEnabled tree since = do
-      let allPatternsRaw = Drain.getAllLogGroups tree
-          allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
-      -- Fetch one sample row per pattern hash for metadata (traceId, serviceName, level)
-      let patternHashes = [toXXHash dp.templateStr | dp <- V.toList allPatterns, not $ T.null dp.templateStr, dp.frequency > 0]
-      sampleMetaV :: V.Vector (Text, Maybe Text, Maybe Text, Maybe Text) <-
-        if null patternHashes
-          then pure V.empty
-          else
-            Hasql.withHasqlTimefusion tfEnabled
-              $ Hasql.interp
-                [HI.sql| SELECT h.hash, e.context___trace_id, e.resource___service___name, e.level FROM unnest(#{patternHashes}::text[]) AS h(hash) LEFT JOIN LATERAL (SELECT context___trace_id, resource___service___name, level FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{since} AND timestamp < #{scheduledTime} AND hashes @> ARRAY['pat:' || h.hash] LIMIT 1) e ON true|]
-      let sampleMeta = V.toList sampleMetaV
-      let metaMap = HM.fromList [(h, (trId, sName, lvl)) | (h, trId, sName, lvl) <- sampleMeta]
-          prepared = flip mapMaybe (V.toList allPatterns) \dp ->
-            let eventCount = fromIntegral dp.frequency :: Int64
-                patternHash = toXXHash dp.templateStr
-             in if eventCount <= 0 || T.null dp.templateStr
-                  then Nothing
-                  else
-                    let (logTraceId, serviceName, logLevel) = fromMaybe (Nothing, Nothing, Nothing) (HM.lookup patternHash metaMap)
-                     in Just (LogPatterns.UpsertPattern{projectId = pid, logPattern = dp.templateStr, hash = patternHash, sourceField, serviceName, logLevel, traceId = logTraceId, sampleMessage = Just dp.exampleLog, eventCount}, (pid, sourceField, patternHash, scheduledTime, eventCount))
-      let (ups, hss) = unzip prepared
-      void $ LogPatterns.upsertLogPatternBatch ups
-      void $ LogPatterns.upsertHourlyStatBatch hss
-
-    extractFieldPatterns tfEnabled startTime = do
-      urlPathsV :: V.Vector (Maybe Text, Maybe Text, Int64) <-
-        Hasql.withHasqlTimefusion tfEnabled
-          $ Hasql.interp
-            [HI.sql| SELECT attributes___url___path, resource___service___name, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___url___path IS NOT NULL GROUP BY attributes___url___path, resource___service___name LIMIT 1000|]
-      let urlPaths = V.toList urlPathsV
-      Relude.when (length urlPaths == 1000) $ Log.logWarn "url_path pattern limit reached" pid
-      let urlUpserts = [(up, hs) | (Just path, serviceName, cnt) <- urlPaths, let (up, hs) = mkNormalized "url_path" path serviceName Nothing cnt]
-      exceptionsV :: V.Vector (Maybe Text, Maybe Text, Maybe Text, Int64) <-
-        Hasql.withHasqlTimefusion tfEnabled
-          $ Hasql.interp
-            [HI.sql| SELECT attributes___exception___message, resource___service___name, level, COUNT(*)::int8 FROM otel_logs_and_spans WHERE project_id = #{pid}::text AND timestamp >= #{startTime} AND timestamp < #{scheduledTime} AND attributes___exception___message IS NOT NULL GROUP BY attributes___exception___message, resource___service___name, level LIMIT 1000|]
-      let exceptions = V.toList exceptionsV
-      Relude.when (length exceptions == 1000) $ Log.logWarn "exception pattern limit reached" pid
-      let excUpserts = [(up, hs) | (Just msg, serviceName, level, cnt) <- exceptions, let (up, hs) = mkNormalized "exception" msg serviceName level cnt]
-          (ups, hss) = unzip (urlUpserts ++ excUpserts)
-      void $ LogPatterns.upsertLogPatternBatch ups
-      void $ LogPatterns.upsertHourlyStatBatch hss
-
-    mkNormalized sf raw serviceName logLevel cnt =
-      let normalized = replaceAllFormats raw
-          patternHash = toXXHash normalized
-       in ( LogPatterns.UpsertPattern{projectId = pid, logPattern = normalized, hash = patternHash, sourceField = sf, serviceName, logLevel, traceId = Nothing, sampleMessage = Just raw, eventCount = cnt}
-          , (pid, sf, patternHash, scheduledTime, cnt)
-          )
 
 
 -- | Input for Drain tree processing.
@@ -914,102 +756,6 @@ processBatchWithMapping isSummary batch now initial = Drain.buildDrainTreeWithMa
 -- Error Detection Strategy:
 -- 1. Query spans with error indicators (status, events, attributes)
 -- 2. Extract error details from span events using OpenTelemetry conventions
--- 3. Group errors by hash (project + service + error type + message)
--- 4. Create runtime exception issues (triggers anomaly detection)
---
--- Note: Uses 2-minute window instead of 1-minute to account for Kafka/PubSub
--- processing delays and ensure no errors are missed.
-processOneMinuteErrors :: UTCTime -> Projects.ProjectId -> ATBackgroundCtx ()
-processOneMinuteErrors scheduledTime pid = do
-  Log.logTrace "Starting 1-minute error processing for project" ("project_id", AE.toJSON pid.toText)
-  ctx <- ask @Config.AuthContext
-  -- This processing might happen before the spans within the timestamp are stored in db
-  -- hence will be missed and never get processed
-  -- since we use hashes of errors and don't insert same error twice
-  -- we can increase the window to account for time spent on kafka
-  -- use two minutes for now before use a better solution
-  Relude.when ctx.config.enableEventsTableUpdates $ do
-    let oneMinuteAgo = addUTCTime (-(60 * 2)) scheduledTime
-    processErrorsPaginated oneMinuteAgo 0
-  void $ ErrorPatterns.propagateMergedCounts pid
-  void $ ErrorPatterns.updateOccurrenceCounts pid scheduledTime
-  where
-    processErrorsPaginated :: UTCTime -> Int -> ATBackgroundCtx ()
-    processErrorsPaginated oneMinuteAgo skip = do
-      -- Get all spans with errors from time window
-      -- Check for:
-      -- 1. Spans with error status codes
-      -- 2. Spans with exception events (OpenTelemetry standard)
-      -- 3. Spans with error attributes
-      spansWithErrors <-
-        V.fromList
-          <$> PG.query
-            [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
-                             NULL::text as body, attributes, resource,
-                             '{}'::text[] as hashes, kind, status_code, status_message, start_time, end_time, events,
-                             NULL::text as links, duration, name, parent_id, '{}'::text[] as summary, date
-                      FROM otel_logs_and_spans
-                  WHERE project_id = ? AND timestamp >= ? AND timestamp < ?
-                  AND (
-                    status_code = 'error' OR status_code = 'ERROR' OR status_code = '2'
-                    OR (
-                      events IS NOT NULL
-                      AND EXISTS (
-                        SELECT 1 FROM jsonb_array_elements(events) AS event
-                        WHERE event->>'event_name' = 'exception'
-                           OR event->>'event_name' ILIKE '%exception%'
-                           OR event->>'event_name' ILIKE '%error%'
-                      )
-                    )
-                    OR attributes->>'error' = 'true'
-                    OR attributes->>'error.type' IS NOT NULL
-                    OR attributes->>'exception.type' IS NOT NULL
-                    OR attributes->>'exception.message' IS NOT NULL
-                  )
-                  OFFSET ? LIMIT 2000 |]
-            (pid, oneMinuteAgo, scheduledTime, skip)
-      -- Only log if there are actually errors to process (reduces noise in tests)
-      Relude.when (V.length spansWithErrors > 0)
-        $ Log.logTrace "Processing spans with errors from 1-minute window" ("span_count", AE.toJSON $ V.length spansWithErrors)
-      let !allErrors = Telemetry.getAllATErrors spansWithErrors
-      -- Group errors by (traceId, spanId) — must sort first since V.groupBy only groups consecutive elements
-      let sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
-          errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
-      processProjectErrors pid allErrors scheduledTime
-      -- Upsert hourly rollup stats (aggregated by hash)
-      let hashGroups = HM.toList $ V.foldl' addError HM.empty allErrors
-          addError acc e = HM.insertWith addCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc
-          addCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
-          rollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- hashGroups]
-      void $ ErrorPatterns.upsertErrorPatternHourlyStats pid scheduledTime rollupStats
-      -- Batch otel updates: write extracted errors JSON into spans
-      let mkErrorUpdate groupedErrors = do
-            (firstError, _) <- V.uncons groupedErrors
-            sId <- firstError.spanId
-            tId <- firstError.traceId
-            let mappedErrors = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) groupedErrors
-            pure (sId, tId, AE.toJSON mappedErrors)
-          updates = V.mapMaybe mkErrorUpdate (V.fromList errorsByTrace)
-      unless (V.null updates) $ do
-        let (spanIds, traceIds, errorsJson) = V.unzip3 updates
-        rowsUpdated <-
-          PG.execute
-            [sql| UPDATE otel_logs_and_spans o
-                  SET errors = u.errors
-                  FROM (SELECT unnest(?::text[]) AS span_id, unnest(?::text[]) AS trace_id,
-                               unnest(?::jsonb[]) AS errors) u
-                  WHERE o.project_id = ? AND o.timestamp >= ? AND o.timestamp < ? AND o.context___span_id = u.span_id AND o.context___trace_id = u.trace_id |]
-            (spanIds, traceIds, errorsJson, pid, oneMinuteAgo, scheduledTime)
-        Relude.when (fromIntegral rowsUpdated /= V.length updates)
-          $ Log.logAttention "Some error updates had no effect" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= V.length updates, "actual" AE..= rowsUpdated])
-      -- Append "err:<hash>" to otel hashes using array_append + guard (same pattern as pat: hashes)
-      let hashToSpans = HM.toList $ V.foldl' (\acc e -> maybe acc (\sId -> HM.insertWith (\new old -> let !r = new <> old in r) ("err:" <> e.hash) [sId] acc) e.spanId) HM.empty allErrors
-      forM_ hashToSpans \(hashTag, sIds) ->
-        void $ PG.execute [sql|UPDATE otel_logs_and_spans SET hashes = array_append(hashes, ?) WHERE project_id = ? AND timestamp >= ? AND timestamp < ? AND context___span_id = ANY(?::text[]) AND NOT (hashes @> ARRAY[?])|] (hashTag, pid.toText, oneMinuteAgo, scheduledTime, PGArray sIds, hashTag)
-      -- Notify after hashes are injected so chart queries can find "err:<hash>" in spans
-      notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) allErrors)
-      Relude.when (V.length spansWithErrors == 2000)
-        $ processErrorsPaginated oneMinuteAgo (skip + 2000)
 
 
 data ErrorSubscriptionDue = ErrorSubscriptionDue
@@ -1186,119 +932,458 @@ processProjectErrors pid errors now = do
           Log.logTrace "Bumped already-open issue for regressed error" (pid', err'.id, existing.id)
 
 
--- | Deduplicate a vector of items by their hash field using HashMap for O(n) performance
--- This is much faster than nubBy which is O(n²)
 deduplicateByHash :: (a -> Text) -> V.Vector a -> V.Vector a
 deduplicateByHash getHash = V.fromList . HM.elems . V.foldl' (\acc item -> HM.insert (getHash item) item acc) HM.empty
 {-# INLINE deduplicateByHash #-}
 
 
--- | Process spans for a specific project to extract API entities
--- This is where the core anomaly detection logic happens:
--- 1. Load project cache (contains known entities to skip)
--- 2. Extract entities from each span
--- 3. Deduplicate entities by hash
--- 4. Bulk insert new entities (triggers DB anomaly detection)
--- 5. Update spans with hashes for tracking
---
--- The bulk inserts use "ON CONFLICT DO NOTHING" which prevents duplicates
--- but still triggers the database anomaly detection triggers for new entities.
-processProjectSpans :: Projects.ProjectId -> V.Vector Telemetry.OtelLogsAndSpans -> UTCTime -> UTCTime -> ATBackgroundCtx ()
-processProjectSpans pid spans fiveMinutesAgo scheduledTime = do
+-- | Hourly catch-up. Sweeps `processed_at IS NULL` rows via the time-scoped
+-- partial index `idx_otel_unprocessed` and re-drives them through the
+-- extraction worker via `Telemetry.handOffBatches` (same code path as live
+-- ingestion).
+safetyNetReprocess :: Projects.ProjectId -> ATBackgroundCtx ()
+safetyNetReprocess pid = do
   ctx <- ask @Config.AuthContext
-
-  -- Get project cache to filter out known entities
+  let cutoff = ctx.config.processedAtCutoff
   projectCacheVal <- liftIO $ Cache.fetchWithCache ctx.projectCache pid \pid' -> do
     mpjCache <- Projects.projectCacheByIdIO ctx.jobsPool pid'
-    pure $ fromMaybe projectCacheDefault mpjCache
+    pure $ fromMaybe Projects.defaultProjectCache mpjCache
+  let caches = one (pid, projectCacheVal)
+  -- Single page per tick (1000 rows); next hourly tick picks up any remainder.
+  rows <-
+    V.fromList
+      <$> PG.query
+        [sql| SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity,
+                     body, attributes, resource, COALESCE(hashes, '{}'::text[]) AS hashes,
+                     kind, status_code, status_message, start_time, end_time, events,
+                     links, duration, name, parent_id, COALESCE(summary, '{}'::text[]) AS summary, date
+              FROM otel_logs_and_spans
+              WHERE project_id = ?
+                AND processed_at IS NULL
+                AND timestamp >= ?
+                AND timestamp <  now() - interval '10 minutes'
+                AND timestamp >  now() - interval '24 hours'
+              ORDER BY timestamp
+              LIMIT 1000 |]
+        (pid.toText, cutoff)
+  Relude.unless (V.null rows) $ do
+    Log.logTrace "SafetyNetReprocess re-driving unprocessed rows" (AE.object ["project_id" AE..= pid.toText, "row_count" AE..= V.length rows])
+    liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows
 
-  -- Batch generate all UUIDs upfront to avoid repeated IO
-  !spanIds <- V.replicateM (V.length spans) UUID.genUUID
 
-  -- Process each span to extract entities (pure computation)
-  let !canonicalTemplates = parseCanonicalPaths projectCacheVal.canonicalPaths
-  let !results = V.zipWith (processSpanToEntities canonicalTemplates projectCacheVal) spans spanIds
+-- | Dual-fork an UPDATE to Postgres (blocking) + TimeFusion (best-effort, circuit-broken).
+dualExecPgTf :: (DB es, Labeled "timefusion" WithConnection :> es, Ki.StructuredConcurrency :> es, Log :> es, Time.Time :> es, SimplePG.ToRow q) => Config.AuthContext -> SimplePG.Query -> q -> Eff es Int64
+dualExecPgTf ctx sql' params = Ki.scoped \scope -> do
+  mainThread <- Ki.fork scope $ PG.execute sql' params
+  _ <- Ki.fork scope $ Relude.when ctx.config.enableTimefusionWrites $ do
+    now <- Time.currentTime
+    shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
+    Relude.when shouldAttempt $
+      tryAny (withTimefusion True $ PG.execute sql' params) >>= \case
+        Right _ -> liftIO $ ExtractionWorker.recordCircuitSuccess ctx.tfCircuit
+        Left e -> do
+          opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
+          Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
+  Ki.atomically $ Ki.await mainThread
 
-  -- Unzip and deduplicate extracted entities using HashMap for O(n) performance
-  let !(endpoints, shapes, fields, formats, spanUpdates, normalizedPaths) = V.unzip6 results
 
-  -- Deduplicate using HashMap instead of O(n²) nubBy
-  let !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
-  let !shapesFinal = deduplicateByHash (.hash) $ V.mapMaybe id shapes
-  let !fieldsFinal = deduplicateByHash (.hash) $ V.concatMap id fields
-  let !formatsFinal = deduplicateByHash (.hash) $ V.concatMap id formats
+processEagerBatch
+  :: ExtractionWorker.ExtractionBatch Telemetry.OtelLogsAndSpans
+  -> ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  -> ATBackgroundCtx ()
+processEagerBatch batch shard
+  | V.null batch.spans = pass
+  | otherwise = do
+      ctx <- ask @Config.AuthContext
+      Relude.when ctx.config.enableEventsTableUpdates do
+        now <- Time.currentTime
+        let pid = batch.projectId
+            spans = batch.spans
+            projectCache = batch.projectCache
+            spanIdsV = batch.spanIds
+            traceIdsV = batch.traceIds
+            batchMinTs = batch.batchMinTs
+            -- Pad +1s so the exclusive `<` in UPDATE-1 covers the inclusive batchMaxTs.
+            batchMaxTsPad = addUTCTime 1 batch.batchMaxTs
 
-  -- Only log if there are actually entities to process (reduces noise in tests)
-  Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0)
-    $ Log.logTrace
-      "Entities extracted"
-      ( object
-          [ "project_id" AE..= pid.toText
-          , "endpoints_count" AE..= V.length endpointsFinal
-          , "shapes_extracted" AE..= V.length shapes
-          , "shapes_final" AE..= V.length shapesFinal
-          , "fields_final" AE..= V.length fieldsFinal
-          , "formats_final" AE..= V.length formatsFinal
-          ]
-      )
+        -- Pure entity + hash derivation.
+        !entityIds <- V.replicateM (V.length spans) UUID.genUUID
+        let !canonicalTemplates = parseCanonicalPaths projectCache.canonicalPaths
+            !results = V.zipWith (processSpanToEntities canonicalTemplates projectCache) spans entityIds
+            !(endpoints, shapes, fields, formats, spanHashes, normalizedPaths) = V.unzip6 results
+            !endpointsFinal = deduplicateByHash (.hash) $ V.mapMaybe id endpoints
+            !shapesFinal = deduplicateByHash (.hash) $ V.mapMaybe id shapes
+            !fieldsFinal = deduplicateByHash (.hash) $ V.concatMap id fields
+            !formatsFinal = deduplicateByHash (.hash) $ V.concatMap id formats
 
-  -- Insert extracted entities
-  result <- tryAny $ Ki.scoped \scope -> do
-    unless (null endpointsFinal) $ void $ Ki.fork scope $ Endpoints.bulkInsertEndpoints endpointsFinal
-    unless (null shapesFinal) $ void $ Ki.fork scope $ Fields.bulkInsertShapes shapesFinal
-    unless (null fieldsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFields fieldsFinal
-    unless (null formatsFinal) $ void $ Ki.fork scope $ Fields.bulkInsertFormat formatsFinal
-    Ki.atomically $ Ki.awaitAll scope
+        -- Error extraction (pure).
+        let !allErrors = Telemetry.getAllATErrors spans
+            sortedErrors = V.modify (VA.sortBy (comparing \e -> (e.traceId, e.spanId))) allErrors
+            errorsByTrace = V.groupBy (\a b -> a.traceId == b.traceId && a.spanId == b.spanId) sortedErrors
+            mkErrorEntry grouped = do
+              (firstE, _) <- V.uncons grouped
+              sId <- firstE.spanId
+              tId <- firstE.traceId
+              let mapped = V.map (\x -> AE.object ["type" AE..= x.errorType, "message" AE..= x.message, "stack_trace" AE..= x.stackTrace]) grouped
+              pure ((sId, tId), AE.toJSON mapped)
+            errorsByKey :: HM.HashMap (Text, Text) AE.Value
+            errorsByKey = HM.fromList $ mapMaybe mkErrorEntry errorsByTrace
+            errHashesByKey :: HM.HashMap (Text, Text) [Text]
+            errHashesByKey =
+              V.foldl'
+                ( \acc e -> case (e.spanId, e.traceId) of
+                    (Just sid, Just tid) -> HM.insertWith (<>) (sid, tid) ["err:" <> e.hash] acc
+                    _ -> acc
+                )
+                HM.empty
+                allErrors
+            addErrCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
+            errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty allErrors
+            errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
 
-  case result of
-    Left e ->
-      Log.logAttention "SPAN_ENTITY_INSERT_FAILED"
-        $ AE.object
-          [ "error_id" AE..= ("SPAN_ENTITY_INSERT_FAILED" :: Text)
-          , "project_id" AE..= pid.toText
-          , "kind" AE..= (if isJust (fromException @Hasql.HasqlException e) then "hasql" else "other" :: Text)
-          , "span_count" AE..= V.length spans
-          , "error" AE..= show @Text e
-          ]
-    Right _ -> do
-      -- Batch update spans with computed hashes using a single query.
-      -- For HTTP spans we also stamp the normalized path onto attributes.http.route,
-      -- attributes.url.path and the promoted attributes___url___path column so
-      -- notification explorer links and the catalog UI can filter by the same
-      -- template stored in apis.endpoints.
-      let spansWithHashes = V.filter (\(_, hashes, _) -> not $ V.null hashes) $ V.zip3 spans spanUpdates normalizedPaths
-      Relude.when (V.length spansWithHashes > 0) $ do
-        let expectedCount = V.length spansWithHashes
-        Log.logTrace "Updating spans with computed hashes" ("span_count", AE.toJSON expectedCount)
-        let dbSpanIds = PGArray $ V.toList $ V.map (\(s, _, _) -> s.id) spansWithHashes
-            hashValues = PGArray $ V.toList $ V.map (\(_, h, _) -> AE.toJSON h) spansWithHashes
-            normPaths = PGArray $ V.toList $ V.map (\(_, _, p) -> p) spansWithHashes
-        rowsUpdated <-
-          PG.execute
-            [sql| UPDATE otel_logs_and_spans
-                  SET hashes = converted.arr,
-                      attributes___url___path = COALESCE(updates.norm_path, otel_logs_and_spans.attributes___url___path),
-                      attributes = CASE WHEN updates.norm_path IS NOT NULL THEN
-                        COALESCE(otel_logs_and_spans.attributes, '{}'::jsonb)
-                          || jsonb_build_object(
-                               'url', COALESCE(otel_logs_and_spans.attributes->'url', '{}'::jsonb) || jsonb_build_object('path', updates.norm_path),
-                               'http', COALESCE(otel_logs_and_spans.attributes->'http', '{}'::jsonb) || jsonb_build_object('route', updates.norm_path))
-                      ELSE otel_logs_and_spans.attributes END
-                  FROM (SELECT unnest(?::uuid[]) as id, unnest(?::jsonb[]) as hashes_json, unnest(?::text[]) as norm_path) updates
-                  CROSS JOIN LATERAL (
-                    SELECT ARRAY(SELECT jsonb_array_elements_text(updates.hashes_json)) as arr
-                  ) converted
-                  WHERE otel_logs_and_spans.id = updates.id
-                    AND otel_logs_and_spans.project_id = ?
-                    AND otel_logs_and_spans.timestamp >= ?
-                    AND otel_logs_and_spans.timestamp < ? |]
-            (dbSpanIds, hashValues, normPaths, pid.toText, fiveMinutesAgo, scheduledTime)
-        Relude.when (fromIntegral rowsUpdated /= expectedCount)
-          $ Log.logAttention "Span hash update count mismatch" (AE.object ["project_id" AE..= pid.toText, "expected" AE..= expectedCount, "actual" AE..= rowsUpdated])
-        Log.logTrace "Completed span processing for project" ("project_id", AE.toJSON pid.toText)
+        -- Per-row packed vectors for UPDATE-1.
+        let perRowHashesJson :: V.Vector AE.Value
+            perRowHashesJson =
+              V.zipWith3
+                ( \sid tid base ->
+                    let extra = fromMaybe [] (HM.lookup (sid, tid) errHashesByKey)
+                     in AE.toJSON (V.toList base <> extra)
+                )
+                spanIdsV
+                traceIdsV
+                spanHashes
+            perRowErrorsJson :: V.Vector AE.Value
+            perRowErrorsJson =
+              V.zipWith (\sid tid -> fromMaybe AE.Null (HM.lookup (sid, tid) errorsByKey)) spanIdsV traceIdsV
+
+        Relude.when (V.length endpointsFinal > 0 || V.length shapesFinal > 0 || V.length fieldsFinal > 0 || V.length formatsFinal > 0 || V.length allErrors > 0)
+          $ Log.logTrace
+            "Eager-track derivations"
+            ( AE.object
+                [ "project_id" AE..= pid.toText
+                , "spans" AE..= V.length spans
+                , "endpoints" AE..= V.length endpointsFinal
+                , "shapes" AE..= V.length shapesFinal
+                , "fields" AE..= V.length fieldsFinal
+                , "formats" AE..= V.length formatsFinal
+                , "errors" AE..= V.length allErrors
+                ]
+            )
+
+        -- Upsert error_patterns (must precede hourly-stats fork which FKs them).
+        Relude.unless (V.null allErrors)
+          $ void
+          $ ErrorPatterns.batchUpsertErrorPatterns pid allErrors now
+
+        -- Sibling inserts (any throw prevents UPDATE-1 from running — safety-net retries).
+        Ki.scoped \scope -> do
+          let forkNonEmpty :: V.Vector a -> (V.Vector a -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
+              forkNonEmpty v action = Relude.unless (V.null v) $ void $ Ki.fork scope $ action v
+          forkNonEmpty endpointsFinal Endpoints.bulkInsertEndpoints
+          forkNonEmpty shapesFinal Fields.bulkInsertShapes
+          forkNonEmpty fieldsFinal Fields.bulkInsertFields
+          forkNonEmpty formatsFinal Fields.bulkInsertFormat
+          forkNonEmpty errorRollupStats (void . ErrorPatterns.upsertErrorPatternHourlyStats pid now)
+          forkNonEmpty allErrors \_ -> liftIO $ withResource ctx.jobsPool \conn ->
+            void $ createJob conn "background_jobs" $ ProcessProjectErrorsJob pid allErrors now
+          Ki.atomically $ Ki.awaitAll scope
+
+        -- UPDATE-1: non-destructive hash merge, dual-forked to PG + TimeFusion.
+        let dbSpanIds = PGArray $ V.toList spanIdsV
+            dbTraceIds = PGArray $ V.toList traceIdsV
+            dbHashesJson = PGArray $ V.toList perRowHashesJson
+            dbErrorsJson = PGArray $ V.toList perRowErrorsJson
+            dbNormPaths = PGArray $ V.toList normalizedPaths
+            update1Sql =
+              [sql| UPDATE otel_logs_and_spans o
+                    SET hashes = ARRAY(
+                          SELECT DISTINCT h
+                          FROM unnest(COALESCE(o.hashes, '{}'::text[]) || u.new_hashes) AS h
+                        ),
+                        errors = COALESCE(NULLIF(u.errors, 'null'::jsonb), o.errors),
+                        attributes___url___path = COALESCE(u.norm_path, o.attributes___url___path),
+                        attributes = CASE WHEN u.norm_path IS NOT NULL THEN
+                          COALESCE(o.attributes, '{}'::jsonb)
+                            || jsonb_build_object(
+                                 'url',  COALESCE(o.attributes->'url',  '{}'::jsonb) || jsonb_build_object('path',  u.norm_path),
+                                 'http', COALESCE(o.attributes->'http', '{}'::jsonb) || jsonb_build_object('route', u.norm_path))
+                          ELSE o.attributes END,
+                        processed_at = now()
+                    FROM (
+                      SELECT span_id, trace_id, errors, norm_path,
+                             ARRAY(SELECT jsonb_array_elements_text(hashes_json)) AS new_hashes
+                      FROM (
+                        SELECT unnest(?::text[])  AS span_id,
+                               unnest(?::text[])  AS trace_id,
+                               unnest(?::jsonb[]) AS hashes_json,
+                               unnest(?::jsonb[]) AS errors,
+                               unnest(?::text[])  AS norm_path
+                      ) raw
+                    ) u
+                    WHERE o.project_id = ?
+                      AND o.timestamp >= ?
+                      AND o.timestamp <  ?
+                      AND o.context___span_id = u.span_id
+                      AND o.context___trace_id = u.trace_id |]
+            update1Params = (dbSpanIds, dbTraceIds, dbHashesJson, dbErrorsJson, dbNormPaths, pid.toText, batchMinTs, batchMaxTsPad)
+        rowsUpdated <- dualExecPgTf ctx update1Sql update1Params
+        Log.logTrace "Eager-track UPDATE-1 complete" (AE.object ["project_id" AE..= pid.toText, "span_count" AE..= V.length spans, "rows_updated" AE..= rowsUpdated])
+
+        -- TODO(otel-metrics): emit counters for batches_processed, spans_processed here.
+        -- Drain-track hand-off: buffer spans for pattern tagging (T.copy to unpin).
+        let bufferedSpans :: [(Text, ExtractionWorker.BufferedSpan)]
+            bufferedSpans = V.toList $ V.zipWith3 buildBuffered spans spanIdsV traceIdsV
+            buildBuffered s spanCtxId' traceId' =
+              let svcName = fromMaybe "unknown" (Telemetry.spanServiceName s)
+                  summaryText = T.copy $ T.intercalate " " (V.toList s.summary)
+               in ( T.copy svcName
+                  , ExtractionWorker.BufferedSpan
+                      { ExtractionWorker.spanCtxId = T.copy spanCtxId'
+                      , ExtractionWorker.traceId = T.copy traceId'
+                      , ExtractionWorker.timestamp = s.timestamp
+                      , ExtractionWorker.summary = summaryText
+                      }
+                  )
+        liftIO $ ExtractionWorker.appendBufferedSpans shard pid ctx.config.drainFlushBatchSize now ctx.extractionWorker.droppedFlushTasks bufferedSpans
+
+
+-- | 1-minute error-state decay tick. Owns `propagateMergedCounts` +
+-- `updateOccurrenceCounts` so errors auto-resolve once quiet long enough.
+-- Runs every minute per active project.
+runErrorDecayFiber :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
+runErrorDecayFiber logger ctx tp = forever $ do
+  threadDelay 60_000_000
+  runBackground logger ctx tp $ do
+    now <- Time.currentTime
+    projects <- Projects.activeNonOnboardingProjectIds
+    tryLog "propagateMergedCountsBatch" $ void $ ErrorPatterns.propagateMergedCountsBatch projects
+    tryLog "updateOccurrenceCountsBatch" $ void $ ErrorPatterns.updateOccurrenceCountsBatch projects now
+
+
+-- | Drain-flusher shard fiber: pulls `DrainFlushTask`s from the shard's
+-- drainFlushQ, runs Drain clustering (rehydrating the tree from
+-- apis.log_patterns when stale), persists log patterns, and issues the
+-- additive UPDATE-2 that appends `pat:*` tags to the owning spans' `hashes`
+-- column. Unlike UPDATE-1, UPDATE-2 never touches `processed_at` — only the
+-- eager track claims a row (invariant #1 from the plan).
+runDrainFlusher
+  :: Logger
+  -> Config.AuthContext
+  -> TracerProvider
+  -> ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  -> IO ()
+runDrainFlusher logger ctx tp shard = forever $ do
+  task <- atomically $ readTBQueue shard.drainFlushQ
+  tryAny (maybeSpawnRehydration logger ctx tp shard (task.projectId, task.serviceName)) >>= \case
+    Right () -> pass
+    Left e -> logExc "drain-flusher:rehydration" e
+  tryAny (runBackground logger ctx tp $ flushDrainTask shard task) >>= \case
+    Right () -> pass
+    Left e -> logExc "drain-flusher:task" e
   where
-    projectCacheDefault :: Projects.ProjectCache
-    projectCacheDefault = Projects.defaultProjectCache
+    logExc label e = runLogT (show ctx.config.environment) logger ctx.config.logLevel
+      $ LogLegacy.logAttention label (show @Text e)
+
+
+-- | Spawn async rehydration for a (project, service) tree if stale and not
+-- already pending. Uses change detection via MAX(last_seen_at). The flusher
+-- continues with the existing (stale) tree — rehydration swaps in the fresh
+-- tree on completion.
+maybeSpawnRehydration
+  :: Logger
+  -> Config.AuthContext
+  -> TracerProvider
+  -> ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  -> (Projects.ProjectId, Text)
+  -> IO ()
+maybeSpawnRehydration logger ctx tp shard key@(pid, svcName) = do
+  now <- getCurrentTime
+  let rehydrateInterval = fromIntegral ctx.config.drainRehydrateIntervalSecs :: NominalDiffTime
+  existing <- HM.lookup key <$> readIORef shard.drainTrees
+  let isStale = case existing of
+        Nothing -> True
+        Just sdt -> diffUTCTime now sdt.lastSeededAt >= rehydrateInterval
+  when isStale $ do
+    pending <- readIORef shard.pendingRehydrations
+    unless (HashSet.member key pending) $ do
+      let job = do
+            tryAny (runBackground logger ctx tp $ rehydrateTree shard key now existing) >>= \case
+              Right () -> pass
+              Left e -> runLogT (show ctx.config.environment) logger ctx.config.logLevel
+                $ LogLegacy.logAttention "drain-rehydrate failed" (show @Text e)
+            atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.delete key s, ())
+      atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.insert key s, ())
+      enqueued <- atomically $ do
+        full <- isFullTBQueue shard.rehydrationQ
+        if full then pure False
+        else writeTBQueue shard.rehydrationQ job >> pure True
+      unless enqueued $
+        atomicModifyIORef' shard.pendingRehydrations \s -> (HashSet.delete key s, ())
+
+
+rehydrateTree
+  :: ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  -> (Projects.ProjectId, Text)
+  -> UTCTime
+  -> Maybe ExtractionWorker.ServiceDrainTree
+  -> ATBackgroundCtx ()
+rehydrateTree shard key@(pid, svcName) now existing = do
+  (texts, maxSeen) <- LogPatterns.getLogPatternTextsByService pid "summary" svcName
+  -- Change detection: skip rebuild if maxPatternSeenAt hasn't advanced.
+  let unchanged = case (existing, maxSeen) of
+        (Just sdt, Just ms) | sdt.maxPatternSeenAt == Just ms -> True
+        _ -> False
+  if unchanged
+    then liftIO $ atomicModifyIORef' shard.drainTrees \m ->
+      case HM.lookup key m of
+        Just sdt -> (HM.insert key sdt{ExtractionWorker.lastSeededAt = now} m, ())
+        Nothing -> (m, ())
+    else void $ seedFromPatterns shard key now texts maxSeen
+
+
+-- | Seed a drain tree from DB patterns and insert it into the shard's IORef.
+seedDrainTreeFromDB
+  :: DB es
+  => ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  -> (Projects.ProjectId, Text) -> UTCTime
+  -> Eff es Drain.DrainTree
+seedDrainTreeFromDB shard key@(pid, svcName) now = do
+  (texts, maxSeen) <- LogPatterns.getLogPatternTextsByService pid "summary" svcName
+  seedFromPatterns shard key now texts maxSeen
+
+-- | Build a drain tree from pre-fetched patterns and insert into shard state.
+seedFromPatterns
+  :: IOE :> es
+  => ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  -> (Projects.ProjectId, Text) -> UTCTime -> [Text] -> Maybe UTCTime
+  -> Eff es Drain.DrainTree
+seedFromPatterns shard key now texts maxSeen = do
+  let freshTree = processBatch True (V.fromList $ map SeedPattern texts) now Drain.emptyDrainTree
+      newEntry = ExtractionWorker.ServiceDrainTree{tree = freshTree, lastSeededAt = now, maxPatternSeenAt = maxSeen}
+  liftIO $ atomicModifyIORef' shard.drainTrees \m -> (HM.insert key newEntry m, ())
+  pure freshTree
+
+
+-- | Process a single drain-flush task: merge the batch through the current
+-- (possibly stale) tree via `processBatchWithMapping`, persist patterns to
+-- `apis.log_patterns` + hourly stats, then issue UPDATE-2 to append each
+-- span's pattern hash tag to `otel_logs_and_spans.hashes`.
+flushDrainTask
+  :: ExtractionWorker.ShardState Telemetry.OtelLogsAndSpans
+  -> ExtractionWorker.DrainFlushTask
+  -> ATBackgroundCtx ()
+flushDrainTask shard task
+  | null task.spans = pass
+  | otherwise = do
+      ctx <- ask @Config.AuthContext
+      now <- Time.currentTime
+      let pid = task.projectId
+          svcName = task.serviceName
+          key = (pid, svcName)
+      -- Use whatever tree is currently available (rehydration runs async).
+      -- If no tree exists yet, seed synchronously on first encounter.
+      existingTree <- liftIO $ HM.lookup key <$> readIORef shard.drainTrees
+      seededTree <- maybe (seedDrainTreeFromDB shard key now) (pure . (.tree)) existingTree
+
+      -- Build NewEvent inputs from the buffered spans.
+      let events =
+            V.fromList
+              [ NewEvent bs.spanCtxId bs.summary
+              | bs <- task.spans
+              ]
+          (!mergedTree, mapping) = processBatchWithMapping True events now seededTree
+
+      -- Swap the merged tree back. Preserve lastSeededAt/maxPatternSeenAt from
+      -- the existing entry (async rehydration owns those fields).
+      liftIO $ atomicModifyIORef' shard.drainTrees \m ->
+        let prev = HM.lookup key m
+            newEntry = ExtractionWorker.ServiceDrainTree
+              { tree = mergedTree
+              , lastSeededAt = maybe now (.lastSeededAt) prev
+              , maxPatternSeenAt = prev >>= (.maxPatternSeenAt)
+              }
+         in (HM.insert key newEntry m, ())
+
+      -- Build a spanCtxId → patternHash tag map so each row can have its own
+      -- tag appended in UPDATE-2.
+      let tagFor lid = "pat:" <> toXXHash lid
+          tagByCtx :: HM.HashMap Text Text
+          tagByCtx = HM.fromList [(lid, tagFor tpl) | (lid, tpl) <- V.toList mapping]
+
+      -- Persist log patterns + hourly stats.
+      let allPatternsRaw = Drain.getAllLogGroups mergedTree
+          allPatterns = PatternMerge.mergeByJaccard PatternMerge.jaccardMergeThreshold allPatternsRaw
+          prepared = flip mapMaybe (V.toList allPatterns) \dp ->
+            let eventCount = fromIntegral dp.frequency :: Int64
+                patternHash = toXXHash dp.templateStr
+             in if eventCount <= 0 || T.null dp.templateStr
+                  then Nothing
+                  else
+                    Just
+                      ( LogPatterns.UpsertPattern
+                          { projectId = pid
+                          , logPattern = dp.templateStr
+                          , hash = patternHash
+                          , sourceField = "summary"
+                          , serviceName = Just svcName
+                          , logLevel = Nothing
+                          , traceId = Nothing
+                          , sampleMessage = Just dp.exampleLog
+                          , eventCount
+                          }
+                      , (pid, "summary" :: Text, patternHash, task.flushedAt, eventCount)
+                      )
+      let (ups, hss) = unzip prepared
+      Relude.unless (null ups) $ void $ LogPatterns.upsertLogPatternBatch ups
+      Relude.unless (null hss) $ void $ LogPatterns.upsertHourlyStatBatch hss
+
+      -- UPDATE-2: additive per-row tag append. Dual-forked to Postgres + TimeFusion.
+      let taggedSpans =
+            [ (bs.spanCtxId, bs.traceId, tag, bs.timestamp)
+            | bs <- task.spans
+            , Just tag <- [HM.lookup bs.spanCtxId tagByCtx]
+            ]
+      whenJust (nonEmpty taggedSpans) \taggedNE -> do
+        let spanIds' = PGArray [sid | (sid, _, _, _) <- taggedSpans]
+            traceIds' = PGArray [tid | (_, tid, _, _) <- taggedSpans]
+            tagArr = PGArray [t | (_, _, t, _) <- taggedSpans]
+            tsList = fmap (\(_, _, _, ts) -> ts) taggedNE
+            (minTs, maxTs) = foldl' (\(!lo, !hi) t -> (min lo t, max hi t)) (head tsList, head tsList) tsList
+            maxTsPad = addUTCTime 1 maxTs
+            update2Sql =
+              [sql| UPDATE otel_logs_and_spans o
+                    SET hashes = COALESCE(o.hashes, '{}'::text[]) || ARRAY[u.tag]
+                    FROM (SELECT unnest(?::text[]) AS span_id,
+                                 unnest(?::text[]) AS trace_id,
+                                 unnest(?::text[]) AS tag) u
+                    WHERE o.project_id = ?
+                      AND o.timestamp >= ?
+                      AND o.timestamp <  ?
+                      AND o.context___span_id = u.span_id
+                      AND o.context___trace_id = u.trace_id
+                      AND NOT (COALESCE(o.hashes, '{}'::text[]) @> ARRAY[u.tag]) |]
+        void $ dualExecPgTf ctx update2Sql (spanIds', traceIds', tagArr, pid.toText, minTs, maxTsPad)
+      -- TODO(otel-metrics): emit counters for drain_flushes_completed, spans_flushed, patterns_persisted.
+      Log.logTrace "Drain-flush complete" (AE.object ["project_id" AE..= pid.toText, "service" AE..= svcName, "span_count" AE..= length task.spans, "pattern_count" AE..= length ups])
+
+
+-- | Age-flush timer fiber. Every 10 s: (1) evict age-stale buffers,
+-- (2) enforce global maxBufferedSpans by force-flushing the largest buffer,
+-- (3) LRU-evict drainTrees entries older than 1 hour or exceeding maxDrainTrees.
+-- TODO(otel-metrics): periodically export batches_processed, spans_processed,
+-- dropped_batches, dropped_flush_tasks, drain_flushes_completed as OTel counters.
+runDrainAgeFlushTimer :: Logger -> Config.AuthContext -> IO ()
+runDrainAgeFlushTimer logger ctx = forever $ do
+  threadDelay 10_000_000 -- 10 s
+  now <- getCurrentTime
+  let worker = ctx.extractionWorker
+      tryOp name action = tryAny action >>= \case
+        Right () -> pass
+        Left e -> runLogT (show ctx.config.environment) logger ctx.config.logLevel
+          $ LogLegacy.logAttention ("drain-age-flush:" <> name) (show @Text e)
+  tryOp "collectAgedFlushes" $ ExtractionWorker.collectAgedFlushes worker ctx.config.drainFlushMaxAgeSecs now
+  tryOp "enforceBufferBound" $ ExtractionWorker.enforceBufferBound worker ctx.config.maxBufferedSpans now
+  tryOp "evictStaleTrees" $ ExtractionWorker.evictStaleTrees worker ctx.config.maxDrainTrees now
 
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
@@ -2228,7 +2313,7 @@ evaluateWithResults monitor startWall title total durationNs = do
           { Telemetry.kind = Just "alert"
           , Telemetry.parent_id = Just monitor.id.toText
           }
-  insertSystemLog otelLog{Telemetry.summary = generateSummary otelLog}
+  insertSystemLog ctx.env.enableTimefusionWrites otelLog{Telemetry.summary = generateSummary otelLog}
 
   -- Determine notification intent before UPDATE so we can set timestamps correctly
   let isRecovery = status == Monitors.MSNormal && prevStatus /= Monitors.MSNormal

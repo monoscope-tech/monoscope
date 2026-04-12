@@ -54,7 +54,8 @@ spec = aroundAll withTestResources do
       ingestTraceWithException tr apiKey "GET /api/users/:id" "ConnectionRefusedError" "connect ECONNREFUSED 127.0.0.1:5432" connStack (addUTCTime (-10) frozenTime)
 
       -- Process errors in the [frozenTime-2min, frozenTime) window
-      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 10 0
       length patterns `shouldBe` 2
@@ -98,7 +99,8 @@ spec = aroundAll withTestResources do
 
           -- Ingest same error again → should regress
           ingestTraceWithException tr apiKey "GET /api/users/:id" pat.errorType pat.message pat.stacktrace (addUTCTime 60 frozenTime)
-          runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 120 frozenTime) pid
+          drainExtractionWorker tr
+          void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
           regressedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById pat.id
           fmap (.state) regressedPat `shouldBe` Just ESRegressed
@@ -287,7 +289,8 @@ spec = aroundAll withTestResources do
           -- Re-ingest to regress
           apiKey <- createTestAPIKey tr pid "regress-spike-key"
           ingestTraceWithException tr apiKey "GET /regress-spike" errRate.errorType errRate.message errRate.stacktrace (addUTCTime 9000 frozenTime)
-          runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 9060 frozenTime) pid
+          drainExtractionWorker tr
+          void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
           regressedPat <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternById errRate.errorId
           fmap (.state) regressedPat `shouldBe` Just ESRegressed
@@ -488,7 +491,8 @@ spec = aroundAll withTestResources do
       -- Same error with different IPs in message and different timestamps → same fingerprint
       ingestTraceWithException tr apiKey "POST /api/data" "ConnectionError" "connect ECONNREFUSED 10.0.0.1:5432" stack (addUTCTime 300 frozenTime)
       ingestTraceWithException tr apiKey "POST /api/data" "ConnectionError" "connect ECONNREFUSED 192.168.1.100:5432" stack (addUTCTime 310 frozenTime)
-      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 360 frozenTime) pid
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       -- Both should have matched the same pattern (IP normalized to {ipv4})
       patM <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatternByHash pid
@@ -498,7 +502,8 @@ spec = aroundAll withTestResources do
       -- Different error type → different fingerprint (separate pattern)
       prevCount <- length <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
       ingestTraceWithException tr apiKey "POST /api/data" "TimeoutError" "request timed out after 30000ms" stack (addUTCTime 320 frozenTime)
-      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 380 frozenTime) pid
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
       newCount <- length <$> runTestBg frozenTime tr (ErrorPatterns.getErrorPatterns pid Nothing 100 0)
       newCount `shouldSatisfy` (> prevCount)
 
@@ -559,7 +564,8 @@ spec = aroundAll withTestResources do
       -- Ingest an error for pid2
       apiKey2 <- createTestAPIKey tr pid2 "isolation-test-key"
       ingestTraceWithException tr apiKey2 "GET /isolated" "IsolationError" "should not appear in pid" "IsolationError\n    at test (/app/test.js:1:1)" (addUTCTime (-30) frozenTime)
-      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid2
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       -- Verify pid2 got its own patterns
       pid2Patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid2 Nothing 100 0
@@ -636,7 +642,8 @@ spec = aroundAll withTestResources do
       ingestTraceWithException tr apiKey "POST /api/connect" "ConnectionRefusedError" "connect ECONNREFUSED 10.0.0.1:5432" connErrStack (addUTCTime (-10) frozenTime)
 
       -- b) Process errors → creates error patterns + RuntimeException issues
-      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors frozenTime pid
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
 
       -- c) Run pending background jobs (processOneMinuteErrors enqueued EnhanceIssuesWithLLM jobs)
       --    This executes the LLM enhancement: titles, criticality, root cause analysis
@@ -745,7 +752,8 @@ spec = aroundAll withTestResources do
       issuesBefore <- countIssues tr Issues.RuntimeException
       forM_ spans \sp ->
         ingestTraceWithException tr apiKey sp "IOException" ioMsg "" (addUTCTime 300 frozenTime)
-      runTestBg frozenTime tr $ BackgroundJobs.processOneMinuteErrors (addUTCTime 360 frozenTime) pid
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
       -- Should create exactly 1 new issue, not 4
       issuesAfter <- countIssues tr Issues.RuntimeException
       (issuesAfter - issuesBefore) `shouldBe` 1

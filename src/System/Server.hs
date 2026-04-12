@@ -3,11 +3,13 @@ module System.Server (runMonoscope) where
 import BackgroundJobs qualified
 import Colourista.IO (blueMessage)
 import Control.Concurrent (threadDelay)
+import Data.Time.Clock qualified
 import Control.Concurrent.Async (async, waitAnyCancel)
 import Control.Exception.Safe qualified as Safe
 import Data.Aeson qualified as AE
 import Data.Pool as Pool (destroyAllResources)
 import Data.Text qualified as T
+import Data.Vector qualified as V
 import Effectful
 import Effectful.Concurrent (runConcurrent)
 import Effectful.Fail (runFailIO)
@@ -24,6 +26,7 @@ import OpenTelemetry.Instrumentation.Wai (newOpenTelemetryWaiMiddleware')
 import OpenTelemetry.Trace (TracerProvider)
 import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.Replay (processReplayEvents)
+import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Pkg.Queue qualified as Queue
 import ProcessMessage (processMessages)
 import Relude
@@ -31,12 +34,12 @@ import Servant (FromHttpApiData (..))
 import Servant qualified
 import Servant.Server.Generic (genericServeTWithContext)
 import System.Config (
-  AuthContext (config, jobsPool, pool, timefusionPgPool),
+  AuthContext (config, extractionWorker, jobsPool, pool, timefusionPgPool),
   EnvConfig (..),
   getAppContext,
  )
 import System.Logging qualified as Logging
-import System.Types (effToServantHandler)
+import System.Types (effToServantHandler, runBackground)
 import Web.Auth qualified as Auth
 import Web.Routes qualified as Routes
 
@@ -105,17 +108,34 @@ runServer appLogger env tp = do
           $ server
   let bgJobWorker = BackgroundJobs.jobsWorkerInit appLogger env tp
   let logExc = logException env.config.environment appLogger env.config.logLevel
+  -- Extraction worker shard fibers. Each shard runs `processEagerBatch` per
+  -- batch inside its own `runBackground` effect stack. The error-decay fiber
+  -- owns propagateMergedCounts/updateOccurrenceCounts on a 1-minute tick.
+  let runEager batch shard = void $ runBackground appLogger env tp $ BackgroundJobs.processEagerBatch batch shard
+  let shardsIndexed = zip [0 :: Int ..] (V.toList env.extractionWorker.shards)
+  let fiber name = async . supervise logExc name
+  let workerFibers =
+        [ fiber ("extraction-worker-" <> show i) $ ExtractionWorker.runShardWorker (logExc ("extraction-worker-" <> show i)) runEager shard
+        | (i, shard) <- shardsIndexed
+        ]
+          <> [fiber ("drain-flusher-" <> show i) $ BackgroundJobs.runDrainFlusher appLogger env tp shard | (i, shard) <- shardsIndexed]
+          <> [fiber ("rehydration-worker-" <> show i) $ ExtractionWorker.runRehydrationWorker (logExc ("rehydration-worker-" <> show i)) shard | (i, shard) <- shardsIndexed]
+          <> [ fiber "drain-age-flush" $ BackgroundJobs.runDrainAgeFlushTimer appLogger env
+             , fiber "error-decay" $ BackgroundJobs.runErrorDecayFiber appLogger env tp
+             ]
+  liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
   asyncs <-
     liftIO
       $ sequenceA
       $ catMaybes
-        [ Just $ async $ runSettings warpSettings wrappedServer -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit
+      $ [ Just $ async $ runSettings warpSettings wrappedServer -- intentionally unsupervised: Warp crash triggers waitAnyCancel → process exit
         , guard env.config.enablePubsubService $> async (supervise logExc "pubsub" $ Queue.pubsubService appLogger env tp env.config.requestPubsubTopics processMessages)
         , Just $ async $ supervise logExc "background-jobs" bgJobWorker
         , Just $ async $ supervise logExc "otlp-grpc" $ OtlpServer.runServer appLogger env tp
         , guard (env.config.enableKafkaService && not (any T.null env.config.kafkaTopics)) $> async (supervise logExc "kafka" $ Queue.kafkaService appLogger env tp env.config.kafkaTopics OtlpServer.processList)
         , guard env.config.enableReplayService $> async (supervise logExc "kafka-replay" $ Queue.kafkaService appLogger env tp env.config.rrwebTopics processReplayEvents)
         ]
+      <> fmap Just workerFibers
   void $ liftIO $ waitAnyCancel asyncs
 
 
@@ -134,12 +154,23 @@ mkServer logger env tp = do
 shutdownMonoscope :: AuthContext -> Eff '[IOE] ()
 shutdownMonoscope env =
   liftIO $ do
-    -- Flush + close cached Kafka producer first so any in-flight replay/dead-letter
-    -- batches make it to the broker before we tear down DB pools.
+    -- Phase A: stop accepting new batches; wait for in-flight ingress to drain.
+    atomically $ writeTVar env.extractionWorker.acceptingBatches False
+    awaitDrained env.extractionWorker 500_000 10
+    -- Phase B: force-flush drain buffers so buffered spans get pattern-tagged.
+    now <- Data.Time.Clock.getCurrentTime
+    ExtractionWorker.forceFlushAllBuffers env.extractionWorker now
+    awaitDrained env.extractionWorker 500_000 5
     Queue.closeSharedKafkaProducer
     Pool.destroyAllResources env.pool
     Pool.destroyAllResources env.jobsPool
     Pool.destroyAllResources env.timefusionPgPool
+ where
+  awaitDrained worker delayUs budget
+    | budget <= (0 :: Int) = pass
+    | otherwise = do
+        drained <- ExtractionWorker.allQueuesDrained worker
+        unless drained $ threadDelay delayUs >> awaitDrained worker delayUs (budget - 1)
 
 
 logException :: Text -> LogBase.Logger -> LogLevel -> Text -> Text -> IO ()

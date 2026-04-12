@@ -52,13 +52,10 @@ import Effectful
 import Effectful.Labeled (Labeled)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
-import Effectful.Reader.Static qualified
 import GHC.Records (HasField (getField))
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), withTimefusion)
 import Relude
-import System.Config (AuthContext (..), EnvConfig (..))
-import System.Types (DB, withTimefusion)
 import Web.HttpApiData (FromHttpApiData)
 
 
@@ -363,21 +360,23 @@ facetColumns =
 
 
 generateAndSaveFacets
-  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es)
-  => Projects.ProjectId
+  :: (DB es, Labeled "timefusion" WithConnection :> es, UUID.UUIDEff :> es)
+  => Bool
+  -- ^ enableTimefusionReads (caller passes it to keep this module a leaf of
+  -- `System.Config` — breaks the `Config ↔ Telemetry` cycle).
+  -> Projects.ProjectId
   -> Text
   -> Int
   -> UTCTime
   -> Eff es FacetSummary
-generateAndSaveFacets pid tableName maxValues timestamp = do
+generateAndSaveFacets enableTfReads pid tableName maxValues timestamp = do
   let dayEnd = timestamp
       dayStart = addUTCTime (-86400) dayEnd
 
-  authCtx <- Effectful.Reader.Static.ask @AuthContext
   let q = buildOptimizedFacetQuery tableName
       params = concatMap (const [toField pid.toText, toField dayStart, toField dayEnd, toField maxValues]) facetColumns :: [Action]
   facetMap <- do
-    values <- checkpoint (toAnnotation q) $ withTimefusion authCtx.env.enableTimefusionReads $ PG.query q params
+    values <- checkpoint (toAnnotation q) $ withTimefusion enableTfReads $ PG.query q params
     pure $ processQueryResults $ V.fromList values
 
   existingIdM <-

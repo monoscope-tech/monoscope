@@ -2,7 +2,6 @@
 
 module Opentelemetry.GrpcIngestionSpec (spec) where
 
-import BackgroundJobs qualified
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
@@ -119,7 +118,7 @@ spec = aroundAll withTestResources do
         ingestLog tr key "E2E test log" frozenTime
         ingestTrace tr key "GET /api/test" frozenTime
         ingestMetric tr key "test.metric" 42.0 frozenTime
-      void $ runTestBg frozenTime tr $ BackgroundJobs.processFiveMinuteSpans frozenTime pid
+      drainExtractionWorker tr
       void $ runAllBackgroundJobs frozenTime tr.trATCtx
       -- Verify logs and traces
       result <- queryLogs tr Nothing

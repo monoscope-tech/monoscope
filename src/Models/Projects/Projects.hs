@@ -22,6 +22,10 @@ module Models.Projects.Projects (
   usersByProjectId,
   selectProjectsForUser,
   getProjectByPhoneNumber,
+  activeProjects,
+  activeNonOnboardingProjectIds,
+  recentlyActiveProjectIds,
+  newProjectsSince,
   updateProject,
   deleteProject,
   updateProjectPricing,
@@ -94,7 +98,7 @@ import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_insert, _selectWhere)
 import Database.PostgreSQL.Entity.Types
-import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only), ToRow)
+import Database.PostgreSQL.Simple (Connection, FromRow, Only (Only, fromOnly), ToRow)
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.Newtypes
 import Database.PostgreSQL.Simple.SqlQQ (sql)
@@ -443,6 +447,29 @@ getProjectByPhoneNumber :: DB es => Text -> Eff es (Maybe Project)
 getProjectByPhoneNumber number = listToMaybe <$> PG.query q (Only number)
   where
     q = [sql| select p.* from projects.projects p where ?=Any(p.whatsapp_numbers) |]
+
+
+activeProjects :: DB es => Eff es [Project]
+activeProjects = PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL|] ()
+
+
+activeNonOnboardingProjectIds :: DB es => Eff es (V.Vector ProjectId)
+activeNonOnboardingProjectIds =
+  V.fromList . map fromOnly <$> PG.query [sql|SELECT DISTINCT p.id FROM projects.projects p WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING'|] ()
+
+
+recentlyActiveProjectIds :: DB es => UTCTime -> Eff es [ProjectId]
+recentlyActiveProjectIds since =
+  map fromOnly
+    <$> PG.query
+      [sql|SELECT DISTINCT p.id FROM projects.projects p JOIN otel_logs_and_spans o ON o.project_id = p.id::text
+           WHERE p.active = TRUE AND p.deleted_at IS NULL AND p.payment_plan != 'ONBOARDING' AND o.timestamp > ?::timestamptz - interval '24 hours'|]
+      (Only since)
+
+
+newProjectsSince :: DB es => UTCTime -> Eff es [Project]
+newProjectsSince since =
+  PG.query [sql|SELECT p.* FROM projects.projects p WHERE p.created_at >= ?::timestamptz AND p.deleted_at IS NULL ORDER BY p.created_at DESC|] (Only since)
 
 
 selectProjectsForUser :: (DB es, Time :> es) => UserId -> Eff es [Project']

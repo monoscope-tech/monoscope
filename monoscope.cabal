@@ -535,6 +535,7 @@ test-suite integration-tests
       CLI.CLIBinarySpec
       CLI.CLISpec
       EndpointDiscoverySpec
+      ExtractionWorkerSpec
       MonitoringSpec
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec

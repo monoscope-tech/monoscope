@@ -28,7 +28,7 @@ where
 
 import Control.Monad.Except qualified as Except
 import Data.Aeson qualified as AE
-import Data.Effectful.Hasql (Hasql, runHasqlPool, withLabeled)
+import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.Hasql qualified
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
@@ -50,7 +50,7 @@ import Effectful.Time (Time, runFrozenTime, runTime)
 import Log qualified
 import Models.Projects.Projects qualified as Sessions
 import OpenTelemetry.Trace (TracerProvider)
-import Pkg.DeriveUtils (DB, runConnectionPool)
+import Pkg.DeriveUtils (DB, runConnectionPool, withTimefusion)
 import Relude
 import Relude.Unsafe qualified as Unsafe
 import Servant (AuthProtect, Header, Headers, ServerError, addHeader, noHeader)
@@ -224,11 +224,6 @@ runBackground logger appCtx tp process =
     & runConcurrent
     & Ki.runStructuredConcurrency
     & Effectful.runEff
-
-
--- | Route a WithConnection action through the timefusion pool when enabled, otherwise use the main pool.
-withTimefusion :: (DB es, Labeled "timefusion" WithConnection :> es) => Bool -> Eff (WithConnection ': es) a -> Eff es a
-withTimefusion = withLabeled @"timefusion" @WithConnection
 
 
 -- | Hasql twin of `withTimefusion`. Re-exported here so call sites can import a single module.

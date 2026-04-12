@@ -17,6 +17,7 @@ import Effectful.Fail (Fail)
 import Hasql.Pool qualified as HPool
 import Log (LogLevel (..))
 import Models.Projects.Projects qualified as Projects
+import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
 import Relude
@@ -146,10 +147,13 @@ data EnvConfig = EnvConfig
   , stripePriceIdGraduated :: Text
   , stripePriceIdGraduatedOverage :: Text
   , stripePriceIdByos :: Text
-  , -- Extraction worker (see plan squishy-imagining-diffie.md)
-    enableExtractionWorker :: Bool
   , extractionWorkerShards :: Int
   , extractionQueueCapacity :: Int
+  , drainFlushBatchSize :: Int
+  , drainFlushMaxAgeSecs :: Int
+  , drainRehydrateIntervalSecs :: Int
+  , maxBufferedSpans :: Int
+  , maxDrainTrees :: Int
   , -- | Must match the `timestamp >=` literal in migration 0064's partial index.
     -- The safety-net query and the partial-index WHERE clause both filter
     -- rows by this cutoff so pre-deploy rows stay invisible to the worker
@@ -177,9 +181,13 @@ instance DefConfig EnvConfig where
       , postmarkFromEmail = "hello@monoscope.tech"
       , openaiModel = "gpt-5.4-mini"
       , openaiSmallModel = "gpt-5.4-nano"
-      , enableExtractionWorker = False
       , extractionWorkerShards = 4
       , extractionQueueCapacity = 64
+      , drainFlushBatchSize = 1000
+      , drainFlushMaxAgeSecs = 60
+      , drainRehydrateIntervalSecs = 300
+      , maxBufferedSpans = 100000
+      , maxDrainTrees = 200
       , -- MUST match the literal in static/migrations/0064_processed_at_safety_net.sql.
         -- The partial index `idx_otel_unprocessed` filters on `timestamp >= this`,
         -- so a mismatched default would silently orphan post-cutoff rows from the
@@ -221,12 +229,8 @@ data AuthContext = AuthContext
   , projectCache :: Cache Projects.ProjectId Projects.ProjectCache
   , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
-  , -- TODO(extraction-worker slice 2): once the module cycle Config ↔ Telemetry
-    -- is resolved (likely by moving `OtelLogsAndSpans` to a leaf module), retype
-    -- this to `ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans` and
-    -- instantiate the `spans` field at the ingestion call sites. Today's `()`
-    -- placeholder is inert: `submitBatch` short-circuits on `acceptingBatches`.
-    extractionWorker :: ExtractionWorker.WorkerState ()
+  , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
+  , tfCircuit :: ExtractionWorker.CircuitBreaker
   , config :: EnvConfig
   }
   deriving stock (Generic)
@@ -246,7 +250,9 @@ instance Default DeploymentEnv where
 configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
-  let createTimefusionPgConnIO = DeriveUtils.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.timefusionPgUrl
+      -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
+      tfParams = DeriveUtils.addKeepaliveParams (encodeUtf8 config.timefusionPgUrl) <> "&options=-c%20timescaledb.max_tuples_decompressed_per_dml_transaction%3D0"
+  let createTimefusionPgConnIO = DeriveUtils.connectPostgreSQL tfParams
   when config.migrateAndInitializeOnStart $ liftIO do
     conn <- createPgConnIO
     initializationRes <- Migrations.runMigration conn Migrations.defaultOptions Migrations.MigrationInitialization
@@ -258,7 +264,7 @@ configToEnv config = do
   jobsPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   timefusionPgPool <- liftIO $ Pool.newPool (Pool.defaultPoolConfig createTimefusionPgConnIO PG.close 30 10 & setNumStripes (Just 2))
   let mainHasqlSettings = DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
-      tfHasqlSettings = DeriveUtils.addKeepaliveParams $ encodeUtf8 config.timefusionPgUrl
+      tfHasqlSettings = tfParams
   hasqlPool <- liftIO $ DeriveUtils.mkHasqlPool 20 mainHasqlSettings
   hasqlJobsPool <- liftIO $ DeriveUtils.mkHasqlPool 10 mainHasqlSettings
   hasqlTimefusionPool <- liftIO $ DeriveUtils.mkHasqlPool 10 tfHasqlSettings
@@ -266,6 +272,7 @@ configToEnv config = do
   projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
+  tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
   pure
     AuthContext
       { pool
@@ -279,6 +286,7 @@ configToEnv config = do
       , projectKeyCache
       , logsPatternCache
       , extractionWorker
+      , tfCircuit
       , config
       }
 

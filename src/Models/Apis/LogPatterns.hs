@@ -5,6 +5,7 @@ module Models.Apis.LogPatterns (
   LogPatternState (..),
   getLogPatterns,
   getLogPatternTexts,
+  getLogPatternTextsByService,
   getLogPatternByHash,
   getNewLogPatterns,
   acknowledgeLogPatterns,
@@ -55,9 +56,8 @@ import Effectful.PostgreSQL qualified as PG
 import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..))
 import Relude hiding (id)
-import System.Types (DB)
 import Utils (truncateHour)
 
 
@@ -134,6 +134,15 @@ getLogPatterns pid limit offset = PG.query (_selectWhere @LogPattern [[DAT.field
 -- ORDER BY last_seen_at DESC keeps the most recently active patterns as seeds.
 getLogPatternTexts :: DB es => Projects.ProjectId -> Text -> Eff es [Text]
 getLogPatternTexts pid sourceField = map fromOnly <$> PG.query [sql| SELECT LEFT(log_pattern, 2000) FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|] (pid, sourceField)
+
+
+-- | Per-service variant with MAX(last_seen_at) for change detection.
+getLogPatternTextsByService :: DB es => Projects.ProjectId -> Text -> Text -> Eff es ([Text], Maybe UTCTime)
+getLogPatternTextsByService pid sourceField svcName = do
+  rows <- PG.query [sql| SELECT LEFT(log_pattern, 2000), last_seen_at FROM apis.log_patterns WHERE project_id = ? AND source_field = ? AND service_name = ? AND canonical_id IS NULL ORDER BY last_seen_at DESC NULLS LAST LIMIT 5000|] (pid, sourceField, svcName)
+  let texts = map (view _1) rows
+      maxSeen = viaNonEmpty head [t | (_, Just t) <- rows]
+  pure (texts, maxSeen)
 
 
 -- | Get log pattern by unique key (project_id, source_field, pattern_hash)
@@ -233,7 +242,7 @@ upsertLogPatternBatch ups = do
           log_level = COALESCE(EXCLUDED.log_level, apis.log_patterns.log_level),
           trace_id = COALESCE(EXCLUDED.trace_id, apis.log_patterns.trace_id)
   |]
-    (map (:. Only now) $ map cap $ dedup ups)
+    (map ((:. Only now) . cap) (dedup ups))
   where
     maxTextLen = 32000
     cap u = u{logPattern = T.take maxTextLen u.logPattern, sampleMessage = T.take maxTextLen <$> u.sampleMessage} :: UpsertPattern

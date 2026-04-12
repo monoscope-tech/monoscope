@@ -11,7 +11,6 @@ import Models.Projects.Projects qualified as Projects
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Reports qualified as PageReports
 
-import BackgroundJobs (processFiveMinuteSpans)
 import BackgroundJobs qualified
 import Data.Aeson qualified as AE
 import Data.Aeson.KeyMap qualified as KeyMap

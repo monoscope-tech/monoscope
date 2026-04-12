@@ -93,7 +93,7 @@ spec = aroundAll withTestResources do
         insertTestLog tr body "test-service" (addUTCTime (fromIntegral (i :: Int) - 60) frozenTime)
 
       -- Window is [frozenTime-5min, frozenTime], derived from scheduledTime
-      runTestBg frozenTime tr $ BackgroundJobs.logsPatternExtraction frozenTime pid
+      drainExtractionWorker tr
 
       -- Verify patterns were created
       patternCount <- countPatterns tr

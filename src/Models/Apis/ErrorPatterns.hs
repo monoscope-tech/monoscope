@@ -10,6 +10,8 @@ module Models.Apis.ErrorPatterns (
   getErrorPatternByHash,
   updateOccurrenceCounts,
   propagateMergedCounts,
+  updateOccurrenceCountsBatch,
+  propagateMergedCountsBatch,
   updateErrorPatternState,
   getErrorPatternLByHash,
   bulkCalculateAndUpdateBaselines,
@@ -47,6 +49,7 @@ import Data.Vector qualified as V
 import Database.PostgreSQL.Entity (_select, _selectWhere)
 import Database.PostgreSQL.Entity.Types (CamelToSnake, Entity, FieldModifiers, GenericEntity, PrimaryKey, Schema, TableName, field)
 import Database.PostgreSQL.Simple (FromRow, Only (..), ToRow)
+import Database.PostgreSQL.Simple.Types (In (..))
 import Database.PostgreSQL.Simple.FromField (FromField)
 import Database.PostgreSQL.Simple.FromRow qualified as FR
 import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
@@ -58,10 +61,9 @@ import Effectful (Eff)
 import Effectful.PostgreSQL qualified as PG
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), WrappedEnumSC (..))
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..))
 import Pkg.ErrorFingerprint qualified as EF
 import Relude hiding (id)
-import System.Types (DB)
 import Utils (truncateHour)
 
 
@@ -223,16 +225,29 @@ getErrorPatternLByHash pid hash now = listToMaybe <$> PG.query q (now, pid, hash
             ) ev ON true WHERE e.project_id = ? AND e.hash = ? |]
 
 
--- | Propagate occurrence counts from merged patterns to their canonical patterns, then zero out the merged ones
 propagateMergedCounts :: DB es => Projects.ProjectId -> Eff es Int64
-propagateMergedCounts pid =
+propagateMergedCounts pid = propagateMergedCountsBatch (V.singleton pid)
+
+
+updateOccurrenceCounts :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
+updateOccurrenceCounts pid now = updateOccurrenceCountsBatch (V.singleton pid) now
+
+
+-- | Batch version: propagate merged counts for all given projects in a single query.
+propagateMergedCountsBatch :: DB es => V.Vector Projects.ProjectId -> Eff es Int64
+propagateMergedCountsBatch pids | V.null pids = pure 0
+propagateMergedCountsBatch pids =
   PG.execute
     [sql|
-    WITH zeroed AS (
-      UPDATE apis.error_patterns SET occurrences_1m = 0, occurrences_5m = 0, occurrences_1h = 0, occurrences_24h = 0
-      WHERE project_id = ? AND canonical_id IS NOT NULL
+    WITH snapshot AS (
+      SELECT id, canonical_id, occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
+      FROM apis.error_patterns
+      WHERE project_id = ANY(?) AND canonical_id IS NOT NULL
         AND (occurrences_1m > 0 OR occurrences_5m > 0 OR occurrences_1h > 0 OR occurrences_24h > 0)
-      RETURNING canonical_id, occurrences_1m, occurrences_5m, occurrences_1h, occurrences_24h
+    ),
+    zeroed AS (
+      UPDATE apis.error_patterns e SET occurrences_1m = 0, occurrences_5m = 0, occurrences_1h = 0, occurrences_24h = 0
+      FROM snapshot s WHERE e.id = s.id
     )
     UPDATE apis.error_patterns c SET
       occurrences_1m = c.occurrences_1m + m.sum_1m,
@@ -241,35 +256,35 @@ propagateMergedCounts pid =
       occurrences_24h = c.occurrences_24h + m.sum_24h
     FROM (SELECT canonical_id, SUM(occurrences_1m) as sum_1m, SUM(occurrences_5m) as sum_5m,
             SUM(occurrences_1h) as sum_1h, SUM(occurrences_24h) as sum_24h
-          FROM zeroed GROUP BY canonical_id) m
-    WHERE c.id = m.canonical_id AND c.project_id = ? |]
-    (pid, pid)
+          FROM snapshot GROUP BY canonical_id) m
+    WHERE c.id = m.canonical_id AND c.project_id = ANY(?) |]
+    (In (V.toList pids), In (V.toList pids))
 
 
--- | Update occurrence counts (called periodically to decay counts)
-updateOccurrenceCounts :: DB es => Projects.ProjectId -> UTCTime -> Eff es Int64
-updateOccurrenceCounts pid now =
-  PG.execute q (now, now, pid)
-  where
-    q =
-      [sql|
-        UPDATE apis.error_patterns SET
-          occurrences_1m = 0,
-          occurrences_5m = GREATEST(0, occurrences_5m - occurrences_1m),
-          occurrences_1h = GREATEST(0, occurrences_1h - occurrences_5m),
-          occurrences_24h = GREATEST(0, occurrences_24h - occurrences_1h),
-          quiet_minutes = CASE WHEN occurrences_1m = 0 THEN quiet_minutes + 1 ELSE 0 END,
-          state = CASE
-            WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN 'resolved'
-            WHEN state = 'regressed' AND regressed_at IS NOT NULL AND ?::timestamptz - regressed_at >= INTERVAL '7 days' THEN 'ongoing'
-            ELSE state
-          END,
-          resolved_at = CASE
-            WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN ?
-            ELSE resolved_at
-          END
-        WHERE project_id = ? AND (state != 'resolved' OR occurrences_24h > 0)
-      |]
+-- | Batch version: decay occurrence counts for all given projects in a single query.
+updateOccurrenceCountsBatch :: DB es => V.Vector Projects.ProjectId -> UTCTime -> Eff es Int64
+updateOccurrenceCountsBatch pids _ | V.null pids = pure 0
+updateOccurrenceCountsBatch pids now =
+  PG.execute
+    [sql|
+      UPDATE apis.error_patterns SET
+        occurrences_1m = 0,
+        occurrences_5m = GREATEST(0, occurrences_5m - occurrences_1m),
+        occurrences_1h = GREATEST(0, occurrences_1h - occurrences_5m),
+        occurrences_24h = GREATEST(0, occurrences_24h - occurrences_1h),
+        quiet_minutes = CASE WHEN occurrences_1m = 0 THEN quiet_minutes + 1 ELSE 0 END,
+        state = CASE
+          WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN 'resolved'
+          WHEN state = 'regressed' AND regressed_at IS NOT NULL AND ?::timestamptz - regressed_at >= INTERVAL '7 days' THEN 'ongoing'
+          ELSE state
+        END,
+        resolved_at = CASE
+          WHEN state IN ('new', 'escalating', 'ongoing', 'regressed') AND quiet_minutes + 1 >= resolution_threshold_minutes THEN ?
+          ELSE resolved_at
+        END
+      WHERE project_id = ANY(?) AND (state != 'resolved' OR occurrences_24h > 0)
+    |]
+    (now, now, In (V.toList pids))
 
 
 updateErrorPatternState :: DB es => ErrorPatternId -> ErrorState -> UTCTime -> Eff es Int64

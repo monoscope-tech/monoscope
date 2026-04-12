@@ -2,7 +2,6 @@
 
 module Pages.AnomaliesSpec (spec) where
 
-import BackgroundJobs (processBackgroundJob, processFiveMinuteSpans, processOneMinuteErrors)
 import BackgroundJobs qualified
 import Control.Concurrent (threadDelay)
 import Data.Aeson (Value)

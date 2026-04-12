@@ -40,21 +40,18 @@ import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.PostgreSQL (WithConnection)
 import Effectful.PostgreSQL qualified as PG
-import Effectful.Reader.Static qualified
 import Effectful.Time qualified as Time
 import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (WrappedEnumShow (..))
+import Pkg.DeriveUtils (DB, WrappedEnumShow (..), withTimefusion)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
 import Pkg.Parser.Expr (flattenedOtelAttributes, transformFlattenedAttribute)
 import Pkg.Parser.Stats (Section, Sources (SSpans))
 import Relude hiding (many, some)
-import System.Config qualified as Config
 import System.Logging qualified as Log
-import System.Types (DB, withTimefusion)
 import Utils (formatUTC, replaceAllFormats)
 import Web.HttpApiData (ToHttpApiData (..))
 
@@ -384,8 +381,20 @@ valueToVector (Only val) = case val of
 data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int}
 
 
-fetchLogPatterns :: (DB es, Effectful.Reader.Static.Reader Config.AuthContext :> es, Labeled "timefusion" WithConnection :> es, Log :> es, Time.Time :> es) => Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Sources -> Maybe Text -> Int -> Eff es (Int, [PatternRow])
-fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
+fetchLogPatterns
+  :: (DB es, Labeled "timefusion" WithConnection :> es, Log :> es, Time.Time :> es)
+  => Bool
+  -- ^ enableTimefusionReads (caller threads it through — keeps this module a
+  -- leaf of `System.Config` so `Telemetry.OtelLogsAndSpans` can be named in
+  -- `AuthContext.extractionWorker` without a module cycle).
+  -> Projects.ProjectId
+  -> [Section]
+  -> (Maybe UTCTime, Maybe UTCTime)
+  -> Maybe Sources
+  -> Maybe Text
+  -> Int
+  -> Eff es (Int, [PatternRow])
+fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
   now <- Time.currentTime
   let sqlCfg = (defSqlQueryCfg pid now sourceM Nothing){dateRange}
       (_, queryComponents) = queryASTToComponents sqlCfg queryAST
@@ -418,10 +427,9 @@ fetchLogPatterns pid queryAST dateRange sourceM targetM skip = do
       pure (totalPatterns, [PatternRow{logPattern = pat, count = cnt, level = lvl, service = svc, volume = lookupVolume h, mergedCount = mc} | (pat, cnt, lvl, svc, h, mc, _) <- precomputed])
     else do
       Log.logTrace "fetchLogPatterns: falling back to on-the-fly query" $ AE.object ["full_where" AE..= fullWhere]
-      authCtx <- Effectful.Reader.Static.ask @Config.AuthContext
       let bucketW = bucketWidthSecs dateRange now
           bucketCol = "floor(extract(epoch from timestamp) / " <> show bucketW <> ")::INT"
-      rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- withTimefusion authCtx.env.enableTimefusionReads case resolveFieldExpr target of
+      rawResults :: [(Text, Int, Int, Maybe Text, Maybe Text)] <- withTimefusion enableTfReads case resolveFieldExpr target of
         Just (Left colExpr) -> do
           let q = "SELECT " <> colExpr <> "::text, " <> bucketCol <> " as bi, count(*)::INT as cnt, mode() WITHIN GROUP (ORDER BY level) as lvl, mode() WITHIN GROUP (ORDER BY resource___service___name) as svc FROM otel_logs_and_spans WHERE project_id=? AND " <> fullWhere <> " AND " <> colExpr <> " IS NOT NULL GROUP BY 1, 2 ORDER BY cnt DESC LIMIT 20000"
           PG.query (Query $ encodeUtf8 q) (Only pid.toText)
