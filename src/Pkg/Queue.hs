@@ -117,10 +117,11 @@ pubsubService appLogger appCtx tp topics fn = checkpoint "pubsubService" do
         let messages = fromMaybe [] (pullResp L.^. field @"receivedMessages")
         let !validMsgs =
               mapMaybe
-                (\msg -> do
-                  ackId <- msg.ackId
-                  b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
-                  Just (ackId, b64Msg))
+                ( \msg -> do
+                    ackId <- msg.ackId
+                    b64Msg <- msg ^? field @"message" . _Just . field @"data'" . _Just . _Base64
+                    Just (ackId, b64Msg)
+                )
                 messages
         let firstAttrs = messages ^? L.folded . field @"message" . _Just . field @"attributes" . _Just . field @"additional"
         let ceType = HM.lookup "ce-type" (maybeToMonoid firstAttrs)
