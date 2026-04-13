@@ -931,7 +931,7 @@ otelColumns =
       , ("id", (.uuidP))
       , ("parent_id", txt (.parent_id))
       , ("hashes", arr (.hashes))
-      , ("name", txt (.name))
+      , ("name", txt (fmap (T.take 500) . (.name)))
       , ("kind", txt (.kind))
       , ("status_code", txt (.status_code))
       , ("status_message", txt (.status_message))

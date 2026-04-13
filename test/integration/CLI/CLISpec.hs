@@ -99,7 +99,7 @@ spec = aroundAll withTestResources do
 
     it "empty metrics query returns empty dataset" \tr -> do
       bs <- runCLITest tr $
-        cliGet baseUrl "/chart_data" [("query", "summarize count(*) by bin_auto(timestamp) | where service_name == 'nonexistent_xyzzy'"), ("since", "1h")]
+        cliGet baseUrl "/chart_data" [("query", "summarize count(*) by bin_auto(timestamp) | where resource.service.name == 'nonexistent_xyzzy'"), ("since", "1h")]
       decodeObject bs $ \obj -> do
         shouldHaveKeys obj ["dataset"]
         KM.lookup "rows_count" obj `shouldBe` Just (AE.Number 0)

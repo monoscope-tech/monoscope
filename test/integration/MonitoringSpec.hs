@@ -101,14 +101,14 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected response"
 
       -- Add widget to dashboard
-      let widget = def{Widget.wType = Widget.WTTimeseries, Widget.id = Just "cascade-test-widget", Widget.title = Just "Test Widget", Widget.query = Just "status_code==500"}
+      let widget = def{Widget.wType = Widget.WTTimeseries, Widget.id = Just "cascade-test-widget", Widget.title = Just "Test Widget", Widget.query = Just "status_code==\"500\""}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
 
       -- Create alert for widget
       let alertForm =
             Dashboards.WidgetAlertForm
               { widgetId = "cascade-test-widget"
-              , query = "status_code==500"
+              , query = "status_code==\"500\""
               , vizType = Just "timeseries"
               , alertEnabled = Just "on"
               , alertThreshold = 100
@@ -151,7 +151,7 @@ spec = aroundAll withTestResources do
         _ -> error "Unexpected response"
 
       -- Add widget with initial query
-      let initialQuery = "status_code==200"
+      let initialQuery = "status_code==\"200\""
       let widget = def{Widget.wType = Widget.WTTimeseries, Widget.id = Just "sync-test-widget", Widget.title = Just "Sync Test Widget", Widget.query = Just initialQuery}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId Nothing Nothing widget
 
@@ -185,7 +185,7 @@ spec = aroundAll withTestResources do
       (Unsafe.fromJust alertM).logQuery `shouldBe` initialQuery
 
       -- Update widget with new query
-      let newQuery = "status_code==500"
+      let newQuery = "status_code==\"500\""
       let updatedWidget = def{Widget.wType = Widget.WTTimeseries, Widget.id = Just "sync-test-widget", Widget.title = Just "Sync Test Widget", Widget.query = Just newQuery}
       _ <- testServant tr $ Dashboards.dashboardWidgetPutH testPid dashId (Just "sync-test-widget") Nothing updatedWidget
 

@@ -3,6 +3,7 @@ module Data.Effectful.Hasql (
   Hasql (..),
   HasqlException (..),
   isTransientHasqlError,
+  isDeadlockError,
   runHasqlPool,
   session,
   statement,
@@ -21,7 +22,7 @@ import Effectful.Dispatch.Dynamic (interpret, send)
 import Effectful.Labeled (Labeled, labeled)
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool (Pool, UsageError (..), use)
-import Hasql.Session (CommandError (..), Session, SessionError (..))
+import Hasql.Session (CommandError (..), ResultError (..), Session, SessionError (..))
 import Hasql.Session qualified as Session
 import Hasql.Statement (Statement)
 import Hasql.Transaction qualified as Tx
@@ -64,6 +65,12 @@ isTransientUsageError = \case
 
 isTransientHasqlError :: HasqlException -> Bool
 isTransientHasqlError (HasqlException ue) = isTransientUsageError ue
+
+
+isDeadlockError :: HasqlException -> Bool
+isDeadlockError (HasqlException ue) = case ue of
+  SessionUsageError (QueryError _ _ (ResultError (ServerError code _ _ _ _))) -> code == "40P01"
+  _ -> False
 
 
 runHasqlPool :: IOE :> es => Pool -> Eff (Hasql ': es) a -> Eff es a

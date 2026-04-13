@@ -965,10 +965,10 @@ safetyNetReprocess pid = do
     liftIO $ Telemetry.handOffBatches ctx.extractionWorker caches rows
 
 
--- | Dual-fork an UPDATE to Postgres (blocking) + TimeFusion (best-effort, circuit-broken).
+-- | Dual-fork an UPDATE to Postgres (blocking, deadlock-retried) + TimeFusion (best-effort, circuit-broken).
 dualExecPgTf :: (DB es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Config.AuthContext -> HI.Sql -> Eff es Int64
 dualExecPgTf ctx sql' = Ki.scoped \scope -> do
-  mainThread <- Ki.fork scope $ Hasql.interpExecute sql'
+  mainThread <- Ki.fork scope $ retryOnDeadlock 2 $ Hasql.interpExecute sql'
   _ <- Ki.fork scope $ Relude.when ctx.config.enableTimefusionWrites $ do
     now <- Time.currentTime
     shouldAttempt <- liftIO $ ExtractionWorker.shouldAttemptCircuit ctx.tfCircuit now
@@ -980,6 +980,16 @@ dualExecPgTf ctx sql' = Ki.scoped \scope -> do
           opened <- liftIO $ ExtractionWorker.recordCircuitFailure ctx.tfCircuit now
           Log.logAttention (if opened then "TimeFusion circuit opened" else "TimeFusion write failed") (show @Text e)
   Ki.atomically $ Ki.await mainThread
+  where
+    retryOnDeadlock :: (DB es, Log :> es) => Int -> Eff es Int64 -> Eff es Int64
+    retryOnDeadlock 0 action = action
+    retryOnDeadlock n action = tryAny action >>= \case
+      Right r -> pure r
+      Left e | Just he <- fromException @Hasql.HasqlException e, Hasql.isDeadlockError he -> do
+        Log.logAttention "UPDATE-1 deadlock, retrying" (show @Text e)
+        liftIO $ threadDelay (50000 * (3 - n)) -- 50ms, 100ms backoff
+        retryOnDeadlock (n - 1) action
+      Left e -> throwIO e
 
 
 processEagerBatch

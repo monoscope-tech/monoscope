@@ -270,6 +270,12 @@ withExternalDBSetup f = do
 
   -- Run tests and cleanup
   finally (f pool cstr) $ do
+    -- Delete TimescaleDB background jobs before tearing down, so the
+    -- scheduler doesn't try to reconnect to a dropped database.
+    withResource pool \conn ->
+      void (PGS.execute_ conn "SELECT delete_job(job_id) FROM timescaledb_information.jobs WHERE proc_schema = 'apis' OR proc_schema = 'monitors' OR proc_schema = 'tests' OR proc_schema = 'public'" :: IO Int64)
+        `Safe.catch` \(_ :: SomeException) -> pass
+
     -- Close all connections in the pool
     destroyAllResources pool
 
