@@ -862,27 +862,49 @@ instance AE.ToJSON LogsGet where
         rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount]) patterns
         total = V.foldl' (\acc p -> acc + p.count) 0 patterns
      in aggregateEnvelope rows cols allCols total ["totalPatterns" AE..= totalPatterns]
-  -- Column order must stay in sync with web-components/src/log-list.ts.
+  -- Sessions use the exact same column layout as logs so the same rendering code is reused.
+  -- Session-specific info is packed into the summary column as badge elements.
+  -- Column indices must match the logs colIdxMap exactly.
   toJSON (LogsSessionsJson totalSessions sessions) =
-    let cols = ["id", "session_id", "user_display", "user_email", "event_count", "error_count", "duration_ns", "first_seen", "last_seen", "services", "volume"] :: [Text]
+    let -- Display columns — identical to logs
+        cols = ["id", "timestamp", "service", "summary", "latency_breakdown"] :: [Text]
+        -- Full colIdxMap — same indices as logs so groupSpans/tree logic works
+        allCols = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "parent_id", "start_time_ns", "errors", "summary", "latency_breakdown", "kind", "event_count"] :: [Text]
+        fmtDuration ns
+          | ns >= 60_000_000_000 = show (ns `div` 60_000_000_000) <> "m"
+          | ns >= 1_000_000_000 = show (ns `div` 1_000_000_000) <> "s"
+          | ns >= 1_000_000 = show (ns `div` 1_000_000) <> "ms"
+          | otherwise = show ns <> "ns"
         rowOf s =
-          AE.Array
-            $ V.fromList
-              [ AE.Null
-              , AE.toJSON s.sessionId
-              , AE.toJSON (LogQueries.sessionUserDisplay s.userEmail s.userName s.userId)
-              , AE.toJSON s.userEmail
-              , AE.toJSON s.eventCount
-              , AE.toJSON s.errorCount
-              , AE.toJSON s.durationNs
-              , AE.toJSON s.firstSeen
-              , AE.toJSON s.lastSeen
-              , AE.toJSON s.services
-              , AE.toJSON s.volume
-              ]
+          let user = LogQueries.sessionUserDisplay s.userEmail s.userName s.userId
+              svcList = V.toList s.services
+              svc = if null svcList then "" else T.intercalate " " svcList
+              summaryParts =
+                [ "session⇒" <> T.take 12 s.sessionId
+                , "user⇒" <> user
+                , "events⇒" <> show s.eventCount
+                ]
+                  ++ ["errors⇒" <> show s.errorCount | s.errorCount > 0]
+                  ++ ["duration⇒" <> toText (fmtDuration s.durationNs)]
+           in AE.Array
+                $ V.fromList
+                  [ AE.Null -- id (0)
+                  , AE.toJSON s.firstSeen -- timestamp (1)
+                  , AE.toJSON s.sessionId -- trace_id (2) — used as expand key
+                  , AE.String "" -- span_name (3)
+                  , AE.toJSON s.durationNs -- duration (4)
+                  , AE.toJSON svc -- service (5)
+                  , AE.String "" -- parent_id (6)
+                  , AE.Number 0 -- start_time_ns (7)
+                  , AE.toJSON s.errorCount -- errors (8)
+                  , AE.toJSON summaryParts -- summary (9)
+                  , AE.Null -- latency_breakdown (10)
+                  , AE.String "" -- kind (11)
+                  , AE.toJSON s.traceCount -- event_count (12) — used for [+N] children count
+                  ]
         rows = V.map rowOf sessions
         total = V.foldl' (\acc s -> acc + s.eventCount) 0 sessions
-     in aggregateEnvelope rows cols cols total ["totalSessions" AE..= totalSessions]
+     in aggregateEnvelope rows cols allCols total ["totalSessions" AE..= totalSessions]
   toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
   toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
   toJSON _ = AE.object ["error" AE..= True]
@@ -1096,7 +1118,7 @@ apiLogsPage page = do
           showTrace = isJust page.showTrace
       div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
         -- Filters and row count header
-        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
+        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0 group-has-[#viz-sessions:checked]/pg:mb-0"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
@@ -1119,7 +1141,7 @@ apiLogsPage page = do
           rowCountDisplay_ "" countText suffixText
 
         -- Visualization widget that shows when not in logs view (skip for patterns mode which uses log-list)
-        div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden"] do
+        div_ [class_ "flex-1 min-h-0 h-full group-has-[#viz-logs:checked]/pg:hidden group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
           let pid = page.pid.toText
           let vizType = maybe "\"timeseries\"" show page.vizType
           script_
@@ -1158,7 +1180,7 @@ apiLogsPage page = do
         -- Logs view section (also within the scrollable container)
         div_ [class_ "flex-1 min-h-0 h-full flex flex-col"] do
           -- Virtual table for logs
-          div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
+          div_ [class_ "flex-1 min-h-0 hidden h-full group-has-[#viz-logs:checked]/pg:block group-has-[#viz-patterns:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block"] $ virtualTable page.pid Nothing Nothing
 
       -- Alert configuration panel on the right
       div_ [class_ "hidden group-has-[#create-alert-toggle:checked]/pg:block max-md:hidden ml-3.5"] $ resizer_ "alert_container" "alert_width" False
@@ -1166,9 +1188,9 @@ apiLogsPage page = do
       div_ [class_ "grow-0 shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll hidden group-has-[#create-alert-toggle:checked]/pg:block w-[500px] max-md:w-full max-md:fixed max-md:inset-0 max-md:z-50 max-md:max-w-full", id_ "alert_container"] do
         alertConfigurationForm_ page.project page.alert page.teams
 
-      div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
+      div_ [class_ $ "transition-opacity duration-200 hidden max-md:hidden ml-3.5 " <> if isJust page.targetEvent then "group-has-[#viz-logs:checked]/pg:block group-has-[#viz-sessions:checked]/pg:block" else "", id_ "resizer-details_width-wrapper"] $ resizer_ "log_details_container" "details_width" False
 
-      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase", id_ "log_details_container", term "hx-on::after-swap" "if(window.innerWidth<768)this.classList.add('details-open')"] do
+      div_ [class_ "grow-0 relative shrink-0 overflow-y-auto overflow-x-hidden h-full c-scroll w-0 max-w-0 overflow-hidden group-has-[#viz-logs:checked]/pg:max-w-full group-has-[#viz-logs:checked]/pg:overflow-y-auto group-has-[#viz-sessions:checked]/pg:max-w-full group-has-[#viz-sessions:checked]/pg:overflow-y-auto max-md:hidden max-md:[&.details-open]:block! max-md:[&.details-open]:fixed max-md:[&.details-open]:inset-0 max-md:[&.details-open]:z-40 max-md:[&.details-open]:w-full max-md:[&.details-open]:max-w-full max-md:[&.details-open]:bg-bgBase", id_ "log_details_container", term "hx-on::after-swap" "if(window.innerWidth<768)this.classList.add('details-open')"] do
         htmxOverlayIndicator_ "details_indicator"
         whenJust page.targetEvent \te -> do
           script_
@@ -1201,9 +1223,10 @@ apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> 
 apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   _ <- Projects.sessionAndProject pid
   let skip = fromMaybe 0 skipM
-      limitN = 20 :: Int
-      fetchLimit = limitN + 1 -- overflow row to detect hasMore
       key = fromMaybe "" keyM
+      isSessionKind = kindM == Just "session"
+      limitN = (if isSessionKind then 100 else 20) :: Int
+      fetchLimit = limitN + 1
   when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
   queryAST <- case parseQueryToAST (fromMaybe "" queryM) of
     Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
@@ -1218,11 +1241,29 @@ apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
   (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind skip fetchLimit
   let hasMore = V.length rows > limitN
       shown = if hasMore then V.take limitN rows else rows
+      colIdxMap = listToIndexHashMap cols
+      isSession = case expandKind of LogQueries.ExpandSession _ -> True; _ -> False
+      alreadyLoadedIds = V.mapMaybe (\v -> lookupVecTextByKey v colIdxMap "id") shown
+  -- Only fetch child spans for sessions (trace tree view); patterns just show flat examples
+  childSpansList <-
+    if not isSession
+      then pure []
+      else do
+        let allTraceIds = V.filter (not . T.null) $ V.catMaybes $ V.map (\v -> lookupVecTextByKey v colIdxMap "trace_id") shown
+            traceIds = V.fromList $ take 100 $ nubOrd $ V.toList allTraceIds
+        LogQueries.selectChildSpansAndLogs pid [] traceIds (fromD, toD) alreadyLoadedIds
+  let logsData = shown <> V.fromList childSpansList
+      queryResultCount = V.length shown
+      traces = buildTraceTree colIdxMap queryResultCount logsData
+      displayCols = curateCols [] cols
   addRespHeaders
     $ AE.object
-      [ "cols" AE..= cols
-      , "rows" AE..= shown
+      [ "cols" AE..= displayCols
+      , "rows" AE..= logsData
       , "hasMore" AE..= hasMore
+      , "colIdxMap" AE..= colIdxMap
+      , "traces" AE..= traces
+      , "queryResultCount" AE..= queryResultCount
       ]
 
 

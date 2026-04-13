@@ -92,7 +92,7 @@ export class LogList extends LitElement {
   // Inline-expand state keyed by aggregate row key (session_id or pattern_hash).
   @state() private expandedAggregates: Record<
     string,
-    { rows: any[][]; cols: string[]; colIdxMap: ColIdxMap; hasMore: boolean; loading: boolean; skip: number }
+    { rows: any[][]; cols: string[]; colIdxMap: ColIdxMap; hasMore: boolean; loading: boolean; skip: number; eventLines?: EventLine[] }
   > = {};
   @state() private fixedColumnWidths: Record<string, number> = {};
 
@@ -104,6 +104,8 @@ export class LogList extends LitElement {
   @query('#details_indicator') private detailsIndicator?: HTMLElement;
 
   private cachedServerTraces: ServerTraceEntry[] = [];
+  // Non-reactive overrides used during renderAggregateChildren to avoid triggering Lit re-renders
+  private _renderOverrides: { colIdxMap: ColIdxMap; logsColumns: string[]; mode: string } | null = null;
   private resizeTarget: string | null = null;
   private mouseState: { x: number } = { x: 0 };
   private colIdxMap: ColIdxMap = {};
@@ -178,19 +180,26 @@ export class LogList extends LitElement {
 
   private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
     // Patterns / sessions: fetch directly, no span grouping needed
-    if (this.isAggregate) {
+    if (this.isAggregate || this.mode === 'sessions') {
       const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
       if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
       const data = await resp.json();
       if (data.error) throw new Error(data.message || 'Server error');
-      const tree = (data.logsData || []).map((row: any[]) => ({
-        id: generateId(), data: row, depth: 0, children: 0, traceId: '', parentIds: [],
-        show: true, expanded: false, isLastChild: true, siblingsArr: [],
-        childErrors: false, hasErrors: false, isNew: false,
-        startNs: 0, duration: 0, traceStart: 0, traceEnd: 0,
-        childrenTimeSpans: [], type: 'log' as const,
-      }));
-      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap: data.colIdxMap || {}, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, totalSessions: data.totalSessions ?? 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
+      const colIdxMap = data.colIdxMap || {};
+      const isSessions = this.mode === 'sessions';
+      const tree = (data.logsData || []).map((row: any[]) => {
+        const sessionId = isSessions ? (row[colIdxMap['trace_id']] as string || '') : '';
+        const eventCount = isSessions ? (row[colIdxMap['event_count']] as number || 0) : 0;
+        return {
+          id: sessionId || generateId(), data: row, depth: 0,
+          children: eventCount || (isSessions ? 1 : 0), traceId: sessionId, parentIds: [],
+          show: true, expanded: false, isLastChild: true, siblingsArr: [],
+          childErrors: false, hasErrors: false, isNew: false,
+          startNs: 0, duration: 0, traceStart: 0, traceEnd: 0,
+          childrenTimeSpans: [], type: 'log' as const,
+        };
+      });
+      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, totalSessions: data.totalSessions ?? 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
     }
 
     // Use early fetch promise if available (set by server-rendered script in head)
@@ -219,7 +228,7 @@ export class LogList extends LitElement {
   }
 
   private get isAggregate() {
-    return this.mode === 'patterns' || this.mode === 'sessions';
+    return this.mode === 'patterns';
   }
 
   private setupEventListeners() {
@@ -339,7 +348,7 @@ export class LogList extends LitElement {
 
   private buildLoadMoreUrl(): string {
     // Patterns / sessions: increment aggregate_skip based on loaded count
-    if (this.isAggregate) {
+    if (this.isAggregate || this.mode === 'sessions') { // sessions also use aggregate skip for top-level pagination
       const url = new URL(window.location.href);
       url.searchParams.set('json', 'true');
       url.searchParams.set('aggregate_skip', String(this.spanListTree.length));
@@ -541,16 +550,6 @@ export class LogList extends LitElement {
       service: 136,
       summary: 3600,
       latency_breakdown: 120,
-      // Sessions columns
-      session_id: 180,
-      user_display: 200,
-      user_email: 200,
-      event_count: 90,
-      error_count: 90,
-      duration_ns: 100,
-      first_seen: 155,
-      last_seen: 155,
-      services: 180,
     };
   }
 
@@ -739,7 +738,7 @@ export class LogList extends LitElement {
     let items: EventLine[];
     if (this.isAggregate) {
       items = this.spanListTree;
-    } else if (this.view === 'tree') {
+    } else if (this.view === 'tree' || this.mode === 'sessions') {
       items = this.spanListTree.filter((e) => e.show);
     } else {
       items = this.spanListTree;
@@ -796,11 +795,8 @@ export class LogList extends LitElement {
     }
   }
 
-  // Derive a stable key for an aggregate row (sessions or patterns).
+  // Derive a stable key for an aggregate row (patterns).
   private aggregateRowKey(rowData: EventLine): string | null {
-    if (this.mode === 'sessions') {
-      return lookupVecValue<string>(rowData.data, this.colIdxMap, 'session_id') || null;
-    }
     if (this.mode === 'patterns') {
       // Patterns rows expose either a stable pattern hash or the template summary.
       const hash = lookupVecValue<string>(rowData.data, this.colIdxMap, 'pattern_hash');
@@ -857,20 +853,29 @@ export class LogList extends LitElement {
       if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
       const data = await resp.json();
       const cols: string[] = data.cols || [];
-      const childIdxMap: ColIdxMap = {};
-      cols.forEach((c, i) => (childIdxMap[c] = i));
+      const childIdxMap: ColIdxMap = data.colIdxMap || {};
+      if (!Object.keys(childIdxMap).length) cols.forEach((c, i) => (childIdxMap[c] = i));
       const existing = this.expandedAggregates[key];
       if (!existing) return;
-      const mergedRows = skip === 0 ? data.rows || [] : [...existing.rows, ...(data.rows || [])];
+      const newRows: any[][] = data.rows || [];
+      const mergedRows = skip === 0 ? newRows : [...existing.rows, ...newRows];
+      // Build trace tree from rows + server traces for full tree rendering
+      const traces = data.traces || [];
+      const eventLines = mergedRows.length
+        ? groupSpans(mergedRows, childIdxMap, {}, false, traces)
+        : [];
+      eventLines.forEach((el) => { el.show = true; el.expanded = true; });
+      const qrc = data.queryResultCount ?? mergedRows.length;
       this.expandedAggregates = {
         ...this.expandedAggregates,
         [key]: {
           rows: mergedRows,
           cols,
           colIdxMap: childIdxMap,
-          hasMore: !!data.hasMore && mergedRows.length < 500,
+          hasMore: !!data.hasMore && qrc < 500,
           loading: false,
-          skip: mergedRows.length,
+          skip: qrc,
+          eventLines,
         },
       };
       this.requestUpdate();
@@ -888,36 +893,18 @@ export class LogList extends LitElement {
   private renderAggregateChildren(parentKey: string) {
     const state = this.expandedAggregates[parentKey];
     if (!state) return nothing;
-    const summaryCol = state.colIdxMap['summary'];
-    const timestampCol = state.colIdxMap['timestamp'] ?? state.colIdxMap['created_at'];
-    const rows = state.rows.map((row) => {
-      const ts = timestampCol !== undefined ? row[timestampCol] : '';
-      const summary = summaryCol !== undefined ? row[summaryCol] : '';
-      const summaryText = Array.isArray(summary)
-        ? summary
-            .map((el) => (typeof el === 'string' ? el.split('⇒').slice(-1)[0] : ''))
-            .filter(Boolean)
-            .join(' ')
-        : String(summary || '');
-      return html`<div
-        class="flex items-center gap-2 px-2 py-0.5 text-xs hover:bg-fillWeaker cursor-pointer"
-        @click=${(e: any) => {
-          e.stopPropagation();
-          const targetInfo = requestDumpLogItemUrlPath(row, state.colIdxMap, 'spans');
-          if (targetInfo[0]) {
-            this.toggleLogRow(e, targetInfo, this.projectId);
-          }
-        }}
-      >
-        <time class="monospace text-textWeak shrink-0 w-32" datetime=${ts || ''}>${ts ? formatTimestamp(String(ts)) : ''}</time>
-        <span class="truncate text-textStrong">${summaryText}</span>
-      </div>`;
-    });
+    const eventLines = state.eventLines || [];
+
+    // Use non-reactive overrides so logItemRow renders with child columns without triggering Lit re-renders
+    this._renderOverrides = { colIdxMap: state.colIdxMap, logsColumns: state.cols, mode: 'logs' };
+    const rows = eventLines.filter((el) => el.show).map((el) => this.logItemRow(el));
+    this._renderOverrides = null;
+
     return html`<tr class="item-row flex w-full">
-      <td class="w-full bg-fillWeaker/40 border-l-2 border-strokeBrand-weak py-1 pl-8">
-        ${state.loading && state.rows.length === 0
+      <td class="w-full bg-fillWeaker/40 border-l-2 border-strokeBrand-weak py-1">
+        ${state.loading && eventLines.length === 0
           ? html`<div class="text-xs text-textWeak px-2 py-1">Loading events…</div>`
-          : state.rows.length === 0
+          : eventLines.length === 0
           ? html`<div class="text-xs text-textWeak px-2 py-1">No events.</div>`
           : html`<div class="flex flex-col">${rows}</div>`}
         ${state.hasMore
@@ -938,27 +925,95 @@ export class LogList extends LitElement {
 
   expandTrace = (tracId: string, spanId: string) => {
     this.shouldScrollToBottom = false;
+    // Sessions: fetch/toggle children on demand
+    if (this.mode === 'sessions') {
+      this.expandSessionTrace(spanId);
+      return;
+    }
     this.expandedTraces[spanId] = !this.expandedTraces[spanId];
     const expanded = this.expandedTraces[spanId];
-    let found = false;
-    for (let i = 0; i < this.spanListTree.length; i++) {
-      const span = this.spanListTree[i];
-      if (span.traceId === tracId) {
-        if (span.id === spanId) {
-          span.expanded = expanded;
-          span.show = true;
-        } else if (span.parentIds.includes(spanId)) {
-          span.expanded = expanded;
-          span.show = expanded;
+    const toggleSpans = (spans: EventLine[]) => {
+      for (const span of spans) {
+        if (span.traceId !== tracId) continue;
+        if (span.id === spanId) { span.expanded = expanded; span.show = true; }
+        else if (span.parentIds?.includes(spanId)) {
+          span.expanded = expanded; span.show = expanded;
           this.expandedTraces[span.id] = expanded;
         }
       }
-    }
-    // Update visible items after changing show properties
+    };
+    toggleSpans(this.spanListTree);
     this.updateVisibleItems();
-    // For user interactions, update immediately
     this.requestUpdate();
   };
+
+  private async expandSessionTrace(sessionId: string) {
+    const parentIdx = this.spanListTree.findIndex((e) => e.id === sessionId);
+    if (parentIdx < 0) {
+      console.warn('expandSessionTrace: session not found in tree', sessionId);
+      return;
+    }
+    const parent = this.spanListTree[parentIdx];
+    const wasExpanded = this.expandedTraces[sessionId];
+    this.expandedTraces[sessionId] = !wasExpanded;
+    parent.expanded = !wasExpanded;
+
+    if (wasExpanded) {
+      // Collapse: hide children
+      for (const span of this.spanListTree) {
+        if (span.parentIds?.includes(sessionId)) {
+          span.show = false;
+          span.expanded = false;
+          this.expandedTraces[span.id] = false;
+        }
+      }
+      this.updateVisibleItems();
+      this.requestUpdate();
+      return;
+    }
+
+    // Check if children already loaded
+    const hasChildren = this.spanListTree.some((e) => e.parentIds?.includes(sessionId));
+    if (hasChildren) {
+      for (const span of this.spanListTree) {
+        if (span.parentIds?.includes(sessionId) && span.parentIds.length === 1) {
+          span.show = true;
+        }
+      }
+      this.updateVisibleItems();
+      this.requestUpdate();
+      return;
+    }
+
+    // Fetch children
+    this.requestUpdate();
+    try {
+      const url = this.buildExpandUrl(sessionId, 0);
+      const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
+      if (!resp.ok) throw new Error(`Server error (${resp.status})`);
+      const data = await resp.json();
+      const childIdxMap: ColIdxMap = data.colIdxMap || {};
+      const rows = data.rows || [];
+      const traces = data.traces || [];
+      const eventLines = rows.length ? groupSpans(rows, childIdxMap, {}, false, traces) : [];
+      // Set parent relationship and depth relative to session parent
+      for (const el of eventLines) {
+        el.parentIds = [sessionId, ...el.parentIds];
+        el.depth = el.depth + 1;
+        el.show = true;
+        el.expanded = false;
+        el.traceId = el.traceId || sessionId;
+      }
+      // Insert children after parent and update children count to actual loaded count
+      this.spanListTree.splice(parentIdx + 1, 0, ...eventLines);
+      parent.children = eventLines.filter((el) => el.depth === 1).length;
+      this.updateVisibleItems();
+      this.requestUpdate();
+    } catch (e) {
+      console.error('Failed to load session children:', e);
+      this.showErrorToast((e as Error).message || 'Failed to load events');
+    }
+  }
 
   fetchData = async (url: string, isRefresh = false, isRecentFetch = false, isLoadMore = false) => {
     if (isRecentFetch && this.isFetchingRecent) return;
@@ -1309,7 +1364,7 @@ export class LogList extends LitElement {
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
     const isPatterns = this.mode === 'patterns';
-    const isAggregate = isPatterns || this.mode === 'sessions';
+    const isAggregate = isPatterns;
 
     return html`
       <style>
@@ -1495,7 +1550,8 @@ export class LogList extends LitElement {
   }
 
   private parseSummaryData(dataArr: any[]): string[] {
-    const summary = lookupVecValue<string[] | string>(dataArr, this.colIdxMap, 'summary');
+    const cim = this._renderOverrides?.colIdxMap ?? this.colIdxMap;
+    const summary = lookupVecValue<string[] | string>(dataArr, cim, 'summary');
     if (Array.isArray(summary)) return summary;
     try {
       return typeof summary === 'string' ? JSON.parse(summary) : [];
@@ -1626,13 +1682,15 @@ export class LogList extends LitElement {
   logItemCol = (rowData: EventLine, key: string): any => {
     const { data: dataArr, depth, children, traceId, childErrors, hasErrors, expanded, type, id, isLastChild, siblingsArr } = rowData;
     const wrapClass = this.wrapLines ? 'whitespace-break-spaces' : 'whitespace-nowrap';
+    // When rendering inside aggregate children, use overridden colIdxMap
+    const colIdxMap = this._renderOverrides?.colIdxMap ?? this.colIdxMap;
 
     switch (key) {
       case 'pattern_count':
-        const count = lookupVecValue<number>(dataArr, this.colIdxMap, key);
-        const mergedCount = lookupVecValue<number>(dataArr, this.colIdxMap, 'merged_count') || 0;
+        const count = lookupVecValue<number>(dataArr, colIdxMap, key);
+        const mergedCount = lookupVecValue<number>(dataArr, colIdxMap, 'merged_count') || 0;
         const maxCount = this.mode === 'patterns' && this.visibleItems.length
-          ? lookupVecValue<number>(this.visibleItems[0].data, this.colIdxMap, key) || 1
+          ? lookupVecValue<number>(this.visibleItems[0].data, colIdxMap, key) || 1
           : 1;
         const pct = (count / maxCount) * 100;
         return html`<div class="flex items-center gap-1.5 w-full min-w-0" title="${pct.toFixed(1)}% of total${mergedCount > 0 ? ` (${mergedCount} merged)` : ''}">
@@ -1643,18 +1701,18 @@ export class LogList extends LitElement {
           </div>
         </div>`;
       case 'volume':
-        const volBuckets = lookupVecValue<number[]>(dataArr, this.colIdxMap, key);
+        const volBuckets = lookupVecValue<number[]>(dataArr, colIdxMap, key);
         return html`<div class="flex items-center w-full">${renderSparkline(volBuckets)}</div>`;
       case 'level':
-        const lv = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        const lv = lookupVecValue<string>(dataArr, colIdxMap, key);
         if (!lv) return html`<span class="text-textWeak text-xs text-center w-full inline-block">-</span>`;
         const lvColors: Record<string, string> = { error: 'badge-error', warn: 'badge-warning', warning: 'badge-warning', info: 'badge-info', debug: 'badge-neutral' };
         return renderBadge(`cbadge-sm ${lvColors[lv.toLowerCase()] || 'badge-neutral'}`, lv);
       case 'id':
-        if (this.isAggregate) {
+        if (!this._renderOverrides && this.isAggregate) {
           return html`<div class="flex items-center justify-between w-3"><span class="col-span-1 h-5 rounded-sm flex w-1 bg-strokeBrand-weak"></span></div>`;
         }
-        const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, this.colIdxMap);
+        const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, colIdxMap);
         const isExpanded = expanded || rowData.parentIds?.some((pid: string) => this.expandedTraces[pid]);
         const indicatorClass = isExpanded ? errClass.replace('-weak', '-strong') : errClass;
         return html`
@@ -1666,7 +1724,7 @@ export class LogList extends LitElement {
         `;
       case 'created_at':
       case 'timestamp':
-        let timestamp = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        let timestamp = lookupVecValue<string>(dataArr, colIdxMap, key);
         return html`<div>
           <time class=${`monospace text-xs text-textWeak tooltip tooltip-right ${wrapClass}`} data-tip="timestamp" datetime=${timestamp}
             >${formatTimestamp(timestamp)}</time
@@ -1677,11 +1735,11 @@ export class LogList extends LitElement {
         const currentWidth = this.columnMaxWidthMap['latency_breakdown'] || this.fixedColumnWidths['latency_breakdown'] || 120;
         if (!rowData._latencyCache || rowData._latencyCache.width !== currentWidth || rowData._latencyCache.expanded !== expanded) {
           const { traceStart, traceEnd, startNs, duration, childrenTimeSpans } = rowData;
-          const color = this.serviceColors[lookupVecValue<string>(dataArr, this.colIdxMap, 'span_name')] || 'bg-slate-400';
+          const color = this.serviceColors[lookupVecValue<string>(dataArr, colIdxMap, 'span_name')] || 'bg-slate-400';
           const chil = childrenTimeSpans.map(({ startNs, duration, data }: { startNs: number; duration: number; data: any }) => ({
             startNs: startNs - traceStart,
             duration,
-            color: this.serviceColors[lookupVecValue<string>(data, this.colIdxMap, 'span_name')] || 'bg-slate-400',
+            color: this.serviceColors[lookupVecValue<string>(data, colIdxMap, 'span_name')] || 'bg-slate-400',
           }));
 
           // Extract right-aligned badges from summary array
@@ -1689,6 +1747,7 @@ export class LogList extends LitElement {
           const rightAlignedBadges: TemplateResult[] = [];
 
           // Use optimized parsing for right-aligned badges
+          let userEmail = '', userName = '', userBadgeStyle = '';
           for (let i = 0; i < summaryArr.length; i++) {
             const element = summaryArr[i];
             const sepIdx = element.indexOf('⇒');
@@ -1704,9 +1763,21 @@ export class LogList extends LitElement {
             const value = element.substring(sepIdx + 1);
             const badgeStyle = this.getStyleClass(style);
 
-            rightAlignedBadges.push(
-              field === 'session' ? this.createSessionButton(value) : renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value)
-            );
+            if (field === 'session') {
+              rightAlignedBadges.push(this.createSessionButton(value));
+            } else if (field === 'user email') {
+              userEmail = value; userBadgeStyle = badgeStyle;
+            } else if (field === 'user name') {
+              userName = value; if (!userBadgeStyle) userBadgeStyle = badgeStyle;
+            } else {
+              rightAlignedBadges.push(renderBadge(`cbadge-sm ${badgeStyle} bg-opacity-100`, value));
+            }
+          }
+          if (userEmail || userName) {
+            const full = userEmail || userName;
+            const display = full.length > 20 ? full.substring(0, 18) + '…' : full;
+            const tip = [userName, userEmail].filter(Boolean).join(' — ');
+            rightAlignedBadges.push(renderBadge(`cbadge-sm ${userBadgeStyle} bg-opacity-100`, display, tip));
           }
 
           const latencyHtml = html`
@@ -1748,7 +1819,7 @@ export class LogList extends LitElement {
           : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         const summaryContent = rowData._summaryCache.content;
         return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
-          ${this.view === 'tree'
+          ${this.view === 'tree' || this.mode === 'sessions'
             ? html`
                 <div class="flex items-center">
                   ${map(
@@ -1790,59 +1861,10 @@ export class LogList extends LitElement {
           <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>${summaryContent}</div>
         </div>`;
       case 'service':
-        let serviceData = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        let serviceData = lookupVecValue<string>(dataArr, colIdxMap, key);
         return renderBadge('cbadge-sm badge-neutral ' + wrapClass, serviceData, key);
-      case 'session_id': {
-        const sid = lookupVecValue<string>(dataArr, this.colIdxMap, key) || '';
-        const short = sid.length > 10 ? `${sid.slice(0, 6)}…${sid.slice(-4)}` : sid;
-        return html`<span class="flex items-center gap-1">
-          <span class="font-mono text-xs text-textStrong truncate" title=${sid}>${short || '—'}</span>
-          ${rowData.expanded
-            ? faSprite('chevron-down', 'regular', 'w-3 h-3 text-textWeak shrink-0')
-            : faSprite('chevron-right', 'regular', 'w-3 h-3 text-textWeak shrink-0')}
-        </span>`;
-      }
-      case 'user_display': {
-        const val = lookupVecValue<string>(dataArr, this.colIdxMap, key);
-        return html`<span class="truncate text-textStrong" title=${val || ''}>${val || '—'}</span>`;
-      }
-      case 'user_email': {
-        const val = lookupVecValue<string>(dataArr, this.colIdxMap, key);
-        return html`<span class="truncate text-textWeak" title=${val || ''}>${val || '—'}</span>`;
-      }
-      case 'event_count': {
-        const n = lookupVecValue<number>(dataArr, this.colIdxMap, key) || 0;
-        return html`<span class="tabular-nums text-textStrong">${n}</span>`;
-      }
-      case 'error_count': {
-        const n = lookupVecValue<number>(dataArr, this.colIdxMap, key) || 0;
-        return n > 0
-          ? renderBadge('cbadge-sm badge-error', String(n))
-          : html`<span class="tabular-nums text-textWeak">0</span>`;
-      }
-      case 'duration_ns': {
-        const n = lookupVecValue<number>(dataArr, this.colIdxMap, key) || 0;
-        const fmt = (window as any).formatDuration
-          ? (window as any).formatDuration(n)
-          : n >= 1e9 ? `${(n / 1e9).toFixed(1)}s` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}ms` : `${(n / 1e3).toFixed(0)}µs`;
-        return html`<span class="tabular-nums text-textWeak">${fmt}</span>`;
-      }
-      case 'first_seen':
-      case 'last_seen': {
-        const ts = lookupVecValue<string>(dataArr, this.colIdxMap, key);
-        return html`<time class="monospace text-xs text-textWeak ${wrapClass}" datetime=${ts || ''}>${ts ? formatTimestamp(ts) : '—'}</time>`;
-      }
-      case 'services': {
-        const arr = lookupVecValue<string[]>(dataArr, this.colIdxMap, key) || [];
-        const shown = arr.slice(0, 3);
-        const extra = arr.length - shown.length;
-        return html`<div class="flex items-center gap-1 overflow-hidden">
-          ${shown.map((s) => renderBadge('cbadge-sm badge-neutral', s))}
-          ${extra > 0 ? html`<span class="text-xs text-textWeak">+${extra}</span>` : nothing}
-        </div>`;
-      }
       default:
-        let v = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        let v = lookupVecValue<string>(dataArr, colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
     }
   };
@@ -1942,7 +1964,7 @@ export class LogList extends LitElement {
 
     if (!this.spanListTree.length) return html`<tr></tr>`;
 
-    // Aggregate views (patterns/sessions) don't support live streaming or loading newer events
+    // Aggregate views (patterns) don't support live streaming or loading newer events
     if (this.isAggregate) return html`<tr></tr>`;
 
     const fetchRecent = () => this.fetchData(this.buildRecentFetchUrl(), false, true);
@@ -2006,14 +2028,18 @@ export class LogList extends LitElement {
 
   logItemRow = (rowData: EventLine) => {
     try {
-      const isPatterns = this.mode === 'patterns';
-      const isAggregate = isPatterns || this.mode === 'sessions';
+      const ov = this._renderOverrides;
+      const effectiveMode = ov?.mode ?? this.mode;
+      const effectiveColIdxMap = ov?.colIdxMap ?? this.colIdxMap;
+      const effectiveLogsColumns = ov?.logsColumns ?? this.logsColumns;
+      const isPatterns = effectiveMode === 'patterns';
+      const isAggregate = isPatterns;
       const s = rowData.type === 'log' ? 'logs' : 'spans';
-      const targetInfo = isAggregate ? '' : requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
+      const targetInfo = isAggregate ? '' : requestDumpLogItemUrlPath(rowData.data, effectiveColIdxMap, s);
       const isNew = rowData.isNew;
 
       // Pre-calculate CSS custom properties for widths
-      const columnStyles = this.logsColumns.reduce((acc, column) => {
+      const columnStyles = effectiveLogsColumns.reduce((acc, column) => {
         const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
         if (width) {
           acc[`--col-${column}-width`] = `${width}px`;
@@ -2024,10 +2050,10 @@ export class LogList extends LitElement {
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex group whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto isolate cursor-pointer',
+            'item-row relative p-0 flex group whitespace-nowrap hover:bg-fillWeaker isolate cursor-pointer',
+            !ov && 'contain-layout-style-paint content-visibility-auto',
             isPatterns && 'items-start',
             !this.wrapLines && !isAggregate && 'h-[28px]',
-            this.mode === 'sessions' && 'h-[32px]',
             isNew && 'animate-fadeBg'
           )}
           style=${Object.entries(columnStyles)
@@ -2038,30 +2064,33 @@ export class LogList extends LitElement {
                 event.stopPropagation();
                 this.toggleAggregateRow(rowData);
               }
-            : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
+            : effectiveMode === 'sessions' && rowData.depth === 0
+              ? (event: any) => { event.stopPropagation(); this.expandTrace(rowData.traceId, rowData.id); }
+              : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
-          ${this.logsColumns
+          ${effectiveLogsColumns
             .filter((v) => v !== 'latency_breakdown')
             .map((column) => {
               const hasWidth = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
+              // In aggregate child rows (ov), skip fixed summary width so it flexes to fill remaining space
+              const skipFixedWidth = ov && column === 'summary';
               return html`<td
                 class=${`${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} bg-bgBase group-hover:bg-inherit relative pl-2 ${
-                  column === 'summary' ? 'flex-1 min-w-0' : 'flex-shrink-0'
-                } ${hasWidth && !(isAggregate && column === 'summary') ? `col-${column}` : ''}`}
+                  column === 'summary' ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}` : 'flex-shrink-0'
+                } ${hasWidth && !(isAggregate && column === 'summary') && !skipFixedWidth ? `col-${column}` : ''}`}
               >
                 ${this.logItemCol(rowData, column)}
               </td>`;
             })}
-          ${this.logsColumns.includes('latency_breakdown')
-            ? html`<td class="sticky right-0 max-md:static bg-bgBase z-10 pl-2">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
+          ${effectiveLogsColumns.includes('latency_breakdown')
+            ? html`<td class="${ov ? '' : 'sticky right-0 max-md:static z-10'} bg-bgBase pl-2 shrink-0 ${ov ? 'col-latency_breakdown' : ''}">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
             : nothing}
         </tr>
       `;
       return rowHtml;
     } catch (error) {
-      return html`<tr>
-        <td colspan="${this.logsColumns.length}">Error rendering row: ${error.message}</td>
-      </tr>`;
+      console.error('logItemRow error:', error);
+      return html`<tr><td>Error rendering row: ${(error as Error).message}</td></tr>`;
     }
   };
 
@@ -2123,7 +2152,8 @@ export class LogList extends LitElement {
 
   createSessionButton = (sessionId: string) => html`
     <button
-      class="flex items-center gap-1 shrink-0 cbadge-sm badge-neutral cursor-pointer"
+      class="flex items-center shrink-0 cbadge-sm badge-neutral cursor-pointer tooltip tooltip-left"
+      data-tip="Play recording"
       @click=${(e: any) => {
         e.stopPropagation();
         e.preventDefault();
@@ -2132,7 +2162,6 @@ export class LogList extends LitElement {
         e.stopPropagation();
         e.preventDefault();
         window.dispatchEvent(new CustomEvent('loadSessionReplay', { detail: { sessionId }, bubbles: true, cancelable: false }));
-        // Cache the wrapper reference
         let wrapper = this.sessionPlayerWrapper;
         if (!wrapper) {
           wrapper = document.querySelector('#sessionPlayerWrapper');
@@ -2141,7 +2170,7 @@ export class LogList extends LitElement {
         if (wrapper) wrapper.classList.remove('hidden');
       }}
     >
-      ${faSprite('play', 'regular', 'w-4 h-4')} Play recording
+      ${faSprite('play', 'regular', 'w-3.5 h-3.5')}
     </button>
   `;
 

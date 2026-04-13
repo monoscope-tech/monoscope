@@ -158,9 +158,9 @@ export const faSprite = (iconName: string, kind: string, classes: string): Templ
 export const renderBadge = (classes: string, title: string, tooltip?: string): TemplateResult =>
   html`<span
     class=${clsx(classes, 'relative transition-all duration-200 hover:shadow-sm', {
-      'tooltip tooltip-right': tooltip,
+      'tooltip tooltip-left': !!tooltip,
     })}
-    ${tooltip ? html`data-tip=${tooltip}` : ''}
+    data-tip=${tooltip ?? ''}
     >${title}</span
   >`;
 

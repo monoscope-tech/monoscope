@@ -367,6 +367,7 @@ data SessionRow = SessionRow
   , firstSeen :: UTCTime
   , lastSeen :: UTCTime
   , durationNs :: Int64
+  , traceCount :: Int64
   , services :: V.Vector Text
   , volume :: [Int]
   }
@@ -493,6 +494,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             attributes___user___email AS user_email,
             COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, '')) AS user_name,
             resource___service___name AS service_name,
+            context___trace_id AS trace_id,
             timestamp, end_time, level, severity___severity_number, status_code,
             floor(extract(epoch from timestamp) / #{bucketW})::INT AS bi
           FROM otel_logs_and_spans
@@ -508,6 +510,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             MIN(timestamp) AS first_seen,
             MAX(COALESCE(end_time, timestamp)) AS last_seen,
             (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1000000000)::BIGINT AS duration_ns,
+            COUNT(DISTINCT trace_id)::BIGINT AS trace_count,
             COUNT(*) OVER()::INT AS total_sessions
           FROM filtered GROUP BY session_id
         ), page AS (
@@ -525,7 +528,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           FROM hourly GROUP BY session_id
         ) SELECT p.session_id, p.user_id, p.user_email, p.user_name,
             p.event_count, p.error_count, p.first_seen,
-            p.last_seen, p.duration_ns, p.total_sessions,
+            p.last_seen, p.duration_ns, p.trace_count, p.total_sessions,
             COALESCE(s.services, '{}'::TEXT[]),
             COALESCE(h.bis, '{}'::INT[]), COALESCE(h.cnts, '{}'::INT[])
           FROM page p LEFT JOIN svcs s USING (session_id) LEFT JOIN hourly_agg h USING (session_id)
@@ -536,14 +539,14 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= V.length rawRows]
   let totalSessions = fromMaybe (0 :: Int) $ do
         firstRow <- rawRows V.!? 0
-        AET.parseMaybe AE.parseJSON =<< (firstRow V.!? 9)
-      allBuckets = concatMap (\row -> fromMaybe [] $ AET.parseMaybe AE.parseJSON =<< (row V.!? 11)) $ V.toList rawRows
+        AET.parseMaybe AE.parseJSON =<< (firstRow V.!? 10)
+      allBuckets = concatMap (\row -> fromMaybe [] $ AET.parseMaybe AE.parseJSON =<< (row V.!? 12)) $ V.toList rawRows
       range = bucketRange allBuckets
       toRowWithVolume row =
         let cell :: AE.FromJSON a => Int -> Maybe a
             cell i = AET.parseMaybe AE.parseJSON =<< (row V.!? i)
-            bis = fromMaybe [] $ cell 11 :: [Int]
-            cnts = fromMaybe [] $ cell 12 :: [Int]
+            bis = fromMaybe [] $ cell 12 :: [Int]
+            cnts = fromMaybe [] $ cell 13 :: [Int]
          in SessionRow
               { sessionId = fromMaybe "" $ cell 0
               , userId = cell 1
@@ -554,7 +557,8 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
               , firstSeen = fromMaybe (posixSecondsToUTCTime 0) $ cell 6
               , lastSeen = fromMaybe (posixSecondsToUTCTime 0) $ cell 7
               , durationNs = fromMaybe 0 $ cell 8
-              , services = fromMaybe V.empty $ cell 10
+              , traceCount = fromMaybe 0 $ cell 9
+              , services = fromMaybe V.empty $ cell 11
               , volume = densifyBuckets range $ zip bis cnts
               }
   pure (totalSessions, map toRowWithVolume $ V.toList rawRows)
@@ -595,11 +599,19 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
       -- Mirror selectLogTable's summary column handling: wrap TEXT[] as JSON for row output.
       processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) $ colsNoAsClause cols
       selectClause = T.intercalate ", " processedCols
-      q =
-        rawSql ("SELECT " <> selectClause <> " FROM otel_logs_and_spans WHERE ")
-          <> fullWhereSql
-          <> expandFilter
-          <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::INT LIMIT #{limitN}::INT|]
+      -- Sessions: fetch one root event per trace via DISTINCT ON so [+N] expansion
+      -- covers all traces.  Patterns/other: fetch raw events as before.
+      q = case expandKind of
+        ExpandSession _ ->
+          rawSql ("SELECT " <> selectClause <> " FROM (SELECT DISTINCT ON (context___trace_id) * FROM otel_logs_and_spans WHERE ")
+            <> fullWhereSql
+            <> expandFilter
+            <> [HI.sql| ORDER BY context___trace_id, parent_id ASC NULLS FIRST, timestamp ASC) sub ORDER BY timestamp ASC OFFSET #{skip}::INT LIMIT #{limitN}::INT|]
+        _ ->
+          rawSql ("SELECT " <> selectClause <> " FROM otel_logs_and_spans WHERE ")
+            <> fullWhereSql
+            <> expandFilter
+            <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::INT LIMIT #{limitN}::INT|]
   Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
   rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery q
   pure (rows, listToColNames cols)

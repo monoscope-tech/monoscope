@@ -214,6 +214,17 @@ logQueryBox_ config = do
       div_ [class_ "flex items-between justify-between max-md:flex-wrap max-md:gap-0.5"] do
         div_ [class_ "flex items-center gap-2 max-md:gap-1 max-md:w-full"] do
           visualizationTabs_ config.vizType config.updateUrl config.targetWidgetPreview config.alert
+          div_ [class_ "hidden group-has-[#viz-sessions:checked]/pg:flex items-center gap-1"] do
+            let sortOptions = [("last_seen", "Last seen"), ("first_seen", "First seen"), ("duration", "Duration"), ("errors", "Errors"), ("events", "Events")] :: [(Text, Text)]
+            span_ [class_ "text-textWeak text-xs"] "Sort:"
+            select_
+              [ class_ "select select-sm max-w-[130px]"
+              , id_ "session-sort-select"
+              , onchange_ "window.setQueryParamAndReload('sort_by', this.value)"
+              ]
+              $ forM_ sortOptions \(v, label) ->
+                option_ [value_ v] $ toHtml label
+            script_ "document.getElementById('session-sort-select').value = new URLSearchParams(window.location.search).get('sort_by') || 'last_seen';"
           div_ [class_ "hidden group-has-[#viz-patterns:checked]/pg:flex items-center gap-1"] do
             let isCustom = maybe False (\s -> s `notElem` map fst knownPatternFields) config.patternSelected
             select_
@@ -282,7 +293,7 @@ logQueryBox_ config = do
           do
             fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 hidden group-has-[.default-chart:checked]/pg:block"] do
               input_ [type_ "checkbox", class_ "checkbox checkbox-sm rounded-sm toggle-chart"] >> span_ "Hide timeline"
-            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden"] do
+            fieldset_ [class_ "fieldset"] $ label_ [class_ "label space-x-1 group-has-[#viz-patterns:checked]/pg:hidden group-has-[#viz-sessions:checked]/pg:hidden"] do
               input_
                 $ [ type_ "checkbox"
                   , id_ "create-alert-toggle"

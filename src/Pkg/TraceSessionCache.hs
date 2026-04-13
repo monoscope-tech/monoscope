@@ -22,6 +22,7 @@ import Data.Aeson qualified as AE
 import Data.HashMap.Strict qualified as HM
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), atMapText)
 import Pkg.DeriveUtils (AesonText (..), DB, unAesonTextMaybe)
+import Utils (jsonToMap, nestedJsonFromDotNotation)
 
 
 data TraceSessionInfo = TraceSessionInfo
@@ -82,18 +83,20 @@ traceKey span_ = (span_.project_id,) <$> (span_.context >>= (.trace_id))
 
 
 -- | Insert session/user attributes into the span's attribute Map without overwriting existing keys.
+-- Uses nestedJsonFromDotNotation so dotted keys (e.g. "session.id") become nested JSON
+-- matching the structure produced by OTLP ingestion, which atMapText expects for lookup.
 stampSpan :: TraceSessionInfo -> OtelLogsAndSpans -> OtelLogsAndSpans
 stampSpan info span_ =
   let am = fromMaybe Map.empty (unAesonTextMaybe span_.attributes)
-      inserts =
-        Map.fromList
-          $ catMaybes
-            [ ("session.id",) . AE.String <$> info.sessionId
-            , ("user.id",) . AE.String <$> info.userId
-            , ("user.email",) . AE.String <$> info.userEmail
-            , ("user.name",) . AE.String <$> info.userName
-            , ("user.full_name",) . AE.String <$> info.userFullName
-            ]
+      pairs =
+        catMaybes
+          [ ("session.id",) . AE.String <$> info.sessionId
+          , ("user.id",) . AE.String <$> info.userId
+          , ("user.email",) . AE.String <$> info.userEmail
+          , ("user.name",) . AE.String <$> info.userName
+          , ("user.full_name",) . AE.String <$> info.userFullName
+          ]
+      inserts = fromMaybe Map.empty $ jsonToMap $ nestedJsonFromDotNotation pairs
    in span_{attributes = Just (AesonText (am `Map.union` inserts))}
 
 
@@ -119,7 +122,7 @@ evictStaleEntries :: TraceSessionCache -> Int -> Int -> UTCTime -> IO Int
 evictStaleEntries cache maxIdleSecs maxEntries now =
   atomicModifyIORef' cache \m ->
     let threshold = fromIntegral maxIdleSecs :: NominalDiffTime
-        fresh = HM.filter (\info -> diffUTCTime now info.lastAccessedAt < threshold) m
+        fresh = HM.filter (\info -> diffUTCTime now info.lastAccessedAt <= threshold) m
         before = HM.size m
      in if HM.size fresh <= maxEntries
           then (fresh, before - HM.size fresh)

@@ -137,13 +137,21 @@ expandAPIlogItemH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text ->
 expandAPIlogItemH pid rdId timestamp sourceM = do
   _ <- Projects.sessionAndProject pid
   authCtx <- Effectful.Reader.Static.ask @AuthContext
-  -- sourceM parameter is preserved for future use but not used in current logic
   -- Query the unified table using timestamp and id
   item <-
     Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
       $ Telemetry.logRecordByProjectAndId pid timestamp rdId
+  -- Fallback: demo project's WHERE clause is "TRUE" (no project_id filter), so expand rows
+  -- may belong to other projects. Only use the unscoped lookup for the demo project.
+  item' <- case item of
+    Just _ -> pure item
+    Nothing
+      | pid.toText == "00000000-0000-0000-0000-000000000000" ->
+          Hasql.withHasqlTimefusion authCtx.env.enableTimefusionReads
+            $ Telemetry.logRecordById timestamp rdId
+      | otherwise -> pure Nothing
 
-  case item of
+  case item' of
     Just record -> do
       -- Determine if this is a log or span based on the kind field
       case record.kind of

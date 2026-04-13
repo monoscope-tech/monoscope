@@ -958,7 +958,7 @@ safetyNetReprocess pid = do
                 AND processed_at IS NULL
                 AND timestamp >= #{cutoff}
                 AND timestamp <  now() - interval '10 minutes'
-                AND timestamp >  now() - interval '24 hours'
+                AND timestamp >  now() - interval '6 hours'
               ORDER BY timestamp
               LIMIT 1000 |]
   Relude.unless (V.null rows) $ do

@@ -28,7 +28,7 @@ import Data.Aeson.Key (fromText)
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
 import Data.List (isInfixOf, sortBy)
 import Data.Set qualified as Set
-import Control.Exception (ErrorCall (..))
+import Control.Exception (ErrorCall (..), evaluate)
 
 
 pid :: Projects.ProjectId
@@ -326,14 +326,16 @@ spec = aroundAll withTestResources do
 
       it "Test 11.5: expand endpoint rejects missing key with 400" $ \tr -> do
         let (timeFrom, timeTo) = testTimeRange
-        toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
-          (Log.apiLogExpandH pid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+        (do (h, _) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+              (Log.apiLogExpandH pid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+            evaluate h >> pass)
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
 
       it "Test 11.6: expand endpoint rejects invalid kind with 400" $ \tr -> do
         let (timeFrom, timeTo) = testTimeRange
-        toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
-          (Log.apiLogExpandH pid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+        (do (h, _) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+              (Log.apiLogExpandH pid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+            evaluate h >> pass)
           `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
 
       it "Test 11.7: sort_by=events orders sessions by event count" $ \tr -> do
