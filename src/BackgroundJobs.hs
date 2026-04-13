@@ -89,11 +89,11 @@ import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
-import Pkg.TraceSessionCache qualified as TSC
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
 import Pkg.QueryCache qualified as QueryCache
+import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage (parseCanonicalPaths, processSpanToEntities, tokenizeUrlPath)
 import PyF (fmtTrim)
 import Relude hiding (ask)
@@ -1401,8 +1401,9 @@ runDrainAgeFlushTimer logger ctx = forever $ do
   tryOp "enforceBufferBound" $ ExtractionWorker.enforceBufferBound worker ctx.config.maxBufferedSpans now
   tryOp "evictStaleTrees" $ ExtractionWorker.evictStaleTrees worker ctx.config.maxDrainTrees now
   tryAny (TSC.evictStaleEntries ctx.traceSessionCache 300 50_000 now) >>= \case
-    Right n -> when (n > 0) $
-      runLogT (show ctx.config.environment) logger ctx.config.logLevel
+    Right n ->
+      when (n > 0)
+        $ runLogT (show ctx.config.environment) logger ctx.config.logLevel
         $ LogLegacy.logTrace "drain-age-flush:evictTraceSessions" (show @Text n)
     Left e ->
       runLogT (show ctx.config.environment) logger ctx.config.logLevel
@@ -1417,10 +1418,10 @@ runSessionBackfillTimer logger ctx tp = forever $ do
     Left e ->
       runLogT (show ctx.config.environment) logger ctx.config.logLevel
         $ LogLegacy.logAttention "session-backfill" (show @Text e)
- where
-  go = do
-    n <- TSC.backfillSessionAttributes
-    when (n > 0) $ Log.logTrace "session-backfill" ("rows_updated" :: Text, n)
+  where
+    go = do
+      n <- TSC.backfillSessionAttributes
+      when (n > 0) $ Log.logTrace "session-backfill" ("rows_updated" :: Text, n)
 
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()

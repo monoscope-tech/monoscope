@@ -85,13 +85,15 @@ traceKey span_ = (span_.project_id,) <$> (span_.context >>= (.trace_id))
 stampSpan :: TraceSessionInfo -> OtelLogsAndSpans -> OtelLogsAndSpans
 stampSpan info span_ =
   let am = fromMaybe Map.empty (unAesonTextMaybe span_.attributes)
-      inserts = Map.fromList $ catMaybes
-        [ ("session.id",) . AE.String <$> info.sessionId
-        , ("user.id",) . AE.String <$> info.userId
-        , ("user.email",) . AE.String <$> info.userEmail
-        , ("user.name",) . AE.String <$> info.userName
-        , ("user.full_name",) . AE.String <$> info.userFullName
-        ]
+      inserts =
+        Map.fromList
+          $ catMaybes
+            [ ("session.id",) . AE.String <$> info.sessionId
+            , ("user.id",) . AE.String <$> info.userId
+            , ("user.email",) . AE.String <$> info.userEmail
+            , ("user.name",) . AE.String <$> info.userName
+            , ("user.full_name",) . AE.String <$> info.userFullName
+            ]
    in span_{attributes = Just (AesonText (am `Map.union` inserts))}
 
 
@@ -101,8 +103,8 @@ lookupAndStamp cache spans = do
   now <- Time.currentTime
   -- Pass 1: collect and upsert
   let infos = V.mapMaybe (\s -> (,) <$> traceKey s <*> extractSessionInfo now s) spans
-  unless (V.null infos) $
-    atomicModifyIORef' cache \m ->
+  unless (V.null infos)
+    $ atomicModifyIORef' cache \m ->
       (V.foldl' (\acc (k, v) -> HM.insertWith (<>) k v acc) m infos, ())
   -- Pass 2: stamp from cache
   cached <- readIORef cache
@@ -128,7 +130,7 @@ evictStaleEntries cache maxIdleSecs maxEntries now =
 
 
 -- | Backfill session/user attrs from sibling spans within recent traces (catches cross-batch edge cases).
-backfillSessionAttributes :: (DB es) => Eff es Int
+backfillSessionAttributes :: DB es => Eff es Int
 backfillSessionAttributes = do
   rows :: [Int] <-
     Hasql.interp

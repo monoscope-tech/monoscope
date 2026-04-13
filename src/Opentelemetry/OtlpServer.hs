@@ -56,7 +56,6 @@ import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Pkg.TraceSessionCache qualified as TSC
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (RpcHandler, SomeRpcHandler, getRequestMetadata, mkRpcHandler, recvFinalInput, sendFinalOutput)
@@ -64,6 +63,7 @@ import Network.GRPC.Server.Run hiding (runServer)
 import Network.GRPC.Server.StreamType (Methods (..), fromMethods)
 import OpenTelemetry.Trace (TracerProvider)
 import Pkg.DeriveUtils (AesonText (..), UUIDId (..), unUUIDId)
+import Pkg.TraceSessionCache qualified as TSC
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
 import Proto.Opentelemetry.Proto.Collector.Metrics.V1.MetricsService qualified as MS
@@ -211,7 +211,7 @@ getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (rm ^. PMF.resource . PR
 
 
 -- | Best-effort session stamping; falls back to unstamped spans on failure (backfill timer catches them).
-stampOrPassthrough :: (IOE :> es, Time.Time :> es, Log :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
+stampOrPassthrough :: (IOE :> es, Log :> es, Time.Time :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
 stampOrPassthrough appCtx v =
   try (TSC.lookupAndStamp appCtx.traceSessionCache v) >>= \case
     Right stamped -> pure stamped
