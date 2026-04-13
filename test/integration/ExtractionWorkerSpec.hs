@@ -52,9 +52,10 @@ spec = aroundAll withTestResources do
 
     it "safety-net: unprocessed rows get re-driven through the worker" \tr -> do
       apiKey <- createTestAPIKey tr pid "ew-safetynet-key"
-      -- Use a timestamp relative to the DB's frozen clock (now() ≈ frozenTime + test runtime)
+      -- Query DB clock (may be real or frozen) and use a timestamp 1h before it
       -- Must satisfy: now() - 24h < ts < now() - 10m
-      let safetyNetTime = addUTCTime (-3600) frozenTime
+      [Only dbNow] <- withPool tr.trPool $ DBT.query_ [sql| SELECT now() |]
+      let safetyNetTime = addUTCTime (-3600) dbNow
       -- Temporarily disable accepting so submitBatch drops the batch
       let worker = (.extractionWorker) tr.trATCtx
       atomically $ writeTVar worker.acceptingBatches False
