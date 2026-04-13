@@ -558,22 +558,24 @@ getTraceDetails pid trId tme now = do
 logRecordByProjectAndId :: DB es => Projects.ProjectId -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
 logRecordByProjectAndId pid = lookupOtelRecord (Just pid.toText)
 
+
 -- | Lookup by id + timestamp only (no project_id filter). Used as fallback for demo project where
 -- session data may span multiple projects.
 logRecordById :: DB es => UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
 logRecordById = lookupOtelRecord Nothing
+
 
 lookupOtelRecord :: DB es => Maybe Text -> UTCTime -> UUID.UUID -> Eff es (Maybe OtelLogsAndSpans)
 lookupOtelRecord mPid createdAt rdId = do
   let tLo = addUTCTime (-1) createdAt
       tHi = addUTCTime 1 createdAt
       pidFilter = maybe mempty (\p -> [HI.sql| and project_id=#{p}|]) mPid
-  Hasql.interpOne $
-    [HI.sql|SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
+  Hasql.interpOne
+    $ [HI.sql|SELECT project_id, id::text, timestamp, observed_timestamp, context, level, severity, body, attributes, resource,
                 COALESCE(hashes, '{}'), kind, status_code, status_message, COALESCE(start_time, timestamp), end_time, events, links, duration, name, parent_id, summary, date::timestamptz
            FROM otel_logs_and_spans where timestamp BETWEEN #{tLo} AND #{tHi}|]
-      <> pidFilter
-      <> [HI.sql| and id=#{rdId} LIMIT 1|]
+    <> pidFilter
+    <> [HI.sql| and id=#{rdId} LIMIT 1|]
 
 
 getSpanRecordsByTraceId :: DB es => Projects.ProjectId -> Text -> Maybe UTCTime -> UTCTime -> Eff es [OtelLogsAndSpans]

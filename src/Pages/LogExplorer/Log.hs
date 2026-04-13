@@ -866,45 +866,47 @@ instance AE.ToJSON LogsGet where
   -- Session-specific info is packed into the summary column as badge elements.
   -- Column indices must match the logs colIdxMap exactly.
   toJSON (LogsSessionsJson totalSessions sessions) =
-    let -- Display columns — identical to logs
-        cols = ["id", "timestamp", "service", "summary", "latency_breakdown"] :: [Text]
-        -- Full colIdxMap — same indices as logs so groupSpans/tree logic works
-        allCols = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "parent_id", "start_time_ns", "errors", "summary", "latency_breakdown", "kind", "event_count"] :: [Text]
-        fmtDuration ns
-          | ns >= 60_000_000_000 = show (ns `div` 60_000_000_000) <> "m"
-          | ns >= 1_000_000_000 = show (ns `div` 1_000_000_000) <> "s"
-          | ns >= 1_000_000 = show (ns `div` 1_000_000) <> "ms"
-          | otherwise = show ns <> "ns"
-        rowOf s =
-          let user = LogQueries.sessionUserDisplay s.userEmail s.userName s.userId
-              svcList = V.toList s.services
-              svc = if null svcList then "" else T.intercalate " " svcList
-              summaryParts =
-                [ "session⇒" <> T.take 12 s.sessionId
-                , "user⇒" <> user
-                , "events⇒" <> show s.eventCount
+    let
+      -- Display columns — identical to logs
+      cols = ["id", "timestamp", "service", "summary", "latency_breakdown"] :: [Text]
+      -- Full colIdxMap — same indices as logs so groupSpans/tree logic works
+      allCols = ["id", "timestamp", "trace_id", "span_name", "duration", "service", "parent_id", "start_time_ns", "errors", "summary", "latency_breakdown", "kind", "event_count"] :: [Text]
+      fmtDuration ns
+        | ns >= 60_000_000_000 = show (ns `div` 60_000_000_000) <> "m"
+        | ns >= 1_000_000_000 = show (ns `div` 1_000_000_000) <> "s"
+        | ns >= 1_000_000 = show (ns `div` 1_000_000) <> "ms"
+        | otherwise = show ns <> "ns"
+      rowOf s =
+        let user = LogQueries.sessionUserDisplay s.userEmail s.userName s.userId
+            svcList = V.toList s.services
+            svc = if null svcList then "" else T.intercalate " " svcList
+            summaryParts =
+              [ "session⇒" <> T.take 12 s.sessionId
+              , "user⇒" <> user
+              , "events⇒" <> show s.eventCount
+              ]
+                ++ ["errors⇒" <> show s.errorCount | s.errorCount > 0]
+                ++ ["duration⇒" <> toText (fmtDuration s.durationNs)]
+         in AE.Array
+              $ V.fromList
+                [ AE.Null -- id (0)
+                , AE.toJSON s.firstSeen -- timestamp (1)
+                , AE.toJSON s.sessionId -- trace_id (2) — used as expand key
+                , AE.String "" -- span_name (3)
+                , AE.toJSON s.durationNs -- duration (4)
+                , AE.toJSON svc -- service (5)
+                , AE.String "" -- parent_id (6)
+                , AE.Number 0 -- start_time_ns (7)
+                , AE.toJSON s.errorCount -- errors (8)
+                , AE.toJSON summaryParts -- summary (9)
+                , AE.Null -- latency_breakdown (10)
+                , AE.String "" -- kind (11)
+                , AE.toJSON s.traceCount -- event_count (12) — used for [+N] children count
                 ]
-                  ++ ["errors⇒" <> show s.errorCount | s.errorCount > 0]
-                  ++ ["duration⇒" <> toText (fmtDuration s.durationNs)]
-           in AE.Array
-                $ V.fromList
-                  [ AE.Null -- id (0)
-                  , AE.toJSON s.firstSeen -- timestamp (1)
-                  , AE.toJSON s.sessionId -- trace_id (2) — used as expand key
-                  , AE.String "" -- span_name (3)
-                  , AE.toJSON s.durationNs -- duration (4)
-                  , AE.toJSON svc -- service (5)
-                  , AE.String "" -- parent_id (6)
-                  , AE.Number 0 -- start_time_ns (7)
-                  , AE.toJSON s.errorCount -- errors (8)
-                  , AE.toJSON summaryParts -- summary (9)
-                  , AE.Null -- latency_breakdown (10)
-                  , AE.String "" -- kind (11)
-                  , AE.toJSON s.traceCount -- event_count (12) — used for [+N] children count
-                  ]
-        rows = V.map rowOf sessions
-        total = V.foldl' (\acc s -> acc + s.eventCount) 0 sessions
-     in aggregateEnvelope rows cols allCols total ["totalSessions" AE..= totalSessions]
+      rows = V.map rowOf sessions
+      total = V.foldl' (\acc s -> acc + s.eventCount) 0 sessions
+     in
+      aggregateEnvelope rows cols allCols total ["totalSessions" AE..= totalSessions]
   toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
   toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
   toJSON _ = AE.object ["error" AE..= True]
