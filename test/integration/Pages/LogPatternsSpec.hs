@@ -80,6 +80,7 @@ spec = aroundAll withTestResources do
   describe "Log Pattern Pipeline" do
 
     it "1. Extract patterns from ingested logs" \tr -> do
+      apiKey <- createTestAPIKey tr pid "logpat-test-key"
       let msgs = [ "User login succeeded for user_id=123 from ip=10.0.0.1"
                  , "User login succeeded for user_id=456 from ip=10.0.0.2"
                  , "User login succeeded for user_id=789 from ip=10.0.0.3"
@@ -90,9 +91,8 @@ spec = aroundAll withTestResources do
                  , "Database connection timeout after 30s host=db-replica"
                  ]
       forM_ (zip [0 ..] msgs) \(i, body) ->
-        insertTestLog tr body "test-service" (addUTCTime (fromIntegral (i :: Int) - 60) frozenTime)
+        ingestLog tr apiKey body (addUTCTime (fromIntegral (i :: Int) - 60) frozenTime)
 
-      -- Window is [frozenTime-5min, frozenTime], derived from scheduledTime
       drainExtractionWorker tr
 
       -- Verify patterns were created

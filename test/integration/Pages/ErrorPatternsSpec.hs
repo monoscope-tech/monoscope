@@ -449,6 +449,9 @@ spec = aroundAll withTestResources do
           void $ testServant tr $ Pages.Anomalies.errorSubscriptionPostH pid pat.id.unErrorPatternId (Pages.Anomalies.ErrorSubscriptionForm (Just 30))
           -- Ensure matching issue exists
           void $ runAllBackgroundJobs frozenTime tr.trATCtx
+          -- Reset last_notified_at so this pattern is eligible (prior tests may have already notified it)
+          withResource tr.trPool \conn ->
+            void $ PGS.execute conn [sql| UPDATE apis.error_patterns SET last_notified_at = NULL WHERE id = ? |] (PGS.Only pat.id)
 
           -- First notification: should create thread IDs and produce Slack + Discord notifications
           (notifs1, _) <- runTestBackgroundWithNotifications frozenTime tr.trLogger tr.trATCtx

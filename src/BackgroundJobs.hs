@@ -874,9 +874,14 @@ processProjectErrors pid errors now = do
           , "error" AE..= show @Text e
           ]
     Right newOrRegressed -> do
-      unless (V.null errors)
-        $ Log.logTrace "Successfully inserted errors for project"
-        $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
+      unless (V.null errors) do
+        Log.logTrace "Successfully inserted errors for project"
+          $ AE.object [("project_id", AE.toJSON pid.toText), ("error_count", AE.toJSON $ V.length errors)]
+        -- Upsert hourly rollup stats (must follow batchUpsertErrorPatterns which creates the FK rows)
+        let addErrCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
+            errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty errors
+            errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
+        void $ ErrorPatterns.upsertErrorPatternHourlyStats pid now errorRollupStats
       forM_ newOrRegressed \(errorHash, errState) -> do
         errM <- ErrorPatterns.getErrorPatternByHash pid errorHash
         whenJust errM \err ->
@@ -1027,9 +1032,6 @@ processEagerBatch batch shard
                 )
                 HM.empty
                 allErrors
-            addErrCounts (c1, u1) (c2, u2) = (c1 + c2, u1 + u2)
-            errorRollupGroups = HM.toList $ V.foldl' (\acc e -> HM.insertWith addErrCounts e.hash (1 :: Int, bool 0 1 (isJust e.userId)) acc) HM.empty allErrors
-            errorRollupStats = V.fromList [(h, cnt, users) | (h, (cnt, users)) <- errorRollupGroups]
 
         -- Per-row packed vectors for UPDATE-1.
         let perRowHashesJson :: V.Vector AE.Value
@@ -1060,12 +1062,9 @@ processEagerBatch batch shard
                 ]
             )
 
-        -- Upsert error_patterns (must precede hourly-stats fork which FKs them).
-        Relude.unless (V.null allErrors)
-          $ void
-          $ ErrorPatterns.batchUpsertErrorPatterns pid allErrors now
-
         -- Sibling inserts (any throw prevents UPDATE-1 from running — safety-net retries).
+        -- Note: error pattern upsert + hourly stats are handled by ProcessProjectErrorsJob
+        -- to avoid double-upsert (which would return 'unchanged' and skip issue creation).
         Ki.scoped \scope -> do
           let forkNonEmpty :: V.Vector a -> (V.Vector a -> ATBackgroundCtx ()) -> ATBackgroundCtx ()
               forkNonEmpty v action = Relude.unless (V.null v) $ void $ Ki.fork scope $ action v
@@ -1073,7 +1072,6 @@ processEagerBatch batch shard
           forkNonEmpty shapesFinal Fields.bulkInsertShapes
           forkNonEmpty fieldsFinal Fields.bulkInsertFields
           forkNonEmpty formatsFinal Fields.bulkInsertFormat
-          forkNonEmpty errorRollupStats (void . ErrorPatterns.upsertErrorPatternHourlyStats pid now)
           forkNonEmpty allErrors \_ -> liftIO $ withResource ctx.jobsPool \conn ->
             void $ createJob conn "background_jobs" $ ProcessProjectErrorsJob pid allErrors now
           Ki.atomically $ Ki.awaitAll scope

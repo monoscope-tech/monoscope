@@ -636,6 +636,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
               , enableBackgroundJobs = True
               , enableEventsTableUpdates = True
               , enableDailyJobScheduling = False
+              , processedAtCutoff = Unsafe.read "2020-01-01 00:00:00 UTC"
               , -- Fallback values for external services (CI mode without .env)
                 -- .env values take priority if set, otherwise use test defaults
                 discordPublicKey = bool envConfig.discordPublicKey testDiscordPublicKeyHex (T.null envConfig.discordPublicKey)
@@ -1176,7 +1177,10 @@ mkSpanRequest trId spanId parentSpanIdM spanName events statusM attrs resource t
 
 createOtelSpanAtTime :: Text -> Text -> Text -> Maybe Text -> Text -> UTCTime -> TS.ExportTraceServiceRequest
 createOtelSpanAtTime apiKey trId spanId parentSpanIdM spanName =
-  mkSpanRequest trId spanId parentSpanIdM spanName [] Nothing [mkAttr "http.method" "GET"] (mkResource apiKey [])
+  let (method, path) = case T.words spanName of
+        (m : p : _) | m `elem` ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] -> (m, p)
+        _ -> ("GET", "/" <> spanName)
+   in mkSpanRequest trId spanId parentSpanIdM spanName [] Nothing [mkAttr "http.method" method, mkAttr "http.route" path] (mkResource apiKey [])
 
 
 createOtelTraceAtTime :: Text -> Text -> UTCTime -> IO TS.ExportTraceServiceRequest
