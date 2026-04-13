@@ -983,13 +983,16 @@ dualExecPgTf ctx sql' = Ki.scoped \scope -> do
   where
     retryOnDeadlock :: (DB es, Log :> es) => Int -> Eff es Int64 -> Eff es Int64
     retryOnDeadlock 0 action = action
-    retryOnDeadlock n action = tryAny action >>= \case
-      Right r -> pure r
-      Left e | Just he <- fromException @Hasql.HasqlException e, Hasql.isDeadlockError he -> do
-        Log.logAttention "UPDATE-1 deadlock, retrying" (show @Text e)
-        liftIO $ threadDelay (50000 * (3 - n)) -- 50ms, 100ms backoff
-        retryOnDeadlock (n - 1) action
-      Left e -> throwIO e
+    retryOnDeadlock n action =
+      tryAny action >>= \case
+        Right r -> pure r
+        Left e
+          | Just he <- fromException @Hasql.HasqlException e
+          , Hasql.isDeadlockError he -> do
+              Log.logAttention "UPDATE-1 deadlock, retrying" (show @Text e)
+              liftIO $ threadDelay (50000 * (3 - n)) -- 50ms, 100ms backoff
+              retryOnDeadlock (n - 1) action
+        Left e -> throwIO e
 
 
 processEagerBatch
