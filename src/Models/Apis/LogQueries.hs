@@ -355,6 +355,7 @@ data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe
 sessionUserDisplay :: Maybe Text -> Maybe Text -> Maybe Text -> Text
 sessionUserDisplay email name uid = fromMaybe "\8212" $ email <|> name <|> uid
 
+
 -- | One aggregated session row for the Sessions visualization.
 data SessionRow = SessionRow
   { sessionId :: Text
@@ -495,7 +496,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             timestamp, end_time, level, severity___severity_number, status_code,
             floor(extract(epoch from timestamp) / #{bucketW})::INT AS bi
           FROM otel_logs_and_spans
-          WHERE |] <> whereSql <> [HI.sql|
+          WHERE |]
+          <> whereSql
+          <> [HI.sql|
             AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
         ), agg AS (
           SELECT session_id,
@@ -508,7 +511,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             COUNT(*) OVER()::INT AS total_sessions
           FROM filtered GROUP BY session_id
         ), page AS (
-          SELECT * FROM agg ORDER BY |] <> sortColSql <> [HI.sql| DESC NULLS LAST OFFSET #{skip} LIMIT #{aggregatePageSize}
+          SELECT * FROM agg ORDER BY |]
+          <> sortColSql
+          <> [HI.sql| DESC NULLS LAST OFFSET #{skip} LIMIT #{aggregatePageSize}
         ), svcs AS (
           SELECT session_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT service_name), NULL) AS services
           FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id
@@ -524,7 +529,9 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             COALESCE(s.services, '{}'::TEXT[]),
             COALESCE(h.bis, '{}'::INT[]), COALESCE(h.cnts, '{}'::INT[])
           FROM page p LEFT JOIN svcs s USING (session_id) LEFT JOIN hourly_agg h USING (session_id)
-          ORDER BY p.|] <> sortColSql <> [HI.sql| DESC NULLS LAST|]
+          ORDER BY p.|]
+          <> sortColSql
+          <> [HI.sql| DESC NULLS LAST|]
   rawRows <- Hasql.withHasqlTimefusion enableTfReads $ executeArbitraryQuery q
   Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= V.length rawRows]
   let totalSessions = fromMaybe (0 :: Int) $ do
@@ -556,6 +563,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
 -- | Which aggregate group to expand in the inline detail view.
 data ExpandKind = ExpandSession Text | ExpandPattern Text
 
+
 -- | Fetch example events belonging to a session or matching a pattern, used by
 -- the inline expand in the Sessions and Patterns visualizations. Returns rows
 -- projected with the same default-select columns as logs mode so the web
@@ -567,8 +575,10 @@ fetchEventExamples
   -> [Section]
   -> (Maybe UTCTime, Maybe UTCTime)
   -> ExpandKind
-  -> Int -- ^ skip
-  -> Int -- ^ limit
+  -> Int
+  -- ^ skip
+  -> Int
+  -- ^ limit
   -> Eff es (V.Vector (V.Vector AE.Value), [Text])
 fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN = do
   now <- Time.currentTime
@@ -587,7 +597,8 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
       selectClause = T.intercalate ", " processedCols
       q =
         rawSql ("SELECT " <> selectClause <> " FROM otel_logs_and_spans WHERE ")
-          <> fullWhereSql <> expandFilter
+          <> fullWhereSql
+          <> expandFilter
           <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::INT LIMIT #{limitN}::INT|]
   Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
   rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery q
@@ -611,6 +622,7 @@ templateToLike :: Text -> Text
 templateToLike t =
   let escaped = T.replace "_" "\\_" $ T.replace "%" "\\%" t
    in T.replace "<*>" "%" escaped
+
 
 -- | Pick a bucket width in seconds targeting ~20 buckets across the given
 -- date range, with a 1 second floor. Shared by sparkline producers.

@@ -893,17 +893,17 @@ instance AE.ToJSON LogsGet where
 -- | Shared JSON envelope for aggregate visualizations (patterns, sessions).
 aggregateEnvelope :: V.Vector AE.Value -> [Text] -> [Text] -> Int64 -> [AET.Pair] -> AE.Value
 aggregateEnvelope rows cols allCols total extra =
-  AE.object $
-    [ "logsData" AE..= rows
-    , "cols" AE..= cols
-    , "colIdxMap" AE..= HM.fromList (zip allCols [0 :: Int ..])
-    , "count" AE..= total
-    , "hasMore" AE..= (V.length rows >= LogQueries.aggregatePageSize)
-    , "queryResultCount" AE..= V.length rows
-    , "serviceColors" AE..= AE.object []
-    , "traces" AE..= ([] :: [AE.Value])
-    ]
-      ++ extra
+  AE.object
+    $ [ "logsData" AE..= rows
+      , "cols" AE..= cols
+      , "colIdxMap" AE..= HM.fromList (zip allCols [0 :: Int ..])
+      , "count" AE..= total
+      , "hasMore" AE..= (V.length rows >= LogQueries.aggregatePageSize)
+      , "queryResultCount" AE..= V.length rows
+      , "serviceColors" AE..= AE.object []
+      , "traces" AE..= ([] :: [AE.Value])
+      ]
+    ++ extra
 
 
 data ApiLogsPageData = ApiLogsPageData
