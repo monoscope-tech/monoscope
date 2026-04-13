@@ -1108,6 +1108,7 @@ processEagerBatch batch shard
                                unnest(#{dbErrorsJson}::jsonb[]) AS errors,
                                unnest(#{dbNormPaths}::text[])  AS norm_path
                       ) raw
+                      ORDER BY span_id, trace_id
                     ) u
                     WHERE o.project_id = #{pidText}
                       AND o.timestamp >= #{batchMinTs}
@@ -1351,9 +1352,10 @@ flushDrainTask shard task
             update2Sql =
               [HI.sql| UPDATE otel_logs_and_spans o
                     SET hashes = COALESCE(o.hashes, '{}'::text[]) || ARRAY[u.tag]
-                    FROM (SELECT unnest(#{spanIds'}::text[]) AS span_id,
+                    FROM (SELECT * FROM (SELECT unnest(#{spanIds'}::text[]) AS span_id,
                                  unnest(#{traceIds'}::text[]) AS trace_id,
-                                 unnest(#{tagArr}::text[]) AS tag) u
+                                 unnest(#{tagArr}::text[]) AS tag) raw
+                                 ORDER BY span_id, trace_id) u
                     WHERE o.project_id = #{pidText}
                       AND o.timestamp >= #{minTs}
                       AND o.timestamp <  #{maxTsPad}

@@ -951,7 +951,9 @@ logIssueActivity :: (DB es, Time :> es) => IssueId -> IssueEvent -> Maybe Projec
 logIssueActivity issueId event createdBy metadataM = do
   now <- Time.currentTime
   let metaJ = Aeson <$> metadataM
-  Hasql.interpExecute_ [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at) VALUES (#{issueId}, #{event}, #{createdBy}, #{metaJ}, #{now}) |]
+  Hasql.interpExecute_ [HI.sql| INSERT INTO apis.issue_activity_log (issue_id, event, created_by, metadata, created_at)
+    SELECT #{issueId}, #{event}, #{createdBy}, #{metaJ}, #{now}
+    WHERE EXISTS (SELECT 1 FROM apis.issues WHERE id = #{issueId}) |]
 
 
 selectIssueActivity :: DB es => Projects.ProjectId -> IssueId -> Eff es [IssueActivity]

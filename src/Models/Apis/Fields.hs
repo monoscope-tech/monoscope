@@ -278,7 +278,9 @@ bulkInsertFormat = V.mapM_ \Format{projectId, fieldHash, fieldType, fieldFormat,
              VALUES (#{projectId}, #{fieldHash}, #{fieldType}::apis.field_type, #{fieldFormat}, #{examples}, #{hash})
              ON CONFLICT (project_id, field_hash, field_format)
              DO UPDATE SET field_type = EXCLUDED.field_type, hash = EXCLUDED.hash,
-                examples = ARRAY(SELECT DISTINCT e FROM unnest(apis.formats.examples || excluded.examples) AS e ORDER BY e LIMIT 20) |]
+                examples = CASE WHEN COALESCE(array_length(apis.formats.examples, 1), 0) >= 20
+                  THEN apis.formats.examples
+                  ELSE ARRAY(SELECT DISTINCT e FROM unnest(apis.formats.examples || excluded.examples) AS e ORDER BY e LIMIT 20) END |]
 
 
 data SwFormat = SwFormat
