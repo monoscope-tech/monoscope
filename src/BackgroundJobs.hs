@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -89,6 +89,7 @@ import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.EmailTemplates qualified as ET
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.TraceSessionCache qualified as TSC
 import Pkg.Mail (NotificationAlerts (..), RuntimeAlertType (..), sendDiscordAlert, sendDiscordAlertWith, sendPagerdutyAlertToService, sendRenderedEmail, sendSlackAlert, sendSlackAlertWith, sendSlackMessage, sendWhatsAppAlert)
 import Pkg.Parser
 import Pkg.PatternMerge qualified as PatternMerge
@@ -1399,6 +1400,27 @@ runDrainAgeFlushTimer logger ctx = forever $ do
   tryOp "collectAgedFlushes" $ ExtractionWorker.collectAgedFlushes worker ctx.config.drainFlushMaxAgeSecs now
   tryOp "enforceBufferBound" $ ExtractionWorker.enforceBufferBound worker ctx.config.maxBufferedSpans now
   tryOp "evictStaleTrees" $ ExtractionWorker.evictStaleTrees worker ctx.config.maxDrainTrees now
+  tryAny (TSC.evictStaleEntries ctx.traceSessionCache 300 50_000 now) >>= \case
+    Right n -> when (n > 0) $
+      runLogT (show ctx.config.environment) logger ctx.config.logLevel
+        $ LogLegacy.logTrace "drain-age-flush:evictTraceSessions" (show @Text n)
+    Left e ->
+      runLogT (show ctx.config.environment) logger ctx.config.logLevel
+        $ LogLegacy.logAttention "drain-age-flush:evictTraceSessions" (show @Text e)
+
+
+runSessionBackfillTimer :: Logger -> Config.AuthContext -> TracerProvider -> IO ()
+runSessionBackfillTimer logger ctx tp = forever $ do
+  threadDelay 90_000_000 -- 90 s
+  tryAny (runBackground logger ctx tp go) >>= \case
+    Right () -> pass
+    Left e ->
+      runLogT (show ctx.config.environment) logger ctx.config.logLevel
+        $ LogLegacy.logAttention "session-backfill" (show @Text e)
+ where
+  go = do
+    n <- TSC.backfillSessionAttributes
+    when (n > 0) $ Log.logTrace "session-backfill" ("rows_updated" :: Text, n)
 
 
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()

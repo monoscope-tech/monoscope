@@ -41,6 +41,9 @@ data ReplayPost = ReplayPost
   { events :: AE.Value
   , sessionId :: UUID.UUID
   , timestamp :: UTCTime
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userName :: Maybe Text
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON, ToSchema)
@@ -51,6 +54,9 @@ data ReplayPost' = ReplayPost'
   , sessionId :: UUID.UUID
   , timestamp :: UTCTime
   , projectId :: Projects.ProjectId
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userName :: Maybe Text
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
@@ -63,7 +69,7 @@ publishReplayEvent replayData pid = do
   let envCfg = ctx.config
   currentTime <- liftIO getCurrentTime
 
-  let messagePayload = AE.object ["events" AE..= replayData.events, "sessionId" AE..= replayData.sessionId, "projectId" AE..= pid, "timestamp" AE..= replayData.timestamp]
+  let messagePayload = AE.object ["events" AE..= replayData.events, "sessionId" AE..= replayData.sessionId, "projectId" AE..= pid, "timestamp" AE..= replayData.timestamp, "userId" AE..= replayData.userId, "userEmail" AE..= replayData.userEmail, "userName" AE..= replayData.userName]
   let attributes = HM.fromList [("eventType", "replay")]
   case envCfg.rrwebTopics of
     [] -> pure $ Left "No rrweb pubsub topics configured"
@@ -276,15 +282,19 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
               case res of
                 Right _ -> do
                   let (rSid, rPid) = (replayData.sessionId, replayData.projectId)
+                      (rUserId, rUserEmail, rUserName) = (replayData.userId, replayData.userEmail, replayData.userName)
                   countRows :: [Int] <-
                     Hasql.interp
                       [HI.sql|
-                    INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys)
-                    VALUES (#{rSid}, #{rPid}, #{now}, 1, ARRAY[#{objKeyText}]::text[])
+                    INSERT INTO projects.replay_sessions (session_id, project_id, last_event_at, event_file_count, file_keys, user_id, user_email, user_name)
+                    VALUES (#{rSid}, #{rPid}, #{now}, 1, ARRAY[#{objKeyText}]::text[], #{rUserId}, #{rUserEmail}, #{rUserName})
                     ON CONFLICT (session_id) DO UPDATE SET
                       last_event_at = #{now}, merged = FALSE,
                       event_file_count = projects.replay_sessions.event_file_count + 1,
                       file_keys = array_append(projects.replay_sessions.file_keys, #{objKeyText}),
+                      user_id = COALESCE(EXCLUDED.user_id, projects.replay_sessions.user_id),
+                      user_email = COALESCE(EXCLUDED.user_email, projects.replay_sessions.user_email),
+                      user_name = COALESCE(EXCLUDED.user_name, projects.replay_sessions.user_name),
                       updated_at = #{now}
                     RETURNING event_file_count
                   |]

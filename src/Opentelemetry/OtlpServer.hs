@@ -43,18 +43,20 @@ import Data.Vector qualified as V
 import Data.Vector.Unboxed qualified as VU
 import Effectful
 import Effectful.Concurrent (Concurrent)
-import Effectful.Exception (onException)
+import Effectful.Exception (onException, try)
 import Effectful.Ki qualified as Ki
 import Effectful.Labeled (Labeled)
 import Effectful.Log (Log)
 import Effectful.Reader.Static (ask)
 import Effectful.Reader.Static qualified as Eff
+import Effectful.Time qualified as Time
 import Log (LogLevel (..), Logger, runLogT)
 import Log qualified as LogBase
 import Models.Projects.ProjectApiKeys qualified as ProjectApiKeys
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (Context (..), OtelLogsAndSpans (..), Severity (..), generateSummary)
 import Models.Telemetry.Telemetry qualified as Telemetry
+import Pkg.TraceSessionCache qualified as TSC
 import Network.GRPC.Common
 import Network.GRPC.Common.Protobuf
 import Network.GRPC.Server (RpcHandler, SomeRpcHandler, getRequestMetadata, mkRpcHandler, recvFinalInput, sendFinalOutput)
@@ -208,8 +210,18 @@ getMetricApiKey :: V.Vector PM.ResourceMetrics -> Maybe Text
 getMetricApiKey !rms = V.mapMaybe (\rm -> getApiKeyAttr (rm ^. PMF.resource . PRF.attributes)) rms V.!? 0
 
 
+-- | Best-effort session stamping; falls back to unstamped spans on failure (backfill timer catches them).
+stampOrPassthrough :: (IOE :> es, Time.Time :> es, Log :> es) => AuthContext -> V.Vector Telemetry.OtelLogsAndSpans -> Eff es (V.Vector Telemetry.OtelLogsAndSpans)
+stampOrPassthrough appCtx v =
+  try (TSC.lookupAndStamp appCtx.traceSessionCache v) >>= \case
+    Right stamped -> pure stamped
+    Left (e :: SomeException) -> do
+      Log.logAttention "trace-session-cache:stamp-failed" (AE.object ["error" AE..= show @Text e, "span_count" AE..= V.length v])
+      pure v
+
+
 -- | Process a list of messages
-processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
+processList :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => [(Text, ByteString)] -> HM.HashMap Text Text -> Eff es [Text]
 processList [] _ = pure []
 processList msgs !attrs = checkpoint "processList" $ do
   startTime <- liftIO getCurrentTime
@@ -254,8 +266,9 @@ processList msgs !attrs = checkpoint "processList" $ do
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.concatMap (V.fromList . convertResourceLogsToOtelLogs ft caches pids) rls
             )
-            ( \caches v ->
-                Telemetry.mintOtelLogIds v
+            ( \caches v -> do
+                stamped <- stampOrPassthrough appCtx v
+                Telemetry.mintOtelLogIds stamped
                   >>= checkpoint "processList:logs:bulkInsert"
                   . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
             )
@@ -273,8 +286,9 @@ processList msgs !attrs = checkpoint "processList" $ do
                     !pids = V.fromList [(k, pid) | (k, pid) <- HM.toList keyToId, k `V.elem` pkeys]
                  in V.fromList $ convertResourceSpansToOtelLogs ft caches pids rss
             )
-            ( \caches v ->
-                Telemetry.mintOtelLogIds v
+            ( \caches v -> do
+                stamped <- stampOrPassthrough appCtx v
+                Telemetry.mintOtelLogIds stamped
                   >>= checkpoint "processList:traces:bulkInsert"
                   . Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker caches
             )
@@ -1243,7 +1257,7 @@ runServer appLogger appCtx tp = do
 
 
 -- | Process trace request with optional API key from gRPC metadata (extracted for testing)
-processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
+processTraceRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> TS.ExportTraceServiceRequest -> Eff es ()
 processTraceRequest metadataApiKey req = do
   Log.logTrace "Received trace export request" AE.Null
 
@@ -1297,7 +1311,8 @@ processTraceRequest metadataApiKey req = do
     (AE.object ["span_count" AE..= V.length spans'])
 
   unless (V.null spans') do
-    mintedSpans <- Telemetry.mintOtelLogIds spans'
+    stampedSpans <- stampOrPassthrough appCtx spans'
+    mintedSpans <- Telemetry.mintOtelLogIds stampedSpans
     Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedSpans
     Log.logTrace
       "Traces: Successfully inserted spans into database"
@@ -1315,7 +1330,7 @@ traceServiceExport appLogger appCtx tp (Proto req) = do
 
 
 -- | Process logs request with optional API key from gRPC metadata (extracted for testing)
-processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
+processLogsRequest :: (Concurrent :> es, DB es, Eff.Reader AuthContext :> es, Ki.StructuredConcurrency :> es, Labeled "timefusion" Hasql.Hasql :> es, Log :> es, Time.Time :> es, UUIDEff :> es) => Maybe Text -> LS.ExportLogsServiceRequest -> Eff es ()
 processLogsRequest metadataApiKey req = do
   Log.logTrace "Received logs export request" AE.Null
   currentTime <- liftIO getCurrentTime
@@ -1367,7 +1382,8 @@ processLogsRequest metadataApiKey req = do
     (AE.object ["log_count" AE..= V.length logs])
 
   unless (V.null logs) do
-    mintedLogs <- Telemetry.mintOtelLogIds logs
+    stampedLogs <- stampOrPassthrough appCtx logs
+    mintedLogs <- Telemetry.mintOtelLogIds stampedLogs
     Telemetry.insertAndHandOff appCtx.env.enableTimefusionWrites appCtx.extractionWorker projectCaches mintedLogs
     Log.logTrace
       "Logs: Successfully inserted logs into database"

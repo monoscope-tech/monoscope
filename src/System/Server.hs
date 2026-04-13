@@ -122,6 +122,7 @@ runServer appLogger env tp = do
           <> [fiber ("rehydration-worker-" <> show i) $ ExtractionWorker.runRehydrationWorker (logExc ("rehydration-worker-" <> show i)) shard | (i, shard) <- shardsIndexed]
           <> [ fiber "drain-age-flush" $ BackgroundJobs.runDrainAgeFlushTimer appLogger env
              , fiber "error-decay" $ BackgroundJobs.runErrorDecayFiber appLogger env tp
+             , fiber "session-backfill" $ BackgroundJobs.runSessionBackfillTimer appLogger env tp
              ]
   liftIO $ atomically $ writeTVar env.extractionWorker.acceptingBatches True
   asyncs <-

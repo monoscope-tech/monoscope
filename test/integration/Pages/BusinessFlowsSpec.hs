@@ -419,6 +419,9 @@ replayTests = do
             { events = AE.Array $ V.fromList [AE.object ["type" AE..= ("click" :: Text), "timestamp" AE..= (1000 :: Int)]]
             , sessionId = sessionId
             , timestamp = currentTime
+            , userId = Nothing
+            , userEmail = Nothing
+            , userName = Nothing
             }
 
     result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData
@@ -442,6 +445,9 @@ replayTests = do
             { events = AE.Array V.empty
             , sessionId = sessionId
             , timestamp = currentTime
+            , userId = Nothing
+            , userEmail = Nothing
+            , userName = Nothing
             }
 
     result <- toBaseServantResponse tr.trATCtx tr.trLogger $ Replay.replayPostH testPid replayData

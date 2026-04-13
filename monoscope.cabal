@@ -90,6 +90,9 @@ extra-source-files:
     static/migrations/0062_monitor_time_window_mins.sql
     static/migrations/0063_replay_session_file_keys.sql
     static/migrations/0064_processed_at_safety_net.sql
+    static/migrations/0065_query_cache_jsonb.sql
+    static/migrations/0066_fix_auto_resolve_trigger_fk_race.sql
+    static/migrations/0068_replay_sessions_user_columns.sql
 
 source-repository head
   type: git
@@ -171,6 +174,7 @@ library
       Pkg.QueryCache
       Pkg.Queue
       Pkg.TestUtils
+      Pkg.TraceSessionCache
       ProcessMessage
       Start
       System.Config
@@ -540,6 +544,7 @@ test-suite integration-tests
       Opentelemetry.GrpcIngestionSpec
       Opentelemetry.OtlpServerSpec
       Opentelemetry.StandardOtelSpansSpec
+      Opentelemetry.TraceSessionPropagationSpec
       Pages.AnomaliesSpec
       Pages.ApiSpec
       Pages.Bots.AgenticSpec

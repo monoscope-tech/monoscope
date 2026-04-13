@@ -120,6 +120,7 @@ import Pages.LogExplorer.Log qualified as Log
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (AesonText (..), DB, UUIDId (..), mkHasqlPool)
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.TraceSessionCache qualified as TSC
 import ProcessMessage qualified
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService qualified as LS
 import Proto.Opentelemetry.Proto.Collector.Logs.V1.LogsService_Fields qualified as LSF
@@ -615,6 +616,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
   envConfig <- decodeWithDefaults defConfig
   extractionWorker <- ExtractionWorker.initWorkerState envConfig.extractionWorkerShards envConfig.extractionQueueCapacity
   atomically $ writeTVar extractionWorker.acceptingBatches True
+  traceSessionCache <- TSC.newTraceSessionCache
   tfCircuit <- ExtractionWorker.newCircuitBreaker
 
   let atAuthCtx =
@@ -630,6 +632,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
           logsPatternCache
           projectKeyCache
           extractionWorker
+          traceSessionCache
           tfCircuit
           ( envConfig
               { -- Override to ensure test database is used (never production DB from .env)

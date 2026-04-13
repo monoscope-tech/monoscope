@@ -20,6 +20,7 @@ import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pkg.DeriveUtils qualified as DeriveUtils
 import Pkg.ExtractionWorker qualified as ExtractionWorker
+import Pkg.TraceSessionCache qualified as TraceSessionCache
 import Relude
 import System.Clock (TimeSpec (TimeSpec))
 import System.Envy (DefConfig (..), FromEnv (..), ReadShowVar (..), Var (..), decodeWithDefaults, fromVar, toVar)
@@ -230,6 +231,7 @@ data AuthContext = AuthContext
   , logsPatternCache :: Cache Projects.ProjectId (V.Vector Text)
   , projectKeyCache :: Cache Text (Maybe Projects.ProjectId)
   , extractionWorker :: ExtractionWorker.WorkerState Telemetry.OtelLogsAndSpans
+  , traceSessionCache :: TraceSessionCache.TraceSessionCache
   , tfCircuit :: ExtractionWorker.CircuitBreaker
   , config :: EnvConfig
   }
@@ -272,6 +274,7 @@ configToEnv config = do
   projectKeyCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   logsPatternCache <- liftIO $ newCache (Just $ TimeSpec (30 * 60) 0)
   extractionWorker <- liftIO $ ExtractionWorker.initWorkerState config.extractionWorkerShards config.extractionQueueCapacity
+  traceSessionCache <- liftIO TraceSessionCache.newTraceSessionCache
   tfCircuit <- liftIO ExtractionWorker.newCircuitBreaker
   pure
     AuthContext
@@ -286,6 +289,7 @@ configToEnv config = do
       , projectKeyCache
       , logsPatternCache
       , extractionWorker
+      , traceSessionCache
       , tfCircuit
       , config
       }
