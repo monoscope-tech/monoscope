@@ -317,8 +317,9 @@ type LogExplorerRoutes = NamedRoutes LogExplorerRoutes'
 
 type LogExplorerRoutes' :: Type -> Type
 data LogExplorerRoutes' mode = LogExplorerRoutes'
-  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> QPT "viz_type" :> QPT "alert" :> QPI "pattern_skip" :> QPT "pattern_target" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
+  { logExplorerGet :: mode :- "log_explorer" :> QPT "query" :> QPT "cols" :> QPU "cursor" :> QPT "since" :> QPT "from" :> QPT "to" :> QPT "layout" :> QPT "source" :> QPT "target-spans" :> QPT "queryTitle" :> QPT "queryLibId" :> QPT "details_width" :> QPT "target_event" :> QPT "showTrace" :> HXRequest :> HXBoosted :> QPT "json" :> QPT "viz_type" :> QPT "alert" :> QPI "aggregate_skip" :> QPT "pattern_target" :> QPT "sort_by" :> Get '[HTML, JSON] (RespHeaders Log.LogsGet)
   , logExplorerItemDetailedGet :: mode :- "log_explorer" :> Capture "logItemID" UUID.UUID :> Capture "createdAt" UTCTime :> "detailed" :> QPT "source" :> Get '[HTML] (RespHeaders LogItem.ApiItemDetailed)
+  , logExplorerExpandGet :: mode :- "log_explorer" :> "expand" :> QPT "kind" :> QPT "key" :> QPI "skip" :> QPT "query" :> QPT "since" :> QPT "from" :> QPT "to" :> Get '[JSON] (RespHeaders AE.Value)
   , aiSearchPost :: mode :- "log_explorer" :> "ai_search" :> ReqBody '[JSON] AE.Value :> Post '[JSON] (RespHeaders AE.Value)
   , schemaGet :: mode :- "log_explorer" :> "schema" :> Get '[JSON] (RespHeaders AE.Value)
   }
@@ -593,6 +594,7 @@ logExplorerServer pid =
   LogExplorerRoutes'
     { logExplorerGet = Log.apiLogH pid
     , logExplorerItemDetailedGet = LogItem.expandAPIlogItemH pid
+    , logExplorerExpandGet = Log.apiLogExpandH pid
     , aiSearchPost = Log.aiSearchH pid
     , schemaGet = addRespHeaders Schema.telemetrySchemaJson
     }

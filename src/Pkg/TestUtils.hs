@@ -39,6 +39,7 @@ module Pkg.TestUtils (
   ingestTraceWithHeader,
   ingestMetricWithHeader,
   ingestTraceWithException,
+  ingestSessionEvent,
   -- CLI test helpers
   runHTTPtoServant,
   testPid,
@@ -1056,6 +1057,23 @@ ingestTraceWithException tr apiKey spanName excType excMessage excStacktrace tim
   void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
 
 
+-- | Ingest a span with arbitrary extra attributes (e.g. session.id, user.id, user.email).
+-- Unlike ingestTrace, which hard-codes http.method via createOtelSpanAtTime, this helper
+-- threads custom attributes straight through mkSpanRequest. When `isError` is True the
+-- span is marked with STATUS_CODE_ERROR so the Sessions aggregator counts it as an error.
+ingestSessionEvent :: TestResources -> Text -> Text -> [(Text, Text)] -> Bool -> UTCTime -> IO ()
+ingestSessionEvent tr apiKey spanName extras isError timestamp = do
+  trIdText <- UUID.toText <$> nextRandom
+  spanIdText <- UUID.toText <$> nextRandom
+  let attrs = [mkAttr k v | (k, v) <- extras]
+      statusM =
+        if isError
+          then Just (defMessage & PTF.code .~ PT.Status'STATUS_CODE_ERROR & PTF.message .~ ("error" :: Text))
+          else Nothing
+      req = mkSpanRequest trIdText spanIdText Nothing spanName [] statusM attrs (mkResource apiKey []) timestamp
+  void $ OtlpServer.traceServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
+
+
 ingestMetric, ingestMetricWithHeader :: TestResources -> Text -> Text -> Double -> UTCTime -> IO ()
 ingestMetric tr apiKey metricName value timestamp =
   void $ OtlpServer.metricsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createGaugeMetricAtTime apiKey metricName value timestamp)
@@ -1114,7 +1132,7 @@ routeRequest tr path params
   | "/log_explorer" `T.isPrefixOf` path = do
       (_, pg) <-
         testServant tr
-          $ Log.apiLogH testPid query Nothing Nothing since from to Nothing source Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing jsonParam Nothing Nothing Nothing Nothing
+          $ Log.apiLogH testPid query Nothing Nothing since from to Nothing source Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing jsonParam Nothing Nothing Nothing Nothing Nothing
       pure $ mockResponse $ AE.encode pg
   | "/chart_data" `T.isPrefixOf` path = do
       result <-

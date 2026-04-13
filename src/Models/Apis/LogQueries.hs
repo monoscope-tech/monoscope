@@ -3,6 +3,7 @@ module Models.Apis.LogQueries (
   RequestTypes (..),
   ATError (..),
   PatternRow (..),
+  SessionRow (..),
   normalizeUrlPath,
   selectLogTable,
   executeArbitraryQuery,
@@ -10,13 +11,23 @@ module Models.Apis.LogQueries (
   logExplorerUrlPath,
   getLastSevenDaysTotalRequest,
   fetchLogPatterns,
+  fetchSessions,
+  ExpandKind (..),
+  fetchEventExamples,
   selectChildSpansAndLogs,
+  sessionUserDisplay,
+  templateToLike,
+  bucketWidthSecs,
+  bucketRange,
+  densifyBuckets,
+  aggregatePageSize,
 )
 where
 
 import Control.Exception.Annotated (checkpoint, try)
 import Control.Lens (view, _5)
 import Data.Aeson qualified as AE
+import Data.Aeson.Types qualified as AET
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Effectful.Hasql (Hasql)
@@ -187,14 +198,13 @@ logExplorerUrlPath pid q cols cursor since fromV toV layout source recent = "/p/
 
 -- | Execute arbitrary SQL query and return results as vector of vectors.
 -- Wraps in row_to_json + json_each to preserve column order via hasql.
-executeArbitraryQuery :: DB es => Text -> Eff es (V.Vector (V.Vector AE.Value))
-executeArbitraryQuery queryText = do
+executeArbitraryQuery :: DB es => HI.Sql -> Eff es (V.Vector (V.Vector AE.Value))
+executeArbitraryQuery querySql = do
   results :: [AE.Value] <-
     Hasql.interp
-      $ rawSql
-      $ "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM ("
-      <> queryText
-      <> ") AS sub"
+      $ rawSql "SELECT (SELECT json_agg(x.value ORDER BY x.ordinality)::jsonb FROM json_each(row_to_json(sub.*)) WITH ORDINALITY AS x) FROM ("
+      <> querySql
+      <> rawSql ") AS sub"
   pure $ V.fromList $ mapMaybe jsonArrayToVector results
 
 
@@ -287,7 +297,7 @@ selectLogTable pid queryAST queryText cursorM dateRange projectedColsByUser sour
         ]
     )
 
-  result <- try @SomeException $ checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery q
+  result <- try @SomeException $ checkpoint (toAnnotation ("selectLogTable", q)) $ executeArbitraryQuery (rawSql q)
   case result of
     Left e -> pure $ Left $ show e
     Right logItemsV -> do
@@ -334,6 +344,34 @@ valueToVector val = case val of
 data PatternRow = PatternRow {logPattern :: Text, count :: Int64, level :: Maybe Text, service :: Maybe Text, volume :: [Int], mergedCount :: Int}
 
 
+-- | Display name for a session row: prefers email, then name, then user ID.
+--
+-- >>> sessionUserDisplay (Just "alice@example.com") (Just "Alice") (Just "u1")
+-- "alice@example.com"
+-- >>> sessionUserDisplay Nothing Nothing (Just "u1")
+-- "u1"
+-- >>> sessionUserDisplay Nothing Nothing Nothing
+-- "\8212"
+sessionUserDisplay :: Maybe Text -> Maybe Text -> Maybe Text -> Text
+sessionUserDisplay email name uid = fromMaybe "\8212" $ email <|> name <|> uid
+
+-- | One aggregated session row for the Sessions visualization.
+data SessionRow = SessionRow
+  { sessionId :: Text
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userName :: Maybe Text
+  , eventCount :: Int64
+  , errorCount :: Int64
+  , firstSeen :: UTCTime
+  , lastSeen :: UTCTime
+  , durationNs :: Int64
+  , services :: V.Vector Text
+  , volume :: [Int]
+  }
+  deriving stock (Generic, Show)
+
+
 fetchLogPatterns
   :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
   => Bool
@@ -362,7 +400,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
   let (dateFrom, dateTo) = dateRange
   precomputed :: [(Text, Int64, Maybe Text, Maybe Text, Text, Int, Int)] <-
     if target `elem` map fst LogPatterns.knownPatternFields
-      then Hasql.interp [HI.sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = #{pid} AND lp.source_field = #{target} AND lp.canonical_id IS NULL AND (#{dateFrom} IS NULL OR lp.last_seen_at >= #{dateFrom}) AND (#{dateTo} IS NULL OR lp.last_seen_at <= #{dateTo}) ORDER BY total_count DESC OFFSET #{skip} LIMIT 100|]
+      then Hasql.interp [HI.sql|SELECT lp.log_pattern, (lp.occurrence_count + COALESCE(m.member_count, 0))::BIGINT as total_count, lp.log_level, lp.service_name, lp.pattern_hash, COALESCE(m.member_cnt, 0)::INT as merged_count, COUNT(*) OVER()::INT as total_patterns FROM apis.log_patterns lp LEFT JOIN LATERAL (SELECT SUM(occurrence_count) as member_count, COUNT(*)::INT as member_cnt FROM apis.log_patterns WHERE canonical_id = lp.id) m ON TRUE WHERE lp.project_id = #{pid} AND lp.source_field = #{target} AND lp.canonical_id IS NULL AND (#{dateFrom} IS NULL OR lp.last_seen_at >= #{dateFrom}) AND (#{dateTo} IS NULL OR lp.last_seen_at <= #{dateTo}) ORDER BY total_count DESC OFFSET #{skip} LIMIT #{aggregatePageSize}|]
       else pure []
   if not (null precomputed)
     then do
@@ -405,11 +443,9 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
               | dr <- V.toList $ Drain.getAllLogGroups drainTree
               ]
           sorted = take 100 $ drop skip $ sortOn (Down . (\(c, _, _, _) -> c) . snd) $ HM.toList merged
-          allBIs = [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
-          (minB, maxB) = case allBIs of [] -> (0, 0); xs -> (foldl' min maxBound xs, foldl' max minBound xs)
-          buildVolume bs = let bMap = HM.fromListWith (+) bs in [fromMaybe 0 $ HM.lookup i bMap | i <- [minB .. maxB]]
+          range = bucketRange [bi | (_, (_, _, _, bs)) <- sorted, (bi, _) <- bs]
       Log.logTrace "fetchLogPatterns: normalization done" $ AE.object ["patterns" AE..= HM.size merged]
-      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = buildVolume bs, mergedCount = 0} | (pat, (cnt, lvl, svc, bs)) <- sorted])
+      pure (HM.size merged, [PatternRow{logPattern = pat, count = fromIntegral cnt, level = lvl, service = svc, volume = densifyBuckets range bs, mergedCount = 0} | (pat, (cnt, lvl, svc, bs)) <- sorted])
   where
     -- SAFETY: All Left branches produce safe column names from hardcoded whitelists
     -- (flattenedOtelAttributes, rootColumns). Right branch uses parameterized #>> operator.
@@ -423,11 +459,201 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       | "attributes." `T.isPrefixOf` f = let parts = drop 1 $ T.splitOn "." f in if null parts || parts == [""] then Nothing else Just $ Right $ V.fromList parts
       | otherwise = Nothing
     rootColumns = ["body", "level", "kind", "name", "status_code", "status_message"] :: [Text]
-    -- ~20 buckets for the sparkline, minimum 1 second
-    bucketWidthSecs (from, to) n =
-      let start = fromMaybe (addUTCTime (-3600) n) from
-          rangeSecs = max 60 $ round $ diffUTCTime (fromMaybe n to) start :: Int
-       in max 1 $ rangeSecs `div` 20 :: Int
+
+
+-- | Fetch session-aggregated rows for the Sessions visualization tab.
+-- Rows are keyed by attributes___session___id; user identity is taken as the
+-- MAX non-null value within the session (stable for a given user). Pagination
+-- happens before the hourly bucket/service joins so join cost tracks page size.
+fetchSessions :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es) => Bool -> Projects.ProjectId -> [Section] -> (Maybe UTCTime, Maybe UTCTime) -> Maybe Text -> Int -> Eff es (Int, [SessionRow])
+fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
+  now <- Time.currentTime
+  let sqlCfg = (defSqlQueryCfg pid now (Just SSpans) Nothing){dateRange}
+      (_, queryComponents) = queryASTToComponents sqlCfg queryAST
+      pidTxt = pid.toText
+      dateRangeClause = buildDateRange sqlCfg
+      whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
+      fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
+      bucketW = bucketWidthSecs dateRange now
+      sortCol = case sortByM of
+        Just "duration" -> "duration_ns" :: Text
+        Just "errors" -> "error_count"
+        Just "events" -> "event_count"
+        Just "first_seen" -> "first_seen"
+        _ -> "last_seen"
+  Log.logTrace "fetchSessions: start"
+    $ AE.object ["project_id" AE..= pid, "skip" AE..= skip, "date_range" AE..= show dateRange, "sort_by" AE..= sortByM]
+  let sortColSql = rawSql sortCol
+      whereSql = rawSql fullWhere
+      q =
+        [HI.sql|WITH filtered AS (
+          SELECT attributes___session___id AS session_id,
+            attributes___user___id AS user_id,
+            attributes___user___email AS user_email,
+            COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, '')) AS user_name,
+            resource___service___name AS service_name,
+            timestamp, end_time, level, severity___severity_number, status_code,
+            floor(extract(epoch from timestamp) / #{bucketW})::INT AS bi
+          FROM otel_logs_and_spans
+          WHERE |] <> whereSql <> [HI.sql|
+            AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
+        ), agg AS (
+          SELECT session_id,
+            MAX(user_id) AS user_id, MAX(user_email) AS user_email, MAX(user_name) AS user_name,
+            COUNT(*)::BIGINT AS event_count,
+            COUNT(*) FILTER (WHERE lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')::BIGINT AS error_count,
+            MIN(timestamp) AS first_seen,
+            MAX(COALESCE(end_time, timestamp)) AS last_seen,
+            (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1000000000)::BIGINT AS duration_ns,
+            COUNT(*) OVER()::INT AS total_sessions
+          FROM filtered GROUP BY session_id
+        ), page AS (
+          SELECT * FROM agg ORDER BY |] <> sortColSql <> [HI.sql| DESC NULLS LAST OFFSET #{skip} LIMIT #{aggregatePageSize}
+        ), svcs AS (
+          SELECT session_id, ARRAY_REMOVE(ARRAY_AGG(DISTINCT service_name), NULL) AS services
+          FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id
+        ), hourly AS (
+          SELECT session_id, bi, COUNT(*)::INT AS cnt
+          FROM filtered WHERE session_id IN (SELECT session_id FROM page) GROUP BY session_id, bi
+        ), hourly_agg AS (
+          SELECT session_id, ARRAY_AGG(bi ORDER BY bi) AS bis, ARRAY_AGG(cnt ORDER BY bi) AS cnts
+          FROM hourly GROUP BY session_id
+        ) SELECT p.session_id, p.user_id, p.user_email, p.user_name,
+            p.event_count, p.error_count, p.first_seen,
+            p.last_seen, p.duration_ns, p.total_sessions,
+            COALESCE(s.services, '{}'::TEXT[]),
+            COALESCE(h.bis, '{}'::INT[]), COALESCE(h.cnts, '{}'::INT[])
+          FROM page p LEFT JOIN svcs s USING (session_id) LEFT JOIN hourly_agg h USING (session_id)
+          ORDER BY p.|] <> sortColSql <> [HI.sql| DESC NULLS LAST|]
+  rawRows <- Hasql.withHasqlTimefusion enableTfReads $ executeArbitraryQuery q
+  Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= V.length rawRows]
+  let totalSessions = fromMaybe (0 :: Int) $ do
+        firstRow <- rawRows V.!? 0
+        AET.parseMaybe AE.parseJSON =<< (firstRow V.!? 9)
+      allBuckets = concatMap (\row -> fromMaybe [] $ AET.parseMaybe AE.parseJSON =<< (row V.!? 11)) $ V.toList rawRows
+      range = bucketRange allBuckets
+      toRowWithVolume row =
+        let cell :: AE.FromJSON a => Int -> Maybe a
+            cell i = AET.parseMaybe AE.parseJSON =<< (row V.!? i)
+            bis = fromMaybe [] $ cell 11 :: [Int]
+            cnts = fromMaybe [] $ cell 12 :: [Int]
+         in SessionRow
+              { sessionId = fromMaybe "" $ cell 0
+              , userId = cell 1
+              , userEmail = cell 2
+              , userName = cell 3
+              , eventCount = fromMaybe 0 $ cell 4
+              , errorCount = fromMaybe 0 $ cell 5
+              , firstSeen = fromMaybe (posixSecondsToUTCTime 0) $ cell 6
+              , lastSeen = fromMaybe (posixSecondsToUTCTime 0) $ cell 7
+              , durationNs = fromMaybe 0 $ cell 8
+              , services = fromMaybe V.empty $ cell 10
+              , volume = densifyBuckets range $ zip bis cnts
+              }
+  pure (totalSessions, map toRowWithVolume $ V.toList rawRows)
+
+
+-- | Which aggregate group to expand in the inline detail view.
+data ExpandKind = ExpandSession Text | ExpandPattern Text
+
+-- | Fetch example events belonging to a session or matching a pattern, used by
+-- the inline expand in the Sessions and Patterns visualizations. Returns rows
+-- projected with the same default-select columns as logs mode so the web
+-- component can render them with the existing logs-mode row template.
+fetchEventExamples
+  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  => Bool
+  -> Projects.ProjectId
+  -> [Section]
+  -> (Maybe UTCTime, Maybe UTCTime)
+  -> ExpandKind
+  -> Int -- ^ skip
+  -> Int -- ^ limit
+  -> Eff es (V.Vector (V.Vector AE.Value), [Text])
+fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN = do
+  now <- Time.currentTime
+  let sqlCfg = (defSqlQueryCfg pid now (Just SSpans) Nothing){dateRange}
+      (_, qc) = queryASTToComponents sqlCfg queryAST
+      pidTxt = pid.toText
+      dateRangeClause = buildDateRange sqlCfg
+      whereCondition = fromMaybe [text|project_id=${pidTxt}|] qc.whereClause
+      fullWhereSql = rawSql (whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause)
+      expandFilter = case expandKind of
+        ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]
+        ExpandPattern tpl -> [HI.sql| AND array_to_string(summary, chr(30)) ILIKE #{templateToLike tpl}|]
+      cols = defaultSelectSqlQuery (Just SSpans)
+      -- Mirror selectLogTable's summary column handling: wrap TEXT[] as JSON for row output.
+      processedCols = map (\c -> if c == "summary" || "summary" `T.isSuffixOf` c then "to_json(summary)" else c) $ colsNoAsClause cols
+      selectClause = T.intercalate ", " processedCols
+      q =
+        rawSql ("SELECT " <> selectClause <> " FROM otel_logs_and_spans WHERE ")
+          <> fullWhereSql <> expandFilter
+          <> [HI.sql| ORDER BY timestamp ASC OFFSET #{skip}::INT LIMIT #{limitN}::INT|]
+  Log.logTrace "fetchEventExamples: query" $ AE.object ["project_id" AE..= pid]
+  rows <- Hasql.withHasqlTimefusion enableTfReads $ checkpoint (toAnnotation ("fetchEventExamples" :: Text, pid)) $ executeArbitraryQuery q
+  pure (rows, listToColNames cols)
+
+
+-- | Page size for patterns and sessions aggregations. The JSON encoder
+-- checks @>= aggregatePageSize@ to set the @hasMore@ flag.
+aggregatePageSize :: Int
+aggregatePageSize = 100
+
+
+-- | Convert a Drain template to a SQL LIKE pattern: @\<*\>@ becomes @%@,
+-- existing @%@ and @_@ are backslash-escaped.
+--
+-- >>> templateToLike "GET /api/<*>/users_list"
+-- "GET /api/%/users\\_list"
+-- >>> templateToLike "100% <*>"
+-- "100\\% %"
+templateToLike :: Text -> Text
+templateToLike t =
+  let escaped = T.replace "_" "\\_" $ T.replace "%" "\\%" t
+   in T.replace "<*>" "%" escaped
+
+-- | Pick a bucket width in seconds targeting ~20 buckets across the given
+-- date range, with a 1 second floor. Shared by sparkline producers.
+--
+-- >>> import Data.Time (UTCTime(..))
+-- >>> import Data.Time.Calendar (fromGregorian)
+-- >>> let t0 = UTCTime (fromGregorian 2026 1 1) 0
+-- >>> let t1 = UTCTime (fromGregorian 2026 1 1) 3600
+-- >>> bucketWidthSecs (Just t0, Just t1) t0
+-- 180
+-- >>> bucketWidthSecs (Nothing, Nothing) t0
+-- 180
+bucketWidthSecs :: (Maybe UTCTime, Maybe UTCTime) -> UTCTime -> Int
+bucketWidthSecs (from, to) n =
+  let start = fromMaybe (addUTCTime (-3600) n) from
+      rangeSecs = max 60 $ round $ diffUTCTime (fromMaybe n to) start :: Int
+   in max 1 $ rangeSecs `div` 20
+
+
+-- | Global (min,max) bucket index across all rows. (0,0) when no buckets.
+--
+-- >>> bucketRange []
+-- (0,0)
+-- >>> bucketRange [3, 1, 5]
+-- (1,5)
+bucketRange :: [Int] -> (Int, Int)
+bucketRange [] = (0, 0)
+bucketRange xs = (foldl' min maxBound xs, foldl' max minBound xs)
+
+
+-- | Densify one row's sparse (bucket, count) pairs into a fixed-length
+-- array covering the given global range, summing duplicate buckets.
+--
+-- >>> densifyBuckets (0, 4) [(0, 2), (2, 3), (4, 1)]
+-- [2,0,3,0,1]
+-- >>> densifyBuckets (0, 0) []
+-- [0]
+-- >>> densifyBuckets (1, 3) [(2, 5), (2, 3)]
+-- [0,8,0]
+densifyBuckets :: (Int, Int) -> [(Int, Int)] -> [Int]
+densifyBuckets (minB, maxB) bs =
+  let bMap = HM.fromListWith (+) bs
+   in [fromMaybe 0 $ HM.lookup i bMap | i <- [minB .. maxB]]
 
 
 -- | Build a fixed 24-slot hourly bucket array from sparse (UTCTime, Int) pairs.

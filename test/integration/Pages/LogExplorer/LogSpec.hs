@@ -24,7 +24,7 @@ spec = aroundAll withTestResources do
   describe "Check Log Page" do
     it "should return an empty list" \tr -> do
       (_, pg) <-
-        testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -59,7 +59,7 @@ spec = aroundAll withTestResources do
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" oneDayFuture
 
       (_, pg) <-
-        testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -94,7 +94,7 @@ spec = aroundAll withTestResources do
       -- Test with a query filter (using proper string comparison for JSONB field)
       let query = "status_code == \"200\""
       (_, pg) <-
-        testServant tr $ Log.apiLogH testPid (Just query) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        testServant tr $ Log.apiLogH testPid (Just query) Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -119,7 +119,7 @@ spec = aroundAll withTestResources do
 
       -- First page
       (_, pg1) <-
-        testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg1 of
         Log.LogsGetJson r -> do
@@ -144,7 +144,7 @@ spec = aroundAll withTestResources do
       -- Note: Just request additional columns beyond the default ones
       let cols = "id,timestamp,name,duration"
       (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid Nothing (Just cols) Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -157,7 +157,7 @@ spec = aroundAll withTestResources do
       let invalidQuery = "status_code = 200"  -- Missing quotes around string value
 
       (_, pg) <- testServant tr $
-        Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid (Just invalidQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       -- Invalid query should return 0 results (not silently ignored)
       case pg of
@@ -170,7 +170,7 @@ spec = aroundAll withTestResources do
     it "should handle malformed query operators" \tr -> do
       let malformedQuery = "status_code === \"200\""  -- Invalid operator
       (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid (Just malformedQuery) Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
       
       case pg of
         Log.LogsGetJson r -> do
@@ -194,7 +194,7 @@ spec = aroundAll withTestResources do
 
       -- First page
       (_, pg1) <- testServant tr $
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg1 of
         Log.LogsGetJson r -> do
@@ -231,7 +231,7 @@ spec = aroundAll withTestResources do
       
       -- Get all results
       (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
       
       case pg of
         Log.LogsGetJson r -> do
@@ -264,7 +264,7 @@ spec = aroundAll withTestResources do
       let toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-5400) frozenTime   -- 1.5 hours ago
       
       (_, pg) <- testServant tr $ 
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
       
       case pg of
         Log.LogsGetJson r -> do
@@ -293,7 +293,7 @@ spec = aroundAll withTestResources do
       
       -- Test "1H" - should get messages from last hour (msgNow and msgHourBefore)
       (_, pg1) <- testServant tr $ 
-        Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing (Just "1H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
       
       case pg1 of
         Log.LogsGetJson r -> do
@@ -305,7 +305,7 @@ spec = aroundAll withTestResources do
 
       -- Test "24H" - should get messages from last 24 hours
       (_, pg2) <- testServant tr $
-        Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing (Just "24H") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg2 of
         Log.LogsGetJson r -> do
@@ -317,7 +317,7 @@ spec = aroundAll withTestResources do
     it "should handle missing time range (default behavior)" \tr -> do
       -- When no time range is specified, it should use a default (e.g., last 24 hours)
       (_, pg) <- testServant tr $
-        Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+        Log.apiLogH testPid Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -333,7 +333,7 @@ spec = aroundAll withTestResources do
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -355,7 +355,7 @@ spec = aroundAll withTestResources do
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do
@@ -376,7 +376,7 @@ spec = aroundAll withTestResources do
 
       let fromTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime (-60) frozenTime
           toTime = Just $ toText $ formatTime defaultTimeLocale "%FT%T%QZ" $ addUTCTime 60 frozenTime
-      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+      (_, pg) <- testServant tr $ Log.apiLogH testPid Nothing Nothing Nothing Nothing fromTime toTime Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
 
       case pg of
         Log.LogsGetJson r -> do

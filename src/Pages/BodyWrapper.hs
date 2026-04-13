@@ -405,7 +405,7 @@ bodyWrapper bcfg child = do
         const url = new URL(window.location.href);
         url.searchParams.set('viz_type', 'patterns');
         url.searchParams.set('pattern_target', fieldPath);
-        url.searchParams.delete('pattern_skip');
+        url.searchParams.delete('aggregate_skip');
         window.location.href = url.toString();
     }
 

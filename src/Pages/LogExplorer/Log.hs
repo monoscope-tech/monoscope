@@ -1,5 +1,6 @@
 module Pages.LogExplorer.Log (
   apiLogH,
+  apiLogExpandH,
   aiSearchH,
   queryEvents,
   LogsGet (..),
@@ -553,8 +554,8 @@ queryEvents pid queryM sinceM fromM toM sourceM limitM = do
       pure lr{logsData = limited, queryResultCount = qrc, hasMore = qrc < lr.count}
 
 
-apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
-apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM = do
+apiLogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe UTCTime -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders LogsGet)
+apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM queryLibItemTitle queryLibItemID detailWM targetEventM showTraceM hxRequestM hxBoostedM jsonM vizTypeM alertM skipM pTargetM sortByM = do
   (sess, project) <- Projects.sessionAndProject pid
   let source = fromMaybe "spans" sourceM
   let summaryCols = T.splitOn "," (fromMaybe "" cols')
@@ -630,6 +631,9 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       Just "patterns" -> do
         (totalPatterns, patternRows) <- LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
         addRespHeaders $ LogsPatternJson totalPatterns (V.fromList patternRows)
+      Just "sessions" -> do
+        (totalSessions, sessionRows) <- LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
+        addRespHeaders $ LogsSessionsJson totalSessions (V.fromList sessionRows)
       _ -> do
         tableAsVecE <- fetchOrSkip
         whenLeft_ (void tableAsVecE) (Log.logAttention "Log explorer JSON query failed" . show @Text)
@@ -638,16 +642,18 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           Nothing -> buildLogResult' (V.empty, ["timestamp", "summary", "duration"], 0) >>= addRespHeaders . LogsGetJson
     else do
       -- Full HTML path: parallelize independent DB queries
-      (tableAsVecE, queryLibE, facetSummaryE, freeTierStatusE, teamsE, patternsE) <- Ki.scoped \scope -> do
+      (tableAsVecE, queryLibE, facetSummaryE, freeTierStatusE, teamsE, aggregateE) <- Ki.scoped \scope -> do
         let aw = Ki.atomically . Ki.await
         t1 <- Ki.fork scope fetchOrSkip
         t2 <- Ki.fork scope $ tryAny $ Projects.queryLibHistoryForUser pid sess.persistentSession.userId
         t3 <- Ki.fork scope $ tryAny $ Fields.getFacetSummary pid "otel_logs_and_spans" (fromMaybe (addUTCTime (-86400) now) fromD) (fromMaybe now toD)
         t4 <- Ki.fork scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
         t5 <- Ki.fork scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
+        -- Patterns and sessions are mutually exclusive; a single fork suffices.
         t6 <- Ki.fork scope $ tryAny $ case effectiveVizType of
-          Just "patterns" -> Just . second V.fromList <$> LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
-          _ -> pure Nothing
+          Just "patterns" -> (,Nothing) . Just . second V.fromList <$> LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+          Just "sessions" -> (Nothing,) . Just . second V.fromList <$> LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
+          _ -> pure (Nothing, Nothing)
         (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
       -- Log errors from non-critical queries but continue with defaults
@@ -656,14 +662,14 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
       logErr "facets" facetSummaryE
       logErr "freeTierStatus" freeTierStatusE
       logErr "teams" teamsE
-      logErr "patterns" patternsE
+      logErr "aggregate" aggregateE
 
       let tableAsVecM = hush tableAsVecE
           queryLib = fromRight [] queryLibE
           facetSummary = join $ rightToMaybe facetSummaryE
           freeTierStatus = fromRight def freeTierStatusE
           teams = fromRight V.empty teamsE
-          patterns = join $ rightToMaybe patternsE
+          (patterns, sessions) = fromRight (Nothing, Nothing) aggregateE
           (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
 
       -- Queue facet generation if no precomputed facets exist (new projects)
@@ -704,6 +710,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         Just tableResult -> do
           r <- buildLogResult' tableResult
           let patternsToSkip = fromMaybe 0 skipM + maybe 0 (V.length . snd) patterns
+              sessionsToSkip = fromMaybe 0 skipM + maybe 0 (V.length . snd) sessions
 
           -- Build widgets with PNG URLs
           let baseChartWidget = logChartWidget pid
@@ -745,6 +752,8 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   , alert = alertDM
                   , patterns = patterns
                   , patternsToSkip
+                  , sessions = sessions
+                  , sessionsToSkip
                   , targetPattern = pTargetM
                   , project = project
                   , teams
@@ -756,6 +765,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
 
           addRespHeaders $ case (layoutM, hxRequestM, jsonM, effectiveVizType) of
             (_, _, Just "true", Just "patterns") -> let (tp, ps) = fromMaybe (0, V.empty) patterns in LogsPatternJson tp ps
+            (_, _, Just "true", Just "sessions") -> let (ts, ss) = fromMaybe (0, V.empty) sessions in LogsSessionsJson ts ss
             (Just "SaveQuery", _, _, _) -> LogsQueryLibrary pid queryLibSaved queryLibRecent
             (Just "resultTable", Just "true", _, _) -> LogsGetJson r
             (Just "all", Just "true", _, _) -> LogsGetJson r
@@ -819,6 +829,7 @@ data LogsGet
   | LogsGetJson LogResult
   | LogsQueryLibrary Projects.ProjectId (V.Vector Projects.QueryLibItem) (V.Vector Projects.QueryLibItem)
   | LogsPatternJson Int (V.Vector LogQueries.PatternRow)
+  | LogsSessionsJson Int (V.Vector LogQueries.SessionRow)
 
 
 instance ToHtml LogsGet where
@@ -828,14 +839,14 @@ instance ToHtml LogsGet where
   toHtml (LogsQueryLibrary pid queryLibSaved queryLibRecent) = toHtml $ queryLibrary_ pid queryLibSaved queryLibRecent
   toHtml x@LogsGetJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
   toHtml x@LogsPatternJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
+  toHtml x@LogsSessionsJson{} = span_ [] . toHtml $ (decodeUtf8 $ AE.encode x :: Text)
   toHtmlRaw = toHtml
 
 
 instance AE.ToJSON LogsGet where
   toJSON (LogsGetJson r) = AE.toJSON r
   toJSON (LogsPatternJson totalPatterns patterns) =
-    let total = V.foldl' (\acc p -> acc + p.count) 0 patterns
-        patternToSummary pat
+    let patternToSummary pat
           | "\x1E" `T.isInfixOf` pat = AE.toJSON (T.splitOn "\x1E" pat)
           | otherwise = AE.toJSON (splitSummaryElements pat)
         -- Group words into summary elements: each word containing ⇒ starts a new
@@ -849,23 +860,51 @@ instance AE.ToJSON LogsGet where
         cols = ["id", "pattern_count", "volume", "level", "service", "summary"] :: [Text]
         allCols = cols ++ ["merged_count"] :: [Text]
         rows = V.map (\p -> AE.Array $ V.fromList [AE.Null, AE.toJSON p.count, AE.toJSON p.volume, AE.toJSON p.level, AE.toJSON p.service, patternToSummary p.logPattern, AE.toJSON p.mergedCount]) patterns
-     in AE.object
-          [ "logsData" AE..= rows
-          , "cols" AE..= cols
-          , "colIdxMap" AE..= HM.fromList (zip allCols [0 :: Int ..])
-          , "count" AE..= total
-          , "totalPatterns" AE..= totalPatterns
-          , "hasMore" AE..= (V.length patterns > 99)
-          , "queryResultCount" AE..= V.length patterns
-          , "serviceColors" AE..= AE.object []
-          , "traces" AE..= ([] :: [AE.Value])
-          ]
+        total = V.foldl' (\acc p -> acc + p.count) 0 patterns
+     in aggregateEnvelope rows cols allCols total ["totalPatterns" AE..= totalPatterns]
+  -- Column order must stay in sync with web-components/src/log-list.ts.
+  toJSON (LogsSessionsJson totalSessions sessions) =
+    let cols = ["id", "session_id", "user_display", "user_email", "event_count", "error_count", "duration_ns", "first_seen", "last_seen", "services", "volume"] :: [Text]
+        rowOf s =
+          AE.Array
+            $ V.fromList
+              [ AE.Null
+              , AE.toJSON s.sessionId
+              , AE.toJSON (LogQueries.sessionUserDisplay s.userEmail s.userName s.userId)
+              , AE.toJSON s.userEmail
+              , AE.toJSON s.eventCount
+              , AE.toJSON s.errorCount
+              , AE.toJSON s.durationNs
+              , AE.toJSON s.firstSeen
+              , AE.toJSON s.lastSeen
+              , AE.toJSON s.services
+              , AE.toJSON s.volume
+              ]
+        rows = V.map rowOf sessions
+        total = V.foldl' (\acc s -> acc + s.eventCount) 0 sessions
+     in aggregateEnvelope rows cols cols total ["totalSessions" AE..= totalSessions]
   toJSON (LogsGetError _) = AE.object ["error" AE..= True, "message" AE..= ("Something went wrong" :: Text)]
   toJSON (LogsGetErrorSimple msg) = AE.object ["error" AE..= True, "message" AE..= msg]
   toJSON _ = AE.object ["error" AE..= True]
 
 
 -- This component has been moved to Pkg.Components.LogQueryBox
+
+-- | Shared JSON envelope for aggregate visualizations (patterns, sessions).
+aggregateEnvelope :: V.Vector AE.Value -> [Text] -> [Text] -> Int64 -> [AET.Pair] -> AE.Value
+aggregateEnvelope rows cols allCols total extra =
+  AE.object $
+    [ "logsData" AE..= rows
+    , "cols" AE..= cols
+    , "colIdxMap" AE..= HM.fromList (zip allCols [0 :: Int ..])
+    , "count" AE..= total
+    , "hasMore" AE..= (V.length rows >= LogQueries.aggregatePageSize)
+    , "queryResultCount" AE..= V.length rows
+    , "serviceColors" AE..= AE.object []
+    , "traces" AE..= ([] :: [AE.Value])
+    ]
+      ++ extra
+
 
 data ApiLogsPageData = ApiLogsPageData
   { pid :: Projects.ProjectId
@@ -898,6 +937,8 @@ data ApiLogsPageData = ApiLogsPageData
   , alert :: Maybe Monitors.QueryMonitor
   , patterns :: Maybe (Int, V.Vector LogQueries.PatternRow)
   , patternsToSkip :: Int
+  , sessions :: Maybe (Int, V.Vector LogQueries.SessionRow)
+  , sessionsToSkip :: Int
   , targetPattern :: Maybe Text
   , project :: Projects.Project
   , teams :: V.Vector ManageMembers.Team
@@ -1150,6 +1191,39 @@ apiLogsPage page = do
           div_ [hxGet_ url, hxTarget_ "#log_details_container", hxSwap_ "innerHtml", hxTrigger_ "intersect one", hxIndicator_ "#details_indicator", term "hx-sync" "this:replace"] pass
 
   queryEditorInitializationCode page.queryLibRecent page.queryLibSaved page.vizType ((.facetJson) <$> page.facets)
+
+
+-- | Inline-expand endpoint for the Sessions and Patterns visualizations.
+-- Returns up to @limitN@ example events that belong to a given session
+-- (@kind=session@) or that match a given pattern template (@kind=pattern@),
+-- plus a @hasMore@ flag for pagination.
+apiLogExpandH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Int -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> ATAuthCtx (RespHeaders AE.Value)
+apiLogExpandH pid kindM keyM skipM queryM sinceM fromM toM = do
+  _ <- Projects.sessionAndProject pid
+  let skip = fromMaybe 0 skipM
+      limitN = 20 :: Int
+      fetchLimit = limitN + 1 -- overflow row to detect hasMore
+      key = fromMaybe "" keyM
+  when (T.null key) $ throwError Servant.err400{Servant.errBody = "Missing key"}
+  queryAST <- case parseQueryToAST (fromMaybe "" queryM) of
+    Left err -> throwError Servant.err400{Servant.errBody = encodeUtf8 $ "Invalid query: " <> err}
+    Right ast -> pure ast
+  now <- Time.currentTime
+  let (fromD, toD, _) = Components.parseTimeRange now (Components.TimePicker sinceM fromM toM)
+  expandKind <- case kindM of
+    Just "session" -> pure $ LogQueries.ExpandSession key
+    Just "pattern" -> pure $ LogQueries.ExpandPattern key
+    _ -> throwError Servant.err400{Servant.errBody = "kind must be session or pattern"}
+  authCtx <- Effectful.Reader.Static.ask @AuthContext
+  (rows, cols) <- LogQueries.fetchEventExamples authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) expandKind skip fetchLimit
+  let hasMore = V.length rows > limitN
+      shown = if hasMore then V.take limitN rows else rows
+  addRespHeaders
+    $ AE.object
+      [ "cols" AE..= cols
+      , "rows" AE..= shown
+      , "hasMore" AE..= hasMore
+      ]
 
 
 aiSearchH :: Projects.ProjectId -> AE.Value -> ATAuthCtx (RespHeaders AE.Value)

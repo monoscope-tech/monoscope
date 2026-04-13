@@ -312,7 +312,9 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
     let defaultVizType = fromMaybe (if alert then "timeseries" else "logs") vizTypeM
         containerSelector = fromMaybe "visualization-widget-container" widgetContainerId
         showEmojis = isJust widgetContainerId -- Only show emojis in widget mode, not in log explorer
-    forM_ visTypes $ \(icon, label, vizType, emoji) -> do
+        -- Sessions tab is hidden in alert mode (not a valid alerting surface).
+    let visible = if alert then filter (\(_, _, t, _) -> t /= "sessions") visTypes else visTypes
+    forM_ visible $ \(icon, label, vizType, emoji) -> do
       label_
         [ term "data-value" vizType
         , class_ "tab !shadow-none !border-strokeWeak flex gap-1"
@@ -322,7 +324,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
             $ [ type_ "radio"
               , name_ "visualization"
               , id_ $ "viz-" <> vizType
-              , class_ $ if vizType == "logs" || vizType == "patterns" then "default-chart" else "no-chart"
+              , class_ $ if vizType == "logs" || vizType == "patterns" || vizType == "sessions" then "default-chart" else "no-chart"
               , value_ vizType
               , term "data-update-url" (if updateUrl then "true" else "false")
               , term "data-container-id" containerSelector
@@ -335,6 +337,8 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                             if resultTable
                               if my.value is 'patterns'
                                 set resultTable.mode to 'patterns'
+                              else if my.value is 'sessions'
+                                set resultTable.mode to 'sessions'
                               else
                                 set resultTable.mode to 'logs'
                               end
@@ -436,12 +440,15 @@ popularQueries =
 
 -- | Visualization types used across the application
 -- Each entry is (icon, label, type, emoji)
+--
+-- TODO: Support the other viz types.
 visTypes :: [(Text, Text, Text, Text)]
 visTypes =
   [ ("list-view", "Logs", "logs", "📋")
   , ("bar-chart", "Bar", "timeseries", "📊")
   , ("duo-line-chart", "Line", "timeseries_line", "📈")
   , ("log-patterns", "Patterns", "patterns", "🔍")
+  , ("users", "Sessions", "sessions", "👥")
   -- , ("duo-pie-chart", "Pie", "pie_chart", "🥧")
   -- , ("duo-scatter-chart", "Scatter", "distribution", "📉")
   -- , ("hashtag", "Number", "stat", "🔢")

@@ -10,6 +10,7 @@ import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
 import Database.PostgreSQL.Simple (Only (..))
 import Database.PostgreSQL.Simple.SqlQQ (sql)
+import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Network.GRPC.Common (GrpcError (..), GrpcException (..))
 import Network.GRPC.Common.Protobuf (Proto (..))
@@ -22,8 +23,12 @@ import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
 import Relude
 import Data.Aeson qualified as AE
+import Data.Aeson.KeyMap qualified as KM
+import Data.Aeson.Key (fromText)
 import Test.Hspec (Spec, aroundAll, describe, expectationFailure, it, shouldBe, shouldContain, shouldSatisfy, shouldThrow)
+import Data.List (isInfixOf, sortBy)
 import Data.Set qualified as Set
+import Control.Exception (ErrorCall (..))
 
 
 pid :: Projects.ProjectId
@@ -37,7 +42,18 @@ queryLogs :: TestResources -> Maybe Text -> IO Log.LogsGet
 queryLogs tr queryM = do
   let (timeFrom, timeTo) = testTimeRange
   (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
-    $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing
+    $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") Nothing Nothing Nothing Nothing Nothing
+  pure result
+
+-- | Helper to query logs with a viz_type (e.g. "sessions", "patterns") using the JSON fast path
+queryLogsViz :: TestResources -> Maybe Text -> Text -> IO Log.LogsGet
+queryLogsViz tr queryM vizType = queryLogsVizSorted tr queryM vizType Nothing
+
+queryLogsVizSorted :: TestResources -> Maybe Text -> Text -> Maybe Text -> IO Log.LogsGet
+queryLogsVizSorted tr queryM vizType sortByM = do
+  let (timeFrom, timeTo) = testTimeRange
+  (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+    $ Log.apiLogH pid queryM Nothing Nothing Nothing (Just timeFrom) (Just timeTo) Nothing (Just "spans") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing (Just "true") (Just vizType) Nothing Nothing Nothing sortByM
   pure result
 
 -- | Helper to extract dataset from LogsResp
@@ -49,6 +65,7 @@ expectLogsJson = \case
   Log.LogsGetErrorSimple err -> fail $ "Got LogsGetErrorSimple: " <> toString err
   Log.LogsQueryLibrary{} -> fail "Got LogsQueryLibrary instead of LogsGetJson"
   Log.LogsPatternJson{} -> fail "Got LogsPatternJson instead of LogsGetJson"
+  Log.LogsSessionsJson{} -> fail "Got LogsSessionsJson instead of LogsGetJson"
 
 
 spec :: Spec
@@ -215,3 +232,114 @@ spec = aroundAll withTestResources do
       length idList `shouldBe` length names
       idList `shouldSatisfy` all (\t -> t /= UUID.toText UUID.nil)
       Set.size (Set.fromList idList) `shouldBe` length idList
+
+    -- Sessions aggregation: verify fetchSessions groups events by session.id,
+    -- surfaces user identity, counts errors, and honors KQL pre-filters.
+    describe "Sessions aggregation" do
+      it "Test 11.1: aggregates events by session with user identity and error count" $ \tr -> do
+        key <- createTestAPIKey tr pid "sessions-key"
+        let aliceAttrs =
+              [ ("session.id", "abc")
+              , ("user.id", "u1")
+              , ("user.email", "alice@example.com")
+              ]
+            bobAttrs =
+              [ ("session.id", "xyz")
+              , ("user.id", "u2")
+              , ("user.email", "bob@example.com")
+              ]
+        -- 3 non-error spans for alice, 1 error span for alice, 2 non-error spans for bob
+        forM_ ([1 .. 3] :: [Int]) $ \i ->
+          ingestSessionEvent tr key ("GET /alice/" <> show i) aliceAttrs False frozenTime
+        ingestSessionEvent tr key "GET /alice/boom" aliceAttrs True frozenTime
+        forM_ ([1 .. 2] :: [Int]) $ \i ->
+          ingestSessionEvent tr key ("GET /bob/" <> show i) bobAttrs False frozenTime
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+        result <- queryLogsViz tr Nothing "sessions"
+        case result of
+          Log.LogsSessionsJson total sessionRows -> do
+            total `shouldBe` 2
+            V.length sessionRows `shouldBe` 2
+            let findBySid sid = V.find (\s -> s.sessionId == sid) sessionRows
+            case findBySid "abc" of
+              Just s -> do
+                s.eventCount `shouldBe` 4
+                s.errorCount `shouldBe` 1
+                s.userEmail `shouldBe` Just "alice@example.com"
+                s.userId `shouldBe` Just "u1"
+              Nothing -> expectationFailure "session abc not found"
+            case findBySid "xyz" of
+              Just s -> do
+                s.eventCount `shouldBe` 2
+                s.errorCount `shouldBe` 0
+                s.userEmail `shouldBe` Just "bob@example.com"
+              Nothing -> expectationFailure "session xyz not found"
+          _ -> expectationFailure "expected LogsSessionsJson"
+
+      it "Test 11.2: KQL filter narrows sessions result to a single user" $ \tr -> do
+        key <- createTestAPIKey tr pid "sessions-filter-key"
+        -- Use unique emails to avoid collision with Test 11.1 data (aroundAll shares state)
+        ingestSessionEvent tr key "GET /a" [("session.id", "s1-filter"), ("user.email", "alice-filter@example.com")] False frozenTime
+        ingestSessionEvent tr key "GET /b" [("session.id", "s2-filter"), ("user.email", "bob-filter@example.com")] False frozenTime
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        result <- queryLogsViz tr (Just "attributes.user.email == \"alice-filter@example.com\"") "sessions"
+        case result of
+          Log.LogsSessionsJson _ sessionRows -> do
+            V.length sessionRows `shouldBe` 1
+            (V.head sessionRows).sessionId `shouldBe` "s1-filter"
+          _ -> expectationFailure "expected LogsSessionsJson"
+
+      it "Test 11.3: sessions with missing user identity fields still aggregate" $ \tr -> do
+        key <- createTestAPIKey tr pid "sessions-anon-key"
+        -- Ingest spans with session.id but NO user.id / user.email / user.name
+        forM_ ([1 .. 3] :: [Int]) $ \i ->
+          ingestSessionEvent tr key ("GET /anon/" <> show i) [("session.id", "anon-sess")] False frozenTime
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        result <- queryLogsViz tr Nothing "sessions"
+        case result of
+          Log.LogsSessionsJson _ sessionRows -> do
+            case V.find (\s -> s.sessionId == "anon-sess") sessionRows of
+              Just s -> do
+                s.eventCount `shouldBe` 3
+                s.userId `shouldBe` Nothing
+                s.userEmail `shouldBe` Nothing
+                s.userName `shouldBe` Nothing
+              Nothing -> expectationFailure "session anon-sess not found"
+          _ -> expectationFailure "expected LogsSessionsJson"
+
+      it "Test 11.4: expand endpoint returns child events for a session" $ \tr -> do
+        key <- createTestAPIKey tr pid "sessions-expand-key"
+        forM_ ([1 .. 3] :: [Int]) $ \i ->
+          ingestSessionEvent tr key ("GET /expand/" <> show i) [("session.id", "expand-sess"), ("user.id", "eu1")] False frozenTime
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        let (timeFrom, timeTo) = testTimeRange
+        (_, expandResult) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+          $ Log.apiLogExpandH pid (Just "session") (Just "expand-sess") Nothing Nothing Nothing (Just timeFrom) (Just timeTo)
+        let field k = case expandResult of AE.Object o -> KM.lookup (fromText k) o; _ -> Nothing
+            rows = fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< field "rows"
+            cols = fromMaybe [] $ AE.decode @[Text] . AE.encode =<< field "cols"
+            hasMore = fromMaybe False $ AE.decode @Bool . AE.encode =<< field "hasMore"
+        length rows `shouldSatisfy` (>= 3)
+        cols `shouldContain` ["timestamp"]
+        hasMore `shouldBe` False
+
+      it "Test 11.5: expand endpoint rejects missing key with 400" $ \tr -> do
+        let (timeFrom, timeTo) = testTimeRange
+        toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+          (Log.apiLogExpandH pid (Just "session") Nothing Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+          `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
+
+      it "Test 11.6: expand endpoint rejects invalid kind with 400" $ \tr -> do
+        let (timeFrom, timeTo) = testTimeRange
+        toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+          (Log.apiLogExpandH pid (Just "invalid") (Just "some-key") Nothing Nothing Nothing (Just timeFrom) (Just timeTo))
+          `shouldThrow` \(ErrorCall msg) -> "400" `isInfixOf` msg
+
+      it "Test 11.7: sort_by=events orders sessions by event count" $ \tr -> do
+        result <- queryLogsVizSorted tr Nothing "sessions" (Just "events")
+        case result of
+          Log.LogsSessionsJson _ sessionRows -> do
+            let counts = V.toList $ V.map (.eventCount) sessionRows
+            counts `shouldBe` sortBy (flip compare) counts
+          _ -> expectationFailure "expected LogsSessionsJson"

@@ -335,8 +335,7 @@ facetColumns =
   , "attributes___user___email"
   , "attributes___user___name"
   , "attributes___user___full_name"
-  , "attributes___session___id"
-  , "attributes___session___previous___id"
+  -- session.id / session.previous.id excluded: near-unique, useless for facets
   , "attributes___db___system___name"
   , "attributes___db___collection___name"
   , "attributes___db___namespace"

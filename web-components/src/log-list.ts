@@ -59,13 +59,13 @@ const _ensureBadgeClasses = html`
 `;
 
 // Special item types for virtual list
-type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' };
+type VirtualListItem = EventLine | { type: 'fetchRecent' } | { type: 'loadMore' } | { type: 'aggregateChildren'; parentKey: string };
 
 @customElement('log-list')
 export class LogList extends LitElement {
   @property({ type: String }) projectId: string = '';
   @property({ type: String }) initialFetchUrl: string = '';
-  @property({ type: String }) mode: 'logs' | 'patterns' = 'logs';
+  @property({ type: String }) mode: 'logs' | 'patterns' | 'sessions' = 'logs';
 
   @state() private expandedTraces: Record<string, boolean> = {};
   @state() private flipDirection: boolean = false;
@@ -80,6 +80,7 @@ export class LogList extends LitElement {
   @state() private loadedCount: number = 0;
   @state() private totalCount: number = 0;
   @state() private totalPatterns: number = 0;
+  @state() private totalSessions: number = 0;
   @state() private isLiveStreaming: boolean = false;
   @state() private isLoading: boolean = false;
   @state() private isFetchingRecent: boolean = false;
@@ -88,6 +89,11 @@ export class LogList extends LitElement {
   @state() private fetchedNew: boolean = false;
   @state() private visibleItems: EventLine[] = [];
   @state() private virtualListItems: VirtualListItem[] = [];
+  // Inline-expand state keyed by aggregate row key (session_id or pattern_hash).
+  @state() private expandedAggregates: Record<
+    string,
+    { rows: any[][]; cols: string[]; colIdxMap: ColIdxMap; hasMore: boolean; loading: boolean; skip: number }
+  > = {};
   @state() private fixedColumnWidths: Record<string, number> = {};
 
   // Refs for DOM elements
@@ -171,9 +177,10 @@ export class LogList extends LitElement {
   }
 
   private async workerFetch(url: string): Promise<{ tree: any[]; meta: any }> {
-    // Patterns mode: fetch directly, no span grouping needed
-    if (this.mode === 'patterns') {
+    // Patterns / sessions: fetch directly, no span grouping needed
+    if (this.isAggregate) {
       const resp = await fetch(url, { headers: { Accept: 'application/json' }, credentials: 'include' });
+      if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
       const data = await resp.json();
       if (data.error) throw new Error(data.message || 'Server error');
       const tree = (data.logsData || []).map((row: any[]) => ({
@@ -183,7 +190,7 @@ export class LogList extends LitElement {
         startNs: 0, duration: 0, traceStart: 0, traceEnd: 0,
         childrenTimeSpans: [], type: 'log' as const,
       }));
-      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap: data.colIdxMap || {}, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
+      return { tree, meta: { serviceColors: {}, nextUrl: '', cols: data.cols || [], colIdxMap: data.colIdxMap || {}, count: data.count || 0, totalPatterns: data.totalPatterns ?? 0, totalSessions: data.totalSessions ?? 0, traces: [], hasMore: data.hasMore ?? false, queryResultCount: data.queryResultCount ?? 0 } };
     }
 
     // Use early fetch promise if available (set by server-rendered script in head)
@@ -211,10 +218,14 @@ export class LogList extends LitElement {
     // Chart data zoom functionality - currently disabled
   }
 
+  private get isAggregate() {
+    return this.mode === 'patterns' || this.mode === 'sessions';
+  }
+
   private setupEventListeners() {
-    // Live streaming button
+    // Live streaming button — disabled for aggregate views (patterns/sessions)
     const liveBtn = document.querySelector('#streamLiveData') as HTMLInputElement;
-    if (liveBtn) {
+    if (liveBtn && !this.isAggregate) {
       liveBtn.addEventListener('change', () => {
         if (liveBtn.checked) {
           this.isLiveStreaming = true;
@@ -295,7 +306,8 @@ export class LogList extends LitElement {
       p.set('json', 'true');
       // Sync viz_type with current mode (URL update may be deferred via rAF)
       if (this.mode === 'patterns') p.set('viz_type', 'patterns');
-      else if (p.get('viz_type') === 'patterns') p.delete('viz_type');
+      else if (this.mode === 'sessions') p.set('viz_type', 'sessions');
+      else if (p.get('viz_type') === 'patterns' || p.get('viz_type') === 'sessions') p.delete('viz_type');
       const pathName = window.location.pathname;
       return `${window.location.origin}${pathName}?${p.toString()}`;
     }
@@ -326,11 +338,11 @@ export class LogList extends LitElement {
   }
 
   private buildLoadMoreUrl(): string {
-    // Patterns mode: increment pattern_skip based on loaded count
-    if (this.mode === 'patterns') {
+    // Patterns / sessions: increment aggregate_skip based on loaded count
+    if (this.isAggregate) {
       const url = new URL(window.location.href);
       url.searchParams.set('json', 'true');
-      url.searchParams.set('pattern_skip', String(this.spanListTree.length));
+      url.searchParams.set('aggregate_skip', String(this.spanListTree.length));
       return url.toString();
     }
 
@@ -425,7 +437,7 @@ export class LogList extends LitElement {
 
   async fetchInitialData() {
     const vizType = new URLSearchParams(window.location.search).get('viz_type');
-    this.mode = vizType === 'patterns' ? 'patterns' : 'logs';
+    this.mode = vizType === 'patterns' ? 'patterns' : vizType === 'sessions' ? 'sessions' : 'logs';
     this.fetchData(this.buildJsonUrl(), false);
   }
 
@@ -529,6 +541,16 @@ export class LogList extends LitElement {
       service: 136,
       summary: 3600,
       latency_breakdown: 120,
+      // Sessions columns
+      session_id: 180,
+      user_display: 200,
+      user_email: 200,
+      event_count: 90,
+      error_count: 90,
+      duration_ns: 100,
+      first_seen: 155,
+      last_seen: 155,
+      services: 180,
     };
   }
 
@@ -544,6 +566,9 @@ export class LogList extends LitElement {
     if (this.mode === 'patterns') {
       countText = `${this.formatCount(this.totalPatterns)} patterns`;
       suffixText = ` found (based on ${this.formatCount(this.totalCount)} logs)`;
+    } else if (this.mode === 'sessions') {
+      countText = `${this.formatCount(this.totalSessions)} sessions`;
+      suffixText = this.totalCount ? ` (${this.formatCount(this.totalCount)} events)` : '';
     } else {
       countText = this.formatCount(this.loadedCount);
       suffixText = this.loadedCount < this.totalCount ? ` of ${this.formatCount(this.totalCount)} rows` : ' rows';
@@ -590,6 +615,12 @@ export class LogList extends LitElement {
   }
 
   updated(changedProperties: Map<string, any>) {
+    // Stop live streaming when switching to an aggregate view
+    if (changedProperties.has('mode') && this.isAggregate && this.liveStreamInterval) {
+      clearInterval(this.liveStreamInterval);
+      this.isLiveStreaming = false;
+    }
+
     if (this.shouldScrollToBottom && this.flipDirection) {
       requestAnimationFrame(() => this.scrollToBottom());
     }
@@ -706,7 +737,7 @@ export class LogList extends LitElement {
 
   private updateVisibleItems() {
     let items: EventLine[];
-    if (this.mode === 'patterns') {
+    if (this.isAggregate) {
       items = this.spanListTree;
     } else if (this.view === 'tree') {
       items = this.spanListTree.filter((e) => e.show);
@@ -718,8 +749,15 @@ export class LogList extends LitElement {
     // Build virtual list with special items
     const virtualItems: VirtualListItem[] = [];
 
-    if (this.mode === 'patterns') {
-      virtualItems.push(...items);
+    if (this.isAggregate) {
+      // Splice inline expanded children after each expanded aggregate row.
+      for (const row of items) {
+        virtualItems.push(row);
+        const key = this.aggregateRowKey(row);
+        if (key && this.expandedAggregates[key]) {
+          virtualItems.push({ type: 'aggregateChildren', parentKey: key });
+        }
+      }
       if (this.hasMore || items.length > 0) virtualItems.push({ type: 'loadMore' });
     } else {
       const isEmbedded = !!this.initialFetchUrl;
@@ -756,6 +794,146 @@ export class LogList extends LitElement {
       // Defer chart update to allow chart to be ready
       setTimeout(() => this.debouncedUpdateChartMarkArea(), 500);
     }
+  }
+
+  // Derive a stable key for an aggregate row (sessions or patterns).
+  private aggregateRowKey(rowData: EventLine): string | null {
+    if (this.mode === 'sessions') {
+      return lookupVecValue<string>(rowData.data, this.colIdxMap, 'session_id') || null;
+    }
+    if (this.mode === 'patterns') {
+      // Patterns rows expose either a stable pattern hash or the template summary.
+      const hash = lookupVecValue<string>(rowData.data, this.colIdxMap, 'pattern_hash');
+      if (hash) return hash;
+      const summary = rowData.data?.[this.colIdxMap['summary']];
+      if (Array.isArray(summary)) return summary.join('\x1e');
+      return typeof summary === 'string' ? summary : null;
+    }
+    return null;
+  }
+
+  // Toggle inline expansion of a patterns/sessions row and fetch child events on first open.
+  toggleAggregateRow = async (rowData: EventLine) => {
+    const key = this.aggregateRowKey(rowData);
+    if (!key) {
+      this.showErrorToast('Unable to expand: missing session identifier');
+      return;
+    }
+    if (this.expandedAggregates[key]) {
+      const { [key]: _dropped, ...rest } = this.expandedAggregates;
+      this.expandedAggregates = rest;
+      rowData.expanded = false;
+      this.updateVisibleItems();
+      this.requestUpdate();
+      return;
+    }
+    // First open — seed loading entry and fetch.
+    this.expandedAggregates = {
+      ...this.expandedAggregates,
+      [key]: { rows: [], cols: [], colIdxMap: {}, hasMore: false, loading: true, skip: 0 },
+    };
+    rowData.expanded = true;
+    this.updateVisibleItems();
+    this.requestUpdate();
+    await this.fetchAggregateChildren(key, 0);
+  };
+
+  private buildExpandUrl(key: string, skip: number): string {
+    const pageParams = new URLSearchParams(window.location.search);
+    const url = new URL(window.location.origin + window.location.pathname.split('/log_explorer')[0] + '/log_explorer/expand');
+    url.searchParams.set('kind', this.mode === 'sessions' ? 'session' : 'pattern');
+    url.searchParams.set('key', key);
+    url.searchParams.set('skip', String(skip));
+    for (const p of ['query', 'since', 'from', 'to']) {
+      const v = pageParams.get(p);
+      if (v) url.searchParams.set(p, v);
+    }
+    return url.toString();
+  }
+
+  private async fetchAggregateChildren(key: string, skip: number) {
+    try {
+      const resp = await fetch(this.buildExpandUrl(key, skip), { headers: { Accept: 'application/json' }, credentials: 'include' });
+      if (!resp.ok) throw new Error(resp.status === 401 ? 'Session expired, please refresh' : `Server error (${resp.status})`);
+      const data = await resp.json();
+      const cols: string[] = data.cols || [];
+      const childIdxMap: ColIdxMap = {};
+      cols.forEach((c, i) => (childIdxMap[c] = i));
+      const existing = this.expandedAggregates[key];
+      if (!existing) return;
+      const mergedRows = skip === 0 ? data.rows || [] : [...existing.rows, ...(data.rows || [])];
+      this.expandedAggregates = {
+        ...this.expandedAggregates,
+        [key]: {
+          rows: mergedRows,
+          cols,
+          colIdxMap: childIdxMap,
+          hasMore: !!data.hasMore && mergedRows.length < 500,
+          loading: false,
+          skip: mergedRows.length,
+        },
+      };
+      this.requestUpdate();
+    } catch (e) {
+      console.error('fetchAggregateChildren failed:', e);
+      const existing = this.expandedAggregates[key];
+      if (existing) {
+        this.expandedAggregates = { ...this.expandedAggregates, [key]: { ...existing, loading: false } };
+        this.requestUpdate();
+      }
+      this.showErrorToast((e as Error).message || 'Failed to load events');
+    }
+  }
+
+  private renderAggregateChildren(parentKey: string) {
+    const state = this.expandedAggregates[parentKey];
+    if (!state) return nothing;
+    const summaryCol = state.colIdxMap['summary'];
+    const timestampCol = state.colIdxMap['timestamp'] ?? state.colIdxMap['created_at'];
+    const rows = state.rows.map((row) => {
+      const ts = timestampCol !== undefined ? row[timestampCol] : '';
+      const summary = summaryCol !== undefined ? row[summaryCol] : '';
+      const summaryText = Array.isArray(summary)
+        ? summary
+            .map((el) => (typeof el === 'string' ? el.split('⇒').slice(-1)[0] : ''))
+            .filter(Boolean)
+            .join(' ')
+        : String(summary || '');
+      return html`<div
+        class="flex items-center gap-2 px-2 py-0.5 text-xs hover:bg-fillWeaker cursor-pointer"
+        @click=${(e: any) => {
+          e.stopPropagation();
+          const targetInfo = requestDumpLogItemUrlPath(row, state.colIdxMap, 'spans');
+          if (targetInfo[0]) {
+            this.toggleLogRow(e, targetInfo, this.projectId);
+          }
+        }}
+      >
+        <time class="monospace text-textWeak shrink-0 w-32" datetime=${ts || ''}>${ts ? formatTimestamp(String(ts)) : ''}</time>
+        <span class="truncate text-textStrong">${summaryText}</span>
+      </div>`;
+    });
+    return html`<tr class="item-row flex w-full">
+      <td class="w-full bg-fillWeaker/40 border-l-2 border-strokeBrand-weak py-1 pl-8">
+        ${state.loading && state.rows.length === 0
+          ? html`<div class="text-xs text-textWeak px-2 py-1">Loading events…</div>`
+          : state.rows.length === 0
+          ? html`<div class="text-xs text-textWeak px-2 py-1">No events.</div>`
+          : html`<div class="flex flex-col">${rows}</div>`}
+        ${state.hasMore
+          ? html`<button
+              class="mt-1 text-xs text-textBrand underline px-2 py-1"
+              @click=${(e: any) => {
+                e.stopPropagation();
+                this.fetchAggregateChildren(parentKey, state.skip);
+              }}
+              ?disabled=${state.loading}
+            >
+              ${state.loading ? 'Loading…' : 'Load more'}
+            </button>`
+          : nothing}
+      </td>
+    </tr>`;
   }
 
   expandTrace = (tracId: string, spanId: string) => {
@@ -814,6 +992,7 @@ export class LogList extends LitElement {
       }
       if (meta.count !== undefined && !isLoadMore) this.totalCount = meta.count;
       if (meta.totalPatterns !== undefined && !isLoadMore) this.totalPatterns = meta.totalPatterns;
+      if (meta.totalSessions !== undefined && !isLoadMore) this.totalSessions = meta.totalSessions;
       this.updateRowCountDisplay();
       if (meta.serviceColors) Object.assign(this.serviceColors, meta.serviceColors);
       this.logsColumns = meta.cols;
@@ -1130,6 +1309,7 @@ export class LogList extends LitElement {
     // Check if we're in initial loading state
     const isInitialLoading = this.isLoading && this.spanListTree.length === 0;
     const isPatterns = this.mode === 'patterns';
+    const isAggregate = isPatterns || this.mode === 'sessions';
 
     return html`
       <style>
@@ -1210,7 +1390,7 @@ export class LogList extends LitElement {
         id="logs_list_container_inner"
         style="min-height: 500px; overflow-anchor: none;"
       >
-        ${!isPatterns && this.recentDataToBeAdded.length > 0 && !this.flipDirection
+        ${!isAggregate && this.recentDataToBeAdded.length > 0 && !this.flipDirection
           ? html` <div class="sticky top-[30px] z-50 flex justify-center" role="status" aria-live="polite">
               <button
                 class="cbadge-sm badge-neutral cursor-pointer bg-fillBrand-strong text-textInverse-strong shadow rounded-lg text-sm"
@@ -1223,9 +1403,9 @@ export class LogList extends LitElement {
           : nothing}
         <table
           role="grid"
-          aria-label="${isPatterns ? 'Log patterns' : 'Log events'}"
+          aria-label="${isPatterns ? 'Log patterns' : this.mode === 'sessions' ? 'Sessions' : 'Log events'}"
           aria-rowcount=${this.totalCount || -1}
-          class="table-fixed ${isPatterns || this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
+          class="table-fixed ${isAggregate || this.wrapLines ? 'w-full' : 'w-max'} relative ctable table-pin-rows table-pin-cols text-sm"
           style=${Object.entries(
             this.logsColumns.reduce((acc, column) => {
               const width = this.columnMaxWidthMap[column] || this.fixedColumnWidths[column];
@@ -1258,7 +1438,7 @@ export class LogList extends LitElement {
                   `
                 : html`
                     ${this.logsColumns.filter((v) => v !== 'latency_breakdown').map((column) => this.logTableHeading(column))}
-                    ${this.logsColumns.length > 0 && !isPatterns ? this.logTableHeading('latency_breakdown') : nothing}
+                    ${this.logsColumns.length > 0 && !isAggregate ? this.logTableHeading('latency_breakdown') : nothing}
                   `}
             </tr>
           </thead>
@@ -1272,7 +1452,7 @@ export class LogList extends LitElement {
                     @visibilityChanged=${this.handleVisibilityChange}
                     .layout=${{
                       itemSize: {
-                        ...(!this.wrapLines && !isPatterns && { height: 28 }), // Fixed height only when wrap is disabled and not patterns
+                        ...(!this.wrapLines && !isAggregate && { height: 28 }), // Fixed height only when wrap is disabled and not aggregate (patterns/sessions)
                         width: '100%',
                       },
                     }}
@@ -1281,7 +1461,7 @@ export class LogList extends LitElement {
               `}
         </table>
 
-        ${!isPatterns && !this.shouldScrollToBottom && this.flipDirection
+        ${!isAggregate && !this.shouldScrollToBottom && this.flipDirection
           ? html` <div style="position: sticky;bottom: 0px;overflow-anchor: none;">
               <button
                 @pointerdown=${() => {
@@ -1351,7 +1531,7 @@ export class LogList extends LitElement {
         unescaped = unescapeJsonString(str);
         // Bounded cache - evict oldest when limit reached
         if (unescapeCache.size >= 1024) {
-          const firstKey = unescapeCache.keys().next().value;
+          const firstKey = unescapeCache.keys().next().value!;
           unescapeCache.delete(firstKey);
         }
         unescapeCache.set(str, unescaped);
@@ -1471,7 +1651,7 @@ export class LogList extends LitElement {
         const lvColors: Record<string, string> = { error: 'badge-error', warn: 'badge-warning', warning: 'badge-warning', info: 'badge-info', debug: 'badge-neutral' };
         return renderBadge(`cbadge-sm ${lvColors[lv.toLowerCase()] || 'badge-neutral'}`, lv);
       case 'id':
-        if (this.mode === 'patterns') {
+        if (this.isAggregate) {
           return html`<div class="flex items-center justify-between w-3"><span class="col-span-1 h-5 rounded-sm flex w-1 bg-strokeBrand-weak"></span></div>`;
         }
         const { statusCode: status, hasErrors: errCount, className: errClass } = getErrorClassification(dataArr, this.colIdxMap);
@@ -1612,6 +1792,55 @@ export class LogList extends LitElement {
       case 'service':
         let serviceData = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return renderBadge('cbadge-sm badge-neutral ' + wrapClass, serviceData, key);
+      case 'session_id': {
+        const sid = lookupVecValue<string>(dataArr, this.colIdxMap, key) || '';
+        const short = sid.length > 10 ? `${sid.slice(0, 6)}…${sid.slice(-4)}` : sid;
+        return html`<span class="flex items-center gap-1">
+          <span class="font-mono text-xs text-textStrong truncate" title=${sid}>${short || '—'}</span>
+          ${rowData.expanded
+            ? faSprite('chevron-down', 'regular', 'w-3 h-3 text-textWeak shrink-0')
+            : faSprite('chevron-right', 'regular', 'w-3 h-3 text-textWeak shrink-0')}
+        </span>`;
+      }
+      case 'user_display': {
+        const val = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        return html`<span class="truncate text-textStrong" title=${val || ''}>${val || '—'}</span>`;
+      }
+      case 'user_email': {
+        const val = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        return html`<span class="truncate text-textWeak" title=${val || ''}>${val || '—'}</span>`;
+      }
+      case 'event_count': {
+        const n = lookupVecValue<number>(dataArr, this.colIdxMap, key) || 0;
+        return html`<span class="tabular-nums text-textStrong">${n}</span>`;
+      }
+      case 'error_count': {
+        const n = lookupVecValue<number>(dataArr, this.colIdxMap, key) || 0;
+        return n > 0
+          ? renderBadge('cbadge-sm badge-error', String(n))
+          : html`<span class="tabular-nums text-textWeak">0</span>`;
+      }
+      case 'duration_ns': {
+        const n = lookupVecValue<number>(dataArr, this.colIdxMap, key) || 0;
+        const fmt = (window as any).formatDuration
+          ? (window as any).formatDuration(n)
+          : n >= 1e9 ? `${(n / 1e9).toFixed(1)}s` : n >= 1e6 ? `${(n / 1e6).toFixed(1)}ms` : `${(n / 1e3).toFixed(0)}µs`;
+        return html`<span class="tabular-nums text-textWeak">${fmt}</span>`;
+      }
+      case 'first_seen':
+      case 'last_seen': {
+        const ts = lookupVecValue<string>(dataArr, this.colIdxMap, key);
+        return html`<time class="monospace text-xs text-textWeak ${wrapClass}" datetime=${ts || ''}>${ts ? formatTimestamp(ts) : '—'}</time>`;
+      }
+      case 'services': {
+        const arr = lookupVecValue<string[]>(dataArr, this.colIdxMap, key) || [];
+        const shown = arr.slice(0, 3);
+        const extra = arr.length - shown.length;
+        return html`<div class="flex items-center gap-1 overflow-hidden">
+          ${shown.map((s) => renderBadge('cbadge-sm badge-neutral', s))}
+          ${extra > 0 ? html`<span class="text-xs text-textWeak">+${extra}</span>` : nothing}
+        </div>`;
+      }
       default:
         let v = lookupVecValue<string>(dataArr, this.colIdxMap, key);
         return html`<span class=${wrapClass} title=${key}>${v}</span>`;
@@ -1713,6 +1942,9 @@ export class LogList extends LitElement {
 
     if (!this.spanListTree.length) return html`<tr></tr>`;
 
+    // Aggregate views (patterns/sessions) don't support live streaming or loading newer events
+    if (this.isAggregate) return html`<tr></tr>`;
+
     const fetchRecent = () => this.fetchData(this.buildRecentFetchUrl(), false, true);
     return this.createLoadingRow(
       'recent-logs',
@@ -1765,6 +1997,9 @@ export class LogList extends LitElement {
     if ('type' in item && item.type === 'loadMore') {
       return this.renderLoadMoreButton();
     }
+    if ('type' in item && item.type === 'aggregateChildren') {
+      return this.renderAggregateChildren(item.parentKey);
+    }
     // Regular event line item
     return this.logItemRow(item as EventLine);
   };
@@ -1772,8 +2007,9 @@ export class LogList extends LitElement {
   logItemRow = (rowData: EventLine) => {
     try {
       const isPatterns = this.mode === 'patterns';
+      const isAggregate = isPatterns || this.mode === 'sessions';
       const s = rowData.type === 'log' ? 'logs' : 'spans';
-      const targetInfo = isPatterns ? '' : requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
+      const targetInfo = isAggregate ? '' : requestDumpLogItemUrlPath(rowData.data, this.colIdxMap, s);
       const isNew = rowData.isNew;
 
       // Pre-calculate CSS custom properties for widths
@@ -1790,13 +2026,19 @@ export class LogList extends LitElement {
           class=${clsx(
             'item-row relative p-0 flex group whitespace-nowrap hover:bg-fillWeaker contain-layout-style-paint content-visibility-auto isolate cursor-pointer',
             isPatterns && 'items-start',
-            !this.wrapLines && !isPatterns && 'h-[28px]',
+            !this.wrapLines && !isAggregate && 'h-[28px]',
+            this.mode === 'sessions' && 'h-[32px]',
             isNew && 'animate-fadeBg'
           )}
           style=${Object.entries(columnStyles)
             .map(([k, v]) => `${k}: ${v}`)
             .join('; ')}
-          @click=${isPatterns ? nothing : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
+          @click=${isAggregate
+            ? (event: any) => {
+                event.stopPropagation();
+                this.toggleAggregateRow(rowData);
+              }
+            : (event: any) => this.toggleLogRow(event, targetInfo, this.projectId)}
         >
           ${this.logsColumns
             .filter((v) => v !== 'latency_breakdown')
@@ -1805,7 +2047,7 @@ export class LogList extends LitElement {
               return html`<td
                 class=${`${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} bg-bgBase group-hover:bg-inherit relative pl-2 ${
                   column === 'summary' ? 'flex-1 min-w-0' : 'flex-shrink-0'
-                } ${hasWidth && !(isPatterns && column === 'summary') ? `col-${column}` : ''}`}
+                } ${hasWidth && !(isAggregate && column === 'summary') ? `col-${column}` : ''}`}
               >
                 ${this.logItemCol(rowData, column)}
               </td>`;
