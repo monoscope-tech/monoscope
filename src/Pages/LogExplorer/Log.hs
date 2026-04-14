@@ -41,6 +41,7 @@ import Models.Apis.Fields qualified as Fields
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
+import Numeric (showFFloat)
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), currProject, navTabAttrs, pageActions, pageTitle, sessM)
 import Pkg.Components.LogQueryBox (LogQueryBoxConfig (..), logQueryBox_, queryEditorInitializationCode, queryLibrary_)
 import Pkg.Components.TimePicker qualified as Components
@@ -52,7 +53,7 @@ import Servant qualified
 import System.Config (AuthContext (..), EnvConfig (..))
 import System.Types
 import Text.Megaparsec (parseMaybe)
-import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
+import Utils (FreeTierStatus (..), LoadingSize (..), LoadingType (..), checkFreeTierStatus, faSprite_, formatUTC, getDurationNSMS, getServiceColors, htmxOverlayIndicator_, levelFillColor, listToIndexHashMap, loadingIndicator_, lookupVecTextByKey, methodFillColor, prettyPrintCount, serviceFillColor, statusFillColorText)
 
 import Data.Time.Format.ISO8601 (iso8601ParseM, iso8601Show)
 import Data.UUID qualified as UUID
@@ -650,10 +651,16 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
         t4 <- Ki.fork scope $ tryAny $ checkFreeTierStatus pid project.paymentPlan
         t5 <- Ki.fork scope $ tryAny $ V.fromList <$> ManageMembers.getTeams pid
         -- Patterns and sessions are mutually exclusive; a single fork suffices.
+        -- The summary is tried independently so its failure doesn't drop the
+        -- sessions table with it.
         t6 <- Ki.fork scope $ tryAny $ case effectiveVizType of
-          Just "patterns" -> (,Nothing) . Just . second V.fromList <$> LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
-          Just "sessions" -> (Nothing,) . Just . second V.fromList <$> LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
-          _ -> pure (Nothing, Nothing)
+          Just "patterns" -> (,Nothing,Nothing) . Just . second V.fromList <$> LogQueries.fetchLogPatterns authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) (parseMaybe pSource =<< sourceM) pTargetM (fromMaybe 0 skipM)
+          Just "sessions" -> do
+            rows <- second V.fromList <$> LogQueries.fetchSessions authCtx.env.enableTimefusionReads pid queryAST (fromD, toD) sortByM (fromMaybe 0 skipM)
+            summE <- tryAny $ LogQueries.fetchSessionSummary authCtx.env.enableTimefusionReads pid queryAST (fromD, toD)
+            whenLeft_ summE (Log.logAttention "fetchSessionSummary failed" . show @Text)
+            pure (Nothing, Just rows, Just $ first (show @Text) summE)
+          _ -> pure (Nothing, Nothing, Nothing)
         (,,,,,) <$> aw t1 <*> aw t2 <*> aw t3 <*> aw t4 <*> aw t5 <*> aw t6
 
       -- Log errors from non-critical queries but continue with defaults
@@ -669,7 +676,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
           facetSummary = join $ rightToMaybe facetSummaryE
           freeTierStatus = fromRight def freeTierStatusE
           teams = fromRight V.empty teamsE
-          (patterns, sessions) = fromRight (Nothing, Nothing) aggregateE
+          (patterns, sessions, sessionSummary) = fromRight (Nothing, Nothing, Nothing) aggregateE
           (queryLibRecent, queryLibSaved) = bimap V.fromList V.fromList $ L.partition (\x -> Projects.QLTHistory == x.queryType) queryLib
 
       -- Queue facet generation if no precomputed facets exist (new projects)
@@ -754,6 +761,7 @@ apiLogH pid queryM' cols' cursorM' sinceM fromM toM layoutM sourceM targetSpansM
                   , patternsToSkip
                   , sessions = sessions
                   , sessionsToSkip
+                  , sessionSummary
                   , targetPattern = pTargetM
                   , project = project
                   , teams
@@ -820,6 +828,114 @@ logLatencyWidget pid =
     , Widget.legendSize = Just "xs"
     , Widget._projectId = Just pid
     }
+
+
+-- | One-decimal percent formatter.
+--
+-- >>> fmtPct1 0
+-- "0.0%"
+-- >>> fmtPct1 5.24
+-- "5.2%"
+-- >>> fmtPct1 100
+-- "100.0%"
+-- >>> fmtPct1 (-1.25)
+-- "-1.2%"
+fmtPct1 :: Double -> Text
+fmtPct1 x = toText (showFFloat (Just 1) x "") <> "%"
+
+
+-- | Rendered when the sessions summary query fails. Surfaces the failure
+-- inline rather than silently falling back to the generic log/span widgets
+-- (which would reintroduce the unit-of-analysis mismatch).
+sessionsHeaderError_ :: Text -> Html ()
+sessionsHeaderError_ err =
+  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden surface-raised rounded-2xl px-3 py-2 flex items-start gap-2 text-sm"] do
+    faSprite_ "triangle-exclamation" "regular" "h-4 w-4 mt-0.5 text-iconError shrink-0"
+    div_ [class_ "min-w-0"] do
+      div_ [class_ "text-textStrong font-medium"] "Session summary unavailable"
+      div_ [class_ "text-textWeak text-xs truncate"] $ toHtml err
+
+
+sessionsHeader_ :: LogQueries.SessionSummary -> Html ()
+sessionsHeader_ summ = do
+  let total = fromIntegral summ.totalSessions :: Int
+      errored = fromIntegral summ.erroredSessions :: Int
+      clean = max 0 (total - errored)
+      errRate = if total == 0 then 0 else 100 * (fromIntegral errored :: Double) / fromIntegral total
+      medDur = toText $ getDurationNSMS (fromIntegral summ.medianDurationNs)
+      p95Dur = toText $ getDurationNSMS (fromIntegral summ.p95DurationNs)
+      totalEvt = fromIntegral summ.totalEvents :: Int
+      bars = zip3 [0 :: Int ..] summ.clean summ.errored
+      maxBar = foldl' max 0 $ zipWith (+) summ.clean summ.errored
+      norm n = if maxBar <= 0 then 0 else (fromIntegral n / fromIntegral maxBar :: Double) * 100
+      bucketFrom i = summ.bucketStartEpoch + i * summ.bucketWidthSec
+      kpi :: Text -> Text -> Maybe Text -> Html ()
+      kpi label value subM = div_ [class_ "surface-raised rounded-2xl px-3 py-2 flex flex-col gap-0.5 min-w-0"] do
+        span_ [class_ "text-xs text-textWeak truncate"] $ toHtml label
+        strong_ [class_ "text-textStrong text-xl font-bold tabular-nums leading-tight truncate"] $ toHtml value
+        whenJust subM \s -> span_ [class_ "text-xs text-textWeak tabular-nums truncate"] $ toHtml s
+  div_ [class_ "mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full flex flex-col gap-2"] do
+    div_ [class_ "grid grid-cols-6 max-md:grid-cols-3 gap-2"] do
+      kpi "Sessions" (prettyPrintCount total) (Just $ prettyPrintCount clean <> " clean")
+      kpi "Errored" (fmtPct1 errRate) (Just $ prettyPrintCount errored <> " sessions")
+      kpi "Median duration" medDur (Just $ "p95 " <> p95Dur)
+      kpi "Median events" (prettyPrintCount $ fromIntegral summ.medianEvents) (Just $ prettyPrintCount totalEvt <> " total")
+      kpi "Users" (prettyPrintCount $ fromIntegral summ.uniqueUsers) Nothing
+      kpi "Services" (prettyPrintCount $ fromIntegral summ.uniqueServices) Nothing
+    div_ [class_ "surface-raised rounded-2xl px-3 py-2"] do
+      div_ [class_ "flex items-center justify-between mb-1"] do
+        span_ [class_ "text-xs text-textWeak"] "Sessions over time"
+        div_ [class_ "flex gap-3 text-xs text-textWeak"] do
+          span_ [class_ "flex items-center gap-1"] do
+            span_ [class_ "inline-block w-2 h-2 rounded-sm bg-fillBrand-strong/70"] ""
+            "Clean"
+          span_ [class_ "flex items-center gap-1"] do
+            span_ [class_ "inline-block w-2 h-2 rounded-sm bg-fillError-strong"] ""
+            "Errored"
+      if total == 0 || null bars
+        then div_ [class_ "h-12 flex items-center justify-center text-xs text-textWeak"] "No sessions in range"
+        else div_ [class_ "flex items-end gap-[2px] h-12"] do
+          forM_ bars \(i, c, e) -> do
+            let cPct = norm c
+                ePct = norm e
+                tip = prettyPrintCount (c + e) <> " sessions · " <> prettyPrintCount e <> " errored"
+                js =
+                  "window.__sessionsBucketFilter("
+                    <> T.show (bucketFrom i)
+                    <> ","
+                    <> T.show (bucketFrom i + summ.bucketWidthSec)
+                    <> ")"
+            button_
+              [ class_ "flex-1 flex flex-col-reverse gap-[1px] min-w-[2px] cursor-pointer group/bar"
+              , type_ "button"
+              , data_ "tippy-content" tip
+              , onclick_ js
+              ]
+              do
+                div_ [class_ "w-full rounded-sm bg-fillBrand-strong/40 group-hover/bar:bg-fillBrand-strong transition-colors", style_ $ "height:" <> T.show cPct <> "%"] ""
+                when (e > 0)
+                  $ div_ [class_ "w-full rounded-sm bg-fillError-strong", style_ $ "height:" <> T.show ePct <> "%"] ""
+      -- Reassigned on every render so bug fixes aren't masked by a stale
+      -- definition left behind from a prior HTMX swap. Dispatches the same
+      -- update-query event log-list uses for chart-zoom so the table refetches.
+      script_
+        [text|
+          window.__sessionsBucketFilter = function(fromEpoch, toEpoch) {
+            if (!Number.isFinite(fromEpoch) || !Number.isFinite(toEpoch) || fromEpoch <= 0) return;
+            const from = new Date(fromEpoch * 1000).toISOString();
+            const to = new Date(toEpoch * 1000).toISOString();
+            if (window.updateTimePicker) {
+              window.updateTimePicker({ from, to }, { skipSetParams: true });
+            } else {
+              console.warn('[sessions-header] updateTimePicker missing; picker UI will not reflect filter');
+            }
+            const p = new URLSearchParams(window.location.search);
+            p.set('from', from); p.set('to', to); p.delete('since');
+            const url = window.location.pathname + '?' + p.toString() + window.location.hash;
+            window.history.replaceState({}, '', url);
+            document.dispatchEvent(new CustomEvent('update-query', { bubbles: true, detail: { source: 'sessions-header-bar', timeRange: from + ' \u2192 ' + to } }));
+          };
+        |]
 
 
 data LogsGet
@@ -982,6 +1098,7 @@ data ApiLogsPageData = ApiLogsPageData
   , patternsToSkip :: Int
   , sessions :: Maybe (Int, V.Vector LogQueries.SessionRow)
   , sessionsToSkip :: Int
+  , sessionSummary :: Maybe (Either Text LogQueries.SessionSummary)
   , targetPattern :: Maybe Text
   , project :: Projects.Project
   , teams :: V.Vector ManageMembers.Team
@@ -1109,9 +1226,17 @@ apiLogsPage page = do
           , facetData = (.facetJson) <$> page.facets
           }
 
-      div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
-        Widget.widget_ page.chartWidget
-        div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
+      -- Sessions viz renders a session-level header. A Left means the summary
+      -- query failed — surface it visibly instead of silently reverting to the
+      -- generic span/log widgets, which would reintroduce the unit-of-analysis
+      -- mismatch this view exists to fix.
+      case page.sessionSummary of
+        Just (Right summ) -> sessionsHeader_ summ
+        Just (Left err) -> sessionsHeaderError_ err
+        Nothing ->
+          div_ [class_ "timeline flex flex-row gap-4 mt-3 group-has-[.no-chart:checked]/pg:hidden group-has-[.toggle-chart:checked]/pg:hidden w-full min-h-36 max-md:min-h-28 aspect-[10/1] max-md:aspect-auto max-md:flex-col"] do
+            Widget.widget_ page.chartWidget
+            div_ [class_ "flex-1 min-w-0 max-md:hidden"] $ Widget.widget_ page.latencyWidget
     div_ [class_ "flex max-md:flex-col h-full overflow-y-hidden max-md:overflow-y-auto", id_ "facets_and_loglist"] do
       -- FACETS
       div_ [class_ "w-68 will-change-[width] contain-[layout_style] text-sm text-textWeak shrink-0 flex flex-col h-full overflow-y-scroll gap-2 max-md:w-full max-md:shrink max-md:max-h-48 max-md:border-b max-md:border-strokeWeak group-has-[.toggle-filters:checked]/pg:max-w-0 group-has-[.toggle-filters:checked]/pg:overflow-hidden max-md:group-has-[.toggle-filters:checked]/pg:max-h-0", id_ "facets-container"] do

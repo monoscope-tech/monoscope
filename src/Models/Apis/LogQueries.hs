@@ -4,6 +4,7 @@ module Models.Apis.LogQueries (
   ATError (..),
   PatternRow (..),
   SessionRow (..),
+  SessionSummary (..),
   normalizeUrlPath,
   selectLogTable,
   executeArbitraryQuery,
@@ -12,6 +13,7 @@ module Models.Apis.LogQueries (
   getLastSevenDaysTotalRequest,
   fetchLogPatterns,
   fetchSessions,
+  fetchSessionSummary,
   ExpandKind (..),
   fetchEventExamples,
   selectChildSpansAndLogs,
@@ -624,6 +626,106 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           , firstError = r.firstError
           }
   pure (total, map toRowWithVolume rawRows)
+
+
+-- | Session-level aggregates for the Sessions viz header. Shares the filter
+-- and CTE shape with 'fetchSessions' so the header reconciles with the table.
+-- @clean@ and @errored@ are parallel arrays: bucket @i@ starts at
+-- @bucketStartEpoch + i*bucketWidthSec@. Both are empty when there are no
+-- sessions in range.
+data SessionSummary = SessionSummary
+  { totalSessions :: Int64
+  , erroredSessions :: Int64
+  , uniqueUsers :: Int64
+  , uniqueServices :: Int64
+  , medianDurationNs :: Int64
+  , p95DurationNs :: Int64
+  , medianEvents :: Int64
+  , totalEvents :: Int64
+  , bucketWidthSec :: Int
+  , bucketStartEpoch :: Int
+  , clean :: [Int]
+  , errored :: [Int]
+  }
+  deriving stock (Generic, Show)
+  deriving (AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake], DAE.OmitNothingFields] SessionSummary
+
+
+fetchSessionSummary
+  :: (DB es, Labeled "timefusion" Hasql :> es, Log :> es, Time.Time :> es)
+  => Bool
+  -> Projects.ProjectId
+  -> [Section]
+  -> (Maybe UTCTime, Maybe UTCTime)
+  -> Eff es SessionSummary
+fetchSessionSummary enableTfReads pid queryAST dateRange = do
+  now <- Time.currentTime
+  let sqlCfg = (defSqlQueryCfg pid now (Just SSpans) Nothing){dateRange}
+      (_, queryComponents) = queryASTToComponents sqlCfg queryAST
+      dateRangeClause = buildDateRange sqlCfg
+      whereCondition = scopedWhere pid.toText queryComponents.whereClause
+      fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
+      bucketW = bucketWidthSecs dateRange now
+      q =
+        [HI.sql|WITH filtered AS (
+          SELECT attributes___session___id AS sid,
+            COALESCE(attributes___user___id, attributes___user___email) AS user_key,
+            resource___service___name AS svc, timestamp, end_time,
+            (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR') AS is_err
+          FROM otel_logs_and_spans WHERE |]
+          <> rawSql fullWhere
+          <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
+        ), per_session AS (
+          SELECT MAX(user_key) AS user_key, COUNT(*)::BIGINT AS events, BOOL_OR(is_err) AS has_err,
+            (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1e9)::BIGINT AS dur_ns,
+            floor(extract(epoch from MIN(timestamp)) / #{bucketW})::INT AS bi
+          FROM filtered GROUP BY sid
+        ), bkt AS (
+          SELECT bi, COUNT(*) FILTER (WHERE NOT has_err)::INT AS c, COUNT(*) FILTER (WHERE has_err)::INT AS e
+          FROM per_session GROUP BY bi
+        )
+        SELECT COUNT(*)::BIGINT, COUNT(*) FILTER (WHERE has_err)::BIGINT,
+          COUNT(DISTINCT user_key) FILTER (WHERE user_key IS NOT NULL)::BIGINT,
+          (SELECT COUNT(DISTINCT svc) FILTER (WHERE svc IS NOT NULL)::BIGINT FROM filtered),
+          COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY dur_ns), 0)::BIGINT,
+          COALESCE(PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY dur_ns), 0)::BIGINT,
+          COALESCE(PERCENTILE_CONT(0.5)  WITHIN GROUP (ORDER BY events),  0)::BIGINT,
+          COALESCE(SUM(events), 0)::BIGINT,
+          COALESCE((SELECT ARRAY_AGG(bi ORDER BY bi) FROM bkt), '{}'::INT[]),
+          COALESCE((SELECT ARRAY_AGG(c  ORDER BY bi) FROM bkt), '{}'::INT[]),
+          COALESCE((SELECT ARRAY_AGG(e  ORDER BY bi) FROM bkt), '{}'::INT[])
+        FROM per_session|]
+  rows :: [(Int64, Int64, Int64, Int64, Int64, Int64, Int64, Int64, V.Vector Int32, V.Vector Int32, V.Vector Int32)] <-
+    Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
+  -- A no-GROUP-BY aggregate always produces exactly one row; zero rows would
+  -- indicate a decoder/arity drift, not a legitimate "no sessions" case.
+  let zeroSumm = SessionSummary 0 0 0 0 0 0 0 0 bucketW 0 [] []
+  case rows of
+    [] -> do
+      Log.logAttention "fetchSessionSummary: aggregate returned zero rows" $ AE.object ["project_id" AE..= pid]
+      pure zeroSumm
+    (total, err, users, svcs, medDur, p95Dur, medEvt, totEvt, bisV, cV, eV) : _ ->
+      if total == 0
+        then pure zeroSumm{erroredSessions = err, uniqueUsers = users, uniqueServices = svcs, totalEvents = totEvt}
+        else do
+          let bisI = map fromIntegral $ V.toList bisV :: [Int]
+              range@(minB, _) = bucketRange bisI
+              dens v = densifyBuckets range $ zip bisI (map fromIntegral $ V.toList v)
+          pure
+            SessionSummary
+              { totalSessions = total
+              , erroredSessions = err
+              , uniqueUsers = users
+              , uniqueServices = svcs
+              , medianDurationNs = medDur
+              , p95DurationNs = p95Dur
+              , medianEvents = medEvt
+              , totalEvents = totEvt
+              , bucketWidthSec = bucketW
+              , bucketStartEpoch = minB * bucketW
+              , clean = dens cV
+              , errored = dens eV
+              }
 
 
 -- | Which aggregate group to expand in the inline detail view.
