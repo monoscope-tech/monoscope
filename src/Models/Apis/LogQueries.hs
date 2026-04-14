@@ -27,7 +27,6 @@ where
 import Control.Exception.Annotated (checkpoint, try)
 import Control.Lens (view, _5)
 import Data.Aeson qualified as AE
-import Data.Aeson.Types qualified as AET
 import Data.Annotation (toAnnotation)
 import Data.Default
 import Data.Effectful.Hasql (Hasql)
@@ -52,7 +51,6 @@ import Hasql.Interpolate qualified as HI
 import Models.Apis.Fields ()
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
-import NeatInterpolation (text)
 import Pkg.DeriveUtils (DB, WrappedEnumShow (..), rawSql)
 import Pkg.Drain qualified as Drain
 import Pkg.Parser
@@ -357,6 +355,11 @@ sessionUserDisplay email name uid = fromMaybe "\8212" $ email <|> name <|> uid
 
 
 -- | One aggregated session row for the Sessions visualization.
+--
+-- @landingUrl@, @userAgent@, and @firstError@ are first-observed-by-timestamp
+-- values taken from the raw events in the session. They're what turns a row
+-- from "some session by some user" into something a support engineer can
+-- recognize at a glance (where did they land, what are they on, what broke).
 data SessionRow = SessionRow
   { sessionId :: Text
   , userId :: Maybe Text
@@ -370,8 +373,59 @@ data SessionRow = SessionRow
   , traceCount :: Int64
   , services :: V.Vector Text
   , volume :: [Int]
+  , landingUrl :: Maybe Text
+  , userAgent :: Maybe Text
+  , firstError :: Maybe Text
   }
   deriving stock (Generic, Show)
+
+
+-- | Mirrors the column order of the SELECT in 'fetchSessions'. Decoded
+-- directly via hasql to bypass the row_to_json/json_each wrapper used by
+-- 'executeArbitraryQuery' — that wrapper trips PostgreSQL's JSON parser
+-- whenever a TEXT value (e.g. a user_agent or url_path captured from raw
+-- OTLP) contains characters JSON forbids (NULL bytes, lone surrogates).
+data RawSessionRow = RawSessionRow
+  { sessionId :: Text
+  , userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userName :: Maybe Text
+  , eventCount :: Int64
+  , errorCount :: Int64
+  , firstSeen :: UTCTime
+  , lastSeen :: UTCTime
+  , durationNs :: Int64
+  , traceCount :: Int64
+  , totalSessions :: Int32
+  , services :: V.Vector Text
+  , bis :: V.Vector Int32
+  , cnts :: V.Vector Int32
+  , landingUrl :: Maybe Text
+  , userAgent :: Maybe Text
+  , firstError :: Maybe Text
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow)
+
+
+-- | Build a WHERE body always scoped to the project. `QueryComponents.whereClause`
+-- carries only user-supplied filters (see `Pkg.Parser.sqlFromQueryComponents`
+-- where `project_id` is attached separately via `buildWhere`), so any caller
+-- that embeds `whereClause` into its own SQL must prepend project scoping
+-- here — otherwise a non-empty user filter silently bypasses project isolation.
+--
+-- >>> scopedWhere "p1" Nothing
+-- "project_id='p1'"
+-- >>> scopedWhere "p1" (Just "")
+-- "project_id='p1'"
+-- >>> scopedWhere "p1" (Just "level='error'")
+-- "project_id='p1' AND (level='error')"
+scopedWhere :: Text -> Maybe Text -> Text
+scopedWhere pidTxt mUser =
+  let base = "project_id='" <> pidTxt <> "'"
+   in case mUser of
+        Just w | not (T.null w) -> base <> " AND (" <> w <> ")"
+        _ -> base
 
 
 fetchLogPatterns
@@ -393,7 +447,7 @@ fetchLogPatterns enableTfReads pid queryAST dateRange sourceM targetM skip = do
       (_, queryComponents) = queryASTToComponents sqlCfg queryAST
       pidTxt = pid.toText
       dateRangeClause = buildDateRange sqlCfg
-      whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
+      whereCondition = scopedWhere pidTxt queryComponents.whereClause
       fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
       target = fromMaybe "summary" targetM
   Log.logTrace "fetchLogPatterns: start"
@@ -474,7 +528,7 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
       (_, queryComponents) = queryASTToComponents sqlCfg queryAST
       pidTxt = pid.toText
       dateRangeClause = buildDateRange sqlCfg
-      whereCondition = fromMaybe [text|project_id=${pidTxt}|] queryComponents.whereClause
+      whereCondition = scopedWhere pidTxt queryComponents.whereClause
       fullWhere = whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause
       bucketW = bucketWidthSecs dateRange now
       sortCol = case sortByM of
@@ -495,6 +549,10 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             COALESCE(NULLIF(attributes___user___full_name, ''), NULLIF(attributes___user___name, '')) AS user_name,
             resource___service___name AS service_name,
             context___trace_id AS trace_id,
+            attributes___url___path AS url_path,
+            attributes___user_agent___original AS user_agent,
+            COALESCE(NULLIF(status_message, ''), NULLIF(body::text, '')) AS error_text,
+            (lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR') AS is_error,
             timestamp, end_time, level, severity___severity_number, status_code,
             floor(extract(epoch from timestamp) / #{bucketW})::INT AS bi
           FROM otel_logs_and_spans
@@ -506,11 +564,17 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
           SELECT session_id,
             MAX(user_id) AS user_id, MAX(user_email) AS user_email, MAX(user_name) AS user_name,
             COUNT(*)::BIGINT AS event_count,
-            COUNT(*) FILTER (WHERE lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR')::BIGINT AS error_count,
+            COUNT(*) FILTER (WHERE is_error)::BIGINT AS error_count,
             MIN(timestamp) AS first_seen,
             MAX(COALESCE(end_time, timestamp)) AS last_seen,
             (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1000000000)::BIGINT AS duration_ns,
             COUNT(DISTINCT trace_id)::BIGINT AS trace_count,
+            -- First-observed context, by timestamp. FILTER drops empties so
+            -- we don't report "user landed on '' " for sessions where the
+            -- opening event has no url_path / user_agent.
+            (ARRAY_AGG(url_path ORDER BY timestamp) FILTER (WHERE url_path IS NOT NULL AND url_path <> ''))[1] AS landing_url,
+            (ARRAY_AGG(user_agent ORDER BY timestamp) FILTER (WHERE user_agent IS NOT NULL AND user_agent <> ''))[1] AS user_agent,
+            (ARRAY_AGG(error_text ORDER BY timestamp) FILTER (WHERE is_error AND error_text IS NOT NULL AND error_text <> ''))[1] AS first_error,
             COUNT(*) OVER()::INT AS total_sessions
           FROM filtered GROUP BY session_id
         ), page AS (
@@ -530,38 +594,36 @@ fetchSessions enableTfReads pid queryAST dateRange sortByM skip = do
             p.event_count, p.error_count, p.first_seen,
             p.last_seen, p.duration_ns, p.trace_count, p.total_sessions,
             COALESCE(s.services, '{}'::TEXT[]),
-            COALESCE(h.bis, '{}'::INT[]), COALESCE(h.cnts, '{}'::INT[])
+            COALESCE(h.bis, '{}'::INT[]), COALESCE(h.cnts, '{}'::INT[]),
+            p.landing_url, p.user_agent, p.first_error
           FROM page p LEFT JOIN svcs s USING (session_id) LEFT JOIN hourly_agg h USING (session_id)
           ORDER BY p.|]
           <> sortColSql
           <> [HI.sql| DESC NULLS LAST|]
-  rawRows <- Hasql.withHasqlTimefusion enableTfReads $ executeArbitraryQuery q
-  Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= V.length rawRows]
-  let totalSessions = fromMaybe (0 :: Int) $ do
-        firstRow <- rawRows V.!? 0
-        AET.parseMaybe AE.parseJSON =<< (firstRow V.!? 10)
-      allBuckets = concatMap (\row -> fromMaybe [] $ AET.parseMaybe AE.parseJSON =<< (row V.!? 12)) $ V.toList rawRows
+  rawRows :: [RawSessionRow] <- Hasql.withHasqlTimefusion enableTfReads $ Hasql.interp q
+  Log.logTrace "fetchSessions: query done" $ AE.object ["rows" AE..= length rawRows]
+  let total = maybe 0 (fromIntegral . (.totalSessions)) $ listToMaybe rawRows
+      allBuckets = concatMap (\r -> map fromIntegral $ V.toList r.bis) rawRows
       range = bucketRange allBuckets
-      toRowWithVolume row =
-        let cell :: AE.FromJSON a => Int -> Maybe a
-            cell i = AET.parseMaybe AE.parseJSON =<< (row V.!? i)
-            bis = fromMaybe [] $ cell 12 :: [Int]
-            cnts = fromMaybe [] $ cell 13 :: [Int]
-         in SessionRow
-              { sessionId = fromMaybe "" $ cell 0
-              , userId = cell 1
-              , userEmail = cell 2
-              , userName = cell 3
-              , eventCount = fromMaybe 0 $ cell 4
-              , errorCount = fromMaybe 0 $ cell 5
-              , firstSeen = fromMaybe (posixSecondsToUTCTime 0) $ cell 6
-              , lastSeen = fromMaybe (posixSecondsToUTCTime 0) $ cell 7
-              , durationNs = fromMaybe 0 $ cell 8
-              , traceCount = fromMaybe 0 $ cell 9
-              , services = fromMaybe V.empty $ cell 11
-              , volume = densifyBuckets range $ zip bis cnts
-              }
-  pure (totalSessions, map toRowWithVolume $ V.toList rawRows)
+      toRowWithVolume r =
+        SessionRow
+          { sessionId = r.sessionId
+          , userId = r.userId
+          , userEmail = r.userEmail
+          , userName = r.userName
+          , eventCount = r.eventCount
+          , errorCount = r.errorCount
+          , firstSeen = r.firstSeen
+          , lastSeen = r.lastSeen
+          , durationNs = r.durationNs
+          , traceCount = r.traceCount
+          , services = r.services
+          , volume = densifyBuckets range $ zip (map fromIntegral $ V.toList r.bis) (map fromIntegral $ V.toList r.cnts)
+          , landingUrl = r.landingUrl
+          , userAgent = r.userAgent
+          , firstError = r.firstError
+          }
+  pure (total, map toRowWithVolume rawRows)
 
 
 -- | Which aggregate group to expand in the inline detail view.
@@ -590,7 +652,7 @@ fetchEventExamples enableTfReads pid queryAST dateRange expandKind skip limitN =
       (_, qc) = queryASTToComponents sqlCfg queryAST
       pidTxt = pid.toText
       dateRangeClause = buildDateRange sqlCfg
-      whereCondition = fromMaybe [text|project_id=${pidTxt}|] qc.whereClause
+      whereCondition = scopedWhere pidTxt qc.whereClause
       fullWhereSql = rawSql (whereCondition <> if T.null dateRangeClause then "" else " AND " <> dateRangeClause)
       expandFilter = case expandKind of
         ExpandSession sid -> [HI.sql| AND attributes___session___id = #{sid}|]

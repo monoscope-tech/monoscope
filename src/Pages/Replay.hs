@@ -211,9 +211,9 @@ getSessionEvents conn pid bucket sessionId = do
           Right a -> pure $ Right (a, False)
           Left e -> do
             Log.logError "Failed to load legacy replay blob" (HM.insert "error" e logCtx)
-            pure $ Left "Temporarily unavailable; please retry."
-      transientErr = Left "Temporarily unavailable; please retry."
-      corruptedErr = Left "Session history is corrupted; please contact support."
+            pure $ Left "Storage is temporarily unreachable. Retry in a moment — your recording is safe."
+      transientErr = Left "Storage is temporarily unreachable. Retry in a moment — your recording is safe."
+      corruptedErr = Left "This session’s history is corrupted and can’t be replayed. Contact support with the session ID so we can investigate."
   fileKeys <- sessionFileKeys pid sessionId
   mergedRes <- liftIO $ Minio.runMinio conn $ fetchEventArray bucket mergedKey True
   case mergedRes of
@@ -246,6 +246,24 @@ sessionFileKeys :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es [Text]
 sessionFileKeys pid sessionId = do
   rows :: [V.Vector Text] <- Hasql.interp [HI.sql| SELECT COALESCE(file_keys, '{}'::text[]) FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
   pure $ maybe [] V.toList (listToMaybe rows)
+
+
+-- | Identity + timing metadata for a session, surfaced in the player header.
+data SessionMeta = SessionMeta
+  { userId :: Maybe Text
+  , userEmail :: Maybe Text
+  , userName :: Maybe Text
+  , lastEventAt :: UTCTime
+  }
+  deriving stock (Generic, Show)
+  deriving anyclass (HI.DecodeRow, AE.ToJSON)
+
+
+sessionMetadata :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe SessionMeta)
+sessionMetadata pid sessionId = do
+  rows :: [SessionMeta] <-
+    Hasql.interp [HI.sql| SELECT user_id, user_email, user_name, last_event_at FROM projects.replay_sessions WHERE session_id = #{sessionId} AND project_id = #{pid} LIMIT 1 |]
+  pure $ listToMaybe rows
 
 
 -- | Merge multiple already-sorted event arrays by sorting arrays based on their first event's timestamp, then concatenating
@@ -319,19 +337,32 @@ replaySessionGetH pid sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
   let (conn, bucket) = projectMinioConn ctx.config p
       sessionStr = UUID.toText sessionId
+      metaPairs = maybe [] (\m -> ["userId" AE..= m.userId, "userEmail" AE..= m.userEmail, "userName" AE..= m.userName, "lastEventAt" AE..= m.lastEventAt])
+  -- Don't let a metadata DB blip turn the carefully-crafted storage-unreachable
+  -- branch below into a raw 500 — fall through to Nothing and log.
+  metaE <- tryAny $ sessionMetadata pid sessionId
+  meta <- case metaE of
+    Right m -> pure m
+    Left err -> do
+      Log.logAttention "sessionMetadata lookup failed; continuing without identity" (HM.fromList [("session", sessionStr), ("projectId", pid.toText), ("error", toText $ displayException err)])
+      pure Nothing
   result <- tryAny $ getSessionEvents conn pid bucket sessionId
   case result of
     Right (Right (replayEvents, partial)) ->
       addRespHeaders
         $ AE.object
-          [ "events" AE..= AE.Array replayEvents
-          , "partial" AE..= partial
-          ]
+        $ ["events" AE..= AE.Array replayEvents, "partial" AE..= partial]
+        <> metaPairs meta
     Right (Left userMsg) ->
-      addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= userMsg]
+      addRespHeaders $ AE.object $ ["events" AE..= AE.Array V.empty, "error" AE..= userMsg] <> metaPairs meta
     Left err -> do
       Log.logAttention "Unexpected exception fetching replay session" (HM.fromList [("session", sessionStr), ("projectId", pid.toText), ("error", toText $ displayException err)])
-      addRespHeaders $ AE.object ["events" AE..= AE.Array V.empty, "error" AE..= ("Temporarily unable to load session; please retry." :: Text)]
+      addRespHeaders
+        $ AE.object
+        $ [ "events" AE..= AE.Array V.empty
+          , "error" AE..= ("We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support." :: Text)
+          ]
+        <> metaPairs meta
 
 
 -- | Merge a specific replay session's S3 event files (triggered when file count exceeds threshold)
@@ -356,7 +387,7 @@ compressAndMergeReplaySessions = do
   -- Process each session independently; a single failure must not stall the batch.
   forM_ sessions $ \(sessionId, projectId) -> do
     r <- tryAny $ mergeOneSessionByKeys projectId sessionId "" $ \_ ->
-      Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now} WHERE session_id = #{sessionId} |]
+      Hasql.interpExecute_ [HI.sql| UPDATE projects.replay_sessions SET merged = TRUE, updated_at = #{now} WHERE session_id = #{sessionId} AND project_id = #{projectId} |]
     whenLeft_ r $ \err ->
       Log.logAttention "Replay session merge threw; continuing batch" (HM.fromList [("session_id", UUID.toText sessionId), ("project_id", projectId.toText), ("error", toText $ displayException err)])
 
@@ -455,13 +486,17 @@ mergeOneSession conn bucket sessionId fileKeys = do
   -- errors still abort — we will not silently clobber historical data.
   perKey <- forM (zip fileKeys fileObjs) $ \(k, obj) ->
     (k,) <$> Minio.runMinio conn (fetchEventArray bucket obj False)
-  let (errs, newArrays) = foldr classify ([], []) perKey
-      classify (_, Right (Right a)) (es, as) = (es, a : as)
-      classify (k, Right (Left de)) (es, as) = ((k, de) : es, as)
-      classify (k, Left me) (es, as)
-        | isNoSuchKey me = (es, as)
-        | otherwise = ((k, displayException me) : es, as)
-  unless (null errs) $ throwIO $ MergeDecodeFailed errs
+  -- Decode errors are permanent (corrupt data); transport errors are transient.
+  -- Conflating them would mark a merge permanently-failed on a single S3 hiccup.
+  let (decodeErrs, transportErrs, newArrays) = foldr classify ([], [], []) perKey
+      classify (_, Right (Right a)) (de, te, as) = (de, te, a : as)
+      classify (k, Right (Left e)) (de, te, as) = ((k, e) : de, te, as)
+      classify (k, Left me) (de, te, as)
+        | isNoSuchKey me = (de, te, as)
+        | otherwise = (de, me : te, as)
+  case transportErrs of
+    (firstErr : _) -> throwIO $ MergeFetchFailed firstErr
+    [] -> unless (null decodeErrs) $ throwIO $ MergeDecodeFailed decodeErrs
 
   let allEvents = mergeEventArrays (mergedExisting : newArrays)
       compressed = GZip.compress $ AE.encode (AE.Array allEvents)

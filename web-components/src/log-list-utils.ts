@@ -276,6 +276,61 @@ export const WEAK_TEXT_STYLES = new Set(['text-weak', 'text-textWeak']);
 // Pre-compiled regex for performance
 export const RIGHT_PREFIX_REGEX = /^right-/;
 
+// Collapse a raw user-agent string into something a human actually wants to
+// read. Returns "Chrome on macOS", "Safari on iOS", "curl", etc. Falls back
+// to the original string if nothing recognizable is found, so rare UAs don't
+// just vanish from the row.
+export const parseUserAgent = (ua: string): string => {
+  if (!ua) return '';
+  let browser = '';
+  // Order matters: Edge/OPR/Chrome all mention "Chrome" in their UA, so the
+  // more-specific names are checked first.
+  if (/\bEdg(A|iOS)?\//.test(ua)) browser = 'Edge';
+  else if (/\bOPR\//.test(ua) || /\bOpera\//.test(ua)) browser = 'Opera';
+  else if (/\bFirefox\//.test(ua) || /\bFxiOS\//.test(ua)) browser = 'Firefox';
+  else if (/\bChrome\//.test(ua) || /\bCriOS\//.test(ua)) browser = 'Chrome';
+  else if (/\bSafari\//.test(ua) && !/Chromium/.test(ua)) browser = 'Safari';
+  else if (/\bcurl\//.test(ua)) browser = 'curl';
+  else if (/\bPostmanRuntime\//.test(ua)) browser = 'Postman';
+  else if (/\bHeadlessChrome\b/.test(ua)) browser = 'Headless Chrome';
+
+  let os = '';
+  if (/\biPhone\b|\biPad\b|\biPod\b|\bCPU iPhone OS\b|\bCPU OS \d/.test(ua)) os = 'iOS';
+  else if (/\bAndroid\b/.test(ua)) os = 'Android';
+  else if (/\bMac OS X\b|\bMacintosh\b/.test(ua)) os = 'macOS';
+  else if (/\bWindows\b/.test(ua)) os = 'Windows';
+  else if (/\bLinux\b/.test(ua)) os = 'Linux';
+  else if (/\bCrOS\b/.test(ua)) os = 'ChromeOS';
+
+  if (browser && os) return `${browser} on ${os}`;
+  if (browser) return browser;
+  if (os) return os;
+  // Last resort: cap length so an unrecognized UA doesn't blow out the row.
+  return ua.length > 40 ? ua.slice(0, 39) + '\u2026' : ua;
+};
+
+// Bot / automation user-agents. Sessions from these are real traffic but
+// usually not what a support engineer is looking for, so the UI dims them
+// so real-user sessions read first. Keep the list conservative — false
+// positives hide legitimate traffic.
+const BOT_UA_REGEX = /bot\b|crawler|spider|curl\/|PostmanRuntime|HeadlessChrome|python-requests|Go-http-client|Java\/|wget\//i;
+export const isBotUserAgent = (ua: string): boolean => !!ua && BOT_UA_REGEX.test(ua);
+
+// Middle-truncate a URL path so the last segment (usually what identifies
+// the page) stays visible. Returns [head, tail] where head should be
+// rendered with `truncate min-w-0` and tail with `shrink-0`. If the path
+// fits, tail carries the whole string and head is empty.
+export const middleTruncatePath = (path: string, maxTailLen: number = 28): [string, string] => {
+  if (!path) return ['', ''];
+  const lastSlash = path.lastIndexOf('/');
+  // Use the last path segment as the tail when it's a reasonable length;
+  // otherwise fall back to a fixed-char tail.
+  if (lastSlash > 0 && path.length - lastSlash <= maxTailLen) {
+    return [path.slice(0, lastSlash), path.slice(lastSlash)];
+  }
+  return [path.slice(0, Math.max(0, path.length - maxTailLen)), path.slice(-maxTailLen)];
+};
+
 export const formatPatternCount = (n: number): string => {
   if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
   if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';

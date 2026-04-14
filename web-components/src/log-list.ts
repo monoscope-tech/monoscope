@@ -31,6 +31,9 @@ import {
   highlightPlaceholders,
   generateId,
   renderSparkline,
+  parseUserAgent,
+  isBotUserAgent,
+  middleTruncatePath,
 } from './log-list-utils';
 import { expandSince, expandFromToRange, parseChartZoom } from './time-range-utils';
 import { toEChartsColor } from './widgets';
@@ -207,11 +210,12 @@ export class LogList extends LitElement {
     if (earlyPromise) {
       (window as any).logDataPromise = null;
       const data = await earlyPromise;
-      if (!data.error) {
-        const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces } = data;
-        const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
-        return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces: traces || [], hasMore: data.hasMore ?? (logsData?.length > 0), queryResultCount: data.queryResultCount ?? logsData?.length ?? 0 } };
-      }
+      // Propagate server errors instead of silently falling through to the worker —
+      // otherwise the user waits 2 min for "Worker timeout" masking the real cause.
+      if (data.error) throw new Error(data.message || data.error || 'Server error');
+      const { logsData, serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces } = data;
+      const tree = logsData?.length ? groupSpans(logsData, colIdxMap, this.expandedTraces, this.flipDirection, traces || []) : [];
+      return { tree, meta: { serviceColors, nextUrl, recentUrl, cols, colIdxMap, count, traces: traces || [], hasMore: data.hasMore ?? (logsData?.length > 0), queryResultCount: data.queryResultCount ?? logsData?.length ?? 0 } };
     }
     // Fallback to worker
     if (!this.worker) throw new Error('Worker not initialized');
@@ -1555,8 +1559,11 @@ export class LogList extends LitElement {
     if (Array.isArray(summary)) return summary;
     try {
       return typeof summary === 'string' ? JSON.parse(summary) : [];
-    } catch {
-      return [];
+    } catch (err) {
+      // Silent [] made whole rows render blank with no signal. Log + surface a
+      // visible sentinel so support engineers can spot malformed payloads.
+      console.error('parseSummaryData: malformed summary payload', { summary, err });
+      return ['\u26A0 malformed summary'];
     }
   }
 
@@ -1659,6 +1666,9 @@ export class LogList extends LitElement {
             ? html`<span class="text-textWeak">${highlightPlaceholders(value)}</span>`
             : html`<span class="text-textWeak">${unsafeHTML(getCachedUnescape(value))}</span>`);
         } else {
+          // Top-level session rows are rendered via renderSessionSummary in
+          // the summary case; this fallback handles regular log rows and
+          // also expanded span children inside a session.
           result.push(renderBadge(clsx('cbadge-sm', this.getStyleClass(style), wrapClass), value));
         }
       }
@@ -1764,7 +1774,7 @@ export class LogList extends LitElement {
             const badgeStyle = this.getStyleClass(style);
 
             if (field === 'session') {
-              rightAlignedBadges.push(this.createSessionButton(value));
+              rightAlignedBadges.push(this.createSessionButton(value, !!hasErrors));
             } else if (field === 'user email') {
               userEmail = value; userBadgeStyle = badgeStyle;
             } else if (field === 'user name') {
@@ -1805,9 +1815,18 @@ export class LogList extends LitElement {
         }
         return rowData._latencyCache.content;
       case 'summary':
+        const isSessionTopLevel = this.mode === 'sessions' && depth === 0;
         if (!rowData._summaryCache || rowData._summaryCache.wrapLines !== this.wrapLines) {
           const summaryArray = this.parseSummaryData(dataArr);
-          rowData._summaryCache = { content: this.renderSummaryElements(summaryArray, this.wrapLines), wrapLines: this.wrapLines };
+          // Session top-level rows use the two-line identity/context layout;
+          // everything else (logs, patterns, expanded session children) uses
+          // the flat element list.
+          rowData._summaryCache = {
+            content: isSessionTopLevel
+              ? [this.renderSessionSummary(summaryArray)]
+              : this.renderSummaryElements(summaryArray, this.wrapLines),
+            wrapLines: this.wrapLines,
+          };
         }
         if (this.mode === 'patterns') {
           return html`<div class="break-all whitespace-break-spaces">${rowData._summaryCache.content}</div>`;
@@ -1818,10 +1837,10 @@ export class LogList extends LitElement {
           ? 'border border-strokeError-strong bg-fillWeak text-textWeak fill-textWeak'
           : 'border border-strokeWeak bg-fillWeak text-textWeak fill-textWeak';
         const summaryContent = rowData._summaryCache.content;
-        return html`<div class=${clsx('flex w-full gap-1', this.wrapLines ? 'items-start' : 'items-center')}>
+        return html`<div class=${clsx('flex w-full gap-1 min-w-0', isSessionTopLevel ? 'items-center' : this.wrapLines ? 'items-start' : 'items-center')}>
           ${this.view === 'tree' || this.mode === 'sessions'
             ? html`
-                <div class="flex items-center">
+                <div class="flex items-center shrink-0">
                   ${map(
                     Array(Math.max(0, depth - 1)),
                     (_, i) =>
@@ -1858,7 +1877,10 @@ export class LogList extends LitElement {
                 </div>
               `
             : nothing}
-          <div class=${clsx('flex items-center gap-1', this.wrapLines ? 'break-all flex-wrap' : 'overflow-hidden')}>${summaryContent}</div>
+          <div class=${clsx(
+            'flex gap-1 min-w-0',
+            isSessionTopLevel ? 'flex-1 items-center' : this.wrapLines ? 'items-center break-all flex-wrap' : 'items-center overflow-hidden'
+          )}>${summaryContent}</div>
         </div>`;
       case 'service':
         let serviceData = lookupVecValue<string>(dataArr, colIdxMap, key);
@@ -2047,13 +2069,25 @@ export class LogList extends LitElement {
         return acc;
       }, {} as Record<string, string>);
 
+      const isSessionTopLevelRow = effectiveMode === 'sessions' && rowData.depth === 0;
+      // Error sessions escalate visually: the row takes on a soft red tint
+      // so a broken session reads as the urgent thing on the page without
+      // shouting. The existing red left-stripe (rendered in the id column
+      // via getErrorClassification) anchors the severity; this tint makes
+      // the whole row belong to that signal.
+      const isErrorSessionRow = isSessionTopLevelRow && !!rowData.hasErrors;
+      const cellBg = isErrorSessionRow ? 'bg-fillError-weak' : 'bg-bgBase';
+      const rowHoverBg = isErrorSessionRow ? 'hover:bg-fillError-weak' : 'hover:bg-fillWeaker';
       const rowHtml = html`
         <tr
           class=${clsx(
-            'item-row relative p-0 flex group whitespace-nowrap hover:bg-fillWeaker isolate cursor-pointer',
+            'item-row relative p-0 flex group whitespace-nowrap isolate cursor-pointer',
+            rowHoverBg,
             !ov && 'contain-layout-style-paint content-visibility-auto',
             isPatterns && 'items-start',
-            !this.wrapLines && !isAggregate && 'h-[28px]',
+            // All non-wrapping, non-aggregate rows (including sessions) use the
+            // dense 28px log row height for a consistent rhythm.
+            !this.wrapLines && !isAggregate && 'h-[28px] items-center',
             isNew && 'animate-fadeBg'
           )}
           style=${Object.entries(columnStyles)
@@ -2075,7 +2109,7 @@ export class LogList extends LitElement {
               // In aggregate child rows (ov), skip fixed summary width so it flexes to fill remaining space
               const skipFixedWidth = ov && column === 'summary';
               return html`<td
-                class=${`${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} bg-bgBase group-hover:bg-inherit relative pl-2 ${
+                class=${`${this.wrapLines ? 'break-all whitespace-break-spaces' : ''} ${cellBg} group-hover:bg-inherit relative pl-2 ${
                   column === 'summary' ? `flex-1 min-w-0 ${ov ? 'overflow-hidden' : ''}` : 'flex-shrink-0'
                 } ${hasWidth && !(isAggregate && column === 'summary') && !skipFixedWidth ? `col-${column}` : ''}`}
               >
@@ -2083,7 +2117,7 @@ export class LogList extends LitElement {
               </td>`;
             })}
           ${effectiveLogsColumns.includes('latency_breakdown')
-            ? html`<td class="${ov ? '' : 'sticky right-0 max-md:static z-10'} bg-bgBase pl-2 shrink-0 ${ov ? 'col-latency_breakdown' : ''}">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
+            ? html`<td class="${ov ? '' : 'sticky right-0 max-md:static z-10'} ${cellBg} group-hover:bg-inherit pl-2 shrink-0 ${ov ? 'col-latency_breakdown' : ''}">${this.logItemCol(rowData, 'latency_breakdown')}</td>`
             : nothing}
         </tr>
       `;
@@ -2150,10 +2184,82 @@ export class LogList extends LitElement {
     `;
   }
 
-  createSessionButton = (sessionId: string) => html`
+  // Single-line session row: user · URL · errors · events · duration · device · error
+  // matches the dense log-row rhythm (28px). The user is the anchor (strongest
+  // weight); the error badge keeps its color; everything else reads secondary.
+  private renderSessionSummary(summaryArray: string[]): TemplateResult {
+    const fields: Record<string, string> = {};
+    for (const el of summaryArray) {
+      const parsed = parseSummaryElement(el);
+      if (parsed.type === 'formatted') {
+        if (RIGHT_PREFIX_REGEX.test(parsed.style)) continue;
+        fields[parsed.field] = parsed.value;
+      } else {
+        // Tolerate bare `field⇒value` (no style / no semicolon) — shouldn't
+        // happen after the Haskell fix, but keeps the UI resilient if an
+        // older emitter or cached payload sneaks through.
+        const sep = parsed.content.indexOf('\u21d2');
+        if (sep > 0) fields[parsed.content.slice(0, sep)] = parsed.content.slice(sep + 1);
+      }
+    }
+
+    const { user, url, device, events, errors, error: errorText, duration } = fields;
+    const sep = html`<span class="text-textWeak/40 select-none shrink-0" aria-hidden="true">·</span>`;
+    // Bot traffic (curl, PostmanRuntime, HeadlessChrome, *bot*) is real but
+    // rarely what a support engineer is scanning for — dim the whole row so
+    // human sessions read first.
+    const isBot = device ? isBotUserAgent(device) : false;
+
+    const parts: TemplateResult[] = [];
+    const add = (content: TemplateResult) => {
+      if (parts.length) parts.push(sep);
+      parts.push(content);
+    };
+
+    if (user) add(html`<span class="text-sm font-medium text-textStrong shrink-0 truncate max-w-[24ch]">${user}</span>`);
+    if (url) {
+      // Middle-truncate: keep the last path segment visible since it usually
+      // identifies the page ("/checkout/cart" is more useful than "/api/v2/…").
+      const [head, tail] = middleTruncatePath(url);
+      add(html`<span class="text-xs font-mono text-textStrong inline-flex items-center min-w-0" title=${url}>${head ? html`<span class="truncate min-w-0">${head}</span>` : nothing}<span class="shrink-0">${tail}</span></span>`);
+    }
+    if (errors) {
+      add(html`<span
+        class="cbadge-sm badge-error tabular-nums shrink-0"
+        title="${errors} error${errors === '1' ? '' : 's'} in this session"
+      >${errors} ${errors === '1' ? 'error' : 'errors'}</span>`);
+    }
+    if (events) add(html`<span class="text-xs text-textWeak tabular-nums shrink-0">${events} events</span>`);
+    if (duration) add(html`<span class="text-xs text-textWeak tabular-nums shrink-0">${duration}</span>`);
+    if (device) {
+      const parsed = parseUserAgent(device);
+      add(html`<span class="text-xs text-textWeak truncate shrink min-w-0" title=${device}>${parsed || device}</span>`);
+    }
+    // Cap error excerpt at a readable width — stack traces blown into the
+    // row kill the single-line rhythm; the full text stays in the tooltip.
+    if (errorText) add(html`<span class="text-xs text-textError truncate min-w-0 max-w-[60ch]" title=${errorText}>${errorText}</span>`);
+
+    return html`
+      <div class=${clsx('flex items-center gap-1.5 min-w-0 w-full overflow-hidden', isBot && 'opacity-60')}>${parts}</div>
+    `;
+  }
+
+  // Play button escalates with severity: neutral pill for clean sessions,
+  // filled brand CTA for sessions with errors. Keeps a restrained hover
+  // scale on both — the button is the primary affordance on the row, so
+  // it should feel alive without bouncing.
+  createSessionButton = (sessionId: string, hasErrors: boolean = false) => html`
     <button
-      class="flex items-center shrink-0 cbadge-sm badge-neutral cursor-pointer tooltip tooltip-left"
-      data-tip="Play recording"
+      class=${clsx(
+        'inline-flex items-center justify-center shrink-0 self-center rounded-md cursor-pointer tooltip tooltip-left',
+        'h-7 px-2.5 gap-1 transition-transform duration-150 ease-out hover:scale-105 active:scale-100',
+        'motion-reduce:transition-none motion-reduce:hover:scale-100',
+        hasErrors
+          ? 'bg-fillBrand-strong text-textInverse-strong fill-textInverse-strong hover:bg-fillBrand-strong/90 shadow-xs font-medium'
+          : 'bg-fillWeak text-textStrong fill-iconNeutral hover:bg-fillStrong/10 border border-strokeWeak'
+      )}
+      data-tip=${hasErrors ? 'Replay this broken session' : 'Play recording'}
+      aria-label=${hasErrors ? 'Replay broken session' : 'Play session recording'}
       @click=${(e: any) => {
         e.stopPropagation();
         e.preventDefault();
@@ -2170,7 +2276,8 @@ export class LogList extends LitElement {
         if (wrapper) wrapper.classList.remove('hidden');
       }}
     >
-      ${faSprite('play', 'regular', 'w-3.5 h-3.5')}
+      ${faSprite('play', hasErrors ? 'solid' : 'regular', 'w-3.5 h-3.5')}
+      <span class="text-xs">Play</span>
     </button>
   `;
 

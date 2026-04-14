@@ -5,6 +5,7 @@ module Opentelemetry.GrpcIngestionSpec (spec) where
 import Data.Time (addUTCTime)
 import Data.Time.Format.ISO8601 (iso8601Show)
 import Data.UUID qualified as UUID
+import Data.UUID.V4 qualified as UUIDV4
 import Data.Vector qualified as V
 import Database.PostgreSQL.Entity.DBT (withPool)
 import Database.PostgreSQL.Entity.DBT qualified as DBT
@@ -18,6 +19,7 @@ import Opentelemetry.OtlpServer qualified as OtlpServer
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.LogExplorer.Log qualified as Log
+import Pages.Replay qualified as Replay
 import Pages.Settings qualified as Api
 import Pkg.DeriveUtils (UUIDId (..))
 import Pkg.TestUtils
@@ -345,3 +347,100 @@ spec = aroundAll withTestResources do
             let counts = V.toList $ V.map (.eventCount) sessionRows
             counts `shouldBe` sortBy (flip compare) counts
           _ -> expectationFailure "expected LogsSessionsJson"
+
+      -- Regression for cross-project session leak: a user-supplied filter must
+      -- not erase project_id scoping in fetchSessions / fetchEventExamples.
+      -- Before the fix, any non-empty `whereClause` replaced the project_id
+      -- fallback, so rows from another project matched by the filter bled in.
+      it "Test 11.8: filtered sessions viz does not leak rows from other projects" $ \tr -> do
+        let otherPid = UUIDId (UUID.fromWords 0xdeadbeef 0xcafe0001 0x0 0x0) :: Projects.ProjectId
+            leakEmail = "leak@external.com" :: Text
+            leakSess = "cross-project-leak-sess" :: Text
+        _ <- withPool tr.trPool $ DBT.execute
+          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif)
+                VALUES (?, 'Other', 'Startup', true, true, true)
+                ON CONFLICT (id) DO NOTHING |]
+          (Only otherPid)
+        _ <- withPool tr.trPool $ DBT.execute
+          [sql| INSERT INTO otel_logs_and_spans
+                  (project_id, timestamp, name, context___trace_id,
+                   attributes___session___id, attributes___user___email, attributes___user___id)
+                VALUES (?, ?, 'GET /leak', 'trace-leak',
+                        ?, ?, 'leak-user') |]
+          (otherPid, frozenTime, leakSess, leakEmail)
+
+        -- Same session.id also exists for `pid`, with a different user — this
+        -- is the realistic case where the filter targets the other project.
+        key <- createTestAPIKey tr pid "sessions-isolation-key"
+        ingestSessionEvent tr key "GET /own"
+          [("session.id", leakSess), ("user.email", "own@example.com")] False frozenTime
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+        -- Filter by the external email: must return zero sessions from `pid`.
+        emailFilter <- queryLogsViz tr (Just ("attributes.user.email == \"" <> leakEmail <> "\"")) "sessions"
+        case emailFilter of
+          Log.LogsSessionsJson total rows -> do
+            total `shouldBe` 0
+            V.length rows `shouldBe` 0
+          _ -> expectationFailure "expected LogsSessionsJson"
+
+        -- Expanding the shared session with the external-email filter must
+        -- also return zero rows (fetchEventExamples path).
+        let (timeFrom, timeTo) = testTimeRange
+        (_, expandResult) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+          $ Log.apiLogExpandH pid (Just "session") (Just leakSess)
+              Nothing
+              (Just ("attributes.user.email == \"" <> leakEmail <> "\""))
+              Nothing (Just timeFrom) (Just timeTo)
+        let rows = case expandResult of
+              AE.Object o -> fromMaybe [] $ AE.decode @[AE.Value] . AE.encode =<< KM.lookup (fromText "rows") o
+              _ -> []
+        length rows `shouldBe` 0
+
+      -- Pins the RawSessionRow column ordering against the SELECT in fetchSessions.
+      -- A single column reorder would silently swap landing_url/user_agent/first_error
+      -- between rows and ship wrong data to every Sessions page.
+      it "Test 11.9: SessionRow surfaces landingUrl, userAgent, and firstError from raw events" $ \tr -> do
+        key <- createTestAPIKey tr pid "sessions-context-key"
+        let attrs =
+              [ ("session.id", "ctx-sess")
+              , ("user.email", "ctx@example.com")
+              , ("url.path", "/login")
+              , ("user_agent.original", "Mozilla/5.0 ContextProbe")
+              ]
+        ingestSessionEvent tr key "GET /login" attrs False frozenTime
+        ingestSessionEvent tr key "POST /login" attrs True (addUTCTime 1 frozenTime)
+        void $ runAllBackgroundJobs frozenTime tr.trATCtx
+        result <- queryLogsViz tr (Just "attributes.session.id == \"ctx-sess\"") "sessions"
+        case result of
+          Log.LogsSessionsJson _ rows -> case V.find (\s -> s.sessionId == "ctx-sess") rows of
+            Just s -> do
+              s.landingUrl `shouldBe` Just "/login"
+              s.userAgent `shouldBe` Just "Mozilla/5.0 ContextProbe"
+              -- isError predicate (status_code='ERROR') populates first_error from status_message.
+              s.firstError `shouldSatisfy` \case Just t -> t /= ""; Nothing -> False
+            Nothing -> expectationFailure "session ctx-sess not found"
+          _ -> expectationFailure "expected LogsSessionsJson"
+
+      -- Mirrors Test 11.8 for the replay path: replaySessionGetH must scope
+      -- sessionMetadata by project_id, otherwise identity from another project's
+      -- session row leaks into the replay header for an unrelated viewer.
+      it "Test 11.10: replaySessionGetH does not leak session metadata across projects" $ \tr -> do
+        let otherPid = UUIDId (UUID.fromWords 0xdeadbeef 0xcafe0002 0x0 0x0) :: Projects.ProjectId
+        sharedSessionId <- liftIO UUIDV4.nextRandom
+        _ <- withPool tr.trPool $ DBT.execute
+          [sql| INSERT INTO projects.projects (id, title, payment_plan, active, weekly_notif, daily_notif)
+                VALUES (?, 'Other2', 'Startup', true, true, true)
+                ON CONFLICT (id) DO NOTHING |]
+          (Only otherPid)
+        _ <- withPool tr.trPool $ DBT.execute
+          [sql| INSERT INTO projects.replay_sessions
+                  (session_id, project_id, last_event_at, user_id, user_email, user_name)
+                VALUES (?, ?, ?, 'leaked-user', 'leaked@external.com', 'Leaked Name') |]
+          (sharedSessionId, otherPid, frozenTime)
+        (_, result) <- toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
+          $ Replay.replaySessionGetH pid sharedSessionId
+        let lookupKey k = case result of AE.Object o -> KM.lookup (fromText k) o; _ -> Nothing
+        lookupKey "userEmail" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
+        lookupKey "userId" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])
+        lookupKey "userName" `shouldSatisfy` (`elem` [Nothing, Just AE.Null])

@@ -880,13 +880,29 @@ instance AE.ToJSON LogsGet where
         let user = LogQueries.sessionUserDisplay s.userEmail s.userName s.userId
             svcList = V.toList s.services
             svc = if null svcList then "" else T.intercalate " " svcList
+            -- Error messages can be stack traces. Take just the first line
+            -- and cap length so one huge exception doesn't blow out the row.
+            clipError t =
+              let firstLine = fromMaybe t . viaNonEmpty head . T.lines . T.strip $ t
+               in if T.length firstLine > 120 then T.take 119 firstLine <> "\x2026" else firstLine
+            -- `session;right-neutral` puts the session id in the right-aligned
+            -- badge group, which is the branch that renders the ▶ play button
+            -- (see createSessionButton in log-list.ts). Without the right-
+            -- prefix the session id just renders as inert text.
+            -- Contract: summary parts are `field;style⇒value`. Empty style
+            -- still needs the semicolon so parseSummaryElement classifies
+            -- them as `formatted` — without it, renderSessionSummary drops
+            -- the whole row's fields as plain content.
             summaryParts =
-              [ "session⇒" <> T.take 12 s.sessionId
-              , "user⇒" <> user
-              , "events⇒" <> show s.eventCount
+              [ "session;right-neutral\x21d2" <> T.take 12 s.sessionId
+              , "user;\x21d2" <> user
               ]
-                ++ ["errors⇒" <> show s.errorCount | s.errorCount > 0]
-                ++ ["duration⇒" <> toText (fmtDuration s.durationNs)]
+                ++ ["url;\x21d2" <> u | Just u <- [s.landingUrl], not (T.null u)]
+                ++ ["device;\x21d2" <> ua | Just ua <- [s.userAgent], not (T.null ua)]
+                ++ ["events;\x21d2" <> show s.eventCount | s.eventCount > 0]
+                ++ ["errors;\x21d2" <> show s.errorCount | s.errorCount > 0]
+                ++ ["error;\x21d2" <> clipError e | Just e <- [s.firstError], not (T.null e)]
+                ++ ["duration;\x21d2" <> toText (fmtDuration s.durationNs)]
          in AE.Array
               $ V.fromList
                 [ AE.Null -- id (0)
@@ -1120,7 +1136,7 @@ apiLogsPage page = do
           showTrace = isJust page.showTrace
       div_ [class_ "grow will-change-[width] contain-[layout_style] relative flex flex-col shrink-1 min-w-0 w-full h-full ", style_ $ "xwidth: " <> dW, id_ "logs_list_container"] do
         -- Filters and row count header
-        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0 group-has-[#viz-sessions:checked]/pg:mb-0"] do
+        div_ [class_ "flex gap-2 py-1 text-sm z-10 w-max bg-bgBase -mb-6 group-has-[#viz-patterns:checked]/pg:mb-0"] do
           label_ [class_ "gap-1 flex items-center cursor-pointer text-textWeak"] do
             faSprite_ "side-chevron-left-in-box" "regular" "w-4 h-4 group-has-[.toggle-filters:checked]/pg:rotate-180 text-iconNeutral"
             span_ [class_ "hidden group-has-[.toggle-filters:checked]/pg:block"] "Show"
