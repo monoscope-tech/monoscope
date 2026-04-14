@@ -1237,112 +1237,124 @@ getErrorEvents OtelLogsAndSpans{events = Just (AesonText (AE.Array arr))} =
 getErrorEvents _ = []
 
 
--- | Extract all runtime errors from a collection of spans
--- This is the main entry point for error anomaly detection
+-- | Predicate mirroring the Sessions UI @is_error@ SQL
+-- (@lower(level) = 'error' OR severity___severity_number >= 17 OR status_code = 'ERROR'@).
+-- Any record the UI flags as an error should also feed the Issues pipeline so teams
+-- get notified — covers frontend @console.error@ logs and server spans marked ERROR
+-- without a recorded exception event.
+isErrorRecord :: OtelLogsAndSpans -> Bool
+isErrorRecord s =
+  maybe False ((== "error") . T.toLower) s.level
+    || maybe False ((>= 17) . (.severity_number)) s.severity
+    || s.status_code == Just "ERROR"
+
+
+-- | Extract all runtime errors from a collection of spans/logs.
+-- Prefers OTel @exception.*@ events; falls back to record-level extraction for
+-- error-severity records that lack an exception event (e.g. OTLP log records,
+-- which always have @events = Nothing@).
 getAllATErrors :: V.Vector OtelLogsAndSpans -> V.Vector ErrorPatterns.ATError
 getAllATErrors = V.concatMap extractErrorsFromSpan
   where
     extractErrorsFromSpan spanObj =
-      let events = getErrorEvents spanObj
-       in V.mapMaybe (extractATError spanObj) events
+      let fromEvents = V.mapMaybe (extractATError spanObj) (getErrorEvents spanObj)
+       in if V.null fromEvents && isErrorRecord spanObj
+            then maybe V.empty V.singleton (extractATErrorFromRecord spanObj)
+            else fromEvents
 
 
--- | Extract error details from an OpenTelemetry event
--- Follows the OpenTelemetry semantic conventions:
--- - exception.type: The type of the exception
--- - exception.message: The exception message
--- - exception.stacktrace: The stacktrace
--- Also extracts HTTP context (method, path) for better error tracking
+-- | Extract error details from an OpenTelemetry exception event.
+-- Follows OTel semantic conventions: @event_attributes.exception.{type,message,stacktrace}@.
 extractATError :: OtelLogsAndSpans -> AE.Value -> Maybe ErrorPatterns.ATError
 extractATError spanObj (AE.Object o) = do
   AE.Object attrs' <- KEM.lookup "event_attributes" o
   AE.Object attrs <- KEM.lookup "exception" attrs'
-  let method = case unAesonTextMaybe spanObj.attributes >>= Map.lookup "http.request.method" of
+  let getTextOrEmpty k = fromMaybe "" $ case KEM.lookup k attrs of
         Just (AE.String s) -> Just s
         _ -> Nothing
-      urlPath = case unAesonTextMaybe spanObj.attributes >>= Map.lookup "http.route" of
-        Just (AE.String s) -> Just s
-        _ -> case unAesonTextMaybe spanObj.attributes >>= Map.lookup "http.target" of
+  pure $ atErrorFrom spanObj (getTextOrEmpty "type") (getTextOrEmpty "message") (getTextOrEmpty "stacktrace")
+extractATError _ _ = Nothing
+
+
+-- | Fallback extractor for error-severity records with no exception event.
+-- Reads OTel @attributes.exception.{type,message,stacktrace}@ (nested by
+-- 'nestedJsonFromDotNotation'). Browser SDK variants (@attributes.error.*@) are
+-- copied into @exception.*@ at ingest by 'migrateHttpSemanticConventions', so
+-- only the canonical namespace needs to be checked here. Message falls back to
+-- body (log records) / @status_message@ (spans). Returns Nothing when neither
+-- message nor stack exists — prevents empty, unhelpful issues.
+extractATErrorFromRecord :: OtelLogsAndSpans -> Maybe ErrorPatterns.ATError
+extractATErrorFromRecord spanObj =
+  let attrs = unAesonTextMaybe spanObj.attributes
+      excAttr k = case attrs >>= Map.lookup "exception" of
+        Just (AE.Object o) -> case KEM.lookup (AEK.fromText k) o of
           Just (AE.String s) -> Just s
           _ -> Nothing
-  let lookupText k = case KEM.lookup k attrs of
+        _ -> Nothing
+      bodyTxt = case unAesonTextMaybe spanObj.body of
         Just (AE.String s) -> Just s
         _ -> Nothing
-      getTextOrEmpty k = fromMaybe "" (lookupText k)
-      getSpanAttr k = unAesonTextMaybe spanObj.attributes >>= Map.lookup k >>= \case AE.String s -> Just s; _ -> Nothing
-      getUserAttrM k v = case unAesonTextMaybe spanObj.resource >>= Map.lookup v of
-        Just (AE.Object userAttrs) -> KEM.lookup k userAttrs >>= asText
-        _ -> Nothing
+      typ = fromMaybe "Error" (excAttr "type")
+      msg = fromMaybe "" $ excAttr "message" <|> bodyTxt <|> spanObj.status_message
+      stack = fromMaybe "" (excAttr "stacktrace")
+   in if T.null msg && T.null stack
+        then Nothing
+        else Just (atErrorFrom spanObj typ msg stack)
 
-      typ = getTextOrEmpty "type"
-      msg = getTextOrEmpty "message"
-      stack = getTextOrEmpty "stacktrace"
 
-      userId = getUserAttrM "id" "user"
-      userEmail = getUserAttrM "email" "user"
-      userIp = getSpanAttr "client.address"
-      sessionId = getUserAttrM "id" "session"
-
-      -- TODO: parse telemetry.sdk.name to SDKTypes
-      tech = case unAesonTextMaybe spanObj.resource >>= Map.lookup "telemetry" of
-        Just (AE.Object tel) ->
-          KEM.lookup "sdk" tel
-            >>= ( \case
-                    AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
-                    _ -> Nothing
-                )
-        _ -> Nothing
-      serviceName = case unAesonTextMaybe spanObj.resource >>= Map.lookup "service" of
-        Just (AE.Object serviceObj) ->
-          KEM.lookup "name" serviceObj >>= asText
-        _ -> Nothing
-
-      spanId = spanObj.context >>= (.span_id)
-      trId = spanObj.context >>= (.trace_id)
-
+-- | Build an 'ErrorPatterns.ATError' from a span/log plus the extracted
+-- @(errorType, message, stackTrace)@ triple. Hash-driven dedup groups similar errors.
+atErrorFrom :: OtelLogsAndSpans -> Text -> Text -> Text -> ErrorPatterns.ATError
+atErrorFrom spanObj typ msg stack =
+  let attrs = unAesonTextMaybe spanObj.attributes
+      resc = unAesonTextMaybe spanObj.resource
       asText (AE.String t) = Just t
       asText _ = Nothing
-      pid = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
-
-  -- Build ATError structure for anomaly detection
-  -- The hash is critical for grouping similar errors together
-  -- Hash components: projectId + service + span name + error type + sanitized message/stack
-  -- This ensures similar errors are grouped while allowing variations in the actual message
-  -- projectId mService mEndpoint runtime exceptionType message stackTrace
-
-  -- Use "" (empty) rather than a magic "unknown" sentinel so the hash inputs stay stable
-  -- across events regardless of whether runtime detection succeeded.
-  let rt = fromMaybe "" tech
+      getSpanAttr k = attrs >>= Map.lookup k >>= asText
+      getUserAttrM k v = case resc >>= Map.lookup v of
+        Just (AE.Object userAttrs) -> KEM.lookup k userAttrs >>= asText
+        _ -> Nothing
+      method = getSpanAttr "http.request.method"
+      urlPath = getSpanAttr "http.route" <|> getSpanAttr "http.target"
+      -- TODO: parse telemetry.sdk.name to SDKTypes
+      tech = case resc >>= Map.lookup "telemetry" of
+        Just (AE.Object tel) ->
+          KEM.lookup "sdk" tel >>= \case
+            AE.Object sdkObj -> KEM.lookup "language" sdkObj >>= asText
+            _ -> Nothing
+        _ -> Nothing
+      serviceName = case resc >>= Map.lookup "service" of
+        Just (AE.Object so) -> KEM.lookup "name" so >>= asText
+        _ -> Nothing
+      -- Empty (not "unknown") keeps hash inputs stable when runtime detection fails.
+      rt = fromMaybe "" tech
       hashes = ErrorPatterns.computeErrorHashes spanObj.project_id serviceName spanObj.name rt typ msg stack
-      isFwk = ErrorPatterns.isFrameworkTransportError typ (ErrorPatterns.normalizeMessage msg)
-  return
-    $ ErrorPatterns.ATError
-      { projectId = pid
-      , when = spanObj.timestamp
-      , errorType = typ
-      , rootErrorType = typ
-      , message = msg
-      , rootErrorMessage = msg
-      , stackTrace = stack
-      , hash = hashes.narrow
-      , parentHash = Just hashes.broad
-      , isFramework = isFwk
-      , technology = Nothing
-      , serviceName = serviceName
-      , requestMethod = method
-      , requestPath = urlPath
-      , spanId = spanId
-      , traceId = trId
-      , runtime = tech
-      , parentSpanId = spanObj.parent_id
-      , endpointHash = Nothing
-      , environment = Nothing
-      , userId = userId
-      , userEmail = userEmail
-      , userIp = userIp
-      , sessionId = sessionId
-      }
-extractATError _ _ = Nothing
+   in ErrorPatterns.ATError
+        { projectId = UUID.fromText spanObj.project_id >>= (Just . UUIDId)
+        , when = spanObj.timestamp
+        , errorType = typ
+        , rootErrorType = typ
+        , message = msg
+        , rootErrorMessage = msg
+        , stackTrace = stack
+        , hash = hashes.narrow
+        , parentHash = Just hashes.broad
+        , isFramework = ErrorPatterns.isFrameworkTransportError typ (ErrorPatterns.normalizeMessage msg)
+        , technology = Nothing
+        , serviceName = serviceName
+        , requestMethod = method
+        , requestPath = urlPath
+        , spanId = spanObj.context >>= (.span_id)
+        , traceId = spanObj.context >>= (.trace_id)
+        , runtime = tech
+        , parentSpanId = spanObj.parent_id
+        , endpointHash = Nothing
+        , environment = Nothing
+        , userId = getUserAttrM "id" "user"
+        , userEmail = getUserAttrM "email" "user"
+        , userIp = getSpanAttr "client.address"
+        , sessionId = getUserAttrM "id" "session"
+        }
 
 
 getProjectStatsForReport :: DB es => Projects.ProjectId -> UTCTime -> UTCTime -> Eff es [(Text, Int, Int)]

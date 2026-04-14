@@ -500,6 +500,19 @@ migrateElasticsearchPathParts keyVals =
 -- == HTTP method _OTHER migration
 -- >>> migrateHttpSemanticConventions [("http.method", AE.String "_OTHER"), ("http.request.method_original", AE.String "PROPFIND")]
 -- [("http.request.method",String "PROPFIND")]
+--
+-- == Browser error.* → OTel exception.* normalization
+-- Browser SDKs commonly use @error.{name,type,message,stack}@ rather than the
+-- OTel @exception.*@ semconv. We copy into @exception.*@ at ingest time so the
+-- extraction and Issues pipelines only have to understand one namespace.
+-- error.name (JS class, e.g. "TypeError") is preferred over error.type
+-- (category, e.g. "uncaught_exception") for exception.type.
+-- >>> migrateHttpSemanticConventions [("error.name", AE.String "TypeError"), ("error.message", AE.String "x is null"), ("error.stack", AE.String "at f()")]
+-- [("error.name",String "TypeError"),("error.message",String "x is null"),("error.stack",String "at f()"),("exception.type",String "TypeError"),("exception.message",String "x is null"),("exception.stacktrace",String "at f()")]
+--
+-- Existing @exception.*@ fields win when both are present:
+-- >>> migrateHttpSemanticConventions [("error.name", AE.String "TypeError"), ("exception.type", AE.String "DomainError")]
+-- [("error.name",String "TypeError"),("exception.type",String "DomainError")]
 fieldMappingsMap :: HM.HashMap Text Text
 fieldMappingsMap =
   HM.fromList
@@ -610,8 +623,18 @@ migrateHttpSemanticConventions !keyVals =
         | not (HM.member "http.request.method" kvMap) ->
             [("http.request.method", originalMethod)]
       _ -> []
+
+    -- Browser SDKs use attributes.error.*; copy into OTel attributes.exception.*
+    -- so the Issues pipeline has a single canonical namespace. Keeps the
+    -- originals so bespoke queries / detail views that know about error.* still work.
+    migrateBrowserError =
+      let pick k = HM.lookup k kvMap
+          emit target src = [(target, v) | not (HM.member target kvMap), Just v <- [src]]
+       in emit "exception.type" (pick "error.name" <|> pick "error.type")
+            ++ emit "exception.message" (pick "error.message")
+            ++ emit "exception.stacktrace" (pick "error.stacktrace" <|> pick "error.stack")
    in
-    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex
+    mgVals ++ migrateHttpTarget ++ migrateMethodOther ++ migrateConnectionString ++ migrateElasticsearchPaths ++ migrateRedisIndex ++ migrateBrowserError
 
 
 -- Extract structured information from protobuf decoding errors

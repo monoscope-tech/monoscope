@@ -33,6 +33,7 @@ module Pkg.TestUtils (
   -- OTLP/Telemetry helpers
   createTestAPIKey,
   ingestLog,
+  ingestErrorLog,
   ingestTrace,
   ingestMetric,
   ingestLogWithHeader,
@@ -131,6 +132,7 @@ import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService qualified as TS
 import Proto.Opentelemetry.Proto.Collector.Trace.V1.TraceService_Fields qualified as TSF
 import Proto.Opentelemetry.Proto.Common.V1.Common qualified as PC
 import Proto.Opentelemetry.Proto.Common.V1.Common_Fields qualified as PCF
+import Proto.Opentelemetry.Proto.Logs.V1.Logs qualified as PL
 import Proto.Opentelemetry.Proto.Logs.V1.Logs_Fields qualified as PLF
 import Proto.Opentelemetry.Proto.Metrics.V1.Metrics_Fields qualified as PMF
 import Proto.Opentelemetry.Proto.Resource.V1.Resource qualified as PR
@@ -1040,6 +1042,25 @@ ingestLog tr apiKey bodyText timestamp =
   void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto $ createOtelLogAtTime apiKey bodyText timestamp)
 ingestLogWithHeader tr apiKey bodyText timestamp =
   void $ runTestBg frozenTime tr $ OtlpServer.processLogsRequest (Just apiKey) (createOtelLogAtTime "" bodyText timestamp)
+
+
+-- | Ingest an ERROR-severity log record with optional @exception.*@ attributes.
+-- Used to exercise the record-level fallback path in getAllATErrors — OTLP log
+-- records never carry span events, so error extraction relies on severity +
+-- attributes rather than event_attributes.exception.
+ingestErrorLog :: TestResources -> Text -> Text -> [(Text, Text)] -> UTCTime -> IO ()
+ingestErrorLog tr apiKey bodyText extras timestamp =
+  let attrs = [mkAttr k v | (k, v) <- extras]
+      logRecord =
+        defMessage
+          & PLF.timeUnixNano .~ toNanos timestamp
+          & PLF.body .~ (defMessage & PCF.stringValue .~ bodyText)
+          & PLF.severityText .~ "ERROR"
+          & PLF.severityNumber .~ PL.SEVERITY_NUMBER_ERROR
+          & PLF.attributes .~ attrs
+      scopeLog = defMessage & PLF.logRecords .~ [logRecord]
+      req = defMessage & LSF.resourceLogs .~ [defMessage & PLF.resource .~ mkResource apiKey [] & PLF.scopeLogs .~ [scopeLog]]
+   in void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)
 
 
 ingestTrace, ingestTraceWithHeader :: TestResources -> Text -> Text -> UTCTime -> IO ()

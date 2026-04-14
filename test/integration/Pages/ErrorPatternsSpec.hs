@@ -81,6 +81,45 @@ spec = aroundAll withTestResources do
         p.message `shouldSatisfy` (/= "")
         p.stacktrace `shouldSatisfy` (/= "")
 
+    it "1b. ERROR-severity records produce error patterns — OTel exception.* (backend log) and error.* (Monoscope browser SDK)" \tr -> do
+      -- OTLP log records never carry span events; internal browser spans often
+      -- carry status_code=ERROR but no exception event. Both cases rely on the
+      -- record-level fallback in getAllATErrors. The Monoscope browser SDK uses
+      -- attributes.error.{name,type,message,stack} — these are normalized into
+      -- attributes.exception.* at ingest (migrateHttpSemanticConventions) so
+      -- extraction only has to understand one namespace.
+      apiKey <- createTestAPIKey tr pid "frontend-error-log-key"
+      let beStack = "ReferenceError: user is not defined\n    at (/app.js:123:5)"
+          feStack = "TypeError: Cannot read properties of null\n    at handleClick (app.bundle.js:42:11)"
+      -- Backend-style log: OTel exception.* (nested via dot-notation flattening).
+      ingestErrorLog tr apiKey "user is not defined"
+        [ ("exception.type", "ReferenceError")
+        , ("exception.message", "user is not defined")
+        , ("exception.stacktrace", beStack)
+        ]
+        (addUTCTime (-5) frozenTime)
+      -- Browser-style log: attributes.error.{name,type,message,stack}.
+      ingestErrorLog tr apiKey ""
+        [ ("error.name", "TypeError")
+        , ("error.type", "uncaught_exception")
+        , ("error.message", "Cannot read properties of null")
+        , ("error.stack", feStack)
+        ]
+        (addUTCTime (-4) frozenTime)
+
+      drainExtractionWorker tr
+      void $ runAllBackgroundJobs frozenTime tr.trATCtx
+
+      patterns <- runTestBg frozenTime tr $ ErrorPatterns.getErrorPatterns pid Nothing 50 0
+      -- OTel exception.* → errorType = "ReferenceError"
+      let bePatM = find (\p -> p.errorType == "ReferenceError") patterns
+      bePatM `shouldSatisfy` isJust
+      forM_ bePatM \p -> p.message `shouldBe` "user is not defined"
+      -- Browser error.* → errorType from error.name (preferred over error.type)
+      let fePatM = find (\p -> p.errorType == "TypeError" && T.isInfixOf "null" p.message) patterns
+      fePatM `shouldSatisfy` isJust
+      forM_ fePatM \p -> p.stacktrace `shouldSatisfy` T.isInfixOf "handleClick"
+
     it "2. processOneMinuteErrors creates RuntimeException issues for new errors" \tr -> do
       -- processOneMinuteErrors in test 1 already created issues synchronously
       issueCount <- countIssues tr Issues.RuntimeException
