@@ -16,6 +16,7 @@ import Data.Default
 import Data.HashMap.Internal.Strict qualified as HM
 import Data.Map qualified as Map
 import Data.Map.Strict qualified as MapS
+import Data.Set qualified as Set
 import Data.Text qualified as T
 import Data.Time (UTCTime, addUTCTime, defaultTimeLocale)
 import Data.Time.Format (formatTime)
@@ -842,8 +843,14 @@ stBox label value iconM =
     span_ [class_ "font-medium text-textWeak text-xs"] $ toHtml label
 
 
+-- | Group spans by parent. Spans whose parent isn't in the batch (cross-trace
+-- entries, dropped parents) are normalized to Nothing so they render as roots
+-- instead of being silently dropped by the tree walk.
 buildSpanMap :: V.Vector Telemetry.SpanRecord -> MapS.Map (Maybe Text) [Telemetry.SpanRecord]
-buildSpanMap = V.foldr (\sp m -> MapS.insertWith (++) sp.parentSpanId [sp] m) MapS.empty
+buildSpanMap spans =
+  let ids = foldr (Set.insert . (.spanId)) Set.empty spans
+      norm sp = if maybe True (`Set.member` ids) sp.parentSpanId then sp.parentSpanId else Nothing
+   in V.foldr (\sp m -> MapS.insertWith (++) (norm sp) [sp] m) MapS.empty spans
 
 
 -- | Build span tree with clock skew adjustment: if a child starts before its parent

@@ -803,6 +803,18 @@ errorTrendChartUrl ctx pid errHash =
   trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just $ "hashes has_any [\"err:" <> errHash <> "\"] | summarize count(*) by bin_auto(timestamp)", Widget.theme = Just "roma"}
 
 
+-- | Compact relative time ("3m ago", "2h ago", "5d ago") for alert timestamps.
+-- Used in Slack/Discord notifications where readers need to judge recency at a glance.
+relTimeAgo :: UTCTime -> UTCTime -> Text
+relTimeAgo now t =
+  let s = max 0 $ round (diffUTCTime now t) :: Int
+   in if s < 60
+        then "just now"
+        else if s < 3600 then show (s `div` 60) <> "m ago"
+        else if s < 86400 then show (s `div` 3600) <> "h ago"
+        else show (s `div` 86400) <> "d ago"
+
+
 monitorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)
 monitorTrendChartUrl ctx pid monitor =
   trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just monitor.logQuery, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
@@ -846,10 +858,11 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
         results <- forConcurrently dueErrors \sub -> do
           let alertType = alertTypeForState sub.errorState
               errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-              occTextM = show sub.occurrences1h <> " occurrences in last hour" <$ guard (sub.occurrences1h > 0)
+              occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
               fromTime = addUTCTime (-(15 * 60)) now
+              firstSeenTextM = Just $ relTimeAgo now sub.errorData.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" sub.errorData.when)
           chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
-          let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM}
+          let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM}
               ~(subj, html) = case alertType of
                 EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
                 RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
@@ -2668,7 +2681,8 @@ createAndNotifyErrorIssue pid issue runtimeAlertType errorData emailFn errorPatt
     users <- Projects.usersByProjectId pid
     let fromTime = addUTCTime (-(15 * 60)) now
     chartUrlM <- errorTrendChartUrl authCtx pid errorData.hash (formatUTC fromTime) (formatUTC now)
-    let alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing}
+    let firstSeenTextM = Just $ relTimeAgo now errorData.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" errorData.when)
+        alert = RuntimeErrorAlert{issueId = issue.id.toText, issueTitle = issue.title, errorData, runtimeAlertType, chartUrl = chartUrlM, occurrenceText = Nothing, firstSeenText = firstSeenTextM}
         errorsUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> issue.id.toText
         (subj, html) = emailFn project.title errorsUrl [errorData] chartUrlM Nothing
     (finalSlackTs, finalDiscordMsgId) <-

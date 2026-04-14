@@ -1059,9 +1059,9 @@ createSeries widgetType colIdx name =
         , "type" AE..= mapWidgetTypeToChartType widgetType
         , "stack" AE..= ("Stack" :: Text)
         , "encode" AE..= AE.object ["x" AE..= (0 :: Int), "y" AE..= colIdx]
-        , "itemStyle" AE..= AE.object ["color" AE..= seriesColor]
-        , "showBackground" AE..= not isStat
-        , "backgroundStyle" AE..= AE.object ["color" AE..= ("rgba(240,248,255, 0.4)" :: Text)]
+        , "itemStyle" AE..= AE.object ["color" AE..= seriesColor, "borderRadius" AE..= AE.Array [AE.Number 2, AE.Number 2, AE.Number 0, AE.Number 0]]
+        , "barCategoryGap" AE..= ("30%" :: Text)
+        , "barMaxWidth" AE..= (10 :: Int)
         , "areaStyle" AE..= if isStat then gradientStyle else AE.Null
         , "lineStyle" AE..= AE.object ["width" AE..= if isStat then 0 else 1]
         ]

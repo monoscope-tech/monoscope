@@ -386,7 +386,7 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
     max = Math.max(max, start + duration);
     barData.push({ el, start, duration, color, textColor: getContrastTextColor(color), label: `${Math.floor(Number(t))} ${u}`, hasErrors: el.dataset.hasErrors === 'true', spanName: el.dataset.spanName || '', service });
   });
-  const maxDuration = max - min || 1;
+  const maxDuration = Number.isFinite(max - min) && max > min ? max - min : 1;
 
   const renderBars = () => {
     const firstWidth = barData[0]?.el.clientWidth;
