@@ -364,9 +364,10 @@ spec = aroundAll withTestResources do
         _ <- withPool tr.trPool $ DBT.execute
           [sql| INSERT INTO otel_logs_and_spans
                   (project_id, timestamp, name, context___trace_id,
-                   attributes___session___id, attributes___user___email, attributes___user___id)
+                   attributes___session___id, attributes___user___email, attributes___user___id,
+                   summary)
                 VALUES (?, ?, 'GET /leak', 'trace-leak',
-                        ?, ?, 'leak-user') |]
+                        ?, ?, 'leak-user', '{}'::TEXT[]) |]
           (otherPid, frozenTime, leakSess, leakEmail)
 
         -- Same session.id also exists for `pid`, with a different user — this

@@ -1158,8 +1158,14 @@ mkAttr :: Text -> Text -> PC.KeyValue
 mkAttr k v = defMessage & PCF.key .~ k & PCF.value .~ (defMessage & PCF.stringValue .~ v)
 
 
+-- | Left-pads @t@ with '0' to @len@ hex chars and decodes to bytes.
+-- Strips dashes first so dashed UUID text (36 chars) becomes a valid 32-hex trace id;
+-- without this every test span would end up with an empty trace_id, collapsing the
+-- TraceSessionCache and DISTINCT ON (context___trace_id) in fetchEventExamples.
 hexPad :: Int -> Text -> ByteString
-hexPad len t = fromRight "" $ B16.decode $ encodeUtf8 $ T.replicate (len - T.length t) "0" <> t
+hexPad len t =
+  let stripped = T.filter (/= '-') t
+   in fromRight "" $ B16.decode $ encodeUtf8 $ T.replicate (len - T.length stripped) "0" <> stripped
 
 
 toNanos :: UTCTime -> Word64
