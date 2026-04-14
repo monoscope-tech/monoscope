@@ -894,7 +894,10 @@ instance AE.ToJSON LogsGet where
             -- them as `formatted` — without it, renderSessionSummary drops
             -- the whole row's fields as plain content.
             summaryParts =
-              [ "session;right-neutral\x21d2" <> T.take 12 s.sessionId
+              -- Full session id: the client feeds this into /replay_session/{id},
+              -- which Servant captures as a UUID. Truncating here would round-trip
+              -- to a 400 from Servant's route parser before the handler runs.
+              [ "session;right-neutral\x21d2" <> s.sessionId
               , "user;\x21d2" <> user
               ]
                 ++ ["url;\x21d2" <> u | Just u <- [s.landingUrl], not (T.null u)]
