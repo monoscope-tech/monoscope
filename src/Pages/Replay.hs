@@ -256,7 +256,7 @@ data SessionMeta = SessionMeta
   , lastEventAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving anyclass (HI.DecodeRow, AE.ToJSON)
+  deriving anyclass (AE.ToJSON, HI.DecodeRow)
 
 
 sessionMetadata :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe SessionMeta)
