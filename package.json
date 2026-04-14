@@ -16,5 +16,9 @@
   },
   "scripts": {
     "test": "jest"
+  },
+  "overrides": {
+    "serialize-javascript": "^7.0.5",
+    "tmp": "^0.2.4"
   }
 }

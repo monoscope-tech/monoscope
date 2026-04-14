@@ -45,5 +45,9 @@
     "vite-plugin-monaco-editor": "^1.1.0",
     "vite-plugin-node-polyfills": "^0.25.0",
     "vitest": "^4.0.16"
+  },
+  "overrides": {
+    "dompurify": "^3.3.2",
+    "underscore": "^1.13.8"
   }
 }
