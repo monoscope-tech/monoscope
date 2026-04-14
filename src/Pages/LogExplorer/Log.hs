@@ -906,7 +906,7 @@ sessionsHeader_ summ = do
                     <> T.show (bucketFrom i + summ.bucketWidthSec)
                     <> ")"
             button_
-              [ class_ "flex-1 flex flex-col-reverse gap-[1px] min-w-[2px] cursor-pointer group/bar"
+              [ class_ "flex-1 h-full flex flex-col-reverse gap-[1px] min-w-[2px] cursor-pointer group/bar"
               , type_ "button"
               , data_ "tippy-content" tip
               , onclick_ js
