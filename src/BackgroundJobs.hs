@@ -810,9 +810,13 @@ relTimeAgo now t =
   let s = max 0 $ round (diffUTCTime now t) :: Int
    in if s < 60
         then "just now"
-        else if s < 3600 then show (s `div` 60) <> "m ago"
-        else if s < 86400 then show (s `div` 3600) <> "h ago"
-        else show (s `div` 86400) <> "d ago"
+        else
+          if s < 3600
+            then show (s `div` 60) <> "m ago"
+            else
+              if s < 86400
+                then show (s `div` 3600) <> "h ago"
+                else show (s `div` 86400) <> "d ago"
 
 
 monitorTrendChartUrl :: Log :> es => Config.AuthContext -> Projects.ProjectId -> Monitors.QueryMonitor -> Text -> Text -> Eff es (Maybe Text)

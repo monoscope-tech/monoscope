@@ -208,7 +208,9 @@ sendWhatsAppAlert alert pid pTitle tos = do
 
 slackReportAlert :: Text -> Text -> Text -> Int -> Int -> V.Vector (Text, Int, Int) -> Text -> Text -> Text -> Text -> Text -> AE.Value
 slackReportAlert reportType startTime endTime totalErrors totalEvents breakDown project channelId url allUrl errUrl =
-  slackAttachment channelId "#64748b"
+  slackAttachment
+    channelId
+    "#64748b"
     [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> url <> "|📊 *" <> T.toTitle reportType <> " report* · " <> project <> ">")]]
     , AE.object
         [ "type" AE..= "context"
@@ -283,7 +285,9 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
 
 slackNewEndpointsAlert :: Text -> V.Vector Text -> Text -> Text -> Text -> AE.Value
 slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
-  slackAttachment channelId "#3b82f6"
+  slackAttachment
+    channelId
+    "#3b82f6"
     [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")]]
     , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= enps]]
     , AE.object
@@ -325,7 +329,9 @@ newEndpointsExplorerUrl projectUrl endpoints =
 
 mkSlackLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Text -> Text -> AE.Value
 mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField occurrenceCount project channelId =
-  slackAttachment channelId "#3b82f6"
+  slackAttachment
+    channelId
+    "#3b82f6"
     [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|:mag: *New log pattern* · " <> project <> ">")]]
     , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 patternText <> "```")]]
     , AE.object
@@ -347,7 +353,9 @@ mkSlackLogPatternPayload patternText issueUrl logLevel serviceName sourceField o
 
 mkSlackLogPatternRateChangePayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Double -> Double -> Double -> Text -> Text -> AE.Value
 mkSlackLogPatternRateChangePayload patternText issueUrl logLevel serviceName direction currentRate baselineMean changePercent project channelId =
-  slackAttachment channelId color
+  slackAttachment
+    channelId
+    color
     [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> issueUrl <> "|" <> icon <> " *Log volume " <> direction <> "* · " <> project <> ">")]]
     , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("```" <> T.take 200 patternText <> "```")]]
     , AE.object
