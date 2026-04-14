@@ -1053,11 +1053,16 @@ ingestErrorLog tr apiKey bodyText extras timestamp =
   let attrs = [mkAttr k v | (k, v) <- extras]
       logRecord =
         defMessage
-          & PLF.timeUnixNano .~ toNanos timestamp
-          & PLF.body .~ (defMessage & PCF.stringValue .~ bodyText)
-          & PLF.severityText .~ "ERROR"
-          & PLF.severityNumber .~ PL.SEVERITY_NUMBER_ERROR
-          & PLF.attributes .~ attrs
+          & PLF.timeUnixNano
+          .~ toNanos timestamp
+            & PLF.body
+          .~ (defMessage & PCF.stringValue .~ bodyText)
+            & PLF.severityText
+          .~ "ERROR"
+            & PLF.severityNumber
+          .~ PL.SEVERITY_NUMBER_ERROR
+            & PLF.attributes
+          .~ attrs
       scopeLog = defMessage & PLF.logRecords .~ [logRecord]
       req = defMessage & LSF.resourceLogs .~ [defMessage & PLF.resource .~ mkResource apiKey [] & PLF.scopeLogs .~ [scopeLog]]
    in void $ OtlpServer.logsServiceExport tr.trLogger tr.trATCtx tr.trTracerProvider (Proto req)

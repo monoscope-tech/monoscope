@@ -1246,7 +1246,8 @@ isErrorRecord :: OtelLogsAndSpans -> Bool
 isErrorRecord s =
   maybe False ((== "error") . T.toLower) s.level
     || maybe False ((>= 17) . (.severity_number)) s.severity
-    || s.status_code == Just "ERROR"
+    || s.status_code
+    == Just "ERROR"
 
 
 -- | Extract all runtime errors from a collection of spans/logs.
