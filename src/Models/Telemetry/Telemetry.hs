@@ -1646,6 +1646,102 @@ generateLogSummary otel =
       SLFatal -> "FATAL"
 
 
+-- | Classify a browser/frontend span by name into a product-level display category.
+-- Returns (human label, badge style class) or Nothing if not a frontend span.
+-- Covers page loads, documents, resources, navigations, user actions, long tasks,
+-- web vitals. Errors flow through the existing ERROR status path. HTTP fetch/xhr
+-- spans ("HTTP GET" etc.) fall through to the generic HTTP path since they have
+-- http.request.method / http.response.status_code attributes the existing code handles.
+--
+-- >>> classifyFrontendSpan "documentLoad"
+-- Just ("page load","badge-info")
+-- >>> classifyFrontendSpan "resourceFetch"
+-- Just ("resource","badge-neutral")
+-- >>> classifyFrontendSpan "web-vital.lcp"
+-- Just ("vital lcp","badge-vital")
+-- >>> classifyFrontendSpan "HTTP GET"
+-- Nothing
+-- >>> classifyFrontendSpan "random-span"
+-- Nothing
+classifyFrontendSpan :: T.Text -> Maybe (T.Text, T.Text)
+classifyFrontendSpan = \case
+  "documentLoad" -> Just ("page load", "badge-info")
+  "documentFetch" -> Just ("document", "badge-info")
+  "resourceFetch" -> Just ("resource", "badge-neutral")
+  "resource" -> Just ("resource", "badge-neutral")
+  "navigation" -> Just ("navigation", "badge-info")
+  "route.change" -> Just ("navigation", "badge-info")
+  "click" -> Just ("click", "badge-action")
+  "submit" -> Just ("submit", "badge-action")
+  "keydown" -> Just ("keydown", "badge-action")
+  "keyup" -> Just ("keyup", "badge-action")
+  "longtask" -> Just ("long task", "badge-warning")
+  n | Just v <- T.stripPrefix "web-vital." n -> Just ("vital " <> v, "badge-vital")
+  _ -> Nothing
+
+
+-- | Drop scheme+host from a full URL for compact display. Fragments are stripped.
+-- Returns the original input when the URL is malformed (has no path).
+--
+-- >>> shortenUrl "https://example.com/api/orders?id=1#x"
+-- "/api/orders?id=1"
+-- >>> shortenUrl "http://host/path"
+-- "/path"
+-- >>> shortenUrl "/already/path"
+-- "/already/path"
+-- >>> shortenUrl "https://example.com"
+-- "example.com"
+shortenUrl :: T.Text -> T.Text
+shortenUrl full =
+  let stripped = fromMaybe full $ T.stripPrefix "https://" full <|> T.stripPrefix "http://" full
+      path = T.dropWhile (/= '/') stripped
+      chosen = if T.null path then stripped else path
+   in T.takeWhile (/= '#') chosen
+
+
+-- | Extract basename (last path segment, no query/fragment) from a URL.
+-- Falls back to the host/path prefix when the URL ends with '/' (no filename).
+--
+-- >>> urlBasename "https://cdn.example.com/assets/app.js?v=1"
+-- "app.js"
+-- >>> urlBasename "/img/logo.png"
+-- "logo.png"
+-- >>> urlBasename "https://example.com/"
+-- "example.com"
+-- >>> urlBasename ""
+-- ""
+urlBasename :: T.Text -> T.Text
+urlBasename url =
+  let path = T.takeWhile (\c -> c /= '?' && c /= '#') (shortenUrl url)
+      seg = snd (T.breakOnEnd "/" path)
+   in if T.null seg
+        then T.dropWhileEnd (== '/') path -- trailing-slash URL: drop the slash
+        else seg
+
+
+-- | Best-effort label for a user-interaction span (click, submit, etc.).
+-- Prefers accessible labels over raw selectors.
+clickTargetLabel :: Maybe (Map Text AE.Value) -> Maybe T.Text
+clickTargetLabel attrs =
+  atMapText "target.aria_label" attrs
+    <|> atMapText "aria.label" attrs
+    <|> atMapText "target.text_content" attrs
+    <|> atMapText "text_content" attrs
+    <|> atMapText "target.element" attrs
+    <|> atMapText "target_element" attrs
+    <|> atMapText "target.tag_name" attrs
+    <|> atMapText "target.xpath" attrs
+    <|> atMapText "event_type" attrs
+
+
+-- | Format a byte count compactly (e.g. 340000 → "340KB").
+humanBytes :: Int -> T.Text
+humanBytes n
+  | n < 1024 = toText (show n) <> "B"
+  | n < 1024 * 1024 = toText (show (n `div` 1024)) <> "KB"
+  | otherwise = toText (show (n `div` (1024 * 1024))) <> "MB"
+
+
 generateSpanSummary :: OtelLogsAndSpans -> V.Vector T.Text
 generateSpanSummary otel =
   let
@@ -1655,9 +1751,16 @@ generateSpanSummary otel =
           || isJust (atMapInt "http.response.status_code" (Just attrs))
       _ -> False
 
+    attrsM = unAesonTextMaybe otel.attributes
+    spanNameT = fromMaybe "" otel.name
+    frontendCat = classifyFrontendSpan spanNameT
+    -- Fallback URL: prefer already-short url.path; else shorten url.full.
+    urlFull = atMapText "url.full" attrsM
+    urlPathOrFull = atMapText "url.path" attrsM <|> fmap shortenUrl urlFull
+
     isEmptySpan =
       (isNothing otel.name || otel.name == Just "")
-        && maybe True Map.null (unAesonTextMaybe otel.attributes)
+        && maybe True Map.null attrsM
 
     elements = if isEmptySpan then resourceFallbackElements else normalElements
 
@@ -1713,61 +1816,91 @@ generateSpanSummary otel =
             "duration;right-badge-neutral⇒" <> toText (getDurationNSMS (fromIntegral dur))
         ]
 
+    -- Primary readable label for a frontend span — derived from attributes, not the protocol span name.
+    -- `frontendCat *>` short-circuits to Nothing when the span is not classified as frontend.
+    -- Resource basename falls back to url.path if url.full is missing (some SDKs only set one).
+    frontendLabel = frontendCat *> case spanNameT of
+      n | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] ->
+        ("url;text-textStrong⇒" <>) <$> urlPathOrFull
+      n | n == "resourceFetch" || n == "resource" ->
+        ("resource;text-textStrong⇒" <>) . urlBasename <$> (urlFull <|> urlPathOrFull)
+      n | n `elem` ["click", "submit", "keydown", "keyup"] ->
+        ("target;text-textStrong⇒" <>) <$> clickTargetLabel attrsM
+      "longtask" -> otel.duration <&> \dur ->
+        "blocked;text-textStrong⇒main thread " <> toText (getDurationNSMS (fromIntegral dur))
+      n | T.isPrefixOf "web-vital." n ->
+        (\v -> "value;text-textStrong⇒" <> v <> "ms") <$> atMapText "value" attrsM
+      _ -> Nothing
+
+    -- Resource size badge (for resourceFetch / document fetches)
+    resourceSizeElt = case atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM of
+      Just n | n > 0 -> Just $ "size;right-badge-neutral⇒" <> humanBytes n
+      _ -> Nothing
+
     normalElements =
       catMaybes
-        $ [ case (otel.kind, hasHttp, atMapText "component" (unAesonTextMaybe otel.attributes)) of
-              (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
-              (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
-              (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "request_type;neutral⇒incoming"
-              (_, True, Just "frontend") -> Just "request_type;neutral⇒outgoing"
-              (_, True, _) -> Just "request_type;neutral⇒outgoing"
-              (Just "server", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒incoming"
-              (Just "client", _, _) | isJust (atMapText "rpc.method" (unAesonTextMaybe otel.attributes)) -> Just "request_type;neutral⇒outgoing"
-              (_, _, _) | isJust (atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)) -> Just "kind;neutral⇒database"
-              (Just "internal", _, _) -> Just "kind;neutral⇒internal"
-              _ -> Nothing
+        $ [ case frontendCat of
+              Just (cat, style) -> Just $ "kind;" <> style <> "⇒" <> cat
+              Nothing -> case (otel.kind, hasHttp, atMapText "component" attrsM) of
+                (Just "server", True, _) -> Just "request_type;neutral⇒incoming"
+                (Just "client", True, _) -> Just "request_type;neutral⇒outgoing"
+                (_, True, Just comp) | "proxy" `T.isInfixOf` comp -> Just "request_type;neutral⇒incoming"
+                (_, True, Just "frontend") -> Just "request_type;neutral⇒outgoing"
+                (_, True, _) -> Just "request_type;neutral⇒outgoing"
+                (Just "server", _, _) | isJust (atMapText "rpc.method" attrsM) -> Just "request_type;neutral⇒incoming"
+                (Just "client", _, _) | isJust (atMapText "rpc.method" attrsM) -> Just "request_type;neutral⇒outgoing"
+                (_, _, _) | isJust (atMapText "db.system.name" attrsM <|> atMapText "db.system" attrsM) -> Just "kind;neutral⇒database"
+                (Just "internal", _, _) -> Just "kind;neutral⇒internal"
+                _ -> Nothing
+          , frontendLabel
           ]
-        ++ [ case atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes) of
+        ++ [ case atMapInt "http.response.status_code" attrsM of
                Just code -> Just $ "status_code;" <> statusCodeStyle code <> "⇒" <> toText (show code)
                _ -> Nothing
            ]
-        ++ [ case atMapText "http.request.method" (unAesonTextMaybe otel.attributes) of
+        ++ [ case atMapText "http.request.method" attrsM of
                Just method -> Just $ "method;" <> methodStyle method <> "⇒" <> method
                _ -> Nothing
            ]
-        ++ [ case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
-               (Just route, _) -> Just $ "route;neutral⇒" <> route
-               (_, Just url) -> Just $ "url;neutral⇒" <> url
+        -- Suppress the raw url element when a frontend label already showed it,
+        -- otherwise show route → url.path → shortened url.full.
+        ++ [ case (atMapText "http.route" attrsM, urlPathOrFull, frontendLabel) of
+               (_, _, Just _) -> Nothing
+               (Just route, _, _) -> Just $ "route;neutral⇒" <> route
+               (_, Just url, _) -> Just $ "url;neutral⇒" <> url
                _ -> Nothing
            ]
-        ++ [ case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+        ++ [ case (atMapText "db.system.name" attrsM, atMapText "db.system" attrsM) of
                (Just system, _) -> Just $ "db.system;neutral⇒" <> system
                (_, Just system) -> Just $ "db.system;neutral⇒" <> system
                _ -> Nothing
-           , case ( atMapText "db.system.name" (unAesonTextMaybe otel.attributes) <|> atMapText "db.system" (unAesonTextMaybe otel.attributes)
-                  , atMapText "db.query.text" (unAesonTextMaybe otel.attributes)
+           , case ( atMapText "db.system.name" attrsM <|> atMapText "db.system" attrsM
+                  , atMapText "db.query.text" attrsM
                   ) of
                (Just _, Just queryText) -> Just $ "db.query.text;text-textStrong⇒" <> T.take 200 queryText
                _ -> Nothing
-           , case atMapText "db.statement" (unAesonTextMaybe otel.attributes) of
+           , case atMapText "db.statement" attrsM of
                Just stmt -> Just $ "db.statement;neutral⇒" <> T.take 200 stmt
                _ -> Nothing
            ]
-        ++ [ case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
+        ++ [ case atMapText "rpc.method" attrsM of
                Just method -> Just $ "rpc.method;neutral⇒" <> method
                _ -> Nothing
-           , case atMapText "rpc.service" (unAesonTextMaybe otel.attributes) of
+           , case atMapText "rpc.service" attrsM of
                Just service -> Just $ "rpc.service;neutral⇒" <> service
                _ -> Nothing
            ]
+        -- Span-name safety net: when nothing else described this row (no route, no url,
+        -- no frontend label), fall back to the raw span name so rows are never blank.
         ++ [ case otel.name of
-               Just n ->
-                 case (atMapText "http.route" (unAesonTextMaybe otel.attributes), atMapText "url.path" (unAesonTextMaybe otel.attributes)) of
-                   (Nothing, Nothing) -> Just $ "span_name;neutral⇒" <> n
-                   _ -> Nothing
+               Just n
+                 | isNothing (atMapText "http.route" attrsM)
+                 , isNothing urlPathOrFull
+                 , isNothing frontendLabel ->
+                     Just $ "span_name;neutral⇒" <> n
                _ -> Nothing
            ]
-        ++ [ case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+        ++ [ case (otel.status_code, atMapInt "http.response.status_code" attrsM) of
                (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
                (Just "ERROR", _) -> Just "status;badge-error⇒ERROR"
                _ -> Nothing
@@ -1783,24 +1916,24 @@ generateSpanSummary otel =
                       in Just $ "attributes;text-textWeak⇒" <> truncated
                _ -> Nothing
            ]
-        ++ [ case atMapText "session.id" (unAesonTextMaybe otel.attributes) of
+        ++ [ case atMapText "session.id" attrsM of
                Just v -> Just $ "session;right-badge-neutral⇒" <> v
                _ -> Nothing
-           , case atMapText "user.email" (unAesonTextMaybe otel.attributes) of
+           , case atMapText "user.email" attrsM of
                Just eml -> Just $ "user email;right-badge-neutral⇒" <> eml
-               _ -> case atMapText "user.id" (unAesonTextMaybe otel.attributes) of
+               _ -> case atMapText "user.id" attrsM of
                  Just s -> Just $ "user name;right-badge-neutral⇒" <> s
                  _ -> Nothing
-           , case atMapText "user.full_name" (unAesonTextMaybe otel.attributes) of
+           , case atMapText "user.full_name" attrsM of
                Just s -> Just $ "user name;right-badge-neutral⇒" <> s
-               _ -> case atMapText "user.name" (unAesonTextMaybe otel.attributes) of
+               _ -> case atMapText "user.name" attrsM of
                  Just s -> Just $ "user name;right-badge-neutral⇒" <> s
                  _ -> Nothing
-           , case (otel.status_code, atMapInt "http.response.status_code" (unAesonTextMaybe otel.attributes)) of
+           , case (otel.status_code, atMapInt "http.response.status_code" attrsM) of
                (Just "ERROR", Just httpStatus) | httpStatus >= 400 -> Nothing
                (Just "ERROR", _) -> Just "status;right-badge-error⇒ERROR"
                _ -> Nothing
-           , case (atMapText "db.system.name" (unAesonTextMaybe otel.attributes), atMapText "db.system" (unAesonTextMaybe otel.attributes)) of
+           , case (atMapText "db.system.name" attrsM, atMapText "db.system" attrsM) of
                (Just "postgresql", _) -> Just "db.system;right-badge-postgres⇒postgres"
                (_, Just "postgresql") -> Just "db.system;right-badge-postgres⇒postgres"
                (Just "mysql", _) -> Just "db.system;right-badge-mysql⇒mysql"
@@ -1814,8 +1947,9 @@ generateSpanSummary otel =
                (Just system, _) -> Just $ "db.system;right-badge-neutral⇒" <> system
                (_, Just system) -> Just $ "db.system;right-badge-neutral⇒" <> system
                _ -> Nothing
+           , resourceSizeElt
            , if hasHttp then Just "protocol;right-badge-neutral⇒http" else Nothing
-           , case atMapText "rpc.method" (unAesonTextMaybe otel.attributes) of
+           , case atMapText "rpc.method" attrsM of
                Just _ -> Just "protocol;right-badge-neutral⇒rpc"
                _ -> Nothing
            , case otel.duration of
