@@ -356,15 +356,15 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                               end
                               call resultTable.refetchLogs()
                             end
-                            -- Sessions uses a session-level summary region in
-                            -- place of the generic chart/latency widgets. When
-                            -- crossing that boundary, swap #page-summary-region
-                            -- via HTMX so the new region renders without a full
-                            -- page reload.
-                            if (my.value is 'sessions' or prevViz is 'sessions') and document.getElementById('page-summary-region')
-                              if window.htmx
-                                call htmx.ajax('GET', window.location.pathname + window.location.search, {target: '#page-summary-region', select: '#page-summary-region', swap: 'outerHTML'})
-                              end
+                            -- Sessions swaps a different server-rendered
+                            -- region than other viz types, so when crossing
+                            -- that boundary we need to refetch that fragment.
+                            -- Defined in queryEditorInitializationCode so it
+                            -- can construct the URL with the new viz_type
+                            -- baked in (updateVizTypeInUrl writes URL state
+                            -- inside a requestAnimationFrame).
+                            if window.swapSessionsRegionIfNeeded
+                              call window.swapSessionsRegionIfNeeded(my.value, prevViz)
                             end
                           end
                        |]
@@ -633,6 +633,24 @@ queryEditorInitializationCode queryLibRecent queryLibSaved vizTypeM facetDataM =
       if (queryBuilder?.refreshFieldSuggestions) queryBuilder.refreshFieldSuggestions();
       if (editor.setPopularSearches) editor.setPopularSearches($popularQueriesJson);
     })();
+
+    // Swap the server-rendered #page-summary-region when the viz tab change
+    // crosses the sessions boundary. Sessions renders a session-level summary;
+    // other viz types render the chart+latency widgets. Without this, switching
+    // to/from sessions only updates the result-table mode and the URL, leaving
+    // the summary region stale until a full reload.
+    window.swapSessionsRegionIfNeeded = function(newViz, prevViz) {
+      if (newViz !== 'sessions' && prevViz !== 'sessions') return;
+      const region = document.getElementById('page-summary-region');
+      if (!region || !window.htmx) return;
+      const url = new URL(window.location);
+      url.searchParams.set('viz_type', newViz);
+      window.htmx.ajax('GET', url.pathname + url.search, {
+        target: '#page-summary-region',
+        select: '#page-summary-region',
+        swap: 'outerHTML'
+      });
+    };
 
     // Inline parse error: intercept errorToast events for query errors and show inline
     window.showQueryParseError = function(msg) {
