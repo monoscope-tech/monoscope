@@ -1819,18 +1819,24 @@ generateSpanSummary otel =
     -- Primary readable label for a frontend span — derived from attributes, not the protocol span name.
     -- `frontendCat *>` short-circuits to Nothing when the span is not classified as frontend.
     -- Resource basename falls back to url.path if url.full is missing (some SDKs only set one).
-    frontendLabel = frontendCat *> case spanNameT of
-      n | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] ->
-        ("url;text-textStrong⇒" <>) <$> urlPathOrFull
-      n | n == "resourceFetch" || n == "resource" ->
-        ("resource;text-textStrong⇒" <>) . urlBasename <$> (urlFull <|> urlPathOrFull)
-      n | n `elem` ["click", "submit", "keydown", "keyup"] ->
-        ("target;text-textStrong⇒" <>) <$> clickTargetLabel attrsM
-      "longtask" -> otel.duration <&> \dur ->
-        "blocked;text-textStrong⇒main thread " <> toText (getDurationNSMS (fromIntegral dur))
-      n | T.isPrefixOf "web-vital." n ->
-        (\v -> "value;text-textStrong⇒" <> v <> "ms") <$> atMapText "value" attrsM
-      _ -> Nothing
+    frontendLabel =
+      frontendCat *> case spanNameT of
+        n
+          | n `elem` ["documentLoad", "documentFetch", "navigation", "route.change"] ->
+              ("url;text-textStrong⇒" <>) <$> urlPathOrFull
+        n
+          | n == "resourceFetch" || n == "resource" ->
+              ("resource;text-textStrong⇒" <>) . urlBasename <$> (urlFull <|> urlPathOrFull)
+        n
+          | n `elem` ["click", "submit", "keydown", "keyup"] ->
+              ("target;text-textStrong⇒" <>) <$> clickTargetLabel attrsM
+        "longtask" ->
+          otel.duration <&> \dur ->
+            "blocked;text-textStrong⇒main thread " <> toText (getDurationNSMS (fromIntegral dur))
+        n
+          | T.isPrefixOf "web-vital." n ->
+              (\v -> "value;text-textStrong⇒" <> v <> "ms") <$> atMapText "value" attrsM
+        _ -> Nothing
 
     -- Resource size badge (for resourceFetch / document fetches)
     resourceSizeElt = case atMapInt "http.response.body.size" attrsM <|> atMapInt "http.response_content_length" attrsM of
