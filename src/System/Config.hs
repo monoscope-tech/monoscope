@@ -253,7 +253,10 @@ configToEnv :: IOE :> es => EnvConfig -> Eff es AuthContext
 configToEnv config = do
   let createPgConnIO = PG.connectPostgreSQL $ DeriveUtils.addKeepaliveParams $ encodeUtf8 config.databaseUrl
       -- Raise TimescaleDB DML decompression limit for UPDATE queries on compressed hypertables
-      tfParams = DeriveUtils.addKeepaliveParams (encodeUtf8 config.timefusionPgUrl) <> "&options=-c%20timescaledb.max_tuples_decompressed_per_dml_transaction%3D0"
+      tfParams =
+        DeriveUtils.appendConnParams
+          [("options", "-c%20timescaledb.max_tuples_decompressed_per_dml_transaction%3D0")]
+          (DeriveUtils.addKeepaliveParams (encodeUtf8 config.timefusionPgUrl))
   let createTimefusionPgConnIO = DeriveUtils.connectPostgreSQL tfParams
   when config.migrateAndInitializeOnStart $ liftIO do
     conn <- createPgConnIO

@@ -12,6 +12,7 @@ module Pkg.DeriveUtils (
   encodeEnumSC,
   WrappedEnumShow (..),
   addKeepaliveParams,
+  appendConnParams,
   connectPostgreSQL,
   idToText,
   idFromText,
@@ -29,6 +30,7 @@ module Pkg.DeriveUtils (
 import Control.Exception (throwIO)
 import Control.Lens ((?~))
 import Data.Aeson qualified as AE
+import Data.ByteString qualified as BS
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
 import Data.CaseInsensitive (CI, FoldCase)
@@ -319,11 +321,28 @@ data BaselineState = BSLearning | BSEstablished
   deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "BS" BaselineState
 
 
+-- | Append libpq connection parameters, handling both URI
+-- (@postgres://…?k=v&…@) and keyword/value (@host=… sslmode=…@) forms.
+appendConnParams :: [(ByteString, ByteString)] -> ByteString -> ByteString
+appendConnParams kvs connStr
+  | null kvs = connStr
+  | isUri =
+      let sep = if "?" `T.isInfixOf` decodeUtf8 connStr then "&" else "?"
+       in connStr <> sep <> BS.intercalate "&" [k <> "=" <> v | (k, v) <- kvs]
+  | otherwise = connStr <> " " <> BS.intercalate " " [k <> "=" <> v | (k, v) <- kvs]
+  where
+    txt = decodeUtf8 connStr
+    isUri = "postgres://" `T.isPrefixOf` txt || "postgresql://" `T.isPrefixOf` txt
+
+
 addKeepaliveParams :: ByteString -> ByteString
-addKeepaliveParams connStr =
-  let params = "keepalives=1&keepalives_idle=15&keepalives_interval=10&keepalives_count=3"
-      sep = if T.isInfixOf "?" (decodeUtf8 connStr) then "&" else "?"
-   in connStr <> sep <> params
+addKeepaliveParams =
+  appendConnParams
+    [ ("keepalives", "1")
+    , ("keepalives_idle", "15")
+    , ("keepalives_interval", "10")
+    , ("keepalives_count", "3")
+    ]
 
 
 connectPostgreSQL :: ByteString -> IO Connection
