@@ -631,6 +631,11 @@ flattenedOtelAttributes =
     , "resource.telemetry.sdk.language"
     , "resource.telemetry.sdk.name"
     , "resource.telemetry.sdk.version"
+    , "attributes.session.id"
+    , "attributes.user.id"
+    , "attributes.user.email"
+    , "attributes.user.name"
+    , "attributes.user.full_name"
     ]
 
 
