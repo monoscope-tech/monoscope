@@ -180,21 +180,27 @@ fetchIndividuals
   -> Minio.Bucket
   -> [Text]
   -> HashMap Text Text
-  -> ATAuthCtx (AE.Array, Bool)
+  -> ATAuthCtx (AE.Array, Bool, Int)
 fetchIndividuals conn bucket fileKeys logCtx = do
   perKey <- liftIO $ forM fileKeys $ \k ->
     Minio.runMinio conn (fetchEventArray bucket (fromString $ toString k) False) <&> (k,)
-  let (arrs, decodeErrs, transportErrs) = foldr classify ([], [], []) perKey
-      classify (_, Right (Right a)) (as, ds, ts) = (a : as, ds, ts)
-      classify (k, Right (Left de)) (as, ds, ts) = (as, (k, de) : ds, ts)
-      classify (k, Left me) (as, ds, ts)
-        | isNoSuchKey me = (as, ds, ts)
-        | otherwise = (as, ds, (k, displayException me) : ts)
+  let (arrs, decodeErrs, transportErrs, missing) = foldr classify ([], [], [], []) perKey
+      classify (_, Right (Right a)) (as, ds, ts, ms) = (a : as, ds, ts, ms)
+      classify (k, Right (Left de)) (as, ds, ts, ms) = (as, (k, de) : ds, ts, ms)
+      classify (k, Left me) (as, ds, ts, ms)
+        | isNoSuchKey me = (as, ds, ts, k : ms)
+        | otherwise = (as, ds, (k, displayException me) : ts, ms)
   unless (null decodeErrs)
     $ Log.logAttention "Decode errors while reading replay event files" (HM.insert "errors" (toText $ show decodeErrs) logCtx)
   unless (null transportErrs)
     $ Log.logAttention "Transport errors while reading replay event files" (HM.insert "errors" (toText $ show transportErrs) logCtx)
-  pure (mergeEventArrays arrs, not (null decodeErrs && null transportErrs))
+  -- Tracked keys pointing at missing objects is silent data loss: the DB said
+  -- the file exists, S3 disagrees. Always surface, even if some siblings survived.
+  unless (null missing)
+    $ Log.logAttention
+      "Tracked replay file_keys missing from S3"
+      (HM.insert "missing_keys" (toText $ show missing) $ HM.insert "missing_count" (show $ length missing) logCtx)
+  pure (mergeEventArrays arrs, not (null decodeErrs && null transportErrs), length missing)
 
 
 -- | Fetch events for a session. Returns `Left` with a user-facing message on
@@ -208,12 +214,18 @@ getSessionEvents conn pid bucket sessionId = do
         Log.logInfo "Falling back to legacy replay blob" (HM.insert "reason" reason logCtx)
         legacyRes <- getMinioFile conn bucket (fromString $ toString $ sessionStr <> ".json")
         case legacyRes of
-          Right a -> pure $ Right (a, False)
+          Right a
+            | V.null a -> do
+                Log.logAttention "No replay events found anywhere for session" (HM.insert "reason" "legacy_blob_missing" logCtx)
+                pure $ Left notFoundErr
+            | otherwise -> pure $ Right (a, False)
           Left e -> do
             Log.logError "Failed to load legacy replay blob" (HM.insert "error" e logCtx)
             pure $ Left "Storage is temporarily unreachable. Retry in a moment — your recording is safe."
-      transientErr = Left "Storage is temporarily unreachable. Retry in a moment — your recording is safe."
+      transientMsg = "Storage is temporarily unreachable. Retry in a moment — your recording is safe." :: Text
+      transientErr = Left transientMsg
       corruptedErr = Left "This session’s history is corrupted and can’t be replayed. Contact support with the session ID so we can investigate."
+      notFoundErr = "No recorded events found for this session. The SDK may not have uploaded any events, or storage retention has expired. Session ID is below — share with support if this is unexpected." :: Text
   fileKeys <- sessionFileKeys pid sessionId
   mergedRes <- liftIO $ Minio.runMinio conn $ fetchEventArray bucket mergedKey True
   case mergedRes of
@@ -235,9 +247,20 @@ getSessionEvents conn pid bucket sessionId = do
             then legacy "new_or_pre_migration_session"
             else pure $ Right (mergedEvents, False)
         else do
-          (arr, partial) <- fetchIndividuals conn bucket fileKeys logCtx
+          (arr, partial, missingCount) <- fetchIndividuals conn bucket fileKeys logCtx
           let combined = mergeEventArrays [mergedEvents, arr]
-          pure $ if partial && V.null combined then transientErr else Right (combined, partial)
+          if partial && V.null combined
+            then pure $ Left transientMsg
+            else
+              if V.null combined
+                then do
+                  Log.logAttention
+                    "Replay session resolved empty despite tracked file_keys"
+                    ( HM.insert "file_keys_count" (show $ length fileKeys)
+                        $ HM.insert "missing_count" (show missingCount) logCtx
+                    )
+                  pure $ Left notFoundErr
+                else pure $ Right (combined, partial)
 
 
 -- | Lookup the tracked object keys for an unmerged replay session.
@@ -347,16 +370,26 @@ replaySessionGetH pid sessionId = do
       Log.logAttention "sessionMetadata lookup failed; continuing without identity" (HM.fromList [("session", sessionStr), ("projectId", pid.toText), ("error", toText $ displayException err)])
       pure Nothing
   result <- tryAny $ getSessionEvents conn pid bucket sessionId
+  let summaryCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
   case result of
-    Right (Right (replayEvents, partial)) ->
+    Right (Right (replayEvents, partial)) -> do
+      Log.logInfo
+        "Replay session served"
+        ( HM.insert "event_count" (show $ V.length replayEvents)
+            $ HM.insert "partial" (show partial)
+            $ HM.insert "outcome" "ok" summaryCtx
+        )
       addRespHeaders
         $ AE.object
         $ ["events" AE..= AE.Array replayEvents, "partial" AE..= partial]
         <> metaPairs meta
-    Right (Left userMsg) ->
+    Right (Left userMsg) -> do
+      Log.logInfo
+        "Replay session served (user-facing error)"
+        (HM.insert "outcome" "user_error" $ HM.insert "user_msg" userMsg summaryCtx)
       addRespHeaders $ AE.object $ ["events" AE..= AE.Array V.empty, "error" AE..= userMsg] <> metaPairs meta
     Left err -> do
-      Log.logAttention "Unexpected exception fetching replay session" (HM.fromList [("session", sessionStr), ("projectId", pid.toText), ("error", toText $ displayException err)])
+      Log.logAttention "Unexpected exception fetching replay session" (HM.insert "error" (toText $ displayException err) summaryCtx)
       addRespHeaders
         $ AE.object
         $ [ "events" AE..= AE.Array V.empty
