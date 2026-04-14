@@ -912,9 +912,13 @@ sessionsHeader_ summ = do
               , onclick_ js
               ]
               do
-                div_ [class_ "w-full rounded-sm bg-fillBrand-strong/40 group-hover/bar:bg-fillBrand-strong transition-colors", style_ $ "height:" <> T.show cPct <> "%"] ""
+                -- Match the legend swatch opacity (/70) so clean bars are
+                -- visibly readable on the dark surface — /40 was nearly
+                -- invisible, making clean traffic look absent.
+                when (c > 0)
+                  $ div_ [class_ "w-full rounded-sm bg-fillBrand-strong/70 group-hover/bar:bg-fillBrand-strong transition-colors", style_ $ "height:" <> T.show (max 4 cPct) <> "%"] ""
                 when (e > 0)
-                  $ div_ [class_ "w-full rounded-sm bg-fillError-strong", style_ $ "height:" <> T.show ePct <> "%"] ""
+                  $ div_ [class_ "w-full rounded-sm bg-fillError-strong", style_ $ "height:" <> T.show (max 4 ePct) <> "%"] ""
       -- Reassigned on every render so bug fixes aren't masked by a stale
       -- definition left behind from a prior HTMX swap. Dispatches the same
       -- update-query event log-list uses for chart-zoom so the table refetches.
@@ -1229,8 +1233,10 @@ apiLogsPage page = do
       -- Sessions viz renders a session-level header. A Left means the summary
       -- query failed — surface it visibly instead of silently reverting to the
       -- generic span/log widgets, which would reintroduce the unit-of-analysis
-      -- mismatch this view exists to fix.
-      case page.sessionSummary of
+      -- mismatch this view exists to fix. Wrapped in #page-summary-region so the
+      -- viz-tab change handler can swap this fragment when crossing the sessions
+      -- boundary (sessions uses a different region than other viz types).
+      div_ [id_ "page-summary-region"] $ case page.sessionSummary of
         Just (Right summ) -> sessionsHeader_ summ
         Just (Left err) -> sessionsHeaderError_ err
         Nothing ->

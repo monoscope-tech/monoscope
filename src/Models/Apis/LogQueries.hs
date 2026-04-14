@@ -676,7 +676,14 @@ fetchSessionSummary enableTfReads pid queryAST dateRange = do
           <> rawSql fullWhere
           <> [HI.sql| AND attributes___session___id IS NOT NULL AND attributes___session___id <> ''
         ), per_session AS (
-          SELECT MAX(user_key) AS user_key, COUNT(*)::BIGINT AS events, BOOL_OR(is_err) AS has_err,
+          -- COALESCE around BOOL_OR: spans with no level/severity/status_code
+          -- yield is_err = NULL, so BOOL_OR returns NULL for sessions where
+          -- every event lacks an error signal. Without this default, "NOT
+          -- has_err" below would evaluate to NULL (not TRUE), silently
+          -- dropping clean sessions from the per-bucket counts while still
+          -- counting them in the scalar totals — producing a chart with only
+          -- error bars even when most traffic is clean.
+          SELECT MAX(user_key) AS user_key, COUNT(*)::BIGINT AS events, COALESCE(BOOL_OR(is_err), FALSE) AS has_err,
             (EXTRACT(EPOCH FROM (MAX(COALESCE(end_time, timestamp)) - MIN(timestamp))) * 1e9)::BIGINT AS dur_ns,
             floor(extract(epoch from MIN(timestamp)) / #{bucketW})::INT AS bi
           FROM filtered GROUP BY sid

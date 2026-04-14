@@ -341,6 +341,7 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
               , term "data-container-id" containerSelector
               , [__| on change
                           if my.checked
+                            set prevViz to window.currentVisualizationType
                             call updateVizTypeInUrl(my.value, @data-update-url === 'true')
                             set widgetJSON.type to my.value
                             send 'update-widget' to #{@data-container-id}
@@ -354,6 +355,16 @@ visualizationTabs_ vizTypeM updateUrl widgetContainerId alert =
                                 set resultTable.mode to 'logs'
                               end
                               call resultTable.refetchLogs()
+                            end
+                            -- Sessions uses a session-level summary region in
+                            -- place of the generic chart/latency widgets. When
+                            -- crossing that boundary, swap #page-summary-region
+                            -- via HTMX so the new region renders without a full
+                            -- page reload.
+                            if (my.value is 'sessions' or prevViz is 'sessions') and document.getElementById('page-summary-region')
+                              if window.htmx
+                                call htmx.ajax('GET', window.location.pathname + window.location.search, {target: '#page-summary-region', select: '#page-summary-region', swap: 'outerHTML'})
+                              end
                             end
                           end
                        |]
