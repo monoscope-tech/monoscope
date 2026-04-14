@@ -30,9 +30,9 @@ module Pkg.DeriveUtils (
 import Control.Exception (throwIO)
 import Control.Lens ((?~))
 import Data.Aeson qualified as AE
-import Data.ByteString qualified as BS
 import Data.Aeson.KeyMap qualified as KEM
 import Data.Aeson.Types qualified as AET
+import Data.ByteString qualified as BS
 import Data.CaseInsensitive (CI, FoldCase)
 import Data.CaseInsensitive qualified as CI (mk, original)
 import Data.Default (Default (..))
