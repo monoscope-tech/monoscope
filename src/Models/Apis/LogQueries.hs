@@ -715,9 +715,18 @@ fetchSessionSummary enableTfReads pid queryAST dateRange = do
       if total == 0
         then pure zeroSumm{erroredSessions = err, uniqueUsers = users, uniqueServices = svcs, totalEvents = totEvt}
         else do
-          let bisI = map fromIntegral $ V.toList bisV :: [Int]
-              range@(minB, _) = bucketRange bisI
-              dens v = densifyBuckets range $ zip bisI (map fromIntegral $ V.toList v)
+          -- Densify over the full picker range, not just the observed
+          -- min..max, so the chart reads as a real timeline: empty periods
+          -- show as blank bars and clusters sit at their correct relative x
+          -- position. The defaults mirror bucketWidthSecs so an absent
+          -- `from`/`to` behaves identically to the width calculation.
+          let fromT = fromMaybe (addUTCTime (-3600) now) (fst dateRange)
+              toT = fromMaybe now (snd dateRange)
+              epochBucket t = floor (utcTimeToPOSIXSeconds t) `div` bucketW
+              pickerMinB = epochBucket fromT
+              pickerMaxB = max pickerMinB (epochBucket toT)
+              bisI = map fromIntegral $ V.toList bisV :: [Int]
+              dens v = densifyBuckets (pickerMinB, pickerMaxB) $ zip bisI (map fromIntegral $ V.toList v)
           pure
             SessionSummary
               { totalSessions = total
@@ -729,7 +738,7 @@ fetchSessionSummary enableTfReads pid queryAST dateRange = do
               , medianEvents = medEvt
               , totalEvents = totEvt
               , bucketWidthSec = bucketW
-              , bucketStartEpoch = minB * bucketW
+              , bucketStartEpoch = pickerMinB * bucketW
               , clean = dens cV
               , errored = dens eV
               }
