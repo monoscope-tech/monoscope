@@ -71,7 +71,7 @@ data Endpoint = Endpoint
   , environment :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
-  deriving anyclass (Default, FromRow, NFData, ToRow)
+  deriving anyclass (Default, FromRow, HI.DecodeRow, NFData, ToRow)
   deriving (FromField) via Aeson Endpoint
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] Endpoint
 

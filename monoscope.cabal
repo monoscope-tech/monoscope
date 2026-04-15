@@ -405,6 +405,9 @@ executable monoscope
       CLI.Core
       CLI.Resource
       CLI.UI
+      Paths_monoscope
+  autogen-modules:
+      Paths_monoscope
   hs-source-dirs:
       cli/
   default-extensions:
@@ -436,6 +439,7 @@ executable monoscope
       aeson
     , aeson-pretty
     , ansi-terminal
+    , base
     , brick
     , containers
     , directory
@@ -456,9 +460,6 @@ executable monoscope
     , vty
     , wreq
     , yaml
-  mixins:
-      relude (Relude as Prelude)
-    , relude 
   default-language: GHC2024
 
 executable monoscope-server

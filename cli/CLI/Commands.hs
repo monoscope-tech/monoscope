@@ -30,7 +30,7 @@ module CLI.Commands
 import Relude
 
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (OutputMode (..), apiGet, apiPost, isInteractiveTTY, printError, renderJSON, renderTable, withAPIResult)
+import CLI.Core (OutputMode (..), apiGet, apiPost, isInteractiveTTY, printError, renderJSON, renderTable, renderYAML, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Data.Aeson qualified as AE
@@ -164,6 +164,7 @@ runServicesList cfg opts mode = do
           ]
   withAPIResult cfg "/api/v1/metrics" params $ \val -> case mode of
     OutputJSON -> renderJSON val
+    OutputYAML -> renderYAML val
     OutputTable -> renderServicesList val
 
 renderServicesList :: (IOE :> es) => AE.Value -> Eff es ()
@@ -217,6 +218,7 @@ runEventsSearch cfg opts mode = do
   let params = buildSearchParams opts
   withAPIResult cfg "/api/v1/events" params $ \val -> case mode of
     OutputJSON -> renderJSON val
+    OutputYAML -> renderYAML val
     OutputTable -> renderEventsTable val opts.fields
 
 runEventsGet :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
@@ -227,6 +229,7 @@ runEventsGet cfg opts mode = do
       then renderTraceTree val
       else case mode of
         OutputJSON -> renderJSON val
+        OutputYAML -> renderYAML val
         OutputTable -> renderEventsTable val Nothing
 
 runEventsTail :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsTailOpts -> Maybe Text -> Eff es ()
@@ -269,6 +272,7 @@ runEventsContext cfg opts kindOverride mode = do
           ]
   withAPIResult cfg "/api/v1/events" params $ \val -> case mode of
     OutputJSON -> renderJSON val
+    OutputYAML -> renderYAML val
     OutputTable -> renderEventsTable val Nothing
 
 buildSearchParams :: EventsSearchOpts -> [(Text, Text)]
@@ -371,6 +375,7 @@ runMetricsQuery cfg opts mode = do
   withAPIResult cfg "/api/v1/metrics" params $ \val -> do
     case mode of
       OutputJSON -> renderJSON val
+      OutputYAML -> renderYAML val
       OutputTable -> renderMetricsTable val
     whenJust opts.assert $ checkAssertion val
 

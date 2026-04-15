@@ -99,6 +99,7 @@ import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
 import Data.Hashable (hash)
+import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Text.Display (Display, display)
 import Data.Time (UTCTime)
@@ -144,9 +145,9 @@ data IssueType
   | QueryAlert
   | LogPattern
   | LogPatternRateChange
-  deriving stock (Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "" IssueType
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "" IssueType
 
 
 -- | Hash prefix used in otel_logs_and_spans hashes column
@@ -930,9 +931,9 @@ data IssueEvent
   | IEUnassigned
   | IEAutoResolved
   | IEEscalated
-  deriving stock (Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "IE" IssueEvent
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "IE" IssueEvent
 
 
 data IssueActivity = IssueActivity
