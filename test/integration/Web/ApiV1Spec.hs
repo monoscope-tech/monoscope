@@ -151,11 +151,11 @@ spec = aroundAll withTestResources do
             runB k = runAsBase tr k
             input = ApiT.DashboardInput{ApiT.title = "d1", ApiT.tags = Just ["a"], ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
         created <- runB $ ApiH.apiDashboardCreate testPid input
-        created.title `shouldBe` "d1"
-        starred <- runB $ ApiH.apiDashboardStar testPid created.id
-        starred.starred `shouldBe` True
-        NoContent <- runB $ ApiH.apiDashboardUnstar testPid created.id
-        NoContent <- runB $ ApiH.apiDashboardDelete testPid created.id
+        created.summary.title `shouldBe` "d1"
+        starred <- runB $ ApiH.apiDashboardStar testPid created.summary.id
+        starred.summary.starred `shouldBe` True
+        NoContent <- runB $ ApiH.apiDashboardUnstar testPid created.summary.id
+        NoContent <- runB $ ApiH.apiDashboardDelete testPid created.summary.id
         pass
 
       it "bulk delete removes multiple dashboards" $ \tr -> do
@@ -164,7 +164,7 @@ spec = aroundAll withTestResources do
             mkInput n = ApiT.DashboardInput{ApiT.title = "bulk-d-" <> n, ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.filePath = Nothing, ApiT.schema = Nothing}
         d1 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "a")
         d2 <- runB $ ApiH.apiDashboardCreate testPid (mkInput "b")
-        res <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [d1.id.unwrap, d2.id.unwrap], ApiT.durationMinutes = Nothing}
+        res <- runB $ ApiH.apiDashboardBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [d1.summary.id.unwrap, d2.summary.id.unwrap], ApiT.durationMinutes = Nothing}
         length res.succeeded `shouldBe` 2
 
       it "apply upserts by file_path (idempotent)" $ \tr -> do
@@ -173,7 +173,7 @@ spec = aroundAll withTestResources do
             doc = ApiT.DashboardYAMLDoc{ApiT.filePath = "dashes/foo.yaml", ApiT.title = Just "foo", ApiT.tags = Nothing, ApiT.teams = Nothing, ApiT.schema = def}
         d1 <- runB $ ApiH.apiDashboardApply testPid doc
         d2 <- runB $ ApiH.apiDashboardApply testPid doc
-        d1.id `shouldBe` d2.id -- same row updated, not inserted again
+        d1.summary.id `shouldBe` d2.summary.id -- same row updated, not inserted again
 
     describe "API keys CRUD" do
       it "create returns plaintext once; list includes it; delete deactivates" $ \tr -> do

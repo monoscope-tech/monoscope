@@ -5,6 +5,7 @@ module CLI.Core
   , renderJSON
   , renderYAML
   , renderByMode
+  , renderWith
   , renderTable
   , printError
   , APIError (..)
@@ -71,10 +72,15 @@ renderYAML = liftIO . putBSLn . Yaml.encode
 
 -- | Render using the chosen mode; table mode falls back to JSON if no table rows supplied.
 renderByMode :: (AE.ToJSON a, IOE :> es) => OutputMode -> Maybe ([Text], [[Text]]) -> a -> Eff es ()
-renderByMode mode tableM v = case mode of
+renderByMode mode tableM v = renderWith mode v (maybe (renderJSON v) (uncurry renderTable) tableM)
+
+
+-- | Render JSON/YAML uniformly; delegate to a custom action for table mode.
+renderWith :: (AE.ToJSON a, IOE :> es) => OutputMode -> a -> Eff es () -> Eff es ()
+renderWith mode v tableAction = case mode of
   OutputJSON -> renderJSON v
   OutputYAML -> renderYAML v
-  OutputTable -> maybe (renderJSON v) (uncurry renderTable) tableM
+  OutputTable -> tableAction
 
 renderTable :: (IOE :> es) => [Text] -> [[Text]] -> Eff es ()
 renderTable headers rows = liftIO $ do
@@ -112,7 +118,6 @@ apiGet cfg path params =
     (Right . (^. responseBody) <$> getWith (reqOpts cfg params) (toString $ cfg.apiUrl <> path))
     (pure . Left . httpExToError)
 
--- | GET returning a decoded JSON body.
 apiGetJson :: (HTTP :> es, IOE :> es, AE.FromJSON a) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError a)
 apiGetJson cfg path params = apiGet cfg path params >>= pure . decodeBody
 
@@ -124,7 +129,6 @@ apiPost baseUrl path params =
     )
     (pure . Left . httpExToError)
 
--- | POST with a JSON body, decoding JSON response.
 apiPostJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> a -> Eff es (Either APIError b)
 apiPostJson cfg path body = jsonCall (\o u b -> postWith o u b) cfg path body
 
@@ -158,15 +162,14 @@ jsonCall action cfg path body =
     )
     (pure . Left . httpExToError)
 
+-- | Decode a JSON response body. Empty bodies succeed only when the target type
+-- accepts JSON null (e.g. 'Maybe a', '()'); otherwise the parse error is surfaced
+-- to the caller rather than silently returning null.
 decodeBody :: AE.FromJSON a => Either APIError LByteString -> Either APIError a
 decodeBody (Left e) = Left e
-decodeBody (Right bs)
-  | LBS.null bs = case AE.eitherDecode "null" of
-      Left err -> Left $ APIError 0 (toText err)
-      Right v -> Right v
-  | otherwise = case AE.eitherDecode bs of
-      Left err -> Left $ APIError 0 (toText err)
-      Right v -> Right v
+decodeBody (Right bs) =
+  let input = if LBS.null bs then "null" else bs
+   in first (APIError 0 . toText) (AE.eitherDecode input)
 
 -- | Fetch JSON from API endpoint and apply a handler, printing errors on failure.
 withAPIResult :: (HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (AE.Value -> Eff es ()) -> Eff es ()

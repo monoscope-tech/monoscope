@@ -106,8 +106,8 @@ bulkExec ba ops = do
       else BulkResult{succeeded = [], failed = (,"not applied") <$> ba.ids}
 
 
-apiMonitorsList :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATBaseCtx [Monitors.QueryMonitor]
-apiMonitorsList pid _filter _since = Monitors.queryMonitorsAll pid
+apiMonitorsList :: Projects.ProjectId -> ATBaseCtx [Monitors.QueryMonitor]
+apiMonitorsList = Monitors.queryMonitorsAll
 
 
 apiMonitorGet :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
@@ -231,32 +231,27 @@ apiMonitorDelete pid mid = do
   pure NoContent
 
 
+-- | Verify a resource belongs to the project via @fetch@, run a mutation,
+-- then re-fetch the post-mutation value. Used by mute/unmute/resolve/toggle
+-- style lifecycle endpoints.
+withRefetch :: Monad m => m a -> m b -> m a
+withRefetch fetch mutate = fetch *> mutate *> fetch
+
+
 apiMonitorToggleActive :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorToggleActive pid mid = do
-  _ <- apiMonitorGet pid mid
-  _ <- Monitors.monitorToggleActiveById mid
-  apiMonitorGet pid mid
+apiMonitorToggleActive pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorToggleActiveById mid)
 
 
 apiMonitorMute :: Projects.ProjectId -> Monitors.QueryMonitorId -> Maybe Int -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorMute pid mid durationM = do
-  _ <- apiMonitorGet pid mid
-  _ <- Monitors.monitorMuteByIds durationM [mid]
-  apiMonitorGet pid mid
+apiMonitorMute pid mid durationM = withRefetch (apiMonitorGet pid mid) (Monitors.monitorMuteByIds durationM [mid])
 
 
 apiMonitorUnmute :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorUnmute pid mid = do
-  _ <- apiMonitorGet pid mid
-  _ <- Monitors.monitorUnmuteByIds [mid]
-  apiMonitorGet pid mid
+apiMonitorUnmute pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorUnmuteByIds [mid])
 
 
 apiMonitorResolve :: Projects.ProjectId -> Monitors.QueryMonitorId -> ATBaseCtx Monitors.QueryMonitor
-apiMonitorResolve pid mid = do
-  _ <- apiMonitorGet pid mid
-  _ <- Monitors.monitorResolveByIds [mid]
-  apiMonitorGet pid mid
+apiMonitorResolve pid mid = withRefetch (apiMonitorGet pid mid) (Monitors.monitorResolveByIds [mid])
 
 
 apiMonitorBulk :: Projects.ProjectId -> BulkAction -> ATBaseCtx BulkResult
@@ -289,19 +284,7 @@ toSummary d =
 
 
 toFull :: Dashboards.DashboardVM -> DashboardFull
-toFull d =
-  DashboardFull
-    { id = d.id
-    , title = d.title
-    , tags = d.tags
-    , teams = d.teams
-    , starred = isJust d.starredSince
-    , createdAt = d.createdAt
-    , updatedAt = d.updatedAt
-    , filePath = d.filePath
-    , fileSha = d.fileSha
-    , schema = d.schema
-    }
+toFull d = DashboardFull{summary = toSummary d, fileSha = d.fileSha, schema = d.schema}
 
 
 apiDashboardsList :: Projects.ProjectId -> Maybe Text -> Maybe Text -> ATBaseCtx [DashboardSummary]
@@ -401,17 +384,14 @@ apiDashboardDuplicate pid did = do
   existing <- apiDashboardGet pid did
   now <- Time.currentTime
   newId <- UUIDId <$> UUID.genUUID
-  let copyTitle = existing.title <> " (Copy)"
+  let copyTitle = existing.summary.title <> " (Copy)"
       copySchema = existing.schema & _Just . #title %~ fmap (<> " (Copy)") . (<|> Just "Untitled")
-  insertDashboard pid (Projects.UserId UUID.nil) now newId copyTitle (Just $ V.toList existing.tags) (Just $ V.toList existing.teams) Nothing copySchema
+  insertDashboard pid (Projects.UserId UUID.nil) now newId copyTitle (Just $ V.toList existing.summary.tags) (Just $ V.toList existing.summary.teams) Nothing copySchema
 
 
 apiDashboardStar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx DashboardFull
-apiDashboardStar pid did = do
-  _ <- apiDashboardGet pid did
-  now <- Time.currentTime
-  _ <- Dashboards.updateStarredSince did (Just now)
-  apiDashboardGet pid did
+apiDashboardStar pid did =
+  withRefetch (apiDashboardGet pid did) (Time.currentTime >>= Dashboards.updateStarredSince did . Just)
 
 
 apiDashboardUnstar :: Projects.ProjectId -> Dashboards.DashboardId -> ATBaseCtx NoContent
@@ -426,10 +406,10 @@ apiDashboardYaml pid did = do
   d <- apiDashboardGet pid did
   pure
     DashboardYAMLDoc
-      { filePath = fromMaybe "" d.filePath
-      , title = Just d.title
-      , tags = Just (V.toList d.tags)
-      , teams = Just (V.toList d.teams)
+      { filePath = fromMaybe "" d.summary.filePath
+      , title = Just d.summary.title
+      , tags = Just (V.toList d.summary.tags)
+      , teams = Just (V.toList d.summary.teams)
       , schema = fromMaybe def d.schema
       }
 
@@ -507,10 +487,7 @@ apiKeyCreate pid inp = do
 
 
 apiKeyActivate :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx ApiKeySummary
-apiKeyActivate pid kid = do
-  _ <- apiKeyGet pid kid
-  _ <- ProjectApiKeys.activateApiKey kid
-  apiKeyGet pid kid
+apiKeyActivate pid kid = withRefetch (apiKeyGet pid kid) (ProjectApiKeys.activateApiKey kid)
 
 
 apiKeyDeactivate :: Projects.ProjectId -> ProjectApiKeys.ProjectApiKeyId -> ATBaseCtx ApiKeySummary
@@ -548,20 +525,8 @@ apiAnomaliesBulk _pid ba =
       nAll = fromIntegral (length ba.ids)
    in bulkExec
         ba
-        [
-          ( "acknowledge"
-          , do
-              hashes <- Anomalies.acknowledgeAnomalies nilUid vIds
-              void $ Anomalies.acknowlegeCascade nilUid (V.fromList hashes)
-              pure nAll
-          )
-        ,
-          ( "archive"
-          , do
-              now <- Time.currentTime
-              _ <- Hasql.interpExecute [HI.sql| UPDATE apis.issues SET archived_at=#{now} WHERE id=ANY(#{vIds}::uuid[]) |]
-              Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET archived_at=#{now} WHERE id=ANY(#{vIds}::uuid[]) |]
-          )
+        [ ("acknowledge", nAll <$ (Anomalies.acknowledgeAnomalies nilUid vIds >>= void . Anomalies.acknowlegeCascade nilUid . V.fromList))
+        , ("archive", Anomalies.archiveAnomaliesAndIssues vIds)
         ]
 
 

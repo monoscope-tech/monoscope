@@ -8,6 +8,8 @@ module Models.Apis.Endpoints (
   dependenciesAndEventsCount,
   endpointRequestStatsByProject,
   countEndpointInbox,
+  countEndpointsByProject,
+  getEndpointById,
   -- Endpoint template discovery
   getUnmergedEndpoints,
   setEndpointCanonical,
@@ -272,6 +274,20 @@ countEndpointInbox pid host requestType = do
           <> rawSql showCountBaseOnRequestType
           <> [HI.sql| AND ann.id IS NOT NULL AND ann.acknowledged_at IS NULL AND host = #{host}|]
       )
+
+
+countEndpointsByProject :: DB es => Projects.ProjectId -> Bool -> Eff es Int
+countEndpointsByProject pid outgoing =
+  fromMaybe 0
+    <$> Hasql.interpOne
+      [HI.sql| SELECT COUNT(*)::int FROM apis.endpoints WHERE project_id = #{pid} AND outgoing = #{outgoing} |]
+
+
+getEndpointById :: DB es => Projects.ProjectId -> EndpointId -> Eff es (Maybe Endpoint)
+getEndpointById pid eid =
+  Hasql.interpOne
+    [HI.sql| SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
+             FROM apis.endpoints WHERE id = #{eid} AND project_id = #{pid} |]
 
 
 -- Endpoint template discovery ---------------------------------------------------

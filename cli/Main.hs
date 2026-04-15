@@ -4,7 +4,7 @@ import Relude
 
 import CLI.Commands hiding (value)
 import CLI.Config (CLIConfig (..), resolveConfig)
-import CLI.Core (OutputMode (..), apiGetJson, apiPostJson, detectOutputMode, printError, renderByMode)
+import CLI.Core (OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode)
 import CLI.Resource qualified as Resource
 import Data.Aeson qualified as AE
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
@@ -70,7 +70,6 @@ data MonitorsCommand
   | MonUnmute Text
   | MonResolve Text
   | MonToggle Text
-  | MonApply FilePath
   deriving stock (Show)
 
 
@@ -79,6 +78,7 @@ data DashboardsCommand
   | DashGet Text
   | DashDelete Text
   | DashStar Text
+  | DashUnstar Text
   | DashDuplicate Text
   | DashYaml Text
   | DashApply FilePath
@@ -267,7 +267,6 @@ monitorsParser =
       , command "unmute" (info (MonUnmute <$> idArg <**> helper) (progDesc "Unmute a monitor"))
       , command "resolve" (info (MonResolve <$> idArg <**> helper) (progDesc "Resolve a monitor"))
       , command "toggle-active" (info (MonToggle <$> idArg <**> helper) (progDesc "Toggle active state"))
-      , command "apply" (info (MonApply <$> strArgument (metavar "FILE" <> help "Monitor YAML") <**> helper) (progDesc "Apply a monitor YAML file"))
       ]
 
 
@@ -278,7 +277,8 @@ dashboardsParser =
       [ command "list" (info (pure DashList) (progDesc "List dashboards"))
       , command "get" (info (DashGet <$> idArg <**> helper) (progDesc "Get a single dashboard"))
       , command "delete" (info (DashDelete <$> idArg <**> helper) (progDesc "Delete a dashboard"))
-      , command "star" (info (DashStar <$> idArg <**> helper) (progDesc "Toggle star"))
+      , command "star" (info (DashStar <$> idArg <**> helper) (progDesc "Star a dashboard"))
+      , command "unstar" (info (DashUnstar <$> idArg <**> helper) (progDesc "Unstar a dashboard"))
       , command "duplicate" (info (DashDuplicate <$> idArg <**> helper) (progDesc "Duplicate dashboard"))
       , command "yaml" (info (DashYaml <$> idArg <**> helper) (progDesc "Dump dashboard as YAML"))
       , command "apply" (info (DashApply <$> strArgument (metavar "FILE" <> help "Dashboard YAML") <**> helper) (progDesc "Apply a dashboard YAML file"))
@@ -370,7 +370,6 @@ run global = \case
       MonUnmute i -> Resource.runLifecycle cfg Resource.Monitors i "unmute" [] mode
       MonResolve i -> Resource.runLifecycle cfg Resource.Monitors i "resolve" [] mode
       MonToggle i -> Resource.runLifecycle cfg Resource.Monitors i "toggle_active" [] mode
-      MonApply path -> Resource.runApply cfg Resource.Monitors path mode
   DashboardsCmd sub -> do
     cfg <- resolveCfgWith global
     mode <- resolveMode global
@@ -379,9 +378,12 @@ run global = \case
       DashGet i -> Resource.runGet cfg Resource.Dashboards i mode
       DashDelete i -> Resource.runDelete cfg Resource.Dashboards i
       DashStar i -> Resource.runLifecycle cfg Resource.Dashboards i "star" [] mode
+      DashUnstar i ->
+        Resource.withResult (apiDelete cfg ("/dashboards/" <> i <> "/star")) show $ \() ->
+          putTextLn $ "/dashboards/" <> i <> "/star unstarred"
       DashDuplicate i -> Resource.runLifecycle cfg Resource.Dashboards i "duplicate" [] mode
       DashYaml i -> Resource.runYamlDump cfg Resource.Dashboards i
-      DashApply path -> Resource.runApply cfg Resource.Dashboards path mode
+      DashApply path -> Resource.runApply cfg path mode
   ApiKeysCmd sub -> do
     cfg <- resolveCfgWith global
     mode <- resolveMode global
@@ -389,18 +391,14 @@ run global = \case
       KeyList -> Resource.runList cfg Resource.ApiKeys [] mode
       KeyGet i -> Resource.runGet cfg Resource.ApiKeys i mode
       KeyCreate title ->
-        apiPostJson @_ @_ @AE.Value cfg "/api_keys" (AE.object ["title" AE..= title]) >>= \case
-          Left err -> printError (show err) >> liftIO exitFailure
-          Right v -> renderByMode mode Nothing v
+        Resource.runAPI mode (apiPostJson @_ @_ @AE.Value cfg "/api_keys" (AE.object ["title" AE..= title])) show
       KeyActivate i -> Resource.runLifecycle cfg Resource.ApiKeys i "activate" [] mode
       KeyRevoke i -> Resource.runLifecycle cfg Resource.ApiKeys i "deactivate" [] mode
       KeyDelete i -> Resource.runDelete cfg Resource.ApiKeys i
   SchemaCmd -> do
     cfg <- resolveCfgWith global
     mode <- resolveMode global
-    apiGetJson @_ @AE.Value cfg "/schema" [] >>= \case
-      Left err -> printError (show err) >> liftIO exitFailure
-      Right v -> renderByMode mode Nothing v
+    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/schema" []) show
   CompletionCmd shell -> emitCompletion shell
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion Paths.version)
 

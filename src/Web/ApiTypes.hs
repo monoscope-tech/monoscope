@@ -101,7 +101,6 @@ data MonitorPatch = MonitorPatch
   deriving (ToSchema) via SnakeSchema MonitorPatch
 
 
--- | Compact summary for list endpoints.
 data DashboardSummary = DashboardSummary
   { id :: Dashboards.DashboardId
   , title :: Text
@@ -117,16 +116,9 @@ data DashboardSummary = DashboardSummary
   deriving (ToSchema) via SnakeSchema DashboardSummary
 
 
--- | Full dashboard view including schema body.
+-- | Full dashboard view: summary + schema body/sha.
 data DashboardFull = DashboardFull
-  { id :: Dashboards.DashboardId
-  , title :: Text
-  , tags :: V.Vector Text
-  , teams :: V.Vector UUID.UUID
-  , starred :: Bool
-  , createdAt :: UTCTime
-  , updatedAt :: UTCTime
-  , filePath :: Maybe Text
+  { summary :: DashboardSummary
   , fileSha :: Maybe Text
   , schema :: Maybe Dashboards.Dashboard
   }

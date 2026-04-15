@@ -186,12 +186,7 @@ data ApiV1Routes mode = ApiV1Routes
   , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
   , rrwebPost :: mode :- "rrweb" :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
   , -- Monitors (CRUD + lifecycle)
-    monitorsList
-      :: mode
-        :- "monitors"
-          :> QPT "filter"
-          :> QPT "since"
-          :> Get '[JSON] [Monitors.QueryMonitor]
+    monitorsList :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
   , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
   , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
   , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorInput :> Put '[JSON] Monitors.QueryMonitor

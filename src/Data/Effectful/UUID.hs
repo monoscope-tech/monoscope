@@ -44,10 +44,13 @@ runStaticUUID uuids eff = do
 
 -- | Variant that reuses an externally-managed IORef so multiple effect runs
 -- in the same test draw from a shared, non-resetting counter (avoids id
--- collisions across handler invocations).
+-- collisions across handler invocations). When the pool is exhausted, falls
+-- back to a random UUID rather than crashing — callers should pre-seed a
+-- sufficient pool if they need determinism across all draws.
 runStaticUUIDRef :: IOE :> es => IORef [UUID.UUID] -> Eff (UUIDEff ': es) a -> Eff es a
 runStaticUUIDRef ref =
   interpret \_ -> \case
-    GenUUID -> liftIO $ atomicModifyIORef' ref \case
-      (u : rs) -> (rs, u)
-      [] -> error "runStaticUUIDRef: empty UUID pool"
+    GenUUID ->
+      liftIO
+        $ atomicModifyIORef' ref (\case u : rs -> (rs, Just u); [] -> ([], Nothing))
+        >>= maybe (liftIO UUID.nextRandom) pure

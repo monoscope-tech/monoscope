@@ -14,6 +14,8 @@ module CLI.Resource
   , runApply
   , runYamlDump
   , resourcePath
+  , withResult
+  , runAPI
   ) where
 
 import Relude
@@ -40,11 +42,20 @@ resourcePath = \case
   ApiKeys -> "/api_keys"
 
 
+-- | Run an API-producing action, exit with `printError` on Left, call
+-- @onOk@ on Right. Used to dispatch API responses uniformly across
+-- command handlers.
 withResult :: IOE :> es => Eff es (Either e a) -> (e -> Text) -> (a -> Eff es ()) -> Eff es ()
 withResult act renderErr onOk =
   act >>= \case
     Left e -> printError (renderErr e) >> liftIO exitFailure
     Right v -> onOk v
+
+
+-- | Specialised `withResult` for API calls returning `APIError`, with the
+-- common "render result with OutputMode, no table variant" continuation.
+runAPI :: (IOE :> es, AE.ToJSON a) => OutputMode -> Eff es (Either e a) -> (e -> Text) -> Eff es ()
+runAPI mode act renderErr = withResult act renderErr (renderByMode mode Nothing)
 
 
 runList :: (HTTP :> es, IOE :> es) => CLIConfig -> ResourceKind -> [(Text, Text)] -> OutputMode -> Eff es ()
@@ -86,11 +97,11 @@ runLifecycle cfg k resId verb params mode =
     (renderByMode mode Nothing)
 
 
--- | Apply: POST a parsed YAML document to <resource>/apply.
+-- | Apply: POST a parsed dashboard YAML document to /dashboards/apply.
 runApply
   :: (HTTP :> es, FileSystem :> es, IOE :> es)
-  => CLIConfig -> ResourceKind -> FilePath -> OutputMode -> Eff es ()
-runApply cfg k path mode = do
+  => CLIConfig -> FilePath -> OutputMode -> Eff es ()
+runApply cfg path mode = do
   exists <- doesFileExist path
   unless exists $ printError ("file not found: " <> toText path) >> liftIO exitFailure
   parsed <- liftIO $ Yaml.decodeFileEither path
@@ -98,7 +109,7 @@ runApply cfg k path mode = do
     Left err -> printError ("yaml parse error: " <> toText (Yaml.prettyPrintParseException err)) >> liftIO exitFailure
     Right (val :: AE.Value) ->
       withResult
-        (apiPostJson @_ @_ @AE.Value cfg (resourcePath k <> "/apply") val)
+        (apiPostJson @_ @_ @AE.Value cfg (resourcePath Dashboards <> "/apply") val)
         show
         (renderByMode mode Nothing)
 
