@@ -1730,11 +1730,15 @@ processAPIChangeAnomalies pid targetHashes = do
               hasNewEndpoint = V.any ((== Anomalies.ATEndpoint) . (.anomalyType)) anomalies
               hasChanges = hasNewEndpoint || not (V.null allNewFields && V.null allDeletedFields && V.null allModifiedFields)
           Relude.when hasChanges do
-            let apiChangeData =
+            -- All endpoint_* fields on an anomaly come from the same joined apis.endpoints
+            -- row, so they always co-vary. Matching the create path (Issues.createAPIChangeIssue),
+            -- we take anomaly[0]'s fields rather than searching for the first non-null per column.
+            let firstAnom = V.head anomalies
+                apiChangeData =
                   Issues.APIChangeData
-                    { endpointMethod = fromMaybe "UNKNOWN" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointMethod) anomalies
-                    , endpointPath = fromMaybe "/" $ viaNonEmpty head $ V.toList $ V.mapMaybe (.endpointUrlPath) anomalies
-                    , endpointHost = "Unknown"
+                    { endpointMethod = fromMaybe "UNKNOWN" firstAnom.endpointMethod
+                    , endpointPath = fromMaybe "/" firstAnom.endpointUrlPath
+                    , endpointHost = fromMaybe "Unknown" firstAnom.endpointHost
                     , anomalyHashes = V.map (.targetHash) anomalies
                     , shapeChanges = V.empty
                     , formatChanges = V.empty
@@ -1759,7 +1763,7 @@ processAPIChangeAnomalies pid targetHashes = do
                 createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
               let firstAnom = V.head anomalies
                   label = fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
-              pure $ Just ET.EndpointAlertRow{label, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
+              pure $ Just ET.EndpointAlertRow{label, host = firstAnom.endpointHost, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
 
   -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do

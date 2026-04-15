@@ -556,7 +556,7 @@ createAPIChangeIssue projectId endpointHash anomalies = do
         APIChangeData
           { endpointMethod = fromMaybe "UNKNOWN" firstAnomaly.endpointMethod
           , endpointPath = fromMaybe "/" firstAnomaly.endpointUrlPath
-          , endpointHost = "Unknown"
+          , endpointHost = fromMaybe "Unknown" firstAnomaly.endpointHost
           , anomalyHashes = V.map (.targetHash) anomalies
           , shapeChanges = V.empty
           , formatChanges = V.empty

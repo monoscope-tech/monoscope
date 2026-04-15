@@ -25,7 +25,7 @@ import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
-import Pkg.EmailTemplates (EndpointAlertRow (..), endpointContextLabel, groupedByContext)
+import Pkg.EmailTemplates (EndpointAlertRow (..), groupedByContext)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
@@ -290,9 +290,12 @@ bulletList :: [Text] -> Text
 bulletList = T.intercalate "\n" . fmap (\x -> "• `" <> x <> "`")
 
 
--- | Italic subheader on its own line, or empty when no context is present.
-italicSubhead :: Maybe Text -> Text
-italicSubhead = foldMap (\c -> "_" <> c <> "_\n")
+-- | Markdown group header: bold globe-prefixed host with optional dimmed
+-- "service · env" caption, each on its own line. Empty when neither is set.
+groupHeaderMd :: Maybe Text -> Maybe Text -> Text
+groupHeaderMd hostM ctxM =
+  foldMap (\h -> "🌐 **" <> h <> "**\n") hostM
+    <> foldMap (\c -> "_" <> c <> "_\n") ctxM
 
 
 slackNewEndpointsAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> Text -> AE.Value
@@ -307,11 +310,20 @@ slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
     actionsBlock = AE.object ["type" AE..= "actions", "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View in Explorer", "emoji" AE..= True], "style" AE..= "primary", "url" AE..= explorerUrl]]]
     section t = AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= t]]
     context t = AE.object ["type" AE..= "context", "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= t]]]
-    -- One group with context → separate context block + flat list (nicer Slack styling).
-    -- Everything else collapses to one section per group with inline italic subhead.
+    -- Option A layout: host is the primary group header (bold, with globe), service · env
+    -- drops to a dimmed context caption on the same line. Bullets below.
+    groupHeader hostM ctxM = case (hostM, ctxM) of
+      (Just h, Just c) -> Just $ ":globe_with_meridians: *" <> h <> "*  ·  " <> c
+      (Just h, Nothing) -> Just $ ":globe_with_meridians: *" <> h <> "*"
+      (Nothing, Just c) -> Just $ "_" <> c <> "_"
+      (Nothing, Nothing) -> Nothing
+    -- Single group with a header → separate context block + flat bullets (nicer Slack styling).
+    -- Multiple groups → one section per group with inline header + bullets.
     bodyBlocks = case groupedByContext endpoints of
-      [(Just ctx, labels)] -> [context ctx, section (bulletList labels)]
-      groups -> groups <&> \(ctxM, labels) -> section (italicSubhead ctxM <> bulletList labels)
+      [((hostM, ctxM), labels)]
+        | Just h <- groupHeader hostM ctxM -> [context h, section (bulletList labels)]
+        | otherwise -> [section (bulletList labels)]
+      groups -> groups <&> \((hostM, ctxM), labels) -> section (maybe "" (<> "\n") (groupHeader hostM ctxM) <> bulletList labels)
 
 
 -- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
@@ -501,8 +513,8 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     url = projectUrl <> "/issues/by_hash/" <> hash
     explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
     explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
-    description = T.intercalate "\n\n" $ groupedByContext endpoints <&> \(ctxM, labels) ->
-      italicSubhead ctxM <> bulletList labels
+    description = T.intercalate "\n\n" $ groupedByContext endpoints <&> \((hostM, ctxM), labels) ->
+      groupHeaderMd hostM ctxM <> bulletList labels
 
 
 mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> AE.Value
@@ -571,7 +583,7 @@ sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash
   let endpointUrl = projectUrl <> "/issues/by_hash/" <> hash
       labels = (.label) <$> V.toList endpoints
       endpointNames = T.intercalate ", " labels
-      rowPayload r = AE.object $ ["endpoint" AE..= r.label] <> maybeToList (("service" AE..=) <$> r.service) <> maybeToList (("environment" AE..=) <$> r.environment)
+      rowPayload r = AE.object $ ("endpoint" AE..= r.label) : [k AE..= v | (k, Just v) <- [("host", r.host), ("service", r.service), ("environment", r.environment)]]
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= (rowPayload <$> endpoints)]) endpointUrl
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
@@ -586,7 +598,7 @@ sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 
 sampleAlert :: IssueType -> Text -> NotificationAlerts
 sampleAlert = \case
-  ApiChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton EndpointAlertRow{label = "POST /api/users", service = Just "api-service", environment = Just "production"}) "test-hash"
+  ApiChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton EndpointAlertRow{label = "POST /api/users", host = Just "api.example.com", service = Just "api-service", environment = Just "production"}) "test-hash"
   RuntimeException ->
     const
       $ RuntimeErrorAlert

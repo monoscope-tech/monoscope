@@ -52,23 +52,27 @@ import Relude
 import Utils (formatWithCommas)
 
 
--- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @service@/@environment@
---   come from OTel resource attrs.
+-- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @host@ is the
+--   remote hostname (from @server.address@/@http.host@/@url.full@); @service@
+--   and @environment@ come from OTel resource attrs. Host is the primary
+--   grouping axis — a service may publish traffic on multiple hosts, and paths
+--   like @/@ or @/health@ only become identifiable once the host is known.
 data EndpointAlertRow = EndpointAlertRow
   { label :: Text
+  , host :: Maybe Text
   , service :: Maybe Text
   , environment :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
 
 
--- | A "service · env" label, or 'Nothing' when neither attribute is set.
+-- | A "service · env" caption, or 'Nothing' when neither attribute is set.
 --
--- >>> endpointContextLabel (EndpointAlertRow "GET /x" (Just "auth") (Just "prod"))
+-- >>> endpointContextLabel (EndpointAlertRow "GET /x" Nothing (Just "auth") (Just "prod"))
 -- Just "auth \183 prod"
--- >>> endpointContextLabel (EndpointAlertRow "GET /x" (Just "auth") Nothing)
+-- >>> endpointContextLabel (EndpointAlertRow "GET /x" Nothing (Just "auth") Nothing)
 -- Just "auth"
--- >>> endpointContextLabel (EndpointAlertRow "GET /x" Nothing Nothing)
+-- >>> endpointContextLabel (EndpointAlertRow "GET /x" Nothing Nothing Nothing)
 -- Nothing
 endpointContextLabel :: EndpointAlertRow -> Maybe Text
 endpointContextLabel r = case catMaybes [r.service, r.environment] of
@@ -76,20 +80,24 @@ endpointContextLabel r = case catMaybes [r.service, r.environment] of
   xs -> Just (T.intercalate " · " xs)
 
 
--- | Partition alert rows by @(service, environment)@. Single group ⇒ homogeneous
---   batch; multiple groups ⇒ renderers emit per-group subheaders.
+-- | Partition alert rows by @(host, service, environment)@. Each group carries
+--   a @host@ header (primary) plus a @service · env@ caption (secondary). A
+--   single group ⇒ homogeneous batch; multiple groups ⇒ renderers emit
+--   per-group subheaders. Host leads because it's the operational axis — a
+--   reader seeing "GET /" needs to know which hostname got the new surface.
 --
--- >>> import qualified Data.Vector as V
--- >>> groupedByContext (V.fromList [EndpointAlertRow "GET /a" (Just "auth") (Just "prod"), EndpointAlertRow "POST /b" (Just "auth") (Just "prod")])
--- [(Just "auth \183 prod",["GET /a","POST /b"])]
--- >>> length (groupedByContext (V.fromList [EndpointAlertRow "GET /a" (Just "auth") Nothing, EndpointAlertRow "POST /b" (Just "billing") Nothing]))
+-- >>> groupedByContext [EndpointAlertRow "GET /a" (Just "api.x") (Just "auth") (Just "prod"), EndpointAlertRow "POST /b" (Just "api.x") (Just "auth") (Just "prod")]
+-- [((Just "api.x",Just "auth \183 prod"),["GET /a","POST /b"])]
+-- >>> length (groupedByContext [EndpointAlertRow "GET /a" (Just "api.x") Nothing Nothing, EndpointAlertRow "POST /b" (Just "admin.x") Nothing Nothing])
 -- 2
--- >>> groupedByContext (V.fromList [EndpointAlertRow "GET /a" Nothing Nothing])
--- [(Nothing,["GET /a"])]
-groupedByContext :: V.Vector EndpointAlertRow -> [(Maybe Text, [Text])]
+-- >>> groupedByContext [EndpointAlertRow "GET /a" Nothing Nothing Nothing]
+-- [((Nothing,Nothing),["GET /a"])]
+groupedByContext :: Foldable f => f EndpointAlertRow -> [((Maybe Text, Maybe Text), [Text])]
 groupedByContext rows =
-  NE.groupAllWith (\r -> (r.service, r.environment)) (V.toList rows)
-    <&> \grp -> (endpointContextLabel (NE.head grp), (.label) <$> NE.toList grp)
+  NE.groupAllWith (\r -> (r.host, r.service, r.environment)) (toList rows)
+    <&> \grp ->
+      let r = NE.head grp
+       in ((r.host, endpointContextLabel r), (.label) <$> NE.toList grp)
 
 
 cellpadding_, cellspacing_, align_ :: Text -> Attribute
@@ -461,11 +469,19 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
       div_ [class_ "highlight-box"]
         $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
           tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
-          forM_ endpointRows \r ->
-            tr_ $ td_ [style_ "padding: 3px 0;"] do
-              span_ [class_ "monoscope-code"] $ toHtml r.label
-              whenJust (endpointContextLabel r) \ctx ->
-                span_ [style_ "color: #6b7280; margin-left: 8px; font-size: 13px;"] $ toHtml ctx
+          forM_ (groupedByContext endpointRows) \((hostM, ctxM), labels) -> do
+            whenJust hostM \h ->
+              tr_ $ td_ [style_ "padding: 10px 0 2px 0; font-weight: 600; font-size: 14px; color: #111827;"] do
+                "🌐 "
+                toHtml h
+                whenJust ctxM \c ->
+                  span_ [style_ "color: #6b7280; font-weight: 400; margin-left: 8px; font-size: 13px;"] $ toHtml c
+            -- When host is absent but a service/env caption is present, still show it on its own line.
+            when (isNothing hostM) $ whenJust ctxM \c ->
+              tr_ $ td_ [style_ "padding: 10px 0 2px 0; color: #6b7280; font-size: 13px;"] $ toHtml c
+            forM_ labels \label ->
+              tr_ $ td_ [style_ "padding: 3px 0 3px 18px;"]
+                $ span_ [class_ "monoscope-code"] $ toHtml label
       emailButton anomalyUrl "Explore the Endpoint"
       emailHelpLinks
       br_ []
@@ -797,8 +813,8 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
 sampleAnomalyEndpoint :: (Text, Html ())
 sampleAnomalyEndpoint =
   anomalyEndpointEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id/issues"
-    [ EndpointAlertRow "POST /api/v1/orders" (Just "orders-service") (Just "production")
-    , EndpointAlertRow "GET /api/v1/orders/:id" (Just "orders-service") (Just "production")
+    [ EndpointAlertRow "POST /api/v1/orders" (Just "api.example.com") (Just "orders-service") (Just "production")
+    , EndpointAlertRow "GET /api/v1/orders/:id" (Just "api.example.com") (Just "orders-service") (Just "production")
     ]
 
 
