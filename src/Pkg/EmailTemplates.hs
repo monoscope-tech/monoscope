@@ -480,8 +480,10 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
             when (isNothing hostM) $ whenJust ctxM \c ->
               tr_ $ td_ [style_ "padding: 10px 0 2px 0; color: #6b7280; font-size: 13px;"] $ toHtml c
             forM_ labels \label ->
-              tr_ $ td_ [style_ "padding: 3px 0 3px 18px;"]
-                $ span_ [class_ "monoscope-code"] $ toHtml label
+              tr_
+                $ td_ [style_ "padding: 3px 0 3px 18px;"]
+                $ span_ [class_ "monoscope-code"]
+                $ toHtml label
       emailButton anomalyUrl "Explore the Endpoint"
       emailHelpLinks
       br_ []
