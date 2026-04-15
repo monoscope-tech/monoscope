@@ -1758,7 +1758,8 @@ processAPIChangeAnomalies pid targetHashes = do
               _ <- liftIO $ withResource authCtx.jobsPool \conn ->
                 createJob conn "background_jobs" $ BackgroundJobs.EnhanceIssuesWithLLM pid (V.singleton issue.id)
               let firstAnom = V.head anomalies
-              pure $ Just (fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath)
+                  label = fromMaybe "UNKNOWN" firstAnom.endpointMethod <> " " <> fromMaybe "/" firstAnom.endpointUrlPath
+              pure $ Just ET.EndpointAlertRow{label, service = firstAnom.endpointServiceName, environment = firstAnom.endpointEnvironment}
 
   -- Only send notifications for newly created issues, with 30-minute cooldown
   Relude.when (not (null newEndpointInfos) && not authCtx.config.pauseNotifications) do

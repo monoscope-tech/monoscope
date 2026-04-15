@@ -133,6 +133,8 @@ data AnomalyVM = AnomalyVM
     endpointId :: Maybe Endpoints.EndpointId
   , endpointMethod :: Maybe Text
   , endpointUrlPath :: Maybe Text
+  , endpointServiceName :: Maybe Text
+  , endpointEnvironment :: Maybe Text
   , --
     archivedAt :: Maybe ZonedTime
   , eventsCount14d :: Int
@@ -177,6 +179,8 @@ SELECT
     endpoints.id endpoint_id,
     endpoints.method endpoint_method,
     endpoints.url_path endpoint_url_path,
+    endpoints.service_name endpoint_service_name,
+    endpoints.environment endpoint_environment,
     an.archived_at,
     COALESCE(iss.affected_requests, 0),#{now}::timestamptz
 from

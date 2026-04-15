@@ -4,6 +4,11 @@ module Pkg.EmailTemplates (
   emailWrapper,
   emailBody,
 
+  -- * Shared alert row (rendered by email + Slack + Discord renderers)
+  EndpointAlertRow (..),
+  endpointContextLabel,
+  groupedByContext,
+
   -- * Templates
   projectInviteEmail,
   projectCreatedEmail,
@@ -33,6 +38,7 @@ module Pkg.EmailTemplates (
 ) where
 
 import Data.Default (def)
+import Data.List.NonEmpty qualified as NE
 import Data.Text qualified as T
 import Data.Time (formatTime)
 import Data.Time.Format (defaultTimeLocale)
@@ -44,6 +50,46 @@ import Models.Apis.Issues qualified as Issues
 import Pkg.DeriveUtils (UUIDId (..))
 import Relude
 import Utils (formatWithCommas)
+
+
+-- | One row in a new-endpoint alert. @label@ is "METHOD /path"; @service@/@environment@
+--   come from OTel resource attrs.
+data EndpointAlertRow = EndpointAlertRow
+  { label :: Text
+  , service :: Maybe Text
+  , environment :: Maybe Text
+  }
+  deriving stock (Eq, Generic, Show)
+
+
+-- | A "service · env" label, or 'Nothing' when neither attribute is set.
+--
+-- >>> endpointContextLabel (EndpointAlertRow "GET /x" (Just "auth") (Just "prod"))
+-- Just "auth \183 prod"
+-- >>> endpointContextLabel (EndpointAlertRow "GET /x" (Just "auth") Nothing)
+-- Just "auth"
+-- >>> endpointContextLabel (EndpointAlertRow "GET /x" Nothing Nothing)
+-- Nothing
+endpointContextLabel :: EndpointAlertRow -> Maybe Text
+endpointContextLabel r = case catMaybes [r.service, r.environment] of
+  [] -> Nothing
+  xs -> Just (T.intercalate " · " xs)
+
+
+-- | Partition alert rows by @(service, environment)@. Single group ⇒ homogeneous
+--   batch; multiple groups ⇒ renderers emit per-group subheaders.
+--
+-- >>> import qualified Data.Vector as V
+-- >>> groupedByContext (V.fromList [EndpointAlertRow "GET /a" (Just "auth") (Just "prod"), EndpointAlertRow "POST /b" (Just "auth") (Just "prod")])
+-- [(Just "auth \183 prod",["GET /a","POST /b"])]
+-- >>> length (groupedByContext (V.fromList [EndpointAlertRow "GET /a" (Just "auth") Nothing, EndpointAlertRow "POST /b" (Just "billing") Nothing]))
+-- 2
+-- >>> groupedByContext (V.fromList [EndpointAlertRow "GET /a" Nothing Nothing])
+-- [(Nothing,["GET /a"])]
+groupedByContext :: V.Vector EndpointAlertRow -> [(Maybe Text, [Text])]
+groupedByContext rows =
+  NE.groupAllWith (\r -> (r.service, r.environment)) (V.toList rows)
+    <&> \grp -> (endpointContextLabel (NE.head grp), (.label) <$> NE.toList grp)
 
 
 cellpadding_, cellspacing_, align_ :: Text -> Attribute
@@ -403,8 +449,8 @@ truncateText n t = if T.length t > n then T.take n t <> "…" else t
 -- Anomaly Endpoint Template
 -- =============================================================================
 
-anomalyEndpointEmail :: Text -> Text -> Text -> [Text] -> (Text, Html ())
-anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
+anomalyEndpointEmail :: Text -> Text -> Text -> [EndpointAlertRow] -> (Text, Html ())
+anomalyEndpointEmail userName projectName anomalyUrl endpointRows =
   ( "[···] New Endpoint(s) Detected for Your \"" <> projectName <> "\" Project"
   , emailBody do
       emailGreeting (Just userName)
@@ -415,11 +461,11 @@ anomalyEndpointEmail userName projectName anomalyUrl endpointNames =
       div_ [class_ "highlight-box"]
         $ table_ [width_ "100%", cellpadding_ "0", cellspacing_ "0"] do
           tr_ $ td_ [style_ "padding-bottom: 8px; font-weight: 600; font-size: 15px;"] "New Endpoints:"
-          forM_ endpointNames
-            $ tr_
-            . td_ [style_ "padding: 3px 0;"]
-            . span_ [class_ "monoscope-code"]
-            . toHtml
+          forM_ endpointRows \r ->
+            tr_ $ td_ [style_ "padding: 3px 0;"] do
+              span_ [class_ "monoscope-code"] $ toHtml r.label
+              whenJust (endpointContextLabel r) \ctx ->
+                span_ [style_ "color: #6b7280; margin-left: 8px; font-size: 13px;"] $ toHtml ctx
       emailButton anomalyUrl "Explore the Endpoint"
       emailHelpLinks
       br_ []
@@ -749,7 +795,11 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
 
 
 sampleAnomalyEndpoint :: (Text, Html ())
-sampleAnomalyEndpoint = anomalyEndpointEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id/issues" ["POST /api/v1/orders", "GET /api/v1/orders/:id"]
+sampleAnomalyEndpoint =
+  anomalyEndpointEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id/issues"
+    [ EndpointAlertRow "POST /api/v1/orders" (Just "orders-service") (Just "production")
+    , EndpointAlertRow "GET /api/v1/orders/:id" (Just "orders-service") (Just "production")
+    ]
 
 
 sampleIssueAssigned :: (Text, Html ())

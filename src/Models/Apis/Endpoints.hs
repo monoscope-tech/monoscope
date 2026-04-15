@@ -67,6 +67,8 @@ data Endpoint = Endpoint
   , hash :: Text
   , outgoing :: Bool
   , description :: Text
+  , serviceName :: Maybe Text
+  , environment :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (Default, FromRow, NFData, ToRow)
@@ -78,8 +80,8 @@ bulkInsertEndpoints :: DB es => V.Vector Endpoint -> Eff es ()
 bulkInsertEndpoints eps | V.null eps = pass
 bulkInsertEndpoints eps =
   Hasql.interpExecute_
-    [HI.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing)
-           SELECT * FROM unnest(#{pids}::uuid[], #{paths}::text[], #{params}::jsonb[], #{methods}::text[], #{hosts}::text[], #{hashes}::text[], #{outs}::bool[])
+    [HI.sql| INSERT INTO apis.endpoints (project_id, url_path, url_params, method, host, hash, outgoing, service_name, environment)
+           SELECT * FROM unnest(#{pids}::uuid[], #{paths}::text[], #{params}::jsonb[], #{methods}::text[], #{hosts}::text[], #{hashes}::text[], #{outs}::bool[], #{svcs}::text[], #{envs}::text[])
            ON CONFLICT (hash) DO NOTHING |]
   where
     pids = V.map (.projectId) eps
@@ -89,6 +91,8 @@ bulkInsertEndpoints eps =
     hosts = V.map (.host) eps
     hashes = V.map (.hash) eps
     outs = V.map (.outgoing) eps
+    svcs = V.map (.serviceName) eps
+    envs = V.map (.environment) eps
 
 
 -- Based of a view which is generated every 5minutes.

@@ -25,6 +25,7 @@ import Models.Apis.Issues (IssueType (..), parseIssueType)
 import Models.Apis.LogQueries qualified as LogQueries
 import Models.Projects.Projects qualified as Projects
 import Network.HTTP.Types (urlEncode)
+import Pkg.EmailTemplates (EndpointAlertRow (..), endpointContextLabel, groupedByContext)
 import Relude hiding (Reader, ask)
 import System.Config (AuthContext (env))
 import System.Config qualified as Config
@@ -48,7 +49,7 @@ sendSlackMessage pid message = do
 
 
 data NotificationAlerts
-  = EndpointAlert {project :: Text, endpoints :: V.Vector Text, endpointHash :: Text}
+  = EndpointAlert {project :: Text, endpoints :: V.Vector EndpointAlertRow, endpointHash :: Text}
   | RuntimeErrorAlert {issueId :: Text, issueTitle :: Text, errorData :: ErrorPatterns.ATError, runtimeAlertType :: RuntimeAlertType, chartUrl :: Maybe Text, occurrenceText :: Maybe Text, firstSeenText :: Maybe Text}
   | ShapeAlert
   | ReportAlert
@@ -174,7 +175,8 @@ sendWhatsAppAlert alert pid pTitle tos = do
     EndpointAlert{..} -> do
       let template = appCtx.config.whatsappEndpointTemplate
           url = pid.toText <> "/issues/by_hash/" <> endpointHash
-          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x <> "`") <$> V.toList endpoints), "3" AE..= url]
+          labels = (.label) <$> V.toList endpoints
+          contentVars = AE.object ["1" AE..= ("*" <> pTitle <> "*"), "2" AE..= T.intercalate "." ((\x -> "`" <> x <> "`") <$> labels), "3" AE..= url]
       sendAlert template contentVars
       pass
     ReportAlert{..} -> do
@@ -283,24 +285,33 @@ slackMonitorAlert monitorTitle monitorUrl chartUrlM channelId =
     <> [AE.object ["type" AE..= "actions", "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "🔍 View monitor", "emoji" AE..= True], "url" AE..= monitorUrl, "style" AE..= "primary"]]]]
 
 
-slackNewEndpointsAlert :: Text -> V.Vector Text -> Text -> Text -> Text -> AE.Value
+-- | Markdown bullet list shared by Slack + Discord new-endpoint renderers.
+bulletList :: [Text] -> Text
+bulletList = T.intercalate "\n" . fmap (\x -> "• `" <> x <> "`")
+
+
+-- | Italic subheader on its own line, or empty when no context is present.
+italicSubhead :: Maybe Text -> Text
+italicSubhead = foldMap (\c -> "_" <> c <> "_\n")
+
+
+slackNewEndpointsAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> Text -> AE.Value
 slackNewEndpointsAlert projectName endpoints channelId hash projectUrl =
-  slackAttachment
-    channelId
-    "#3b82f6"
-    [ AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")]]
-    , AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= enps]]
-    , AE.object
-        [ "type" AE..= "actions"
-        , "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View in Explorer", "emoji" AE..= True], "style" AE..= "primary", "url" AE..= explorerUrl]]
-        ]
-    ]
+  slackAttachment channelId "#3b82f6" $ [headlineBlock] <> bodyBlocks <> [actionsBlock]
   where
-    n = length endpoints
+    n = V.length endpoints
     headline = if n == 1 then "1 new endpoint" else show n <> " new endpoints"
     targetUrl = projectUrl <> "/issues/by_hash/" <> hash
-    explorerUrl = newEndpointsExplorerUrl projectUrl endpoints
-    enps = T.intercalate "\n" $ (\x -> "• `" <> x <> "`") <$> V.toList endpoints
+    explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
+    headlineBlock = AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= ("<" <> targetUrl <> "|:large_blue_circle: *" <> headline <> "* · " <> projectName <> ">")]]
+    actionsBlock = AE.object ["type" AE..= "actions", "elements" AE..= AE.Array [AE.object ["type" AE..= "button", "text" AE..= AE.object ["type" AE..= "plain_text", "text" AE..= "View in Explorer", "emoji" AE..= True], "style" AE..= "primary", "url" AE..= explorerUrl]]]
+    section t = AE.object ["type" AE..= "section", "text" AE..= AE.object ["type" AE..= "mrkdwn", "text" AE..= t]]
+    context t = AE.object ["type" AE..= "context", "elements" AE..= AE.Array [AE.object ["type" AE..= "mrkdwn", "text" AE..= t]]]
+    -- One group with context → separate context block + flat list (nicer Slack styling).
+    -- Everything else collapses to one section per group with inline italic subhead.
+    bodyBlocks = case groupedByContext endpoints of
+      [(Just ctx, labels)] -> [context ctx, section (bulletList labels)]
+      groups -> groups <&> \(ctxM, labels) -> section (italicSubhead ctxM <> bulletList labels)
 
 
 -- | Build an explorer URL filtering by the given "METHOD /path" endpoint strings.
@@ -464,7 +475,7 @@ discordMonitorAlert monitorTitle monitorUrl chartUrlM =
     ]
 
 
-discordNewEndpointAlert :: Text -> V.Vector Text -> Text -> Text -> AE.Value
+discordNewEndpointAlert :: Text -> V.Vector EndpointAlertRow -> Text -> Text -> AE.Value
 discordNewEndpointAlert projectName endpoints hash projectUrl =
   [aesonQQ|
   {
@@ -472,7 +483,7 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     {
       "type": "rich",
       "title": #{title},
-      "description": #{enps},
+      "description": #{description},
       "color": 3901174,
       "fields": [
         {"name": "\u200b", "value": #{explorerLink}, "inline": false}
@@ -484,13 +495,14 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
 }
   |]
   where
-    n = length endpoints
+    n = V.length endpoints
     title = (if n == 1 then "🔵 1 new endpoint" else "🔵 " <> show n <> " new endpoints") <> " · " <> projectName
     content = if n == 1 then "🔵 **New endpoint detected**" else "🔵 **" <> show n <> " new endpoints detected**"
     url = projectUrl <> "/issues/by_hash/" <> hash
-    explorerUrl = newEndpointsExplorerUrl projectUrl endpoints
+    explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
     explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
-    enps = T.intercalate "\n" $ (\x -> "• `" <> x <> "`") <$> V.toList endpoints
+    description = T.intercalate "\n\n" $ groupedByContext endpoints <&> \(ctxM, labels) ->
+      italicSubhead ctxM <> bulletList labels
 
 
 mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> AE.Value
@@ -557,8 +569,10 @@ sendPagerdutyAlertToService integrationKey (MonitorsRecoveryAlert monitorTitle m
   Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDResolve ("monoscope-alert-" <> monitorTitle) (projectTitle <> ": Resolved - " <> monitorTitle) Notify.PDInfo (AE.object ["url" AE..= monitorUrl]) monitorUrl
 sendPagerdutyAlertToService integrationKey (EndpointAlert project endpoints hash) projectTitle projectUrl =
   let endpointUrl = projectUrl <> "/issues/by_hash/" <> hash
-      endpointNames = T.intercalate ", " $ V.toList endpoints
-   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= endpoints]) endpointUrl
+      labels = (.label) <$> V.toList endpoints
+      endpointNames = T.intercalate ", " labels
+      rowPayload r = AE.object $ ["endpoint" AE..= r.label] <> maybeToList (("service" AE..=) <$> r.service) <> maybeToList (("environment" AE..=) <$> r.environment)
+   in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-endpoint-" <> hash) (projectTitle <> ": New Endpoints - " <> endpointNames) Notify.PDWarning (AE.object ["project" AE..= project, "endpoints" AE..= (rowPayload <$> endpoints)]) endpointUrl
 sendPagerdutyAlertToService integrationKey RuntimeErrorAlert{issueId, issueTitle, errorData, chartUrl} projectTitle projectUrl =
   let errorUrl = projectUrl <> "/issues/by_hash/" <> errorData.hash
    in Notify.sendNotification $ Notify.pagerdutyNotification integrationKey Notify.PDTrigger ("monoscope-error-" <> issueId) (projectTitle <> ": " <> errorData.errorType <> " - " <> issueTitle) Notify.PDError (AE.object $ ["error_type" AE..= errorData.errorType, "message" AE..= errorData.message] <> maybeToList (("chart_url" AE..=) <$> chartUrl)) errorUrl
@@ -572,7 +586,7 @@ sendPagerdutyAlertToService _ ShapeAlert _ _ = pass
 
 sampleAlert :: IssueType -> Text -> NotificationAlerts
 sampleAlert = \case
-  ApiChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton "POST /api/users") "test-hash"
+  ApiChange -> \title -> EndpointAlert ("🧪 TEST: " <> title) (V.singleton EndpointAlertRow{label = "POST /api/users", service = Just "api-service", environment = Just "production"}) "test-hash"
   RuntimeException ->
     const
       $ RuntimeErrorAlert

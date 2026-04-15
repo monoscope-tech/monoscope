@@ -228,6 +228,13 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
             , attrValue ^? key "http" . key "host" . _String
             ]
 
+      -- Resolve service and environment from OTel resource attrs, falling back to span
+      -- attributes for SDKs that put them there.
+      !resourceMap = unAesonTextMaybe otelSpan.resource
+      lookupAttr k = Telemetry.atMapText k resourceMap <|> Telemetry.atMapText k (Just attributes)
+      !serviceName = lookupAttr "service.name"
+      !environment = asum $ lookupAttr <$> ["deployment.environment.name", "deployment.environment", "service.namespace", "k8s.namespace.name"]
+
       -- Extract SDK type from attributes (needed for URL normalization)
       !sdkTypeStr =
         fromMaybe "unknown"
@@ -325,6 +332,8 @@ processSpanToEntities canonicalTemplates pjc otelSpan dumpId =
                 , hash = endpointHash
                 , outgoing = outgoing
                 , description = ""
+                , serviceName = serviceName
+                , environment = environment
                 }
 
       -- Build shape if not in cache
