@@ -76,6 +76,7 @@ import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Anomalies
+import Models.Apis.Issues qualified as Issues
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -104,6 +105,8 @@ import Pages.Telemetry qualified as Trace
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget qualified as Widget
 import Pkg.EmailTemplates qualified as ET
+import Web.ApiHandlers qualified as ApiH
+import Web.ApiTypes qualified as ApiT
 
 
 -- =============================================================================
@@ -181,8 +184,53 @@ data ApiV1Routes mode = ApiV1Routes
           :> QPT "source"
           :> Get '[JSON] Charts.MetricsData
   , schemaGet :: mode :- "schema" :> Get '[JSON] Schema.Schema
-  , monitorsGet :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
   , rrwebPost :: mode :- "rrweb" :> ReqBody '[JSON] Replay.ReplayPost :> Post '[JSON] AE.Value
+  , -- Monitors (CRUD + lifecycle)
+    monitorsList :: mode :- "monitors" :> Get '[JSON] [Monitors.QueryMonitor]
+  , monitorGet :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Get '[JSON] Monitors.QueryMonitor
+  , monitorCreate :: mode :- "monitors" :> ReqBody '[JSON] ApiT.MonitorInput :> Post '[JSON] Monitors.QueryMonitor
+  , monitorUpdate :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorInput :> Put '[JSON] Monitors.QueryMonitor
+  , monitorPatch :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> ReqBody '[JSON] ApiT.MonitorPatch :> Patch '[JSON] Monitors.QueryMonitor
+  , monitorDelete :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> Delete '[JSON] NoContent
+  , monitorToggleActive :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "toggle_active" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorMute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration_minutes" Int :> Post '[JSON] Monitors.QueryMonitor
+  , monitorUnmute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "unmute" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorResolve :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "resolve" :> Post '[JSON] Monitors.QueryMonitor
+  , monitorBulk :: mode :- "monitors" :> "bulk" :> ReqBody '[JSON] ApiT.BulkAction :> Post '[JSON] ApiT.BulkResult
+  , -- Events body variant (avoids URL length limits)
+    eventsQuery :: mode :- "events" :> "query" :> ReqBody '[JSON] ApiT.EventsQuery :> Post '[JSON] Log.LogResult
+  , -- Anomalies bulk (acknowledge/archive)
+    anomaliesBulk :: mode :- "anomalies" :> "bulk" :> ReqBody '[JSON] ApiT.BulkAction :> Post '[JSON] ApiT.BulkResult
+  , -- Share links
+    shareLinkCreate :: mode :- "share" :> ReqBody '[JSON] ApiH.ShareLinkCreate :> Post '[JSON] ApiH.ShareLinkCreated
+  , -- Dashboards (CRUD + IaC apply + widgets)
+    dashboardsList
+      :: mode
+        :- "dashboards"
+          :> QPT "sort"
+          :> QPT "team_id"
+          :> Get '[JSON] [ApiT.DashboardSummary]
+  , dashboardGet :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Get '[JSON] ApiT.DashboardFull
+  , dashboardCreate :: mode :- "dashboards" :> ReqBody '[JSON] ApiT.DashboardInput :> Post '[JSON] ApiT.DashboardFull
+  , dashboardApply :: mode :- "dashboards" :> "apply" :> ReqBody '[JSON] ApiT.DashboardYAMLDoc :> Post '[JSON] ApiT.DashboardFull
+  , dashboardUpdate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] ApiT.DashboardInput :> Put '[JSON] ApiT.DashboardFull
+  , dashboardPatch :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> ReqBody '[JSON] ApiT.DashboardPatch :> Patch '[JSON] ApiT.DashboardFull
+  , dashboardDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> Delete '[JSON] NoContent
+  , dashboardDuplicate :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "duplicate" :> Post '[JSON] ApiT.DashboardFull
+  , dashboardStar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Post '[JSON] ApiT.DashboardFull
+  , dashboardUnstar :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "star" :> Delete '[JSON] NoContent
+  , dashboardYaml :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "yaml" :> Get '[JSON] ApiT.DashboardYAMLDoc
+  , dashboardWidgetUpsert :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
+  , dashboardWidgetDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
+  , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> QPT "tab" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
+  , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] ApiT.BulkAction :> Post '[JSON] ApiT.BulkResult
+  , -- API keys
+    apiKeysList :: mode :- "api_keys" :> Get '[JSON] [ApiT.ApiKeySummary]
+  , apiKeyGet :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Get '[JSON] ApiT.ApiKeySummary
+  , apiKeyCreate :: mode :- "api_keys" :> ReqBody '[JSON] ApiT.ApiKeyCreate :> Post '[JSON] ApiT.ApiKeyCreated
+  , apiKeyActivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiT.ApiKeySummary
+  , apiKeyDeactivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiT.ApiKeySummary
+  , apiKeyDelete :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
   }
   deriving stock (Generic)
 
@@ -502,8 +550,45 @@ apiV1Server pid =
     , metricsQuery = \queryM dataTypeM sinceM fromM toM sourceM ->
         Charts.queryMetrics Nothing dataTypeM (Just pid) queryM Nothing sinceM fromM toM sourceM []
     , schemaGet = pure Schema.telemetrySchema
-    , monitorsGet = Monitors.queryMonitorsAll pid
     , rrwebPost = Replay.replayPostH pid
+    , -- Monitors
+      monitorsList = ApiH.apiMonitorsList pid
+    , monitorGet = ApiH.apiMonitorGet pid
+    , monitorCreate = ApiH.apiMonitorCreate pid
+    , monitorUpdate = ApiH.apiMonitorUpdate pid
+    , monitorPatch = ApiH.apiMonitorPatch pid
+    , monitorDelete = ApiH.apiMonitorDelete pid
+    , monitorToggleActive = ApiH.apiMonitorToggleActive pid
+    , monitorMute = ApiH.apiMonitorMute pid
+    , monitorUnmute = ApiH.apiMonitorUnmute pid
+    , monitorResolve = ApiH.apiMonitorResolve pid
+    , monitorBulk = ApiH.apiMonitorBulk pid
+    , eventsQuery = ApiH.apiEventsQuery pid
+    , anomaliesBulk = ApiH.apiAnomaliesBulk pid
+    , shareLinkCreate = ApiH.apiShareLinkCreate pid
+    , -- Dashboards
+      dashboardsList = ApiH.apiDashboardsList pid
+    , dashboardGet = ApiH.apiDashboardGet pid
+    , dashboardCreate = ApiH.apiDashboardCreate pid
+    , dashboardApply = ApiH.apiDashboardApply pid
+    , dashboardUpdate = ApiH.apiDashboardUpdate pid
+    , dashboardPatch = ApiH.apiDashboardPatch pid
+    , dashboardDelete = ApiH.apiDashboardDelete pid
+    , dashboardDuplicate = ApiH.apiDashboardDuplicate pid
+    , dashboardStar = ApiH.apiDashboardStar pid
+    , dashboardUnstar = ApiH.apiDashboardUnstar pid
+    , dashboardYaml = ApiH.apiDashboardYaml pid
+    , dashboardWidgetUpsert = ApiH.apiDashboardWidgetUpsert pid
+    , dashboardWidgetDelete = ApiH.apiDashboardWidgetDelete pid
+    , dashboardWidgetsReorder = ApiH.apiDashboardWidgetsReorder pid
+    , dashboardBulk = ApiH.apiDashboardBulk pid
+    , -- API keys
+      apiKeysList = ApiH.apiKeysList pid
+    , apiKeyGet = ApiH.apiKeyGet pid
+    , apiKeyCreate = ApiH.apiKeyCreate pid
+    , apiKeyActivate = ApiH.apiKeyActivate pid
+    , apiKeyDeactivate = ApiH.apiKeyDeactivate pid
+    , apiKeyDelete = ApiH.apiKeyDelete pid
     }
 
 

@@ -21,6 +21,7 @@ module Models.Apis.Anomalies (
   getAnomaliesVM,
   acknowlegeCascade,
   acknowledgeAnomalies,
+  archiveAnomaliesAndIssues,
 )
 where
 
@@ -235,6 +236,16 @@ acknowlegeCascade uid targets
       let hashes = (<> "%") <$> targets
       _ <- Hasql.interpExecute [HI.sql| UPDATE apis.issues SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash=ANY(#{hashes}) |]
       Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET acknowledged_by = #{uid}, acknowledged_at = #{now} WHERE target_hash LIKE ANY(#{hashes}) |]
+
+
+-- | Archive both issues and anomalies by id in one shot — used by the bulk API.
+archiveAnomaliesAndIssues :: (DB es, Time :> es) => V.Vector Text -> Eff es Int64
+archiveAnomaliesAndIssues aids
+  | V.null aids = pure 0
+  | otherwise = do
+      now <- Time.currentTime
+      _ <- Hasql.interpExecute [HI.sql| UPDATE apis.issues    SET archived_at=#{now} WHERE id=ANY(#{aids}::uuid[]) |]
+      Hasql.interpExecute [HI.sql| UPDATE apis.anomalies SET archived_at=#{now} WHERE id=ANY(#{aids}::uuid[]) |]
 
 
 -------------------------------------------------------------------------------------------

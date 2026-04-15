@@ -4,6 +4,7 @@ module Models.Projects.ProjectApiKeys (
   ProjectApiKey (..),
   ProjectApiKeyId (..),
   encryptAPIKey,
+  encodeApiKeyB64,
   getProjectIdByApiKey,
   activateApiKey,
   decryptAPIKey,
@@ -16,9 +17,13 @@ module Models.Projects.ProjectApiKeys (
 )
 where
 
+import Data.Aeson qualified as AE
+import Data.Base64.Types qualified as B64T
+import Data.ByteString.Base64 qualified as B64
 import Data.Cache qualified as Cache
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
+import Data.OpenApi (ToParamSchema (..), ToSchema (..), declareNamedSchema)
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
@@ -47,8 +52,12 @@ import "cryptonite" Crypto.Error (throwCryptoError)
 
 newtype ProjectApiKeyId = ProjectApiKeyId {unProjectApiKeyId :: UUID.UUID}
   deriving stock (Generic, Show)
-  deriving newtype (Default, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField)
+  deriving newtype (AE.FromJSON, AE.ToJSON, Default, Eq, FromField, FromHttpApiData, HI.DecodeValue, HI.EncodeValue, NFData, ToField)
   deriving anyclass (FromRow, ToRow)
+
+
+instance ToSchema ProjectApiKeyId where declareNamedSchema _ = declareNamedSchema (Proxy @UUID.UUID)
+instance ToParamSchema ProjectApiKeyId where toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
 instance HasField "toText" ProjectApiKeyId Text where
@@ -147,3 +156,10 @@ encryptAPIKey key = ctrCombine ctx nullIV
 -- | decryptAPIKey :: secretKey -> TextToDecrypt -> DecryptedText as bytestring
 decryptAPIKey :: ByteString -> ByteString -> ByteString
 decryptAPIKey = encryptAPIKey
+
+
+-- | Encrypt a random UUID with the project's secret key, base64-encode it — the one-shot
+-- plaintext token presented to the user. Reuses the same format stored in @key_prefix@.
+encodeApiKeyB64 :: Text -> UUID.UUID -> Text
+encodeApiKeyB64 secret keyUUID =
+  B64T.extractBase64 . B64.encodeBase64 $ encryptAPIKey (encodeUtf8 secret) (encodeUtf8 $ UUID.toText keyUUID)

@@ -9,6 +9,7 @@ module Models.Projects.Dashboards (
   Tab (..),
   Constant (..),
   getDashboardById,
+  getDashboardByFilePath,
   readDashboardsFromDirectory,
   readDashboardEndpoint,
   replaceQueryVariables,
@@ -230,6 +231,12 @@ getDashboardById :: DB es => DashboardId -> Eff es (Maybe DashboardVM)
 getDashboardById did =
   Hasql.interpOne
     (selectFrom @DashboardVM <> [HI.sql| WHERE id = #{did} |])
+
+
+getDashboardByFilePath :: DB es => Projects.ProjectId -> Text -> Eff es (Maybe DashboardVM)
+getDashboardByFilePath pid fp =
+  Hasql.interpOne
+    (selectFrom @DashboardVM <> [HI.sql| WHERE project_id = #{pid} AND file_path = #{fp} LIMIT 1 |])
 
 
 deleteDashboardsByIds :: DB es => Projects.ProjectId -> V.Vector DashboardId -> Eff es Int64

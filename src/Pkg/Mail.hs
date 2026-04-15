@@ -513,8 +513,9 @@ discordNewEndpointAlert projectName endpoints hash projectUrl =
     url = projectUrl <> "/issues/by_hash/" <> hash
     explorerUrl = newEndpointsExplorerUrl projectUrl ((.label) <$> endpoints)
     explorerLink = "[View in Explorer](" <> explorerUrl <> ")"
-    description = T.intercalate "\n\n" $ groupedByContext endpoints <&> \((hostM, ctxM), labels) ->
-      groupHeaderMd hostM ctxM <> bulletList labels
+    description =
+      T.intercalate "\n\n" $ groupedByContext endpoints <&> \((hostM, ctxM), labels) ->
+        groupHeaderMd hostM ctxM <> bulletList labels
 
 
 mkDiscordLogPatternPayload :: Text -> Text -> Maybe Text -> Maybe Text -> Text -> Int -> Maybe Text -> Text -> AE.Value

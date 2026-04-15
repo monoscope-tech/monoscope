@@ -30,7 +30,7 @@ module CLI.Commands
 import Relude
 
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (OutputMode (..), apiGet, apiPost, isInteractiveTTY, printError, renderJSON, renderTable, withAPIResult)
+import CLI.Core (OutputMode (..), apiGet, apiPost, isInteractiveTTY, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Data.Aeson qualified as AE
@@ -162,9 +162,7 @@ runServicesList cfg opts mode = do
           [ Just ("query", "summarize count() by resource.service.name")
           , ("since",) <$> (opts.since <|> Just "24h")
           ]
-  withAPIResult cfg "/api/v1/metrics" params $ \val -> case mode of
-    OutputJSON -> renderJSON val
-    OutputTable -> renderServicesList val
+  withAPIResult cfg "/api/v1/metrics" params $ \val -> renderWith mode val (renderServicesList val)
 
 renderServicesList :: (IOE :> es) => AE.Value -> Eff es ()
 renderServicesList val = case val of
@@ -215,9 +213,7 @@ data EventsContextOpts = EventsContextOpts
 runEventsSearch :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsSearchOpts -> OutputMode -> Eff es ()
 runEventsSearch cfg opts mode = do
   let params = buildSearchParams opts
-  withAPIResult cfg "/api/v1/events" params $ \val -> case mode of
-    OutputJSON -> renderJSON val
-    OutputTable -> renderEventsTable val opts.fields
+  withAPIResult cfg "/api/v1/events" params $ \val -> renderWith mode val (renderEventsTable val opts.fields)
 
 runEventsGet :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsGetOpts -> OutputMode -> Eff es ()
 runEventsGet cfg opts mode = do
@@ -225,9 +221,7 @@ runEventsGet cfg opts mode = do
   withAPIResult cfg "/api/v1/events" params $ \val ->
     if opts.showTree
       then renderTraceTree val
-      else case mode of
-        OutputJSON -> renderJSON val
-        OutputTable -> renderEventsTable val Nothing
+      else renderWith mode val (renderEventsTable val Nothing)
 
 runEventsTail :: (HTTP :> es, IOE :> es) => CLIConfig -> EventsTailOpts -> Maybe Text -> Eff es ()
 runEventsTail cfg opts kindOverride = do
@@ -267,9 +261,7 @@ runEventsContext cfg opts kindOverride mode = do
           , Just ("since", fromMaybe "5m" opts.window)
           , ("source",) <$> (opts.kind <|> kindOverride)
           ]
-  withAPIResult cfg "/api/v1/events" params $ \val -> case mode of
-    OutputJSON -> renderJSON val
-    OutputTable -> renderEventsTable val Nothing
+  withAPIResult cfg "/api/v1/events" params $ \val -> renderWith mode val (renderEventsTable val Nothing)
 
 buildSearchParams :: EventsSearchOpts -> [(Text, Text)]
 buildSearchParams opts =
@@ -369,9 +361,7 @@ runMetricsQuery :: (HTTP :> es, IOE :> es) => CLIConfig -> MetricsQueryOpts -> O
 runMetricsQuery cfg opts mode = do
   let params = metricsParams opts.expression opts.since opts.from opts.to
   withAPIResult cfg "/api/v1/metrics" params $ \val -> do
-    case mode of
-      OutputJSON -> renderJSON val
-      OutputTable -> renderMetricsTable val
+    renderWith mode val (renderMetricsTable val)
     whenJust opts.assert $ checkAssertion val
 
 runMetricsChart :: (HTTP :> es, IOE :> es) => CLIConfig -> MetricsChartOpts -> Eff es ()

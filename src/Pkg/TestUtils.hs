@@ -21,6 +21,7 @@ module Pkg.TestUtils (
   setBjRunAtInThePast,
   toServantResponse,
   toBaseServantResponse,
+  runAsBase,
   atAuthToBase,
   effToServantHandlerTest,
   runQueryEffect,
@@ -596,6 +597,8 @@ data TestResources = TestResources
   , trATCtx :: AuthContext
   , trLogger :: Log.Logger
   , trTracerProvider :: TracerProvider
+  , trUUIDRef :: IORef [UUID.UUID]
+  -- ^ Pool of deterministic UUIDs shared across handler invocations in one test.
   }
 
 
@@ -660,6 +663,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
               , openaiApiKey = bool envConfig.openaiApiKey "sk-test-key-not-real" (T.null envConfig.openaiApiKey)
               }
           )
+  uuidRef <- newIORef (map (UUID.fromWords 0 0 0) [1 .. 100000])
   f
     TestResources
       { trPool = pool
@@ -668,6 +672,7 @@ withTestResources f = withSetup $ \pool cstr -> LogBulk.withBulkStdOutLogger \lo
       , trATCtx = atAuthCtx
       , trLogger = logger
       , trTracerProvider = tp
+      , trUUIDRef = uuidRef
       }
 
 
@@ -679,9 +684,10 @@ toServantResponse
   -> IO (RespHeaders a, a)
 toServantResponse trATCtx trSessAndHeader trLogger k = do
   tp <- getGlobalTracerProvider
+  uuidRef <- freshUUIDRef
   headersResp <-
     ( atAuthToBase trSessAndHeader k
-        & effToServantHandlerTest trATCtx trLogger tp
+        & effToServantHandlerTest uuidRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -696,10 +702,11 @@ testServant tr = toServantResponse tr.trATCtx tr.trSessAndHeader tr.trLogger
 testServantWithNotifications :: TestResources -> ATAuthCtx (RespHeaders a) -> IO ([Data.Effectful.Notify.Notification], (RespHeaders a, a))
 testServantWithNotifications TestResources{..} k = do
   tp <- getGlobalTracerProvider
+  uuidRef <- freshUUIDRef
   notifRef <- newIORef []
   headersResp <-
     ( atAuthToBaseTest notifRef trSessAndHeader k
-        & effToServantHandlerTest trATCtx trLogger tp
+        & effToServantHandlerTest uuidRef trATCtx trLogger tp
         & ServantS.runHandler
     )
       <&> fromRightShow
@@ -707,7 +714,9 @@ testServantWithNotifications TestResources{..} k = do
   pure (notifications, (headersResp, Servant.getResponse headersResp))
 
 
--- | Run a base context handler (like webhookPostH, replayPostH) in test context
+-- | Run a base context handler (like webhookPostH, replayPostH) in test context.
+-- Each call gets a fresh UUID pool; use `runAsBase` when you need IDs persisted
+-- across multiple handler invocations within the same test.
 toBaseServantResponse
   :: AuthContext
   -> Log.Logger
@@ -715,11 +724,29 @@ toBaseServantResponse
   -> IO a
 toBaseServantResponse trATCtx trLogger k = do
   tp <- getGlobalTracerProvider
+  uuidRef <- freshUUIDRef
   ( k
-      & effToServantHandlerTest trATCtx trLogger tp
+      & effToServantHandlerTest uuidRef trATCtx trLogger tp
       & ServantS.runHandler
     )
     <&> fromRightShow
+
+
+-- | Like `toBaseServantResponse` but draws UUIDs from the TestResources-scoped
+-- pool, so multiple handler invocations (e.g. create a, create b, bulk-delete
+-- [a,b]) get distinct deterministic ids.
+runAsBase :: TestResources -> ATBaseCtx a -> IO a
+runAsBase TestResources{..} k = do
+  tp <- getGlobalTracerProvider
+  ( k
+      & effToServantHandlerTest trUUIDRef trATCtx trLogger tp
+      & ServantS.runHandler
+    )
+    <&> fromRightShow
+
+
+freshUUIDRef :: IO (IORef [UUID.UUID])
+freshUUIDRef = newIORef (map (UUID.fromWords 0 0 0) [1 .. 1000])
 
 
 -- | Run a query effect (like Charts.queryMetrics) in test context

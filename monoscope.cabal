@@ -92,7 +92,10 @@ extra-source-files:
     static/migrations/0064_processed_at_safety_net.sql
     static/migrations/0065_query_cache_jsonb.sql
     static/migrations/0066_fix_auto_resolve_trigger_fk_race.sql
+    static/migrations/0067_drop_orphaned_host_stats_job.sql
     static/migrations/0068_replay_sessions_user_columns.sql
+    static/migrations/0069_session_user_indexes.sql
+    static/migrations/0070_endpoint_service_environment.sql
 
 source-repository head
   type: git
@@ -183,6 +186,8 @@ library
       System.Tracing
       System.Types
       Utils
+      Web.ApiHandlers
+      Web.ApiTypes
       Web.Auth
       Web.Routes
       Proto.Opentelemetry.Proto.Common.V1.Common
@@ -399,7 +404,11 @@ executable monoscope
       CLI.Commands
       CLI.Config
       CLI.Core
+      CLI.Resource
       CLI.UI
+      Paths_monoscope
+  autogen-modules:
+      Paths_monoscope
   hs-source-dirs:
       cli/
   default-extensions:
@@ -431,6 +440,7 @@ executable monoscope
       aeson
     , aeson-pretty
     , ansi-terminal
+    , base
     , brick
     , containers
     , directory
@@ -451,9 +461,6 @@ executable monoscope
     , vty
     , wreq
     , yaml
-  mixins:
-      relude (Relude as Prelude)
-    , relude 
   default-language: GHC2024
 
 executable monoscope-server

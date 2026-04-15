@@ -6,6 +6,7 @@ module Pkg.DeriveUtils (
   DB,
   PGTextArray (..),
   SnakeSchema (..),
+  JsonValueSchema (..),
   UUIDId (..),
   WrappedEnum (..),
   WrappedEnumSC (..),
@@ -287,6 +288,15 @@ instance (GToSchema (Rep a), Generic a, Typeable a) => ToSchema (SnakeSchema a) 
     genericDeclareNamedSchema
       OpenApi.defaultSchemaOptions{OpenApi.fieldLabelModifier = quietSnake . fromString}
       (Proxy @a)
+
+
+-- | DerivingVia wrapper: emit an unconstrained JSON value schema for types whose
+-- subtrees don't have ToSchema (escape hatch for deeply nested domain types).
+newtype JsonValueSchema a = JsonValueSchema a
+
+
+instance Typeable a => ToSchema (JsonValueSchema a) where
+  declareNamedSchema _ = declareNamedSchema (Proxy @AET.Value)
 
 
 newtype WrappedEnumShow a = WrappedEnumShow a

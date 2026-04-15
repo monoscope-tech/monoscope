@@ -44,7 +44,6 @@ import Control.Lens ((.~), (^.), (^?))
 import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Aeson.Types (parseMaybe)
-import Data.Base64.Types qualified as B64
 import Data.ByteArray qualified as BA
 import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
@@ -94,7 +93,6 @@ import Text.Printf (printf)
 import UnliftIO.Exception (catch, throwIO)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
-import "base64" Data.ByteString.Base64.URL qualified as B64
 import "cryptonite" Crypto.Hash (SHA256)
 import "cryptonite" Crypto.MAC.HMAC qualified as HMAC
 
@@ -196,8 +194,7 @@ apiPostH pid apiKeyForm = do
   (sess, project) <- Projects.sessionAndProject pid
   authCtx <- ask @AuthContext
   projectKeyUUID <- liftIO UUIDV4.nextRandom
-  let encryptedKey = ProjectApiKeys.encryptAPIKey (encodeUtf8 authCtx.config.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
-  let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 encryptedKey
+  let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 authCtx.config.apiKeyEncryptionSecretKey projectKeyUUID
   pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID (title apiKeyForm) encryptedKeyB64
   apiKeys <- do
     ProjectApiKeys.insertProjectApiKey pApiKey

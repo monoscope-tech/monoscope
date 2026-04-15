@@ -312,7 +312,10 @@ executables:
     source-dirs: cli/
     ghc-options:
       - -threaded
+    generated-other-modules:
+      - Paths_monoscope
     dependencies:
+      - base
       - monoscope
       - optparse-applicative
       - ansi-terminal
@@ -337,9 +340,6 @@ executables:
       - vector
       - name: relude
         version: '>= 1.2.0.0'
-        mixin:
-          - (Relude as Prelude)
-          - ''
 
 tests:
   doctests:

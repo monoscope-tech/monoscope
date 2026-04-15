@@ -812,7 +812,10 @@ sampleRuntimeErrors = runtimeErrorsEmail "My API Project" "https://app.monoscope
 
 sampleAnomalyEndpoint :: (Text, Html ())
 sampleAnomalyEndpoint =
-  anomalyEndpointEmail "Jane Doe" "My API Project" "https://app.monoscope.tech/p/sample-id/issues"
+  anomalyEndpointEmail
+    "Jane Doe"
+    "My API Project"
+    "https://app.monoscope.tech/p/sample-id/issues"
     [ EndpointAlertRow "POST /api/v1/orders" (Just "api.example.com") (Just "orders-service") (Just "production")
     , EndpointAlertRow "GET /api/v1/orders/:id" (Just "api.example.com") (Just "orders-service") (Just "production")
     ]
