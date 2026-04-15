@@ -46,7 +46,6 @@ where
 import BackgroundJobs qualified
 import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
-import Data.Base64.Types qualified as B64
 import Data.CaseInsensitive (original)
 import Data.CaseInsensitive qualified as CI
 import Data.Char (isAlphaNum, isDigit, isLower)
@@ -106,7 +105,6 @@ import System.Types (ATAuthCtx, RespHeaders, addErrorToast, addRespHeaders, addR
 import UnliftIO.Exception (tryAny)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_, insertIfNotExist, isDemoAndNotSudo, lookupValueText)
 import Web.FormUrlEncoded (FromForm)
-import "base64" Data.ByteString.Base64 qualified as B64
 
 
 --------------------------------------------------------------------------------
@@ -1253,7 +1251,7 @@ projectOnboardingH = do
       _ <- Projects.insertProject pr
       _ <- ProjectMembers.createEveryoneTeam pid sess.user.id
       projectKeyUUID <- UUID.genUUID
-      let encryptedKeyB64 = B64.extractBase64 $ B64.encodeBase64 $ ProjectApiKeys.encryptAPIKey (encodeUtf8 envCfg.apiKeyEncryptionSecretKey) (encodeUtf8 $ UUID.toText projectKeyUUID)
+      let encryptedKeyB64 = ProjectApiKeys.encodeApiKeyB64 envCfg.apiKeyEncryptionSecretKey projectKeyUUID
       pApiKey <- ProjectApiKeys.newProjectApiKeys pid projectKeyUUID "Default API Key" encryptedKeyB64
       _ <- ProjectApiKeys.insertProjectApiKey pApiKey
       let projectMember = ProjectMembers.CreateProjectMembers pid sess.user.id ProjectMembers.PAdmin

@@ -28,7 +28,7 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (Default (..))
 import Data.Effectful.Hasql qualified as Hasql
-import Data.OpenApi (ToSchema (..))
+import Data.OpenApi (ToParamSchema (..), ToSchema (..))
 import Data.Text.Display (Display)
 import Data.Time.Calendar (Day (..))
 import Data.Time.Clock (UTCTime (..), addUTCTime)
@@ -58,6 +58,10 @@ newtype QueryMonitorId = QueryMonitorId {unQueryMonitorId :: UUID.UUID}
 
 instance HasField "toText" QueryMonitorId Text where
   getField = UUID.toText . unQueryMonitorId
+
+
+instance ToParamSchema QueryMonitorId where
+  toParamSchema _ = toParamSchema (Proxy @UUID.UUID)
 
 
 data MonitorStatus = MSNormal | MSWarning | MSAlerting

@@ -5,6 +5,7 @@ module Data.Effectful.UUID (
   genUUID,
   runUUID,
   runStaticUUID,
+  runStaticUUIDRef,
 ) where
 
 import Data.UUID qualified as UUID
@@ -38,12 +39,15 @@ runUUID = interpret $ \_ -> \case
 runStaticUUID :: IOE :> es => [UUID.UUID] -> Eff (UUIDEff ': es) a -> Eff es a
 runStaticUUID uuids eff = do
   ref <- liftIO $ newIORef (cycle uuids)
-  interpret
-    ( \_ -> \case
-        GenUUID -> do
-          liftIO $ do
-            (uuid : rest) <- readIORef ref
-            writeIORef ref rest
-            return uuid
-    )
-    eff
+  runStaticUUIDRef ref eff
+
+
+-- | Variant that reuses an externally-managed IORef so multiple effect runs
+-- in the same test draw from a shared, non-resetting counter (avoids id
+-- collisions across handler invocations).
+runStaticUUIDRef :: IOE :> es => IORef [UUID.UUID] -> Eff (UUIDEff ': es) a -> Eff es a
+runStaticUUIDRef ref =
+  interpret \_ -> \case
+    GenUUID -> liftIO $ atomicModifyIORef' ref \case
+      (u : rs) -> (rs, u)
+      [] -> error "runStaticUUIDRef: empty UUID pool"

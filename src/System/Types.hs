@@ -31,11 +31,11 @@ import Data.Effectful.Hasql (Hasql, runHasqlPool)
 import Data.Effectful.Hasql qualified
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
-import Data.Effectful.UUID (UUIDEff, runStaticUUID, runUUID)
+import Data.Effectful.UUID (UUIDEff, runStaticUUIDRef, runUUID)
+import Data.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
 import Data.Time (UTCTime)
-import Data.UUID qualified as UUID
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)
@@ -149,13 +149,15 @@ effToServantHandler env logger tp app =
 
 
 -- | `effToServantHandler` exists specifically to be used in tests,
--- so the UUID and Time effects are fixed to constants.
-effToServantHandlerTest :: AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
-effToServantHandlerTest env logger tp app =
+-- so the UUID and Time effects are fixed to constants. The IORef holds a
+-- pre-populated pool of deterministic UUIDs shared across multiple handler
+-- invocations in the same test (so creates in a loop get distinct ids).
+effToServantHandlerTest :: IORef [UUID.UUID] -> AuthContext -> Log.Logger -> TracerProvider -> ATBaseCtx a -> Servant.Handler a
+effToServantHandlerTest uuidRef env logger tp app =
   app
     & ELLM.runLLMGolden "./tests/golden/"
     & Effectful.Reader.Static.runReader env
-    & runStaticUUID (map (UUID.fromWords 0 0 0) [1 .. 1000])
+    & runStaticUUIDRef uuidRef
     & runHTTPGolden "./tests/golden/"
     & runHasqlPool env.hasqlPool
     & runLabeled @"timefusion" (runHasqlPool env.hasqlTimefusionPool)
