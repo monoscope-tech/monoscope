@@ -103,7 +103,7 @@ bulkExec ba ops = do
   pure
     $ if n > 0
       then BulkResult{succeeded = ba.ids, failed = []}
-      else BulkResult{succeeded = [], failed = (,"not applied") <$> ba.ids}
+      else BulkResult{succeeded = [], failed = [BulkFailure{id = i, error = "not applied"} | i <- ba.ids]}
 
 
 apiMonitorsList :: Projects.ProjectId -> ATBaseCtx [Monitors.QueryMonitor]
@@ -195,7 +195,16 @@ apiMonitorPatch pid mid patch = do
   existing <- apiMonitorGet pid mid
   now <- Time.currentTime
   let ac = existing.alertConfig
-      mergedAc = ac{Monitors.title = fromMaybe ac.title patch.title}
+      mergedAc =
+        ac
+          { Monitors.title = fromMaybe ac.title patch.title
+          , Monitors.severity = fromMaybe ac.severity patch.severity
+          , Monitors.subject = fromMaybe ac.subject patch.subject
+          , Monitors.message = fromMaybe ac.message patch.message
+          , Monitors.emails = maybe ac.emails (V.fromList . fmap CI.mk) patch.emails
+          , Monitors.emailAll = fromMaybe ac.emailAll patch.emailAll
+          , Monitors.slackChannels = maybe ac.slackChannels V.fromList patch.slackChannels
+          }
       updateActive m =
         case patch.active of
           Nothing -> m
@@ -335,7 +344,7 @@ apiDashboardCreate pid inp = do
   insertDashboard pid (Projects.UserId UUID.nil) now did inp.title inp.tags inp.teams inp.filePath inp.schema
 
 
--- | Upsert keyed by file_path — the core "Infrastructure-as-Code" entrypoint.
+-- | Upsert keyed by file_path.
 apiDashboardApply :: Projects.ProjectId -> DashboardYAMLDoc -> ATBaseCtx DashboardFull
 apiDashboardApply pid doc = do
   now <- Time.currentTime
@@ -542,6 +551,8 @@ data ShareLinkCreate = ShareLinkCreate
 
 
 -- | Response: `{ id: UUID, url: Text }`. URL lasts 48 hours.
+-- Keep in sync with the SQL interval in 'Pages.Share.getShareLink' and
+-- the user-facing copy in 'Pages.Share'.
 data ShareLinkCreated = ShareLinkCreated
   { id :: UUID.UUID
   , url :: Text

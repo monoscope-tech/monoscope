@@ -9,9 +9,10 @@ module CLI.Core
   , renderTable
   , printError
   , APIError (..)
+  , renderAPIError
   , apiGet
   , apiGetJson
-  , apiPost
+  , apiPostUnauth
   , apiPostJson
   , apiPutJson
   , apiPatchJson
@@ -34,7 +35,7 @@ import Data.Yaml qualified as Yaml
 import Effectful
 import Effectful.Environment (Environment)
 import Effectful.Environment qualified as Env
-import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..))
+import Network.HTTP.Client (HttpException (..), HttpExceptionContent (..), Request, host, method, path, port, secure)
 import Network.Wreq qualified as Wreq
 import Pkg.CLIFormat (colWidths, formatRow)
 import System.Console.ANSI qualified as ANSI
@@ -103,6 +104,13 @@ printError msg = liftIO $ do
 data APIError = APIError {statusCode :: Int, message :: Text}
   deriving stock (Show)
 
+-- | Human-readable rendering for end-user error messages.
+-- Preferred over 'show' which leaks Haskell record syntax.
+renderAPIError :: APIError -> Text
+renderAPIError e
+  | e.statusCode == 0 = e.message
+  | otherwise = "HTTP " <> show e.statusCode <> ": " <> e.message
+
 -- | Build common request options (auth + project header + query params).
 reqOpts :: CLIConfig -> [(Text, Text)] -> W.Options
 reqOpts cfg params =
@@ -119,24 +127,28 @@ apiGet cfg path params =
     (pure . Left . httpExToError)
 
 apiGetJson :: (HTTP :> es, IOE :> es, AE.FromJSON a) => CLIConfig -> Text -> [(Text, Text)] -> Eff es (Either APIError a)
-apiGetJson cfg path params = apiGet cfg path params >>= pure . decodeBody
+apiGetJson cfg path params = decodeBody <$> apiGet cfg path params
 
-apiPost :: (HTTP :> es, IOE :> es) => Text -> Text -> [(Text, Text)] -> Eff es (Either APIError LByteString)
-apiPost baseUrl path params =
+-- | Unauthenticated POST for device-code auth bootstrap (pre-token flows).
+-- All other callers should use the 'CLIConfig'-carrying variants which attach
+-- Bearer + project headers.
+apiPostUnauth :: (HTTP :> es, IOE :> es) => Text -> Text -> [(Text, Text)] -> Eff es (Either APIError LByteString)
+apiPostUnauth baseUrl path params =
   catch
     ( Right . (^. responseBody)
         <$> postWith (W.defaults & W.header "Accept" .~ ["application/json"] & addParams params) (toString $ baseUrl <> path) ("" :: ByteString)
     )
     (pure . Left . httpExToError)
 
-apiPostJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> a -> Eff es (Either APIError b)
-apiPostJson cfg path body = jsonCall (\o u b -> postWith o u b) cfg path body
+-- | POST JSON with optional query params (wreq URL-encodes them safely).
+apiPostJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
+apiPostJson = jsonCall postWith
 
-apiPutJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> a -> Eff es (Either APIError b)
-apiPutJson cfg path body = jsonCall (\o u b -> putWith o u b) cfg path body
+apiPutJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
+apiPutJson = jsonCall putWith
 
-apiPatchJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> a -> Eff es (Either APIError b)
-apiPatchJson cfg path body = jsonCall (\o u b -> patchWith o u b) cfg path body
+apiPatchJson :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b) => CLIConfig -> Text -> [(Text, Text)] -> a -> Eff es (Either APIError b)
+apiPatchJson = jsonCall patchWith
 
 -- | DELETE; discards response body (returns unit on success).
 apiDelete :: (HTTP :> es, IOE :> es) => CLIConfig -> Text -> Eff es (Either APIError ())
@@ -146,36 +158,38 @@ apiDelete cfg path =
     (pure . Left . httpExToError)
 
 jsonCall
-  :: (HTTP :> es, IOE :> es, AE.ToJSON a, AE.FromJSON b)
+  :: (IOE :> es, AE.ToJSON a, AE.FromJSON b)
   => (W.Options -> String -> LByteString -> Eff es (Wreq.Response LByteString))
   -> CLIConfig
   -> Text
+  -> [(Text, Text)]
   -> a
   -> Eff es (Either APIError b)
-jsonCall action cfg path body =
+jsonCall action cfg path params body =
   catch
     ( do
-        let opts = reqOpts cfg [] & W.header "Content-Type" .~ ["application/json"]
+        let opts = reqOpts cfg params & W.header "Content-Type" .~ ["application/json"]
             url = toString $ cfg.apiUrl <> path
         resp <- action opts url (AE.encode body)
         pure $ decodeBody (Right (resp ^. responseBody))
     )
     (pure . Left . httpExToError)
 
--- | Decode a JSON response body. Empty bodies succeed only when the target type
--- accepts JSON null (e.g. 'Maybe a', '()'); otherwise the parse error is surfaced
--- to the caller rather than silently returning null.
+-- | Decode a JSON response body. Empty bodies are treated as an explicit error —
+-- we used to coerce them to @null@, which masked server bugs for callers that
+-- happen to accept @null@ (e.g. 'AE.Value'). Callers that genuinely expect an
+-- empty body (like 'apiDelete') return @()@ via the catch path, not this.
 decodeBody :: AE.FromJSON a => Either APIError LByteString -> Either APIError a
 decodeBody (Left e) = Left e
-decodeBody (Right bs) =
-  let input = if LBS.null bs then "null" else bs
-   in first (APIError 0 . toText) (AE.eitherDecode input)
+decodeBody (Right bs)
+  | LBS.null bs = Left (APIError 0 "empty response body")
+  | otherwise = first (APIError 0 . toText) (AE.eitherDecode bs)
 
 -- | Fetch JSON from API endpoint and apply a handler, printing errors on failure.
 withAPIResult :: (HTTP :> es, IOE :> es) => CLIConfig -> Text -> [(Text, Text)] -> (AE.Value -> Eff es ()) -> Eff es ()
 withAPIResult cfg path params onSuccess =
   apiGet cfg path params >>= \case
-    Left err -> printError (show err) >> liftIO exitFailure
+    Left err -> printError (renderAPIError err) >> liftIO exitFailure
     Right bs -> case AE.eitherDecode @AE.Value bs of
       Left err -> printError (toText err) >> liftIO exitFailure
       Right val -> onSuccess val
@@ -192,11 +206,24 @@ addParams :: [(Text, Text)] -> W.Options -> W.Options
 addParams ps o = foldl' (\acc (k, v) -> acc & Wreq.param k .~ [v]) o ps
 
 httpExToError :: HttpException -> APIError
-httpExToError (HttpExceptionRequest _ (StatusCodeException resp _)) =
+httpExToError (HttpExceptionRequest req (StatusCodeException resp _)) =
   let code = resp ^. Wreq.responseStatus . Wreq.statusCode
       msg = decodeUtf8 $ resp ^. Wreq.responseStatus . Wreq.statusMessage
-   in APIError code msg
-httpExToError (HttpExceptionRequest _ (ConnectionFailure _)) =
-  APIError 0 "Connection failed — is the server running?"
-httpExToError e =
-  APIError 0 (toText $ displayException e)
+   in APIError code (msg <> " (" <> reqSummary req <> ")")
+httpExToError (HttpExceptionRequest req (ConnectionFailure _)) =
+  APIError 0 ("connection failed — is the server running? (" <> reqSummary req <> ")")
+httpExToError (HttpExceptionRequest req content) =
+  APIError 0 (show content <> " (" <> reqSummary req <> ")")
+httpExToError (InvalidUrlException url reason) =
+  APIError 0 ("invalid URL " <> toText url <> ": " <> toText reason)
+
+-- | Compact "METHOD scheme://host:port/path" for error context.
+reqSummary :: Request -> Text
+reqSummary r =
+  decodeUtf8 (method r)
+    <> " "
+    <> (if secure r then "https" else "http")
+    <> "://"
+    <> decodeUtf8 (host r)
+    <> (if port r `elem` [80, 443] then "" else ":" <> show (port r))
+    <> decodeUtf8 (path r)

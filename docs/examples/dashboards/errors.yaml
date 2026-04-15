@@ -1,0 +1,17 @@
+file_path: dashboards/errors.yaml
+title: Errors & Exceptions
+tags: [errors]
+schema:
+  title: Errors & Exceptions
+  description: Top errors by service and error-rate trends
+  widgets:
+    - id: w-top-errors
+      title: Top errors
+      type: table
+      query: "where status_code >= 500 | summarize count(*) by service, error_type | sort by count desc | take 20"
+      layout: { x: 0, y: 0, w: 12, h: 6 }
+    - id: w-error-rate
+      title: Error rate by service
+      type: timeseries
+      query: "where status_code >= 500 | summarize count(*) by bin_auto(timestamp), service"
+      layout: { x: 0, y: 6, w: 12, h: 4 }

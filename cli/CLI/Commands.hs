@@ -30,7 +30,7 @@ module CLI.Commands
 import Relude
 
 import CLI.Config (CLIConfig (..), ConfigKey (..), allConfigKeys, configDir, configFilePath, configKeyText, parseConfigKey, removeToken, resolveConfig, saveToken, setConfigValue)
-import CLI.Core (OutputMode (..), apiGet, apiPost, isInteractiveTTY, printError, renderJSON, renderTable, renderWith, withAPIResult)
+import CLI.Core (OutputMode (..), apiGet, apiPostUnauth, isInteractiveTTY, printError, renderJSON, renderTable, renderWith, withAPIResult)
 import CLI.UI (inputForm, selectFromList, withSpinner)
 import Control.Monad.Except (ExceptT (..), runExceptT, throwError)
 import Data.Aeson qualified as AE
@@ -65,7 +65,7 @@ runAuth = \case
     cfg <- resolveConfig
     let baseUrl = cfg.apiUrl
     result <- runExceptT $ do
-      bs <- ExceptT $ first show <$> apiPost baseUrl "/api/device/code" []
+      bs <- ExceptT $ first show <$> apiPostUnauth baseUrl "/api/device/code" []
       resp <- ExceptT . pure $ first toText $ AE.eitherDecode @DeviceCodeResponse bs
       putTextLn $ "\nYour authorization code: " <> resp.userCode
       putTextLn $ "Opening browser to: " <> resp.verificationUri
@@ -443,7 +443,7 @@ pollForToken :: (HTTP :> es, IOE :> es) => Text -> Text -> Int -> Eff es (Maybe 
 pollForToken _ _ 0 = pure Nothing
 pollForToken baseUrl deviceCode remaining = do
   threadDelay 5_000_000
-  apiPost baseUrl "/api/device/token" [("device_code", deviceCode)] >>= \case
+  apiPostUnauth baseUrl "/api/device/token" [("device_code", deviceCode)] >>= \case
     Left _ -> pollForToken baseUrl deviceCode (remaining - 1) -- transient error, keep polling
     Right bs -> case AE.eitherDecode @DeviceTokenResponse bs of
       Left _ -> pollForToken baseUrl deviceCode (remaining - 1)

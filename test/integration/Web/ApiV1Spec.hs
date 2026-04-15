@@ -2,6 +2,7 @@ module Web.ApiV1Spec (spec) where
 
 import Control.Lens ((^.), (^?))
 import Data.Aeson qualified as AE
+import Data.Aeson.Key qualified as AEK
 import Data.Aeson.Lens (key, _Array, _Number, _Object)
 import Data.Default (def)
 import Data.Map qualified as Map
@@ -49,10 +50,38 @@ spec = aroundAll withTestResources do
           Nothing -> False
 
       it "declares all expected endpoint paths" $ \_tr -> do
-        (specJson ^? key "paths" . key "/events") `shouldSatisfy` isJust
-        (specJson ^? key "paths" . key "/metrics") `shouldSatisfy` isJust
-        (specJson ^? key "paths" . key "/schema") `shouldSatisfy` isJust
-        (specJson ^? key "paths" . key "/monitors") `shouldSatisfy` isJust
+        let expectedPaths :: [Text]
+            expectedPaths =
+              [ "/events"
+              , "/metrics"
+              , "/schema"
+              , "/monitors"
+              , "/monitors/{monitor_id}"
+              , "/monitors/{monitor_id}/mute"
+              , "/monitors/{monitor_id}/unmute"
+              , "/monitors/{monitor_id}/resolve"
+              , "/monitors/{monitor_id}/toggle_active"
+              , "/monitors/bulk"
+              , "/dashboards"
+              , "/dashboards/{dashboard_id}"
+              , "/dashboards/apply"
+              , "/dashboards/{dashboard_id}/duplicate"
+              , "/dashboards/{dashboard_id}/star"
+              , "/dashboards/{dashboard_id}/yaml"
+              , "/dashboards/{dashboard_id}/widgets"
+              , "/dashboards/{dashboard_id}/widgets/{widget_id}"
+              , "/dashboards/{dashboard_id}/widgets/order"
+              , "/dashboards/bulk"
+              , "/api_keys"
+              , "/api_keys/{key_id}"
+              , "/api_keys/{key_id}/activate"
+              , "/api_keys/{key_id}/deactivate"
+              , "/events/query"
+              , "/anomalies/bulk"
+              , "/share"
+              ]
+        for_ expectedPaths $ \p ->
+          (specJson ^? key "paths" . key (AEK.fromText p)) `shouldSatisfy` isJust
 
       it "includes schema definitions for response types" $ \_tr -> do
         let schemas = specJson ^? key "components" . key "schemas" . _Object
@@ -144,6 +173,48 @@ spec = aroundAll withTestResources do
         m2 <- runB $ ApiH.apiMonitorCreate testPid (mkInput "b")
         res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [m1.id.unQueryMonitorId, m2.id.unQueryMonitorId], ApiT.durationMinutes = Nothing}
         length res.succeeded `shouldBe` 2
+        res.failed `shouldBe` []
+
+      it "bulk delete against non-existent ids reports them in failed with error text" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+        bogus1 <- UUIDV4.nextRandom
+        bogus2 <- UUIDV4.nextRandom
+        res <- runB $ ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [bogus1, bogus2], ApiT.durationMinutes = Nothing}
+        res.succeeded `shouldBe` []
+        length res.failed `shouldBe` 2
+        -- SDK-facing wire shape: each failure is {id, error}, not a tuple
+        fmap (.id) res.failed `shouldMatchList` [bogus1, bogus2]
+        fmap (.error) res.failed `shouldSatisfy` all (== "not applied")
+
+      it "bulk with unknown action raises 400" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+        runB (ApiH.apiMonitorBulk testPid ApiT.BulkAction{ApiT.action = "nuke", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+          `shouldThrow` anyException
+
+      it "get with non-existent id raises 404" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+        bogus <- UUIDV4.nextRandom
+        runB (ApiH.apiMonitorGet testPid (Monitors.QueryMonitorId bogus))
+          `shouldThrow` anyException
+
+      it "patch propagates notification fields (emails, emailAll, slackChannels)" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            input = (def :: ApiT.MonitorInput){ApiT.title = "notify-t", ApiT.query = "count(*)", ApiT.alertThreshold = 5, ApiT.checkIntervalMins = 5, ApiT.timeWindowMins = 15}
+        created <- runB $ ApiH.apiMonitorCreate testPid input
+        patched <-
+          runB
+            $ ApiH.apiMonitorPatch
+              testPid
+              created.id
+              ((def :: ApiT.MonitorPatch){ApiT.emails = Just ["a@b.com"], ApiT.emailAll = Just True, ApiT.slackChannels = Just ["#alerts"], ApiT.severity = Just "critical"})
+        length patched.alertConfig.emails `shouldBe` 1
+        patched.alertConfig.emailAll `shouldBe` True
+        toList patched.alertConfig.slackChannels `shouldBe` ["#alerts"]
+        patched.alertConfig.severity `shouldBe` "critical"
 
     describe "Dashboard CRUD" do
       it "create → star → unstar → delete round-trip" $ \tr -> do

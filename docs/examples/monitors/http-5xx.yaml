@@ -1,0 +1,18 @@
+title: HTTP 5xx rate
+query: "where status_code >= 500 | summarize count(*) by bin_auto(timestamp)"
+severity: error
+subject: "5xx rate elevated"
+message: "Server-side error rate has exceeded the alert threshold."
+alert_threshold: 10
+warning_threshold: 5
+trigger_less_than: false
+check_interval_mins: 5
+time_window_mins: 15
+threshold_sustained_for_mins: 10
+notify_after_mins: 30
+emails: ["oncall@example.com"]
+email_all: false
+slack_channels: ["#alerts"]
+teams: []
+visualization_type: timeseries
+active: true

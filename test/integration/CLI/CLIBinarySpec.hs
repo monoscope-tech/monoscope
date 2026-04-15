@@ -28,6 +28,11 @@ spec = describe "CLI binary E2E tests" do
     code `shouldBe` ExitSuccess
     out `shouldSatisfy` \s -> "events" `isInfixOf` s && "metrics" `isInfixOf` s && "auth" `isInfixOf` s
 
+  it "--version prints monoscope version and exits 0" do
+    (code, out, _) <- runMono ["--version"]
+    code `shouldBe` ExitSuccess
+    out `shouldSatisfy` \s -> "monoscope " `isInfixOf` s
+
   it "events search --help exits 0 and shows options" do
     (code, out, _) <- runMono ["events", "search", "--help"]
     code `shouldBe` ExitSuccess
@@ -45,3 +50,35 @@ spec = describe "CLI binary E2E tests" do
     -- Both should show the same search options
     logOut `shouldSatisfy` \s -> "--since" `isInfixOf` s && "--from" `isInfixOf` s
     length logOut `shouldSatisfy` (> 0)
+
+  describe "--help coverage for Plan A CRUD subcommands" do
+    let helpCases =
+          [ ["monitors", "--help"]
+          , ["monitors", "create", "--help"]
+          , ["monitors", "update", "--help"]
+          , ["monitors", "patch", "--help"]
+          , ["monitors", "apply", "--help"]
+          , ["monitors", "bulk", "--help"]
+          , ["dashboards", "--help"]
+          , ["dashboards", "create", "--help"]
+          , ["dashboards", "update", "--help"]
+          , ["dashboards", "patch", "--help"]
+          , ["dashboards", "bulk", "--help"]
+          , ["dashboards", "widget", "--help"]
+          , ["dashboards", "widget", "upsert", "--help"]
+          , ["dashboards", "widget", "delete", "--help"]
+          , ["dashboards", "widget", "reorder", "--help"]
+          , ["api-keys", "deactivate", "--help"]
+          , ["api-keys", "revoke", "--help"]
+          , ["share-link", "--help"]
+          , ["share-link", "create", "--help"]
+          ]
+    forM_ helpCases $ \args ->
+      it (toString $ unwords $ map toText args) do
+        (code, out, _) <- runMono args
+        code `shouldBe` ExitSuccess
+        -- Help output must at least mention the invoked subcommand name
+        -- (guards against parser-construction errors that silently emit the wrong help).
+        out `shouldSatisfy` \s -> case args of
+          (_ : sub : _) -> sub `isInfixOf` s
+          _ -> True

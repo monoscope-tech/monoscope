@@ -1,0 +1,18 @@
+title: P99 latency
+query: "summarize percentile(duration, 99) by bin_auto(timestamp)"
+severity: warning
+subject: "P99 latency exceeded"
+message: "Tail latency has breached the configured threshold."
+alert_threshold: 1500
+warning_threshold: 1000
+trigger_less_than: false
+check_interval_mins: 5
+time_window_mins: 30
+threshold_sustained_for_mins: 15
+notify_after_mins: 60
+emails: ["perf@example.com"]
+email_all: false
+slack_channels: ["#perf"]
+teams: []
+visualization_type: timeseries
+active: true

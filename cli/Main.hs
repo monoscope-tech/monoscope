@@ -4,10 +4,11 @@ import Relude
 
 import CLI.Commands hiding (value)
 import CLI.Config (CLIConfig (..), resolveConfig)
-import CLI.Core (OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode)
+import CLI.Core (OutputMode (..), apiDelete, apiGetJson, apiPostJson, detectOutputMode, renderAPIError)
 import CLI.Resource qualified as Resource
 import Data.Aeson qualified as AE
 import Data.Effectful.Wreq (HTTP, runHTTPWreq)
+import Data.Text qualified as T
 import Data.Version (showVersion)
 import Effectful
 import Effectful.Environment (Environment, runEnvironment)
@@ -21,7 +22,6 @@ data GlobalOpts = GlobalOpts
   , agentFlag :: Bool
   , outputFlag :: Maybe Text
   , projectFlag :: Maybe Text
-  , showVersionFlag :: Bool
   }
 
 
@@ -34,6 +34,7 @@ data Command
   | MonitorsCmd MonitorsCommand
   | DashboardsCmd DashboardsCommand
   | ApiKeysCmd ApiKeysCommand
+  | ShareLinkCmd ShareLinkCommand
   | SchemaCmd
   | CompletionCmd Text
   | VersionCmd
@@ -65,23 +66,35 @@ data ConfigCommand = CInit | CSet ConfigSetOpts | CGet ConfigGetOpts
 data MonitorsCommand
   = MonList
   | MonGet Text
+  | MonCreate FilePath
+  | MonUpdate Text FilePath
+  | MonPatch Text FilePath
+  | MonApply FilePath
   | MonDelete Text
   | MonMute Text (Maybe Int)
   | MonUnmute Text
   | MonResolve Text
   | MonToggle Text
+  | MonBulk Text [Text] (Maybe Int)
   deriving stock (Show)
 
 
 data DashboardsCommand
   = DashList
   | DashGet Text
+  | DashCreate FilePath
+  | DashUpdate Text FilePath
+  | DashPatch Text FilePath
   | DashDelete Text
   | DashStar Text
   | DashUnstar Text
   | DashDuplicate Text
   | DashYaml Text
   | DashApply FilePath
+  | DashBulk Text [Text]
+  | DashWidgetUpsert Text FilePath
+  | DashWidgetDelete Text Text
+  | DashWidgetsReorder Text (Maybe Text) FilePath
   deriving stock (Show)
 
 
@@ -90,8 +103,13 @@ data ApiKeysCommand
   | KeyGet Text
   | KeyCreate Text -- title
   | KeyActivate Text
-  | KeyRevoke Text
+  | KeyDeactivate Text
   | KeyDelete Text
+  deriving stock (Show)
+
+
+data ShareLinkCommand
+  = ShareLinkCreate Text Text (Maybe Text) -- eventId, createdAt, eventType
   deriving stock (Show)
 
 
@@ -102,7 +120,13 @@ globalOpts =
     <*> switch (long "agent" <> help "Force agent mode")
     <*> optional (strOption (long "output" <> short 'o' <> metavar "FORMAT" <> help "Output format: json|yaml|table"))
     <*> optional (strOption (long "project" <> short 'p' <> metavar "PID" <> help "Project UUID override"))
-    <*> switch (long "version" <> help "Print CLI version and exit")
+
+
+versionOpt :: Parser (a -> a)
+versionOpt =
+  infoOption
+    ("monoscope " <> showVersion Paths.version)
+    (long "version" <> help "Print CLI version and exit")
 
 
 commandParser :: Parser (GlobalOpts, Command)
@@ -121,6 +145,7 @@ commandParser =
           , command "monitors" (info (MonitorsCmd <$> monitorsParser <**> helper) (progDesc "Manage alert monitors"))
           , command "dashboards" (info (DashboardsCmd <$> dashboardsParser <**> helper) (progDesc "Manage dashboards"))
           , command "api-keys" (info (ApiKeysCmd <$> apiKeysParser <**> helper) (progDesc "Manage API keys"))
+          , command "share-link" (info (ShareLinkCmd <$> shareLinkParser <**> helper) (progDesc "Create time-limited share links"))
           , command "schema" (info (pure SchemaCmd) (progDesc "Fetch telemetry schema"))
           , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish")) (progDesc "Emit shell completion script"))
           , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
@@ -256,17 +281,40 @@ idArg :: Parser Text
 idArg = strArgument (metavar "ID" <> help "Resource ID (UUID)")
 
 
+fileArg :: Parser FilePath
+fileArg = strArgument (metavar "FILE" <> help "Path to YAML or JSON file")
+
+
+idsOpt :: Parser [Text]
+idsOpt = fmap (T.splitOn ",") $ strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated UUIDs")
+
+
 monitorsParser :: Parser MonitorsCommand
 monitorsParser =
   subparser $
     mconcat
       [ command "list" (info (pure MonList) (progDesc "List monitors"))
       , command "get" (info (MonGet <$> idArg <**> helper) (progDesc "Get a single monitor"))
+      , command "create" (info (MonCreate <$> fileArg <**> helper) (progDesc "Create monitor from YAML/JSON file"))
+      , command "update" (info (MonUpdate <$> idArg <*> fileArg <**> helper) (progDesc "Replace (PUT) monitor from file"))
+      , command "patch" (info (MonPatch <$> idArg <*> fileArg <**> helper) (progDesc "Patch monitor fields from file"))
+      , command "apply" (info (MonApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory") <**> helper) (progDesc "Upsert monitor(s) from file or directory"))
       , command "delete" (info (MonDelete <$> idArg <**> helper) (progDesc "Delete a monitor"))
       , command "mute" (info (MonMute <$> idArg <*> optional (option auto (long "for" <> metavar "MINUTES")) <**> helper) (progDesc "Mute a monitor"))
       , command "unmute" (info (MonUnmute <$> idArg <**> helper) (progDesc "Unmute a monitor"))
       , command "resolve" (info (MonResolve <$> idArg <**> helper) (progDesc "Resolve a monitor"))
       , command "toggle-active" (info (MonToggle <$> idArg <**> helper) (progDesc "Toggle active state"))
+      , command
+          "bulk"
+          ( info
+              ( MonBulk
+                  <$> strArgument (metavar "ACTION" <> help "delete|activate|deactivate|mute|unmute|resolve")
+                  <*> idsOpt
+                  <*> optional (option auto (long "duration" <> metavar "MINUTES" <> help "For mute action"))
+                  <**> helper
+              )
+              (progDesc "Run bulk action over multiple monitors")
+          )
       ]
 
 
@@ -276,12 +324,64 @@ dashboardsParser =
     mconcat
       [ command "list" (info (pure DashList) (progDesc "List dashboards"))
       , command "get" (info (DashGet <$> idArg <**> helper) (progDesc "Get a single dashboard"))
+      , command "create" (info (DashCreate <$> fileArg <**> helper) (progDesc "Create dashboard from YAML/JSON file"))
+      , command "update" (info (DashUpdate <$> idArg <*> fileArg <**> helper) (progDesc "Replace (PUT) dashboard from file"))
+      , command "patch" (info (DashPatch <$> idArg <*> fileArg <**> helper) (progDesc "Patch dashboard fields from file"))
       , command "delete" (info (DashDelete <$> idArg <**> helper) (progDesc "Delete a dashboard"))
       , command "star" (info (DashStar <$> idArg <**> helper) (progDesc "Star a dashboard"))
       , command "unstar" (info (DashUnstar <$> idArg <**> helper) (progDesc "Unstar a dashboard"))
       , command "duplicate" (info (DashDuplicate <$> idArg <**> helper) (progDesc "Duplicate dashboard"))
       , command "yaml" (info (DashYaml <$> idArg <**> helper) (progDesc "Dump dashboard as YAML"))
-      , command "apply" (info (DashApply <$> strArgument (metavar "FILE" <> help "Dashboard YAML") <**> helper) (progDesc "Apply a dashboard YAML file"))
+      , command "apply" (info (DashApply <$> strArgument (metavar "PATH" <> help "YAML/JSON file or directory") <**> helper) (progDesc "Upsert dashboard(s) from file or directory"))
+      , command
+          "bulk"
+          ( info
+              ( DashBulk
+                  <$> strArgument (metavar "ACTION" <> help "delete")
+                  <*> idsOpt
+                  <**> helper
+              )
+              (progDesc "Run bulk action over multiple dashboards")
+          )
+      , command "widget" (info widgetParser (progDesc "Widget-level operations"))
+      ]
+
+
+widgetParser :: Parser DashboardsCommand
+widgetParser =
+  subparser $
+    mconcat
+      [ command
+          "upsert"
+          ( info
+              ( DashWidgetUpsert
+                  <$> strArgument (metavar "DASHBOARD_ID")
+                  <*> fileArg
+                  <**> helper
+              )
+              (progDesc "Insert or update a widget on a dashboard")
+          )
+      , command
+          "delete"
+          ( info
+              ( DashWidgetDelete
+                  <$> strArgument (metavar "DASHBOARD_ID")
+                  <*> strArgument (metavar "WIDGET_ID")
+                  <**> helper
+              )
+              (progDesc "Delete a widget from a dashboard")
+          )
+      , command
+          "reorder"
+          ( info
+              ( DashWidgetsReorder
+                  <$> strArgument (metavar "DASHBOARD_ID")
+                  <*> optional (strOption (long "tab" <> metavar "TAB"))
+                  <*> fileArg
+                  <**> helper
+              )
+              (progDesc "Reorder widgets via {id: {x,y,w,h}} JSON/YAML")
+          )
       ]
 
 
@@ -293,15 +393,32 @@ apiKeysParser =
       , command "get" (info (KeyGet <$> idArg <**> helper) (progDesc "Get API key"))
       , command "create" (info (KeyCreate <$> strArgument (metavar "TITLE") <**> helper) (progDesc "Create API key; prints plaintext once"))
       , command "activate" (info (KeyActivate <$> idArg <**> helper) (progDesc "Activate an API key"))
-      , command "revoke" (info (KeyRevoke <$> idArg <**> helper) (progDesc "Revoke an API key"))
+      , command "deactivate" (info (KeyDeactivate <$> idArg <**> helper) (progDesc "Deactivate an API key (soft)"))
+      , command "revoke" (info (KeyDeactivate <$> idArg <**> helper) (progDesc "Deprecated alias for deactivate"))
       , command "delete" (info (KeyDelete <$> idArg <**> helper) (progDesc "Delete an API key"))
       ]
+
+
+shareLinkParser :: Parser ShareLinkCommand
+shareLinkParser =
+  subparser $
+    command
+      "create"
+      ( info
+          ( ShareLinkCreate
+              <$> strOption (long "event-id" <> metavar "UUID" <> help "Event ID")
+              <*> strOption (long "created-at" <> metavar "ISO8601" <> help "Event created-at timestamp")
+              <*> optional (strOption (long "type" <> metavar "TYPE" <> help "request|log|span (default: request)"))
+              <**> helper
+          )
+          (progDesc "Create a 48h share link for a stored event")
+      )
 
 
 parserInfo :: ParserInfo (GlobalOpts, Command)
 parserInfo =
   info
-    (commandParser <**> helper)
+    (commandParser <**> versionOpt <**> helper)
     ( fullDesc
         <> progDesc "Monoscope CLI — terminal access to your observability platform"
         <> header "monoscope — Monoscope CLI"
@@ -319,9 +436,7 @@ main :: IO ()
 main = do
   hSetBuffering stdout LineBuffering
   (global, cmd) <- execParser parserInfo
-  if global.showVersionFlag
-    then putTextLn $ "monoscope " <> toText (showVersion Paths.version)
-    else runCLI $ run global cmd
+  runCLI $ run global cmd
 
 
 -- | Apply --project override to the resolved config.
@@ -333,72 +448,86 @@ resolveCfgWith g = do
     Just pid -> c{projectId = Just pid}
 
 
+-- | Resolve config + output mode and hand them to a subcommand handler.
+-- Factors out the two-line preamble every resource branch repeats.
+withCfgMode
+  :: (FileSystem :> es, Environment :> es, IOE :> es)
+  => GlobalOpts -> (CLIConfig -> OutputMode -> Eff es ()) -> Eff es ()
+withCfgMode global k = do
+  cfg <- resolveCfgWith global
+  mode <- resolveMode global
+  k cfg mode
+
+
 run :: (FileSystem :> es, Environment :> es, HTTP :> es, IOE :> es) => GlobalOpts -> Command -> Eff es ()
 run global = \case
   AuthCmd c -> runAuth c
-  EventsCmd kindOverride evCmd -> do
-    cfg <- resolveCfgWith global
-    mode <- resolveMode global
-    case evCmd of
-      EvSearch opts ->
-        let finalOpts = (opts :: EventsSearchOpts){kind = opts.kind <|> kindOverride}
-         in runEventsSearch cfg finalOpts mode
-      EvGet opts -> runEventsGet cfg opts mode
-      EvTail opts -> runEventsTail cfg opts kindOverride
-      EvContext opts -> runEventsContext cfg opts kindOverride mode
-  MetricsCmd mCmd -> do
-    cfg <- resolveCfgWith global
-    mode <- resolveMode global
-    case mCmd of
-      MQuery opts -> runMetricsQuery cfg opts mode
-      MChart opts -> runMetricsChart cfg opts
-  ServicesCmd (SList opts) -> do
-    cfg <- resolveCfgWith global
-    mode <- resolveMode global
-    runServicesList cfg opts mode
+  EventsCmd kindOverride evCmd -> withCfgMode global $ \cfg mode -> case evCmd of
+    EvSearch opts ->
+      let finalOpts = (opts :: EventsSearchOpts){kind = opts.kind <|> kindOverride}
+       in runEventsSearch cfg finalOpts mode
+    EvGet opts -> runEventsGet cfg opts mode
+    EvTail opts -> runEventsTail cfg opts kindOverride
+    EvContext opts -> runEventsContext cfg opts kindOverride mode
+  MetricsCmd mCmd -> withCfgMode global $ \cfg mode -> case mCmd of
+    MQuery opts -> runMetricsQuery cfg opts mode
+    MChart opts -> runMetricsChart cfg opts
+  ServicesCmd (SList opts) -> withCfgMode global $ \cfg mode -> runServicesList cfg opts mode
   ConfigCmd CInit -> runConfigInit
   ConfigCmd (CSet opts) -> runConfigSet opts
   ConfigCmd (CGet opts) -> runConfigGet opts
-  MonitorsCmd sub -> do
-    cfg <- resolveCfgWith global
-    mode <- resolveMode global
-    case sub of
-      MonList -> Resource.runList cfg Resource.Monitors [] mode
-      MonGet i -> Resource.runGet cfg Resource.Monitors i mode
-      MonDelete i -> Resource.runDelete cfg Resource.Monitors i
-      MonMute i minsM -> Resource.runLifecycle cfg Resource.Monitors i "mute" (maybe [] (\m -> [("duration_minutes", show m)]) minsM) mode
-      MonUnmute i -> Resource.runLifecycle cfg Resource.Monitors i "unmute" [] mode
-      MonResolve i -> Resource.runLifecycle cfg Resource.Monitors i "resolve" [] mode
-      MonToggle i -> Resource.runLifecycle cfg Resource.Monitors i "toggle_active" [] mode
-  DashboardsCmd sub -> do
-    cfg <- resolveCfgWith global
-    mode <- resolveMode global
-    case sub of
-      DashList -> Resource.runList cfg Resource.Dashboards [] mode
-      DashGet i -> Resource.runGet cfg Resource.Dashboards i mode
-      DashDelete i -> Resource.runDelete cfg Resource.Dashboards i
-      DashStar i -> Resource.runLifecycle cfg Resource.Dashboards i "star" [] mode
-      DashUnstar i ->
-        Resource.withResult (apiDelete cfg ("/dashboards/" <> i <> "/star")) show $ \() ->
-          putTextLn $ "/dashboards/" <> i <> "/star unstarred"
-      DashDuplicate i -> Resource.runLifecycle cfg Resource.Dashboards i "duplicate" [] mode
-      DashYaml i -> Resource.runYamlDump cfg Resource.Dashboards i
-      DashApply path -> Resource.runApply cfg path mode
-  ApiKeysCmd sub -> do
-    cfg <- resolveCfgWith global
-    mode <- resolveMode global
-    case sub of
-      KeyList -> Resource.runList cfg Resource.ApiKeys [] mode
-      KeyGet i -> Resource.runGet cfg Resource.ApiKeys i mode
-      KeyCreate title ->
-        Resource.runAPI mode (apiPostJson @_ @_ @AE.Value cfg "/api_keys" (AE.object ["title" AE..= title])) show
-      KeyActivate i -> Resource.runLifecycle cfg Resource.ApiKeys i "activate" [] mode
-      KeyRevoke i -> Resource.runLifecycle cfg Resource.ApiKeys i "deactivate" [] mode
-      KeyDelete i -> Resource.runDelete cfg Resource.ApiKeys i
-  SchemaCmd -> do
-    cfg <- resolveCfgWith global
-    mode <- resolveMode global
-    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/schema" []) show
+  MonitorsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    MonList -> Resource.runList cfg Resource.Monitors [] mode
+    MonGet i -> Resource.runGet cfg Resource.Monitors i mode
+    MonCreate path -> Resource.runFromFile cfg Resource.POST (Resource.resourcePath Resource.Monitors) [] path mode
+    MonUpdate i path -> Resource.runFromFile cfg Resource.PUT (Resource.resourceIdPath Resource.Monitors i) [] path mode
+    MonPatch i path -> Resource.runFromFile cfg Resource.PATCH (Resource.resourceIdPath Resource.Monitors i) [] path mode
+    MonApply path -> Resource.runApplyResource cfg Resource.Monitors path mode
+    MonDelete i -> Resource.runDelete cfg Resource.Monitors i
+    MonMute i minsM -> Resource.runLifecycle cfg Resource.Monitors i "mute" (maybe [] (\m -> [("duration_minutes", show m)]) minsM) mode
+    MonUnmute i -> Resource.runLifecycle cfg Resource.Monitors i "unmute" [] mode
+    MonResolve i -> Resource.runLifecycle cfg Resource.Monitors i "resolve" [] mode
+    MonToggle i -> Resource.runLifecycle cfg Resource.Monitors i "toggle_active" [] mode
+    MonBulk act ids durM -> Resource.runBulk cfg Resource.Monitors act ids durM mode
+  DashboardsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    DashList -> Resource.runList cfg Resource.Dashboards [] mode
+    DashGet i -> Resource.runGet cfg Resource.Dashboards i mode
+    DashCreate path -> Resource.runFromFile cfg Resource.POST (Resource.resourcePath Resource.Dashboards) [] path mode
+    DashUpdate i path -> Resource.runFromFile cfg Resource.PUT (Resource.resourceIdPath Resource.Dashboards i) [] path mode
+    DashPatch i path -> Resource.runFromFile cfg Resource.PATCH (Resource.resourceIdPath Resource.Dashboards i) [] path mode
+    DashDelete i -> Resource.runDelete cfg Resource.Dashboards i
+    DashStar i -> Resource.runLifecycle cfg Resource.Dashboards i "star" [] mode
+    DashUnstar i ->
+      Resource.withResult (apiDelete cfg ("/dashboards/" <> i <> "/star")) renderAPIError $ \() ->
+        putTextLn $ "/dashboards/" <> i <> "/star unstarred"
+    DashDuplicate i -> Resource.runLifecycle cfg Resource.Dashboards i "duplicate" [] mode
+    DashYaml i -> Resource.runYamlDump cfg Resource.Dashboards i
+    DashApply path -> Resource.runApplyResource cfg Resource.Dashboards path mode
+    DashBulk act ids -> Resource.runBulk cfg Resource.Dashboards act ids Nothing mode
+    DashWidgetUpsert did path -> Resource.runFromFile cfg Resource.PUT ("/dashboards/" <> did <> "/widgets") [] path mode
+    DashWidgetDelete did wid ->
+      Resource.withResult (apiDelete cfg ("/dashboards/" <> did <> "/widgets/" <> wid)) renderAPIError $ \() ->
+        putTextLn $ "/dashboards/" <> did <> "/widgets/" <> wid <> " deleted"
+    DashWidgetsReorder did tabM path ->
+      Resource.runFromFile cfg Resource.PATCH ("/dashboards/" <> did <> "/widgets/order") (maybe [] (\t -> [("tab", t)]) tabM) path mode
+  ApiKeysCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    KeyList -> Resource.runList cfg Resource.ApiKeys [] mode
+    KeyGet i -> Resource.runGet cfg Resource.ApiKeys i mode
+    KeyCreate title ->
+      Resource.runAPI mode $ apiPostJson @_ @_ @AE.Value cfg "/api_keys" [] (AE.object ["title" AE..= title])
+    KeyActivate i -> Resource.runLifecycle cfg Resource.ApiKeys i "activate" [] mode
+    KeyDeactivate i -> Resource.runLifecycle cfg Resource.ApiKeys i "deactivate" [] mode
+    KeyDelete i -> Resource.runDelete cfg Resource.ApiKeys i
+  ShareLinkCmd (ShareLinkCreate eid createdAt typeM) -> withCfgMode global $ \cfg mode ->
+    Resource.runAPI mode $
+      apiPostJson @_ @_ @AE.Value cfg "/share" [] $
+        AE.object
+          [ "event_id" AE..= eid
+          , "event_created_at" AE..= createdAt
+          , "event_type" AE..= typeM
+          ]
+  SchemaCmd -> withCfgMode global $ \cfg mode ->
+    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/schema" [])
   CompletionCmd shell -> emitCompletion shell
   VersionCmd -> putTextLn $ "monoscope " <> toText (showVersion Paths.version)
 

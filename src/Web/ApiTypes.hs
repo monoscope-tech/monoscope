@@ -22,6 +22,7 @@ module Web.ApiTypes (
   EventsQuery (..),
   -- Generic
   BulkAction (..),
+  BulkFailure (..),
   BulkResult (..),
 ) where
 
@@ -78,6 +79,9 @@ data MonitorInput = MonitorInput
 data MonitorPatch = MonitorPatch
   { title :: Maybe Text
   , query :: Maybe Text
+  , severity :: Maybe Text
+  , subject :: Maybe Text
+  , message :: Maybe Text
   , alertThreshold :: Maybe Double
   , warningThreshold :: Maybe Double
   , triggerLessThan :: Maybe Bool
@@ -231,9 +235,20 @@ data BulkAction = BulkAction
   deriving (ToSchema) via SnakeSchema BulkAction
 
 
+-- | One failed id within a 'BulkResult'. Serialises as @{id, error}@ so SDK
+-- consumers don't have to destructure a 2-element array.
+data BulkFailure = BulkFailure
+  { id :: UUID.UUID
+  , error :: Text
+  }
+  deriving stock (Eq, Generic, Show)
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] BulkFailure
+  deriving (ToSchema) via SnakeSchema BulkFailure
+
+
 data BulkResult = BulkResult
   { succeeded :: [UUID.UUID]
-  , failed :: [(UUID.UUID, Text)]
+  , failed :: [BulkFailure]
   }
   deriving stock (Generic, Show)
   deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier '[DAE.CamelToSnake]] BulkResult

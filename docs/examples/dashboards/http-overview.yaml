@@ -1,0 +1,23 @@
+file_path: dashboards/http-overview.yaml
+title: HTTP Overview
+tags: [http, overview]
+schema:
+  title: HTTP Overview
+  description: High-level view of HTTP traffic, latency, and errors
+  refresh_interval: 30s
+  widgets:
+    - id: w-reqs
+      title: Requests per second
+      type: timeseries
+      query: "summarize count(*) by bin_auto(timestamp)"
+      layout: { x: 0, y: 0, w: 6, h: 4 }
+    - id: w-p95
+      title: P95 latency
+      type: timeseries
+      query: "summarize percentile(duration, 95) by bin_auto(timestamp)"
+      layout: { x: 6, y: 0, w: 6, h: 4 }
+    - id: w-errors
+      title: Error rate
+      type: timeseries
+      query: "where status_code >= 500 | summarize count(*) by bin_auto(timestamp)"
+      layout: { x: 0, y: 4, w: 12, h: 4 }
