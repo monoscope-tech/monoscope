@@ -195,6 +195,7 @@ data HostEvents = HostEvents
   , first_seen :: Maybe ZonedTime
   , last_seen :: Maybe ZonedTime
   , activityBuckets :: PGArray Int
+  , services :: PGArray Text -- distinct resource.service.name emitting traffic for this host
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, ToRow)
@@ -228,7 +229,7 @@ WITH endpoint_hosts AS (
       [text| AND host != '' AND $endpointFilter
 ), combined AS (
     SELECT $hostExpr AS host,
-           COUNT(*) AS eventsCount,
+           resource___service___name AS service,
            MAX(timestamp) AS last_seen,
            MIN(timestamp) AS first_seen,
            LEAST(width_bucket(EXTRACT(EPOCH FROM timestamp), EXTRACT(EPOCH FROM $seriesStart::timestamptz), EXTRACT(EPOCH FROM NOW()), $numBuckets), $numBuckets) AS bucket_idx,
@@ -237,20 +238,27 @@ WITH endpoint_hosts AS (
     WHERE project_id = |]
     <> [HI.sql|#{pid}::text AND |]
     <> timeRangeSql
-    <> [HI.sql| AND attributes___http___request___method IS NOT NULL AND kind IN (CASE WHEN #{isOutgoing} THEN 'client' ELSE 'server' END, CASE WHEN #{isOutgoing} THEN NULL ELSE 'internal' END) GROUP BY host, bucket_idx
+    <> [HI.sql| AND attributes___http___request___method IS NOT NULL AND kind IN (CASE WHEN #{isOutgoing} THEN 'client' ELSE 'server' END, CASE WHEN #{isOutgoing} THEN NULL ELSE 'internal' END) GROUP BY host, service, bucket_idx
 ), host_stats AS (
-    SELECT host, SUM(eventsCount)::bigint AS eventsCount, MAX(last_seen) AS last_seen, MIN(first_seen) AS first_seen FROM combined GROUP BY host
+    SELECT host,
+           SUM(cnt)::bigint AS eventsCount,
+           MAX(last_seen) AS last_seen,
+           MIN(first_seen) AS first_seen,
+           COALESCE(ARRAY_AGG(DISTINCT service) FILTER (WHERE service IS NOT NULL AND service != '' AND service != host), ARRAY[]::text[]) AS services
+    FROM combined GROUP BY host
 ), bucketed_agg AS (|]
     <> rawSql
       [text|
     SELECT c.host, ARRAY_AGG(COALESCE(c2.cnt, 0) ORDER BY s.idx) AS activity_buckets
     FROM (SELECT DISTINCT host FROM combined) c
     CROSS JOIN generate_series(1, $numBuckets) AS s(idx)
-    LEFT JOIN combined c2 ON c2.host = c.host AND c2.bucket_idx = s.idx
+    LEFT JOIN (SELECT host, bucket_idx, SUM(cnt)::int AS cnt FROM combined GROUP BY host, bucket_idx) c2
+      ON c2.host = c.host AND c2.bucket_idx = s.idx
     GROUP BY c.host
 )
 SELECT eh.host, COALESCE(hs.eventsCount, 0) AS eventsCount, hs.last_seen, hs.first_seen,
-       COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets
+       COALESCE(ba.activity_buckets, ARRAY[]::int[]) AS activity_buckets,
+       COALESCE(hs.services, ARRAY[]::text[]) AS services
 FROM endpoint_hosts eh
 LEFT JOIN host_stats hs ON eh.host = hs.host
 LEFT JOIN bucketed_agg ba ON eh.host = ba.host

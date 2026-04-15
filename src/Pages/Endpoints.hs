@@ -19,7 +19,7 @@ import Relude hiding (ask, asks)
 import System.Config (AuthContext (..))
 import System.Types (ATAuthCtx, RespHeaders, addRespHeaders)
 import Text.Time.Pretty (prettyTimeAuto)
-import Utils (checkFreeTierStatus, formatWithCommas)
+import Utils (checkFreeTierStatus, formatWithCommas, toUriStr)
 
 
 apiCatalogH :: Projects.ProjectId -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Text -> Maybe Int -> ATAuthCtx (RespHeaders CatalogList)
@@ -112,10 +112,25 @@ catalogColumns pid requestType baseUrl period =
 
 
 renderCatalogMainCol :: Projects.ProjectId -> Text -> HostEventsVM -> Html ()
-renderCatalogMainCol pid requestType (HostEventsVM _ he _ _ _ _) =
-  div_ [class_ "flex items-center gap-2 min-w-0"] do
-    a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> requestType, class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
-    a_ ([href_ $ "/p/" <> pid.toText <> "/log_explorer?query=attributes.net.host.name%3D%3D" <> "\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
+renderCatalogMainCol pid requestType (HostEventsVM _ he _ _ _ _) = do
+  let PGArray svcs = he.services
+      outgoing = requestType == "Outgoing"
+      sourceLabel = if outgoing then "Called by:" else "Served by:"
+      kindVal = if outgoing then "client" else "server"
+      logsHref q = "/p/" <> pid.toText <> "/log_explorer?query=" <> toUriStr q
+  div_ [class_ "flex flex-col gap-1 min-w-0"] do
+    div_ [class_ "flex items-center gap-2 min-w-0"] do
+      a_ ([href_ $ "/p/" <> pid.toText <> "/endpoints?host=" <> he.host <> "&request_type=" <> requestType, class_ "font-medium text-textStrong hover:text-textBrand transition-colors truncate min-w-0"] <> navTabAttrs) $ toHtml (T.replace "http://" "" $ T.replace "https://" "" he.host)
+      a_ ([href_ $ logsHref $ "attributes.net.host.name==\"" <> he.host <> "\"", class_ "shrink-0 text-xs text-textBrand hover:text-textStrong transition-colors"] <> navTabAttrs) "View logs"
+    unless (null svcs) $ div_ [class_ "flex items-center gap-1 flex-wrap min-w-0"] do
+      span_ [class_ "text-xs text-textWeak shrink-0"] sourceLabel
+      forM_ svcs \svc ->
+        a_
+          [ href_ $ logsHref $ "resource.service.name==\"" <> svc <> "\" AND kind==\"" <> kindVal <> "\""
+          , class_ "badge badge-sm badge-ghost text-xs whitespace-nowrap hover:text-textBrand transition-colors"
+          , term "data-tippy-content" $ "Filter logs by service: " <> svc
+          ]
+          $ toHtml svc
 
 
 data CatalogList = CatalogListPage (PageCtx (Table HostEventsVM)) | CatalogListRows (TableRows HostEventsVM)
