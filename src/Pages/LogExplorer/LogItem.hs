@@ -316,7 +316,12 @@ expandedItemView pid item aptSp leftM rightM = do
             ]
             do
               faSprite_ "xmark" "regular" "w-3.5 h-3.5 text-iconNeutral"
-      -- Row 2: metadata badges
+      -- Row 2: metadata badges (service, span/trace IDs, session/user identity)
+      let attrs = unAesonTextMaybe item.attributes
+          -- Prefer user.full_name, fall back to user.name; carry the matching attr path so the badge filters correctly.
+          uNameInfo =
+            (("attributes.user.full_name",) <$> atMapText "user.full_name" attrs)
+              <|> (("attributes.user.name",) <$> atMapText "user.name" attrs)
       div_ [class_ "flex gap-2 flex-wrap min-w-0"] $ do
         unless (isLog || isAlert) $ do
           spanBadge pid "duration" (toText $ getDurationNSMS $ maybe 0 fromIntegral item.duration) "Span duration"
@@ -326,13 +331,16 @@ expandedItemView pid item aptSp leftM rightM = do
           spanBadge pid "context___span_id" ("Span ID: " <> v) "Span ID"
         whenJust (item.context >>= (.trace_id) >>= guarded (not . T.null)) $ \v ->
           spanBadge pid "context___trace_id" ("Trace ID: " <> v) "Trace ID"
+        whenJust uNameInfo \(p, v) ->
+          spanBadge pid p ("User: " <> v) "User name"
+        whenJust (atMapText "user.email" attrs) \v ->
+          spanBadge pid "attributes.user.email" ("Email: " <> v) "User email"
+        whenJust (atMapText "user.id" attrs) \v ->
+          spanBadge pid "attributes.user.id" ("User ID: " <> v) "User ID"
+        whenJust (atMapText "session.id" attrs) \v ->
+          spanBadge pid "attributes.session.id" ("Session: " <> v) "Session ID"
       let actBtn = [class_ "cursor-pointer flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-md border border-strokeWeak bg-fillWeakerer hover:bg-fillWeaker transition-colors text-textBrand"]
       div_ [class_ "flex flex-wrap gap-2 items-center"] do
-        whenJust (atMapText "session.id" (unAesonTextMaybe item.attributes)) \v ->
-          button_ (actBtn <> [term "data-field-path" "attributes.session.id", term "data-field-value" ("\"" <> v <> "\""), onclick_ "filterByField(event, 'Eq')"]) do
-            faSprite_ "filter" "regular" "w-3 h-3"
-            "Filter by session"
-
         unless isLog $ whenJust reqDetails $ \case
           ("HTTP", _, _, _) -> do
             let json = decodeUtf8 $ AE.encode $ AE.toJSON item
