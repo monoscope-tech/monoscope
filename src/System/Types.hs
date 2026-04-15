@@ -32,10 +32,10 @@ import Data.Effectful.Hasql qualified
 import Data.Effectful.LLM qualified as ELLM
 import Data.Effectful.Notify qualified
 import Data.Effectful.UUID (UUIDEff, runStaticUUIDRef, runUUID)
-import Data.UUID qualified as UUID
 import Data.Effectful.Wreq (HTTP, runHTTPGolden, runHTTPWreq)
 import Data.Map qualified as Map
 import Data.Time (UTCTime)
+import Data.UUID qualified as UUID
 import Effectful
 import Effectful.Concurrent.Async (Concurrent, runConcurrent)
 import Effectful.Error.Static (Error, runErrorNoCallStack)

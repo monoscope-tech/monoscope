@@ -597,8 +597,8 @@ data TestResources = TestResources
   , trATCtx :: AuthContext
   , trLogger :: Log.Logger
   , trTracerProvider :: TracerProvider
-  , -- | Pool of deterministic UUIDs shared across handler invocations in one test.
-    trUUIDRef :: IORef [UUID.UUID]
+  , trUUIDRef :: IORef [UUID.UUID]
+  -- ^ Pool of deterministic UUIDs shared across handler invocations in one test.
   }
 
 

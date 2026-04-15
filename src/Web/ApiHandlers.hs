@@ -61,15 +61,15 @@ import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.List qualified as List
 import Data.Map.Strict qualified as Map
+import Data.OpenApi (ToSchema (..))
 import Data.Text qualified as T
 import Data.Time (UTCTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
-import Data.OpenApi (ToSchema (..))
-import Deriving.Aeson qualified as DAE
 import Hasql.Interpolate qualified as HI
 import Models.Apis.Anomalies qualified as Anomalies
 import Models.Apis.Monitors qualified as Monitors
@@ -261,7 +261,8 @@ apiMonitorResolve pid mid = do
 
 apiMonitorBulk :: Projects.ProjectId -> BulkAction -> ATBaseCtx BulkResult
 apiMonitorBulk _pid ba =
-  bulkExec ba
+  bulkExec
+    ba
     [ ("delete", Monitors.monitorSoftDeleteByIds qIds)
     , ("activate", Monitors.monitorReactivateByIds qIds)
     , ("deactivate", Monitors.monitorDeactivateByIds qIds)
@@ -545,7 +546,8 @@ apiAnomaliesBulk _pid ba =
   let nilUid = Projects.UserId UUID.nil
       vIds = V.fromList $ UUID.toText <$> ba.ids
       nAll = fromIntegral (length ba.ids)
-   in bulkExec ba
+   in bulkExec
+        ba
         [
           ( "acknowledge"
           , do
