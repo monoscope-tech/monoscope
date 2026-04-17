@@ -253,7 +253,8 @@ lemonSqueezyWebhookTests = do
     forM_ webhookTestCases $ \(eventName, testDesc, payloadFn, testFn) ->
       it testDesc $ \TestContext{tcResources = tr, tcProjectId = testPid} -> do
         let payload = payloadFn testPid
-        let callWebhook = void $ toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing payload
+        let rawBody = BL.toStrict (AE.encode payload)
+        let callWebhook = void $ toBaseServantResponse tr.trATCtx tr.trLogger $ LemonSqueezy.webhookPostH Nothing rawBody
         testFn testPid tr.trPool callWebhook
 
 

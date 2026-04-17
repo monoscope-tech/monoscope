@@ -1115,8 +1115,7 @@ manageSubGetH pid = do
   let envCfg = appCtx.config
   case Projects.billingProvider project.subId of
     Projects.StripeProvider -> do
-      -- order_id stores Stripe customer ID for Stripe users
-      case project.orderId of
+      case project.customerId <|> project.orderId of
         Just customerId | not (T.null customerId) -> do
           let returnUrl = envCfg.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
           portalUrlM <- liftIO $ Settings.createStripePortalSession envCfg.stripeSecretKey customerId returnUrl

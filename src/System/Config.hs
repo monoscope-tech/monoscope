@@ -92,6 +92,7 @@ data EnvConfig = EnvConfig
   , postmarkToken :: Text
   , postmarkFromEmail :: Text
   , lemonSqueezyWebhookSecret :: Text
+  , lsWebhookSigEnforce :: Bool
   , openaiApiKey :: Text
   , openaiModel :: Text
   , openaiSmallModel :: Text

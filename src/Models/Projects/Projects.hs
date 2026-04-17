@@ -32,6 +32,7 @@ module Models.Projects.Projects (
   updateProjectBilling,
   projectById,
   projectByOrderId,
+  projectByCustomerId,
   projectBySubId,
   updateSubItemIdBySubId,
   projectCacheById,
@@ -61,6 +62,7 @@ module Models.Projects.Projects (
   upgradeToPaid,
   downgradeToFree,
   downgradeToFreeBySubId,
+  setPlanBySubId,
   updateStripeProjectBilling,
   -- Sessions
   PersistentSessionId (..),
@@ -269,6 +271,7 @@ data Project = Project
   , s3Bucket :: Maybe ProjectS3Bucket
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
+  , customerId :: Maybe Text
   }
   deriving stock (Generic, Show)
   deriving anyclass (FromRow, HI.DecodeRow, NFData)
@@ -310,6 +313,7 @@ data Project' = Project'
   , s3Bucket :: Maybe ProjectS3Bucket
   , endpointAlerts :: Bool
   , errorAlerts :: Bool
+  , customerId :: Maybe Text
   , hasIntegrated :: Bool
   , usersDisplayImages :: V.Vector Text
   }
@@ -431,6 +435,10 @@ projectById pid = EHasql.interpOne [HI.sql| select p.* from projects.projects p 
 
 projectByOrderId :: DB es => Text -> Eff es (Maybe Project)
 projectByOrderId oid = EHasql.interpOne [HI.sql| select p.* from projects.projects p where order_id=#{oid}|]
+
+
+projectByCustomerId :: DB es => Text -> Eff es (Maybe Project)
+projectByCustomerId cid = EHasql.interpOne [HI.sql| select p.* from projects.projects p where customer_id=#{cid}|]
 
 
 projectBySubId :: DB es => Text -> Eff es (Maybe Project)
@@ -680,7 +688,18 @@ addSubscription :: DB es => LemonSub -> Eff es ()
 addSubscription s = do
   let (sId, sCr, sUp, sPid, sSub, sOrd, sFSub, sProd, sEmail) =
         (s.id, s.createdAt, s.updatedAt, s.projectId, s.subscriptionId, s.orderId, s.firstSubId, s.productName, s.userEmail)
-  EHasql.interpExecute_ [HI.sql| INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, subscription_id, order_id, first_sub_id, product_name, user_email) VALUES (#{sId}, #{sCr}, #{sUp}, #{sPid}, #{sSub}, #{sOrd}, #{sFSub}, #{sProd}, #{sEmail}) |]
+  EHasql.interpExecute_
+    [HI.sql|
+      INSERT INTO apis.subscriptions (id, created_at, updated_at, project_id, subscription_id, order_id, first_sub_id, product_name, user_email)
+      VALUES (#{sId}, #{sCr}, #{sUp}, #{sPid}, #{sSub}, #{sOrd}, #{sFSub}, #{sProd}, #{sEmail})
+      ON CONFLICT (subscription_id) DO UPDATE SET
+        updated_at = now(),
+        order_id = EXCLUDED.order_id,
+        first_sub_id = EXCLUDED.first_sub_id,
+        product_name = EXCLUDED.product_name,
+        user_email = EXCLUDED.user_email,
+        project_id = COALESCE(NULLIF(EXCLUDED.project_id, ''), apis.subscriptions.project_id)
+    |]
 
 
 addDailyUsageReport :: DB es => ProjectId -> Int -> Eff es Int64
@@ -696,16 +715,25 @@ getTotalUsage pid start = do
     _ -> pure 0
 
 
+-- Keep sub_id/order_id/first_sub_item_id intact on downgrade so resume/payment_success can re-upgrade without a new checkout.
 downgradeToFree :: DB es => Int -> Int -> Int -> Eff es Int64
 downgradeToFree orderId' _subId _subItemId = do
   let oid = show orderId' :: Text
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE order_id = #{oid}|]
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE order_id = #{oid}|]
 
 
-upgradeToPaid :: DB es => Int -> Int -> Int -> Eff es Int64
-upgradeToPaid orderId' subId subItemId = do
+-- Match on sub_id when available (stable across plan/order changes), else fall back to order_id.
+-- Using OR with both risks matching a stale preserved row on a different project after downgrade.
+upgradeToPaid :: DB es => Int -> Int -> Int -> Text -> Eff es Int64
+upgradeToPaid orderId' subId subItemId plan = do
   let (sId, sItemId, oId) = (show subId :: Text, show subItemId :: Text, show orderId' :: Text)
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'GraduatedPricing', sub_id = #{sId}, first_sub_item_id = #{sItemId} WHERE order_id = #{oId}|]
+  EHasql.interpExecute
+    [HI.sql|
+      UPDATE projects.projects
+         SET payment_plan = #{plan}, sub_id = #{sId}, first_sub_item_id = #{sItemId}
+       WHERE sub_id = #{sId}
+          OR (sub_id IS NULL AND order_id = #{oId})
+    |]
 
 
 -- | >>> billingProvider (Just "sub_abc123")
@@ -730,13 +758,19 @@ billingProvider = \case
 
 downgradeToFreeBySubId :: DB es => Text -> Eff es Int64
 downgradeToFreeBySubId sid =
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free', first_sub_item_id = NULL, sub_id = NULL, order_id = NULL WHERE sub_id = #{sid}|]
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = 'Free' WHERE sub_id = #{sid}|]
 
 
--- order_id stores Stripe customer_id for Stripe users (semantic mismatch, TODO: add customer_id column)
+-- Re-enable a previously-downgraded subscription (paused → active, past_due → active).
+-- IDs were preserved by downgradeToFree* so we match by sub_id.
+setPlanBySubId :: DB es => Text -> Text -> Text -> Eff es Int64
+setPlanBySubId plan firstSubItemId sid =
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, first_sub_item_id = #{firstSubItemId} WHERE sub_id = #{sid}|]
+
+
 updateStripeProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
 updateStripeProjectBilling pid plan subId firstSubItemId customerId =
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, order_id = #{customerId} WHERE id = #{pid}|]
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, customer_id = #{customerId} WHERE id = #{pid}|]
 
 
 -- Sessions

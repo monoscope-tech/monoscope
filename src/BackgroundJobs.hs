@@ -143,6 +143,7 @@ data BgJobs
   | PatternEmbeddingAndMerge UTCTime Projects.ProjectId
   | EndpointTemplateDiscovery UTCTime Projects.ProjectId
   | MonoscopeAdminDaily
+  | UsageAuditReport
   | -- | Hourly catch-up for rows the extraction worker missed. Re-drives rows
     -- where processed_at IS NULL through the same submitBatch path as live
     -- ingestion.
@@ -308,6 +309,7 @@ processBackgroundJob authCtx bgJob =
             Log.logInfo "Scheduling hourly jobs for today" ()
             liftIO $ withResource authCtx.jobsPool \conn -> do
               void $ createJob conn "background_jobs" BackgroundJobs.MonoscopeAdminDaily
+              void $ createJob conn "background_jobs" BackgroundJobs.UsageAuditReport
               -- background job to cleanup demo project
               Relude.when (dayOfWeek currentDay == Monday) do
                 void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
@@ -397,15 +399,21 @@ processBackgroundJob authCtx bgJob =
         let totalUsage = totalToReport + totalMetricsCount
         Log.logInfo "Usage to report" ("project_id", pid.toText, "events", totalToReport, "metrics", totalMetricsCount, "total", totalUsage)
         Relude.when (totalUsage > 0) do
-          case provider of
-            Projects.StripeProvider -> whenJust (mfilter (not . T.null) project.orderId) \custId ->
+          -- Capture failures for structured logging; rethrow so odd-jobs retries.
+          reportResult <- tryAny $ case provider of
+            Projects.StripeProvider -> whenJust (mfilter (not . T.null) (project.customerId <|> project.orderId)) \custId ->
               liftIO $ Settings.reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" totalUsage
             Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
             Projects.NoBillingProvider -> Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan)
-          Relude.when (provider /= Projects.NoBillingProvider) do
-            void $ Projects.addDailyUsageReport pid totalUsage
-            void $ Projects.updateUsageLastReported pid currentTime
-            Log.logInfo "Usage reported successfully" ("project_id", pid.toText, "total", totalUsage)
+          case reportResult of
+            Left e -> do
+              Log.logAttention "Usage report FAILED — billing data may be missing" ("project_id", pid.toText, "provider", show provider :: Text, "total", totalUsage, "error", displayException e)
+              throwIO e
+            Right () ->
+              Relude.when (provider /= Projects.NoBillingProvider) do
+                void $ Projects.addDailyUsageReport pid totalUsage
+                void $ Projects.updateUsageLastReported pid currentTime
+                Log.logInfo "Usage reported successfully" ("project_id", pid.toText, "total", totalUsage)
     CleanupDemoProject ->
       -- ReadCommitted is sufficient: we need atomicity across the three deletes,
       -- not Serializable's anti-conflict guarantees (which would surface as opaque
@@ -604,6 +612,77 @@ processBackgroundJob authCtx bgJob =
           links = map linkRow sorted
       forM_ (buildMessages links ([] :: [Text])) send
       Log.logInfo "Sent daily admin summary to Discord" ("project_count", length sorted)
+    UsageAuditReport -> do
+      now <- Time.currentTime
+      let since = addUTCTime (-86400) now
+          send msg = sendMessageToDiscord msg authCtx.config.discordWebhookUrl
+      -- Paying projects only; cross-check reported (apis.daily_usage) vs ingested (otel + metrics) over last 24h.
+      rows :: [(Projects.ProjectId, Text, Text, Int, Int)] <-
+        Hasql.interp
+          [HI.sql|
+            WITH reported AS (
+              SELECT project_id::uuid AS pid, COALESCE(SUM(total_requests),0)::int AS r
+                FROM apis.daily_usage
+               WHERE created_at >= #{since}::timestamptz
+               GROUP BY project_id
+            ),
+            ingested_events AS (
+              SELECT project_id::uuid AS pid, COUNT(*)::int AS c
+                FROM public.otel_logs_and_spans
+               WHERE timestamp >= #{since}::timestamptz
+               GROUP BY project_id
+            ),
+            ingested_metrics AS (
+              SELECT project_id::uuid AS pid, COUNT(*)::int AS c
+                FROM telemetry.metrics
+               WHERE time >= #{since}::timestamptz
+               GROUP BY project_id
+            )
+            SELECT p.id::uuid, p.title, p.payment_plan,
+                   COALESCE(r.r, 0)::int AS reported,
+                   (COALESCE(ie.c, 0) + COALESCE(im.c, 0))::int AS ingested
+              FROM projects.projects p
+              LEFT JOIN reported r ON r.pid = p.id
+              LEFT JOIN ingested_events ie ON ie.pid = p.id
+              LEFT JOIN ingested_metrics im ON im.pid = p.id
+             WHERE p.payment_plan NOT IN ('Free','ONBOARDING','Bring nothing')
+               AND p.deleted_at IS NULL
+          |]
+      let mismatches =
+            [ (pid, title, plan, reported, ingested, reported - ingested, pct)
+            | (pid, title, plan, reported, ingested) <- rows
+            , let denom = max 1 (max reported ingested)
+            , let pct = round @Double @Int (fromIntegral (abs (reported - ingested)) / fromIntegral denom * 100)
+            , ingested > 100 || reported > 100
+            , pct > 5
+            ]
+          sorted = sortOn (\(_, _, _, _, _, _, pct) -> negate pct) mismatches
+      forM_ sorted \(pid, title, plan, reported, ingested, delta, pct) ->
+        Log.logAttention "usage_audit_mismatch" (pid.toText, title, plan, reported, ingested, delta, pct)
+      unless (null sorted) do
+        let fmtRow (_, title, plan, reported, ingested, delta, pct) =
+              T.justifyLeft 25 ' ' title
+                <> T.justifyLeft 12 ' ' plan
+                <> T.justifyRight 10 ' ' (show reported)
+                <> T.justifyRight 10 ' ' (show ingested)
+                <> T.justifyRight 10 ' ' (show delta)
+                <> T.justifyRight 6 ' ' (show pct <> "%")
+            hdr =
+              T.justifyLeft 25 ' ' "Project"
+                <> T.justifyLeft 12 ' ' "Plan"
+                <> T.justifyRight 10 ' ' "Reported"
+                <> T.justifyRight 10 ' ' "Ingested"
+                <> T.justifyRight 10 ' ' "Delta"
+                <> T.justifyRight 6 ' ' "Pct"
+            top = take 20 sorted
+            heading =
+              "**Usage Audit** (last 24h) — "
+                <> show (length sorted)
+                <> " projects with >5% drift"
+                <> if length sorted > length top then " (showing top " <> show (length top) <> ")" else ""
+        send heading
+        send $ "```\n" <> hdr <> "\n" <> unlines (map fmtRow top) <> "```"
+      Log.logInfo "Usage audit complete" ("mismatch_count", length sorted)
 
 
 tryLog :: Text -> ATBackgroundCtx () -> ATBackgroundCtx ()

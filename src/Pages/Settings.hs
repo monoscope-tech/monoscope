@@ -45,6 +45,7 @@ import Data.Aeson qualified as AE
 import Data.Aeson.Lens qualified as AL
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray qualified as BA
+import Data.ByteString qualified as B
 import Data.ByteString.Base16 qualified as B16
 import Data.CaseInsensitive qualified as CI
 import Data.Default
@@ -90,7 +91,6 @@ import Servant (err400, errBody)
 import System.Config
 import System.Types (ATAuthCtx, ATBaseCtx, RespHeaders, addErrorToast, addRespHeaders, addSuccessToast, addTriggerEvent)
 import Text.Printf (printf)
-import UnliftIO.Exception (catch, throwIO)
 import Utils (LoadingSize (..), faSprite_, htmxIndicator_)
 import Web.FormUrlEncoded (FromForm)
 import "cryptonite" Crypto.Hash (SHA256)
@@ -590,15 +590,74 @@ instance AE.FromJSON WebhookData where
     return (WebhookData{dataVal = dataVal, meta = meta})
 
 
-webhookPostH :: Maybe Text -> WebhookData -> ATBaseCtx (Html ())
-webhookPostH secretHeaderM dat = do
+-- | LS signs a hex-encoded HMAC-SHA256 of the raw body in the X-Signature header.
+--
+-- >>> let body = "{\"event\":\"x\"}" :: ByteString
+-- >>> let secret = "s3cret" :: ByteString
+-- >>> let sig = decodeUtf8 (B16.encode (BA.convert (HMAC.hmac secret body :: HMAC.HMAC SHA256) :: ByteString)) :: Text
+-- >>> verifyLemonSqueezySignature sig body secret
+-- True
+-- >>> verifyLemonSqueezySignature sig body "wrong"
+-- False
+-- >>> verifyLemonSqueezySignature sig "tampered" secret
+-- False
+-- >>> verifyLemonSqueezySignature "not-hex!" body secret
+-- False
+-- >>> verifyLemonSqueezySignature "" body secret
+-- False
+verifyLemonSqueezySignature :: Text -> ByteString -> ByteString -> Bool
+verifyLemonSqueezySignature sigHeader payload secret =
+  case B16.decode (encodeUtf8 sigHeader) of
+    Right provided ->
+      let expected = BA.convert (HMAC.hmac secret payload :: HMAC.HMAC SHA256) :: ByteString
+       in BA.constEq expected provided
+    Left _ -> False
+
+
+webhookPostH :: Maybe Text -> ByteString -> ATBaseCtx (Html ())
+webhookPostH sigHeaderM rawBody = do
   envConfig <- asks env
+  let secret = encodeUtf8 envConfig.lemonSqueezyWebhookSecret
+      sigValid = case sigHeaderM of
+        Just h -> verifyLemonSqueezySignature h rawBody secret
+        Nothing -> False
+  unless sigValid $ Log.logAttention "ls_webhook_sig_mismatch" (T.take 8 <$> sigHeaderM, B.length rawBody)
+  when envConfig.lsWebhookSigEnforce $ case sigHeaderM of
+    Nothing -> throwError err400{errBody = "missing signature"}
+    Just _ | not sigValid -> throwError err400{errBody = "invalid signature"}
+    _ -> pass
+  dat <- case AE.eitherDecodeStrict rawBody :: Either String WebhookData of
+    Right d -> pure d
+    Left err -> do
+      Log.logAttention "LS webhook invalid JSON" (err, decodeUtf8 @Text (B.take 256 rawBody))
+      throwError err400{errBody = "invalid json"}
   let orderId = dat.dataVal.attributes.orderId
       subItem = dat.dataVal.attributes.firstSubscriptionItem
+      plan = dat.dataVal.attributes.productName
+      billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
       notifyMembers pid (subj, html) = Notify.runNotifyProduction do
         users <- Projects.usersByProjectId pid
         forM_ users \u -> sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
-      billingUrl pid = envConfig.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
+      downgrade reason = do
+        projectM <- Projects.projectByOrderId (show orderId)
+        case projectM of
+          Just project -> do
+            rows <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
+            when (rows == 0) $ Log.logAttention "LS downgrade touched 0 rows" (show orderId :: Text, reason)
+            when (rows > 1) $ Log.logAttention "LS downgrade touched multiple rows" (show orderId :: Text, rows)
+            notifyMembers project.id $ ET.planDowngradedEmail project.title reason (billingUrl project.id)
+          Nothing ->
+            Log.logAttention "LS downgrade: no project for order_id" (show orderId :: Text, dat.meta.eventName, reason)
+        pure "downgraded"
+      upgrade = do
+        rows <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id plan
+        when (rows == 0) $ Log.logAttention "LS upgrade touched 0 rows" (show orderId :: Text, subItem.subscriptionId, plan)
+        when (rows > 1) $ Log.logAttention "LS upgrade touched multiple rows" (show orderId :: Text, rows)
+        projectM <- Projects.projectBySubId (show subItem.subscriptionId)
+        case projectM of
+          Just project -> notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl project.id)
+          Nothing -> Log.logAttention "LS upgrade: no project for sub_id" (show orderId :: Text, subItem.subscriptionId, plan)
+        pure "upgraded"
   case dat.meta.eventName of
     "subscription_created" -> do
       currentTime <- liftIO getZonedTime
@@ -615,32 +674,38 @@ webhookPostH secretHeaderM dat = do
               , subscriptionId = subItem.subscriptionId
               , orderId
               , firstSubId = subItem.id
-              , productName = dat.dataVal.attributes.productName
+              , productName = plan
               , userEmail = dat.dataVal.attributes.userEmail
               }
       _ <- Projects.addSubscription sub
       -- Safety net: update project billing if frontend checkout callback failed
       whenJust (Projects.projectIdFromText projectId) \pid -> do
-        void $ Projects.updateProjectBilling pid dat.dataVal.attributes.productName (show subItem.subscriptionId) (show subItem.id) (show orderId)
+        void $ Projects.updateProjectBilling pid plan (show subItem.subscriptionId) (show subItem.id) (show orderId)
         whenJustM (Projects.projectById pid) \project ->
-          notifyMembers pid $ ET.planUpgradedEmail project.title dat.dataVal.attributes.productName (billingUrl pid)
+          notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
       pure "subscription created"
-    "subscription_cancelled" -> do
+    "subscription_cancelled" -> downgrade "was cancelled"
+    "subscription_expired" -> downgrade "has expired"
+    -- Dunning retry: notify only, don't downgrade. Mirrors Stripe's invoice.payment_failed policy.
+    -- subscription_expired/_cancelled will downgrade if retries ultimately fail.
+    "subscription_payment_failed" -> do
       whenJustM (Projects.projectByOrderId (show orderId)) \project ->
-        notifyMembers project.id $ ET.planDowngradedEmail project.title "was cancelled" (billingUrl project.id)
-      _ <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
-      pure "downgraded"
-    "subscription_resumed" -> do
-      _ <- Projects.upgradeToPaid orderId subItem.subscriptionId subItem.id
-      whenJustM (Projects.projectByOrderId (show orderId)) \project ->
-        notifyMembers project.id $ ET.planUpgradedEmail project.title "GraduatedPricing" (billingUrl project.id)
-      pure "Upgraded"
-    "subscription_expired" -> do
-      whenJustM (Projects.projectByOrderId (show orderId)) \project ->
-        notifyMembers project.id $ ET.planDowngradedEmail project.title "has expired" (billingUrl project.id)
-      _ <- Projects.downgradeToFree orderId subItem.subscriptionId subItem.id
-      pure "Downgraded to free,sub expired"
-    _ -> pure ""
+        notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
+      Log.logAttention "LS subscription_payment_failed (no downgrade)" (show orderId :: Text, subItem.subscriptionId)
+      pure "payment failed notified"
+    "subscription_paused" -> downgrade "was paused"
+    "subscription_resumed" -> upgrade
+    "subscription_unpaused" -> upgrade
+    "subscription_payment_success" -> upgrade
+    "subscription_payment_recovered" -> upgrade
+    "subscription_payment_refunded" -> downgrade "payment refunded"
+    "subscription_plan_changed" -> upgrade
+    "subscription_updated" -> do
+      Log.logInfo "LS subscription_updated (no-op)" (show orderId :: Text, subItem.subscriptionId, plan)
+      pure "updated"
+    other -> do
+      Log.logInfo "LS webhook unhandled event" other
+      pure ""
 
 
 data BillingData = BillingData
@@ -784,24 +849,8 @@ stripeRequest apiKey endpoint =
   Wreq.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
 
 
--- Catch wreq HTTP exceptions, log them, and re-throw so callers see the failure
-tryStripe :: IO (Maybe a) -> IO (Maybe a)
-tryStripe action =
-  action `catch` \(e :: SomeException) -> do
-    putTextLn ("Stripe API error: " <> show e)
-    throwIO e
-
-
-tryStripe_ :: IO a -> IO ()
-tryStripe_ action =
-  void action `catch` \(e :: SomeException) -> do
-    putTextLn ("Stripe API error: " <> show e)
-    throwIO e
-
-
 createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
-createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS =
-  tryStripe $ do
+createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
     let basePrice = case plan of
           "SystemsPricing" -> priceIdBYOS
           _ -> priceIdGraduated
@@ -825,8 +874,7 @@ createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOver
 
 
 createStripePortalSession :: Text -> Text -> Text -> IO (Maybe Text)
-createStripePortalSession apiKey customerId returnUrl =
-  tryStripe $ do
+createStripePortalSession apiKey customerId returnUrl = do
     resp <-
       stripeRequest
         apiKey
@@ -840,12 +888,12 @@ createStripePortalSession apiKey customerId returnUrl =
 
 cancelStripeSubscription :: Text -> Text -> IO ()
 cancelStripeSubscription apiKey subId =
-  tryStripe_ $ Wreq.deleteWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  void $ Wreq.deleteWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
 
 
 reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
 reportUsageToStripe apiKey customerId eventName quantity =
-  tryStripe_
+  void
     $ stripeRequest
       apiKey
       "billing/meter_events"
@@ -900,6 +948,8 @@ stripeWebhookPostH sigHeaderM rawBody = do
           (Just "checkout.session.completed", Just obj) -> handleStripeCheckout envConfig obj notifyMembers billingUrl
           (Just "customer.subscription.deleted", Just obj) -> handleStripeSubDeleted obj notifyMembers billingUrl
           (Just "customer.subscription.updated", Just obj) -> handleStripeSubUpdated obj
+          (Just "customer.subscription.paused", Just obj) -> handleStripeSubPaused obj notifyMembers billingUrl
+          (Just "customer.subscription.resumed", Just obj) -> handleStripeSubResumed envConfig obj notifyMembers billingUrl
           (Just "invoice.payment_failed", Just obj) -> handleStripePaymentFailed obj notifyMembers billingUrl
           _ -> pure ""
 
@@ -939,11 +989,21 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
 
 
 getStripeSubItemId :: Text -> Text -> IO (Maybe Text)
-getStripeSubItemId apiKey subId =
-  tryStripe $ do
+getStripeSubItemId apiKey subId = fmap fst <$> getStripeSubItemAndPrice apiKey subId
+
+
+-- Returns (first subscription item id, first price id) so callers can reverse-map
+-- the price id back to our internal plan name.
+getStripeSubItemAndPrice :: Text -> Text -> IO (Maybe (Text, Text))
+getStripeSubItemAndPrice apiKey subId = do
     resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
     let body = resp ^. Wreq.responseBody
-    pure $ AE.decode @AE.Value body >>= (^? AL.key "items" . AL.key "data" . AL.nth 0 . AL.key "id" . AL._String)
+        item0 = AL.key "items" . AL.key "data" . AL.nth 0
+    pure $ do
+      v <- AE.decode @AE.Value body
+      itemId <- v ^? item0 . AL.key "id" . AL._String
+      priceId <- v ^? item0 . AL.key "price" . AL.key "id" . AL._String
+      pure (itemId, priceId)
 
 
 handleStripeSubDeleted :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
@@ -951,11 +1011,15 @@ handleStripeSubDeleted obj notifyMembers billingUrl = do
   let subIdM = jsonField "id" obj :: Maybe Text
   case subIdM of
     Just subId -> do
+      rows <- Projects.downgradeToFreeBySubId subId
+      when (rows == 0) $ Log.logAttention "Stripe subscription.deleted: no project for sub_id" subId
+      when (rows > 1) $ Log.logAttention "Stripe subscription.deleted touched multiple rows" (subId, rows)
       whenJustM (Projects.projectBySubId subId) \project ->
         notifyMembers project.id $ ET.planDowngradedEmail project.title "was cancelled" (billingUrl project.id)
-      void $ Projects.downgradeToFreeBySubId subId
       pure "subscription deleted"
-    Nothing -> pure "missing sub id"
+    Nothing -> do
+      Log.logAttention "Stripe subscription.deleted: missing sub id" ()
+      pure "missing sub id"
 
 
 handleStripeSubUpdated :: AE.Value -> ATBaseCtx (Html ())
@@ -974,9 +1038,57 @@ handleStripeSubUpdated obj = do
 handleStripePaymentFailed :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
 handleStripePaymentFailed obj notifyMembers billingUrl = do
   let customerIdM = jsonField "customer" obj :: Maybe Text
+      attemptCount = jsonField "attempt_count" obj :: Maybe Int
+      nextAttempt = jsonField "next_payment_attempt" obj :: Maybe Int
   case customerIdM of
     Just customerId -> do
-      whenJustM (Projects.projectByOrderId customerId) \project ->
+      whenJustM (Projects.projectByCustomerId customerId) \project -> do
+        Log.logAttention "Stripe invoice.payment_failed" (project.id, attemptCount, nextAttempt)
         notifyMembers project.id $ ET.planDowngradedEmail project.title "payment failed" (billingUrl project.id)
     Nothing -> pass
   pure "payment failed handled"
+
+
+-- Preserve IDs on pause so resume can restore plan without re-checkout.
+handleStripeSubPaused :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
+handleStripeSubPaused obj notifyMembers billingUrl = do
+  let subIdM = jsonField "id" obj :: Maybe Text
+  case subIdM of
+    Just subId -> do
+      rows <- Projects.downgradeToFreeBySubId subId
+      when (rows == 0) $ Log.logAttention "Stripe subscription.paused: no project for sub_id" subId
+      when (rows > 1) $ Log.logAttention "Stripe subscription.paused touched multiple rows" (subId, rows)
+      when (rows > 0)
+        $ whenJustM (Projects.projectBySubId subId) \project ->
+          notifyMembers project.id $ ET.planDowngradedEmail project.title "was paused" (billingUrl project.id)
+      pure "subscription paused"
+    Nothing -> do
+      Log.logAttention "Stripe subscription.paused: missing sub id" ()
+      pure "missing sub id"
+
+
+-- Look up the sub's price via the Stripe API, reverse-map to our plan name, and re-upgrade.
+handleStripeSubResumed :: EnvConfig -> AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
+handleStripeSubResumed envConfig obj notifyMembers billingUrl = do
+  let subIdM = jsonField "id" obj :: Maybe Text
+  case subIdM of
+    Just subId -> do
+      itemAndPriceM <- liftIO $ getStripeSubItemAndPrice envConfig.stripeSecretKey subId
+      case itemAndPriceM of
+        Just (itemId, priceId) -> do
+          let plan
+                | priceId == envConfig.stripePriceIdByos = "SystemsPricing"
+                | otherwise = "GraduatedPricing"
+          rows <- Projects.setPlanBySubId plan itemId subId
+          when (rows == 0) $ Log.logAttention "Stripe subscription.resumed: no project for sub_id" (subId, plan)
+          when (rows > 1) $ Log.logAttention "Stripe subscription.resumed touched multiple rows" (subId, rows)
+          when (rows > 0)
+            $ whenJustM (Projects.projectBySubId subId) \project ->
+              notifyMembers project.id $ ET.planUpgradedEmail project.title plan (billingUrl project.id)
+          pure "subscription resumed"
+        Nothing -> do
+          Log.logAttention "Stripe subscription.resumed: could not fetch sub items" subId
+          pure "missing items"
+    Nothing -> do
+      Log.logAttention "Stripe subscription.resumed: missing sub id" ()
+      pure "missing sub id"
