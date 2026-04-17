@@ -1599,20 +1599,25 @@ getStripeSubDetails apiKey subId = do
 
 -- | Enqueues TrialEndingReminder jobs at T-7d and T-3d. Enqueue failures are
 -- logged but never raised — checkout billing state is already committed.
-scheduleTrialReminders :: (DB es, Time.Time :> es, Log :> es) => Projects.ProjectId -> Int -> Eff es ()
+scheduleTrialReminders :: (DB es, Log :> es, Time.Time :> es) => Projects.ProjectId -> Int -> Eff es ()
 scheduleTrialReminders pid trialEndEpoch = do
   now <- Time.currentTime
   let trialEnd = posixSecondsToUTCTime (fromIntegral trialEndEpoch)
-      (past, due) = L.partition (\(runAt, _) -> runAt <= now)
-        [ (addUTCTime (negate (fromIntegral daysLeft * 86400)) trialEnd, daysLeft)
-        | daysLeft <- [7, 3 :: Int]
-        ]
+      (past, due) =
+        L.partition
+          (\(runAt, _) -> runAt <= now)
+          [ (addUTCTime (negate (fromIntegral daysLeft * 86400)) trialEnd, daysLeft)
+          | daysLeft <- [7, 3 :: Int]
+          ]
   forM_ past \(runAt, daysLeft) ->
     Log.logAttention "Trial reminder runAt already past; skipping" (pid.toText, daysLeft, runAt)
   forM_ due \(runAt, daysLeft) -> do
     let payload = AE.toJSON (TrialEndingReminder pid daysLeft)
-    res <- tryAny $ void $ Hasql.interpExecute
-      [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
+    res <-
+      tryAny
+        $ void
+        $ Hasql.interpExecute
+          [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
              VALUES (#{runAt}, 'queued', #{HI.AsJsonb payload})|]
     whenLeft_ res \e ->
       Log.logAttention "Trial reminder enqueue failed" (pid.toText, daysLeft, displayException e)

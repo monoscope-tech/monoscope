@@ -64,6 +64,7 @@ import Effectful.Error.Static (throwError)
 import Effectful.Log qualified as Log
 import Hasql.Interpolate qualified as HI
 
+import BackgroundJobs qualified as BJ
 import Effectful.Reader.Static (ask, asks)
 import Effectful.Time qualified as Time
 import Fmt (commaizeF, fmt)
@@ -78,7 +79,6 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
-import BackgroundJobs qualified as BJ
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
