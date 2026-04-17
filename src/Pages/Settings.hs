@@ -851,39 +851,39 @@ stripeRequest apiKey endpoint =
 
 createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
 createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
-    let basePrice = case plan of
-          "SystemsPricing" -> priceIdBYOS
-          _ -> priceIdGraduated
-        prices =
-          [ ("line_items[0][price]", encodeUtf8 basePrice)
-          , ("line_items[0][quantity]", "1")
-          , ("line_items[1][price]", encodeUtf8 priceIdOverage)
-          ]
-        params =
-          prices
-            <> [ ("mode", "subscription")
-               , ("client_reference_id", encodeUtf8 pid.toText)
-               , ("metadata[project_id]", encodeUtf8 pid.toText)
-               , ("metadata[plan]", encodeUtf8 plan)
-               , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
-               , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
-               ]
-    resp <- stripeRequest apiKey "checkout/sessions" params
-    let body = resp ^. Wreq.responseBody
-    pure $ AE.decode @AE.Value body >>= jsonField "url"
+  let basePrice = case plan of
+        "SystemsPricing" -> priceIdBYOS
+        _ -> priceIdGraduated
+      prices =
+        [ ("line_items[0][price]", encodeUtf8 basePrice)
+        , ("line_items[0][quantity]", "1")
+        , ("line_items[1][price]", encodeUtf8 priceIdOverage)
+        ]
+      params =
+        prices
+          <> [ ("mode", "subscription")
+             , ("client_reference_id", encodeUtf8 pid.toText)
+             , ("metadata[project_id]", encodeUtf8 pid.toText)
+             , ("metadata[plan]", encodeUtf8 plan)
+             , ("success_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing?stripe_success=1")
+             , ("cancel_url", encodeUtf8 $ hostUrl <> "p/" <> pid.toText <> "/manage_billing")
+             ]
+  resp <- stripeRequest apiKey "checkout/sessions" params
+  let body = resp ^. Wreq.responseBody
+  pure $ AE.decode @AE.Value body >>= jsonField "url"
 
 
 createStripePortalSession :: Text -> Text -> Text -> IO (Maybe Text)
 createStripePortalSession apiKey customerId returnUrl = do
-    resp <-
-      stripeRequest
-        apiKey
-        "billing_portal/sessions"
-        [ ("customer", encodeUtf8 customerId)
-        , ("return_url", encodeUtf8 returnUrl)
-        ]
-    let body = resp ^. Wreq.responseBody
-    pure $ AE.decode @AE.Value body >>= jsonField "url"
+  resp <-
+    stripeRequest
+      apiKey
+      "billing_portal/sessions"
+      [ ("customer", encodeUtf8 customerId)
+      , ("return_url", encodeUtf8 returnUrl)
+      ]
+  let body = resp ^. Wreq.responseBody
+  pure $ AE.decode @AE.Value body >>= jsonField "url"
 
 
 cancelStripeSubscription :: Text -> Text -> IO ()
@@ -996,14 +996,14 @@ getStripeSubItemId apiKey subId = fmap fst <$> getStripeSubItemAndPrice apiKey s
 -- the price id back to our internal plan name.
 getStripeSubItemAndPrice :: Text -> Text -> IO (Maybe (Text, Text))
 getStripeSubItemAndPrice apiKey subId = do
-    resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
-    let body = resp ^. Wreq.responseBody
-        item0 = AL.key "items" . AL.key "data" . AL.nth 0
-    pure $ do
-      v <- AE.decode @AE.Value body
-      itemId <- v ^? item0 . AL.key "id" . AL._String
-      priceId <- v ^? item0 . AL.key "price" . AL.key "id" . AL._String
-      pure (itemId, priceId)
+  resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  let body = resp ^. Wreq.responseBody
+      item0 = AL.key "items" . AL.key "data" . AL.nth 0
+  pure $ do
+    v <- AE.decode @AE.Value body
+    itemId <- v ^? item0 . AL.key "id" . AL._String
+    priceId <- v ^? item0 . AL.key "price" . AL.key "id" . AL._String
+    pure (itemId, priceId)
 
 
 handleStripeSubDeleted :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())
