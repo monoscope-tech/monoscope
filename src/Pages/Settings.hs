@@ -34,15 +34,13 @@ module Pages.Settings (
   createStripeCheckoutSession,
   createStripePortalSession,
   cancelStripeSubscription,
-  reportUsageToStripe,
   cancelLemonSqueezySubscription,
   lemonSqueezyOpts,
   verifyStripeSignature,
 ) where
 
-import Control.Lens ((.~), (^.), (^?))
+import Control.Lens ((.~), (^.))
 import Data.Aeson qualified as AE
-import Data.Aeson.Lens qualified as AL
 import Data.Aeson.Types (parseMaybe)
 import Data.ByteArray qualified as BA
 import Data.ByteString qualified as B
@@ -80,6 +78,7 @@ import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
 import Network.Minio qualified as Minio
 import Network.Wreq qualified as Wreq
+import BackgroundJobs qualified as BJ
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..), bodyWrapper, settingsContentTarget)
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), confirmModal_, connectionBadge_, formField_, iconBadgeLg_, modalWith_, paymentPlanPicker, sectionLabel_, settingsH2_, settingsSection_)
 import Pkg.Components.Table qualified as Table
@@ -849,8 +848,11 @@ stripeRequest apiKey endpoint =
   Wreq.postWith (stripeOpts apiKey) ("https://api.stripe.com/v1/" <> toString endpoint)
 
 
-createStripeCheckoutSession :: Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
-createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
+-- | `trialEligible` grants a 30-day trial at checkout. Callers should pass True only
+-- for first-time upgrades on GraduatedPricing (not plan switches / migrations / BYOS),
+-- to avoid giving repeat trials to already-paying or returning customers.
+createStripeCheckoutSession :: Bool -> Text -> Text -> Projects.ProjectId -> Text -> Text -> Text -> Text -> IO (Maybe Text)
+createStripeCheckoutSession trialEligible apiKey hostUrl pid plan priceIdGraduated priceIdOverage priceIdBYOS = do
   let basePrice = case plan of
         "SystemsPricing" -> priceIdBYOS
         _ -> priceIdGraduated
@@ -859,8 +861,10 @@ createStripeCheckoutSession apiKey hostUrl pid plan priceIdGraduated priceIdOver
         , ("line_items[0][quantity]", "1")
         , ("line_items[1][price]", encodeUtf8 priceIdOverage)
         ]
+      trialParams = [("subscription_data[trial_period_days]", "30") | trialEligible && plan /= "SystemsPricing"]
       params =
         prices
+          <> trialParams
           <> [ ("mode", "subscription")
              , ("client_reference_id", encodeUtf8 pid.toText)
              , ("metadata[project_id]", encodeUtf8 pid.toText)
@@ -889,18 +893,6 @@ createStripePortalSession apiKey customerId returnUrl = do
 cancelStripeSubscription :: Text -> Text -> IO ()
 cancelStripeSubscription apiKey subId =
   void $ Wreq.deleteWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
-
-
-reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
-reportUsageToStripe apiKey customerId eventName quantity =
-  void
-    $ stripeRequest
-      apiKey
-      "billing/meter_events"
-      [ ("event_name", encodeUtf8 eventName)
-      , ("payload[value]", encodeUtf8 $ show quantity)
-      , ("payload[stripe_customer_id]", encodeUtf8 customerId)
-      ]
 
 
 lemonSqueezyOpts :: Text -> Wreq.Options
@@ -976,10 +968,15 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
                   $ liftIO
                   . cancelLemonSqueezySubscription envConfig.lemonSqueezyApiKey
               _ -> pass
-          subItemId <- liftIO $ getStripeSubItemId envConfig.stripeSecretKey subId
-          when (isNothing subItemId) $ Log.logAttention "Stripe sub item ID not found" subId
-          void $ Projects.updateStripeProjectBilling pid plan subId (fromMaybe "" subItemId) customerId
+          subDetails <- liftIO $ BJ.getStripeSubDetails envConfig.stripeSecretKey subId
+          when (isNothing subDetails) $ Log.logAttention "Stripe sub fetch failed after checkout" (pid.toText, subId)
+          let subItemId = maybe "" (\BJ.StripeSubDetails{subItemId = i} -> i) subDetails
+          void $ Projects.updateStripeProjectBilling pid plan subId subItemId customerId
           void $ ProjectMembers.activateAllMembers pid
+          case subDetails of
+            Just BJ.StripeSubDetails{trialEnd = Just epoch} -> BJ.scheduleTrialReminders pid epoch
+            Just BJ.StripeSubDetails{status = "trialing"} -> Log.logAttention "Stripe sub trialing but trial_end missing; no reminders scheduled" (pid.toText, subId)
+            _ -> pass
           whenJust projectM \project ->
             notifyMembers pid $ ET.planUpgradedEmail project.title plan (billingUrl pid)
           pure "checkout processed"
@@ -988,22 +985,11 @@ handleStripeCheckout envConfig obj notifyMembers billingUrl = do
       pure "missing fields"
 
 
-getStripeSubItemId :: Text -> Text -> IO (Maybe Text)
-getStripeSubItemId apiKey subId = fmap fst <$> getStripeSubItemAndPrice apiKey subId
-
-
 -- Returns (first subscription item id, first price id) so callers can reverse-map
 -- the price id back to our internal plan name.
 getStripeSubItemAndPrice :: Text -> Text -> IO (Maybe (Text, Text))
-getStripeSubItemAndPrice apiKey subId = do
-  resp <- Wreq.getWith (stripeOpts apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
-  let body = resp ^. Wreq.responseBody
-      item0 = AL.key "items" . AL.key "data" . AL.nth 0
-  pure $ do
-    v <- AE.decode @AE.Value body
-    itemId <- v ^? item0 . AL.key "id" . AL._String
-    priceId <- v ^? item0 . AL.key "price" . AL.key "id" . AL._String
-    pure (itemId, priceId)
+getStripeSubItemAndPrice apiKey subId =
+  fmap (\BJ.StripeSubDetails{subItemId = i, priceId = p} -> (i, p)) <$> BJ.getStripeSubDetails apiKey subId
 
 
 handleStripeSubDeleted :: AE.Value -> (Projects.ProjectId -> (Text, Html ()) -> ATBaseCtx ()) -> (Projects.ProjectId -> Text) -> ATBaseCtx (Html ())

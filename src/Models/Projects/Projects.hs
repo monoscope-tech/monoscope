@@ -770,7 +770,9 @@ setPlanBySubId plan firstSubItemId sid =
 
 updateStripeProjectBilling :: DB es => ProjectId -> Text -> Text -> Text -> Text -> Eff es Int64
 updateStripeProjectBilling pid plan subId firstSubItemId customerId =
-  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, customer_id = #{customerId} WHERE id = #{pid}|]
+  -- Clear order_id so a late LemonSqueezy cancel webhook (from a prior LS→Stripe
+  -- switch) can't rematch this project by order_id and downgrade to Free.
+  EHasql.interpExecute [HI.sql|UPDATE projects.projects SET payment_plan = #{plan}, sub_id = #{subId}, first_sub_item_id = #{firstSubItemId}, customer_id = #{customerId}, order_id = NULL WHERE id = #{pid}|]
 
 
 -- Sessions

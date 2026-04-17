@@ -23,10 +23,10 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
+import Data.Text qualified as T
 import Network.Minio (MinioErr (..), ServiceErr (..))
 import Network.Minio qualified as Minio
 import OddJobs.Job (createJob)
-import Pages.Settings (getMinioConnectInfo)
 import Pkg.Queue (publishJSONToKafka)
 import ProcessMessage (replaceNullChars)
 import Relude
@@ -168,7 +168,10 @@ projectMinioConn envCfg p =
           (envCfg.s3AccessKey, envCfg.s3SecretKey, envCfg.s3Region, envCfg.s3Bucket, envCfg.s3Endpoint)
           (\x -> (x.accessKey, x.secretKey, x.region, x.bucket, x.endpointUrl))
           p.s3Bucket
-   in (getMinioConnectInfo acc sec region bucket endpoint, bucket)
+      creds = Minio.CredentialValue (fromString $ toString acc) (fromString $ toString sec) Nothing
+      info = if T.null endpoint then Minio.awsCI else fromString $ toString endpoint
+      conn = Minio.setCreds creds (Minio.setRegion (fromString $ toString region) info)
+   in (conn, bucket)
 
 
 -- | Fetch every tracked key individually, tolerating per-key failures (NoSuchKey is

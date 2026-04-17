@@ -6,7 +6,7 @@ import Data.Time (UTCTime, defaultTimeLocale, formatTime)
 import Lucid
 import Lucid.Aria qualified as Aria
 import Lucid.Base (makeAttribute, makeElement)
-import Lucid.Htmx (hxGet_, hxIndicator_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
+import Lucid.Htmx (hxGet_, hxPost_, hxPushUrl_, hxSelect_, hxSwap_, hxTarget_, hxTrigger_, hxVals_)
 import Lucid.Hyperscript (__)
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
@@ -185,7 +185,6 @@ pricingPostAttrs pid cardId outlineCls extras =
   , hxPost_ $ "/p/" <> pid.toText <> "/onboarding/pricing"
   , id_ cardId
   , hxSwap_ "none"
-  , hxIndicator_ "#loadingIndicator"
   ]
     <> extras
 

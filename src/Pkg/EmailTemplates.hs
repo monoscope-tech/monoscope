@@ -26,6 +26,7 @@ module Pkg.EmailTemplates (
   freeTierUsageEmail,
   planUpgradedEmail,
   planDowngradedEmail,
+  trialEndingEmail,
 
   -- * Sample data for previews
   sampleProjectInvite,
@@ -951,6 +952,27 @@ planUpgradedEmail projectName newPlan billingUrl =
         b_ $ toHtml newPlan
         " plan. Thank you for your support!"
       emailButton billingUrl "View Billing"
+      emailDivider
+      emailHelpLinks
+      br_ []
+      emailSignoff
+      emailFallbackUrl billingUrl
+  )
+
+
+trialEndingEmail :: Text -> Int -> Text -> (Text, Html ())
+trialEndingEmail projectName daysLeft billingUrl =
+  ( "[···] Your free trial ends in " <> show daysLeft <> " days - " <> projectName
+  , emailBody do
+      h1_ $ toHtml $ "Your trial ends in " <> show @Text daysLeft <> " days"
+      p_ do
+        "The 30-day free trial on "
+        b_ $ toHtml projectName
+        " ends in "
+        b_ $ toHtml (show @Text daysLeft)
+        " days. Your subscription will renew automatically and you'll be billed for usage accrued during the trial."
+      p_ "If you'd like to cancel before the trial ends, you can do so from the billing page."
+      emailButton billingUrl "Manage Billing"
       emailDivider
       emailHelpLinks
       br_ []

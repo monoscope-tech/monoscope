@@ -1141,9 +1141,13 @@ stripeCheckoutInitH pid form = do
   void $ Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   let envCfg = appCtx.config
+  -- Trial only for first-time upgrades: no prior subscription on this project.
+  projectM <- Projects.projectById pid
+  let trialEligible = maybe False (\p -> isNothing p.subId && isNothing p.customerId) projectM
   urlM <-
     liftIO
       $ Settings.createStripeCheckoutSession
+        trialEligible
         envCfg.stripeSecretKey
         envCfg.hostUrl
         pid

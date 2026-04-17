@@ -1,12 +1,13 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..)) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
 import Control.Concurrent.STM.TBQueue (isFullTBQueue, readTBQueue, writeTBQueue)
-import Control.Lens (view, (.~), _1, _3)
+import Control.Lens (view, (.~), (^.), (^?), _1, _3)
 import Data.Aeson qualified as AE
+import Data.Aeson.Lens qualified as AL
 import Data.Aeson.QQ (aesonQQ)
 import Data.Cache qualified as Cache
 import Data.CaseInsensitive qualified as CI
@@ -29,6 +30,7 @@ import Data.Text qualified as T
 import Data.Text.Display (display)
 import Data.Time (DayOfWeek (Monday), UTCTime (utctDay, utctDayTime), ZonedTime, addUTCTime, dayOfWeek, formatTime, getZonedTime)
 import Data.Time.Clock (NominalDiffTime, diffUTCTime, getCurrentTime)
+import Data.Time.Clock.POSIX (POSIXTime, posixSecondsToUTCTime, utcTimeToPOSIXSeconds)
 import Data.Time.Format (defaultTimeLocale)
 import Data.Time.LocalTime (LocalTime (localDay), ZonedTime (zonedTimeToLocalTime), getCurrentTimeZone, utcToZonedTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
@@ -74,7 +76,8 @@ import Models.Projects.ProjectMembers qualified as ProjectMembers
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry (SeverityLevel (..), generateSummary, insertSystemLog, mkSystemLog)
 import Models.Telemetry.Telemetry qualified as Telemetry
-import Network.Wreq (defaults, header, postWith)
+import Network.Wreq (defaults, getWith, header, postWith, responseBody)
+import Network.Wreq qualified as Wreq
 import OddJobs.ConfigBuilder (mkConfig)
 import OddJobs.Job (ConcurrencyControl (..), Job (..), LogEvent, LogLevel, createJob, scheduleJob, startJobRunner, throwParsePayload)
 import OpenTelemetry.Attributes qualified as OA
@@ -83,7 +86,6 @@ import Pages.Bots.Utils (ReportType (..))
 import Pages.Charts.Charts qualified as Charts
 import Pages.Replay qualified as Replay
 import Pages.Reports qualified as RP
-import Pages.Settings qualified as Settings
 import Pkg.Components.Widget qualified as Widget
 import Pkg.DeriveUtils (BaselineState (..), UUIDId (..), rawSql)
 import Pkg.Drain qualified as Drain
@@ -123,6 +125,7 @@ data BgJobs
   | DailyJob
   | HourlyJob UTCTime Int
   | ReportUsage Projects.ProjectId
+  | TrialEndingReminder Projects.ProjectId Int
   | GenerateOtelFacetsBatch (V.Vector Projects.ProjectId) UTCTime
   | QueryMonitorsCheck
   | DeletedProject Projects.ProjectId
@@ -402,7 +405,7 @@ processBackgroundJob authCtx bgJob =
           -- Capture failures for structured logging; rethrow so odd-jobs retries.
           reportResult <- tryAny $ case provider of
             Projects.StripeProvider -> whenJust (mfilter (not . T.null) (project.customerId <|> project.orderId)) \custId ->
-              liftIO $ Settings.reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" totalUsage
+              liftIO $ reportUsageToStripe authCtx.config.stripeSecretKey custId "events_usage" totalUsage
             Projects.LemonSqueezyProvider -> liftIO $ reportUsageToLemonsqueezy fSubId totalUsage authCtx.config.lemonSqueezyApiKey
             Projects.NoBillingProvider -> Log.logAttention "ReportUsage: NoBillingProvider for paid project" ("project_id", pid.toText, "sub_id", project.subId, "plan", project.paymentPlan)
           case reportResult of
@@ -414,6 +417,38 @@ processBackgroundJob authCtx bgJob =
                 void $ Projects.addDailyUsageReport pid totalUsage
                 void $ Projects.updateUsageLastReported pid currentTime
                 Log.logInfo "Usage reported successfully" ("project_id", pid.toText, "total", totalUsage)
+    TrialEndingReminder pid scheduledDaysLeft -> do
+      projectM <- Projects.projectById pid
+      case projectM of
+        Nothing -> Log.logAttention "TrialEndingReminder: project not found" (pid.toText, scheduledDaysLeft :: Int)
+        Just project -> case project.subId of
+          Nothing -> Log.logAttention "TrialEndingReminder: project has no subId" (pid.toText, scheduledDaysLeft :: Int)
+          Just subId
+            | Projects.billingProvider (Just subId) /= Projects.StripeProvider ->
+                Log.logInfo "TrialEndingReminder: project migrated off Stripe, skipping" (pid.toText, scheduledDaysLeft :: Int, subId)
+            | otherwise -> do
+                details <- liftIO $ getStripeSubDetails authCtx.config.stripeSecretKey subId
+                case details of
+                  Nothing -> Log.logAttention "TrialEndingReminder: Stripe sub fetch failed" (pid.toText, scheduledDaysLeft :: Int, subId)
+                  Just StripeSubDetails{status, trialEnd} -> case status of
+                    "past_due" -> Log.logAttention "TrialEndingReminder: sub past_due at reminder time" (pid.toText, scheduledDaysLeft :: Int, subId)
+                    "trialing" -> do
+                      -- Re-derive days left from Stripe's current trial_end so email copy
+                      -- reflects any mid-trial extension rather than the scheduled value.
+                      now <- liftIO getCurrentTime
+                      let actualDaysLeft = case trialEnd of
+                            Just epoch ->
+                              let secs = fromIntegral epoch - utcTimeToPOSIXSeconds now :: POSIXTime
+                               in max 0 (ceiling (secs / 86400))
+                            Nothing -> scheduledDaysLeft
+                      users <- Projects.usersByProjectId pid
+                      let billingUrl = authCtx.env.hostUrl <> "p/" <> pid.toText <> "/manage_billing"
+                          (subj, html) = ET.trialEndingEmail project.title actualDaysLeft billingUrl
+                      forM_ users \u -> do
+                        sendRes <- tryAny $ sendRenderedEmail (CI.original u.email) subj (ET.renderEmail subj html)
+                        whenLeft_ sendRes \e ->
+                          Log.logAttention "TrialEndingReminder: email send failed" (pid.toText, CI.original u.email, displayException e)
+                    _ -> Log.logInfo "TrialEndingReminder: sub not trialing, skipping" (pid.toText, scheduledDaysLeft :: Int, subId, status)
     CleanupDemoProject ->
       -- ReadCommitted is sufficient: we need atomicity across the three deletes,
       -- not Serializable's anti-conflict guarantees (which would surface as opaque
@@ -1520,6 +1555,69 @@ runSessionBackfillTimer logger ctx tp = forever $ do
       when (n > 0) $ Log.logTrace "session-backfill" ("rows_updated" :: Text, n)
 
 
+stripeAuth :: Text -> Wreq.Options
+stripeAuth apiKey = defaults & (header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+
+
+reportUsageToStripe :: Text -> Text -> Text -> Int -> IO ()
+reportUsageToStripe apiKey customerId eventName quantity = do
+  let params :: [(ByteString, ByteString)]
+      params =
+        [ ("event_name", encodeUtf8 eventName)
+        , ("payload[value]", encodeUtf8 $ show quantity)
+        , ("payload[stripe_customer_id]", encodeUtf8 customerId)
+        ]
+  void $ postWith (stripeAuth apiKey) "https://api.stripe.com/v1/billing/meter_events" params
+
+
+-- | `trialEnd` is Nothing when the sub has no trial or the trial is over.
+data StripeSubDetails = StripeSubDetails
+  { subItemId :: Text
+  , priceId :: Text
+  , status :: Text
+  , trialEnd :: Maybe Int
+  }
+
+
+-- | Returns Nothing on HTTP/network/TLS error or JSON decode miss. Callers
+-- treat Nothing as an actionable failure.
+getStripeSubDetails :: Text -> Text -> IO (Maybe StripeSubDetails)
+getStripeSubDetails apiKey subId = do
+  respE <- tryAny $ getWith (stripeAuth apiKey) ("https://api.stripe.com/v1/subscriptions/" <> toString subId)
+  pure $ case respE of
+    Left _ -> Nothing
+    Right resp -> do
+      let body = resp ^. responseBody
+          item0 = AL.key "items" . AL.key "data" . AL.nth 0
+      v <- AE.decode @AE.Value body
+      subItemId <- v ^? item0 . AL.key "id" . AL._String
+      priceId <- v ^? item0 . AL.key "price" . AL.key "id" . AL._String
+      let status = fromMaybe "" (v ^? AL.key "status" . AL._String)
+          trialEnd = v ^? AL.key "trial_end" . AL._Integer <&> fromInteger
+      pure StripeSubDetails{..}
+
+
+-- | Enqueues TrialEndingReminder jobs at T-7d and T-3d. Enqueue failures are
+-- logged but never raised — checkout billing state is already committed.
+scheduleTrialReminders :: (DB es, Time.Time :> es, Log :> es) => Projects.ProjectId -> Int -> Eff es ()
+scheduleTrialReminders pid trialEndEpoch = do
+  now <- Time.currentTime
+  let trialEnd = posixSecondsToUTCTime (fromIntegral trialEndEpoch)
+      (past, due) = L.partition (\(runAt, _) -> runAt <= now)
+        [ (addUTCTime (negate (fromIntegral daysLeft * 86400)) trialEnd, daysLeft)
+        | daysLeft <- [7, 3 :: Int]
+        ]
+  forM_ past \(runAt, daysLeft) ->
+    Log.logAttention "Trial reminder runAt already past; skipping" (pid.toText, daysLeft, runAt)
+  forM_ due \(runAt, daysLeft) -> do
+    let payload = AE.toJSON (TrialEndingReminder pid daysLeft)
+    res <- tryAny $ void $ Hasql.interpExecute
+      [HI.sql|INSERT INTO background_jobs (run_at, status, payload)
+             VALUES (#{runAt}, 'queued', #{HI.AsJsonb payload})|]
+    whenLeft_ res \e ->
+      Log.logAttention "Trial reminder enqueue failed" (pid.toText, daysLeft, displayException e)
+
+
 reportUsageToLemonsqueezy :: Text -> Int -> Text -> IO ()
 reportUsageToLemonsqueezy subItemId quantity apiKey = do
   let formData =
@@ -1527,7 +1625,11 @@ reportUsageToLemonsqueezy subItemId quantity apiKey = do
           "data": {"type": "usage-records","attributes": {"quantity": #{quantity},"action": "increment"},
                      "relationships": {"subscription-item": {"data": {"type": "subscription-items","id": #{subItemId}}}}
                   }}|]
-      hds = Settings.lemonSqueezyOpts apiKey & (header "Accept" .~ ["application/vnd.api+json"])
+      hds =
+        defaults
+          & (header "Authorization" .~ ["Bearer " <> encodeUtf8 apiKey])
+          & (header "Content-Type" .~ ["application/vnd.api+json"])
+          & (header "Accept" .~ ["application/vnd.api+json"])
   void $ postWith hds "https://api.lemonsqueezy.com/v1/usage-records" formData
 
 
