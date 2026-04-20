@@ -88,7 +88,7 @@ shareLinkGetH sid = do
   r <- Hasql.interpOne [HI.sql|SELECT project_id, event_id, event_type, event_created_at FROM apis.share_events where id=#{sid} and created_at > #{now}::timestamptz - interval '48 hours' limit 1|]
   uiM <- do
     case r of
-      Just (pid, eventId, eventType, createdAt) -> do
+      Just (pid, eventId, eventType :: Text, createdAt) -> do
         case eventType of
           "log" -> do
             logItem <- Telemetry.logRecordByProjectAndId pid createdAt eventId
