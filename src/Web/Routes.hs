@@ -76,7 +76,6 @@ import "cryptohash-md5" Crypto.Hash.MD5 qualified as MD5
 
 import Models.Apis.Endpoints qualified as Endpoints
 import Models.Apis.Issues qualified as Anomalies
-import Models.Apis.Issues qualified as Issues
 import Pages.Anomalies qualified as AnomalyList
 import Pages.BodyWrapper (PageCtx (..))
 import Pages.Bots.Discord qualified as Discord
@@ -254,6 +253,7 @@ data Routes mode = Routes
   , logout :: mode :- "logout" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] NoContent)
   , authCallback :: mode :- "auth_callback" :> QPT "code" :> QPT "state" :> QPT "redirect_to" :> GetRedirect '[HTML] (Headers '[Header "Location" Text, Header "Set-Cookie" SetCookie] (Html ()))
   , shareLinkGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> Get '[HTML] Share.ShareLinkGet
+  , shareReplaySessionGet :: mode :- "share" :> "r" :> Capture "shareID" UUID.UUID :> "replay_session" :> Capture "sessionId" UUID.UUID :> Get '[JSON] AE.Value
   , slackLinkProjectGet :: mode :- "slack" :> "oauth" :> "callback" :> QPT "code" :> QPT "state" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
   , discordLinkProjectGet :: mode :- "discord" :> "oauth" :> "callback" :> QPT "state" :> QPT "code" :> QPT "guild_id" :> GetRedirect '[HTML] (Headers '[Header "Location" Text] BotUtils.BotResponse)
   , discordInteractions :: mode :- "discord" :> "interactions" :> ReqBody '[RawJSON] BS.ByteString :> Header "X-Signature-Ed25519" BS.ByteString :> Header "X-Signature-Timestamp" BS.ByteString :> Post '[JSON] AE.Value
@@ -500,6 +500,7 @@ server pool =
     , logout = Auth.logoutH
     , authCallback = Auth.authCallbackH
     , shareLinkGet = Share.shareLinkGetH
+    , shareReplaySessionGet = Share.shareReplaySessionGetH
     , slackLinkProjectGet = Slack.linkProjectGetH
     , discordLinkProjectGet = Discord.linkDiscordGetH
     , discordInteractions = Discord.discordInteractionsH

@@ -74,11 +74,18 @@ drawer_ drawerId urlM content trigger = div_ [class_ "drawer drawer-end inline-b
 
 dateTime :: UTCTime -> Maybe UTCTime -> Html ()
 dateTime t endTM = do
-  span_ [class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong"] do
-    faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
-    toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M:%S" t
-    whenJust endTM \endT ->
-      toHtml $ " - " <> formatTime defaultTimeLocale "%b %d, %H:%M:%S" endT
+  let fullIso = formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC" t
+      fullIsoEnd = fmap (formatTime defaultTimeLocale "%Y-%m-%d %H:%M:%S UTC") endTM
+      title = maybe fullIso (\e -> fullIso <> " — " <> e) fullIsoEnd
+  span_
+    [ class_ "flex items-center rounded-lg px-2 py-1.5 text-xs gap-2 border border-strokeWeak bg-fillWeaker text-textStrong"
+    , Lucid.title_ (toText title)
+    ]
+    do
+      faSprite_ "calendar" "regular" "w-4 h-4 fill-none"
+      toHtml $ formatTime defaultTimeLocale "%b %d, %H:%M:%S" t
+      whenJust endTM \endT ->
+        toHtml $ " - " <> formatTime defaultTimeLocale "%b %d, %H:%M:%S" endT
 
 
 paymentPlanPicker :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Bool -> Bool -> Projects.BillingProvider -> Html ()

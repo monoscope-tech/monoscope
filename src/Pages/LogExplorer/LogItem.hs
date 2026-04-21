@@ -6,6 +6,7 @@ module Pages.LogExplorer.LogItem (
   getServiceColor,
   getRequestDetails,
   spanHasErrors,
+  spanBadge,
 ) where
 
 import Data.Aeson qualified as AE
@@ -263,7 +264,7 @@ expandedItemView pid item aptSp leftM rightM = do
     div_ [id_ "copy_share_link"] pass
     unless isLog $ htmxOverlayIndicator_ "loading-span-list"
     htmxOverlayIndicator_ "details_indicator"
-    div_ [class_ "flex flex-col gap-1.5 bg-fillWeaker py-2.5 px-3"] $ do
+    div_ [class_ "detail-header-block flex flex-col gap-1.5 bg-fillWeaker py-2.5 px-3"] $ do
       -- Row 1: severity/title + date + close (compact for logs)
       div_ [class_ "flex justify-between items-start gap-2"] do
         if isLog
@@ -306,7 +307,10 @@ expandedItemView pid item aptSp leftM rightM = do
                             let extraClass = getGrpcStatusColor status
                             when (scheme /= "DB") $ span_ [class_ $ " px-2 py-1.5 border-l " <> extraClass] $ toHtml $ show status
                   Nothing -> do
-                    h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml $ fromMaybe "" item.name
+                    let parts = mapMaybe (guarded (not . T.null)) [getServiceName (unAesonTextMaybe item.resource), fromMaybe "" item.kind]
+                        fallback = if null parts then "Unnamed span" else T.intercalate " · " parts <> " span"
+                        title = fromMaybe fallback (item.name >>= guarded (not . T.null))
+                    h4_ [class_ "text-xl max-w-96 truncate"] $ toHtml title
         div_ [class_ "flex gap-2 items-center shrink-0"] $ do
           dateTime (if isLog then item.timestamp else item.start_time) Nothing
           button_
@@ -353,7 +357,8 @@ expandedItemView pid item aptSp leftM rightM = do
           let tracePath = "/p/" <> pid.toText <> "/traces/" <> trId <> "/?timestamp=" <> createdAt
           button_
             ( actBtn
-                <> [ term
+                <> [ term "data-share-hide" "1"
+                   , term
                        "_"
                        [text|on click remove .hidden from #trace_expanded_view
                             then call updateUrlState('showTrace', "$trId/?timestamp=$createdAt")
@@ -375,7 +380,8 @@ expandedItemView pid item aptSp leftM rightM = do
           "View alert"
         button_
           ( actBtn
-              <> [ hxPost_ $ "/p/" <> pid.toText <> "/share/" <> item_id <> "/" <> createdAt <> "?event_type=" <> eventType
+              <> [ term "data-share-hide" "1"
+                 , hxPost_ $ "/p/" <> pid.toText <> "/share/" <> item_id <> "/" <> createdAt <> "?event_type=" <> eventType
                  , hxSwap_ "innerHTML"
                  , hxTarget_ "#copy_share_link"
                  ]
@@ -485,22 +491,45 @@ expandedItemView pid item aptSp leftM rightM = do
 
 -- Helper functions
 renderErrors :: [AE.Value] -> Html ()
-renderErrors errs =
-  div_ [class_ "flex flex-col mt-4 gap-4 w-full"]
-    $ forM_ errs
-    $ \err -> do
-      let (tye, message, stacktrace) = getErrorDetails err
-      div_ [class_ "w-full border border-strokeWeak rounded-lg"] $ do
-        div_ [class_ "p-3"] do
-          div_ [class_ "text-textError font-semibold text-sm mb-1"] $ toHtml tye
-          p_ [class_ "text-sm leading-snug text-textWeak"] $ toHtml message
-        unless (T.null stacktrace) $ details_ [class_ "group/st border-t border-strokeWeak"] do
-          summary_ [class_ "cursor-pointer select-none flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong"] do
-            faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
-            "Stack Trace"
-          div_ [class_ "px-3 pb-3"]
-            $ pre_ [class_ "text-xs font-mono whitespace-pre-wrap text-textWeak bg-fillWeak rounded-md p-3 max-h-64 overflow-y-auto"]
-            $ toHtml stacktrace
+renderErrors errs = do
+  let total = length errs
+  div_ [class_ "flex flex-col mt-4 gap-3 w-full"] $ forM_ (zip [1 :: Int ..] errs) $ \(idx, err) -> do
+    let (tye, message, stacktrace) = getErrorDetails err
+        displayType = if T.null tye then "Exception" else tye
+        copyId = "exc-msg-" <> show idx
+    div_ [class_ "w-full border border-strokeError-strong/40 rounded-lg overflow-hidden bg-fillError-weak/30"] do
+      -- Header: red strip with type, position, copy
+      div_ [class_ "flex items-center justify-between gap-3 px-3 py-2 bg-fillError-weak border-b border-strokeError-strong/40"] do
+        div_ [class_ "flex items-center gap-2 min-w-0"] do
+          faSprite_ "circle-exclamation" "solid" "w-4 h-4 text-iconError shrink-0"
+          span_ [class_ "font-semibold text-sm text-textError truncate"] $ toHtml displayType
+          when (total > 1)
+            $ span_ [class_ "text-[10px] font-medium text-textWeak px-1.5 py-0.5 rounded bg-bgBase border border-strokeWeak shrink-0"]
+            $ toHtml @Text
+            $ show idx
+            <> " / "
+            <> show total
+        unless (T.null message) $ button_
+          [ class_ "shrink-0 cursor-pointer flex items-center gap-1 text-xs px-2 py-0.5 rounded text-textWeak hover:text-textStrong hover:bg-bgBase/60 transition-colors"
+          , Aria.label_ "Copy exception message"
+          , term "_" [text|install Copy(content:.${copyId})|]
+          ]
+          do
+            faSprite_ "copy" "regular" "w-3 h-3"
+            "Copy"
+      -- Message block: monospace, pre-wrap, full strength
+      unless (T.null message)
+        $ pre_ [class_ $ copyId <> " text-[13px] font-mono whitespace-pre-wrap break-words text-textStrong px-3 py-2.5 leading-relaxed"]
+        $ toHtml message
+      -- Stacktrace: collapsible
+      unless (T.null stacktrace) $ details_ [class_ "group/st border-t border-strokeError-strong/30"] do
+        summary_ [class_ "cursor-pointer select-none flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-textWeak hover:text-textStrong"] do
+          faSprite_ "chevron-right" "regular" "w-3 h-3 transition-transform group-open/st:rotate-90"
+          "Stack trace"
+          span_ [class_ "text-[10px] text-textWeak/70"] $ toHtml @Text $ "(" <> show (length (T.lines stacktrace)) <> " frames)"
+        div_ [class_ "px-3 pb-3"]
+          $ pre_ [class_ "text-[12px] font-mono whitespace-pre text-textWeak bg-bgBase border border-strokeWeak rounded-md p-3 max-h-72 overflow-auto leading-snug"]
+          $ toHtml stacktrace
 
 
 numberOfEvents :: AE.Value -> Int

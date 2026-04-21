@@ -586,18 +586,28 @@ data ErrorHashes = ErrorHashes
 -- But different narrow hashes:
 -- >>> (computeErrorHashes "p" (Just "s") (Just "GET /a") "nodejs" "" "boom" "").narrow == (computeErrorHashes "p" (Just "s") (Just "GET /b") "nodejs" "" "boom" "").narrow
 -- False
+--
+-- Transport errors collapse across routes and stack traces (same type+message → same hash):
+-- >>> let a = computeErrorHashes "p" (Just "web") (Just "GET /a") "haskell" "InvalidRequest" "Warp: Client closed connection prematurely" "at Network.Wai.Handler.Warp.Run:123"
+-- >>> let b = computeErrorHashes "p" (Just "web") (Just "POST /b") "haskell" "InvalidRequest" "Warp: Client closed connection prematurely" "at Network.Wai.Handler.Warp.Recv:45"
+-- >>> a.narrow == b.narrow && a.broad == b.broad
+-- True
 computeErrorHashes :: Text -> Maybe Text -> Maybe Text -> Text -> Text -> Text -> Text -> ErrorHashes
 computeErrorHashes projectIdText mService spanName runtime exceptionType message stackTrace =
-  ErrorHashes
-    { narrow = go spanName
-    , broad = go Nothing
-    }
+  let normalizedMsg = normalizeMessage message
+      normalizedType = T.strip exceptionType
+   in if isFrameworkTransportError normalizedType normalizedMsg
+        then
+          -- Framework transport noise is route/stack-agnostic: collapse every
+          -- occurrence of the same type+message into one pattern so it does not
+          -- fan out into hundreds of distinct issues.
+          let h = toXXHash $ T.intercalate "|" $ filter (not . T.null) [projectIdText, "transport", normalizedType, normalizedMsg]
+           in ErrorHashes{narrow = h, broad = h}
+        else ErrorHashes{narrow = go spanName normalizedMsg normalizedType, broad = go Nothing normalizedMsg normalizedType}
   where
-    go sn =
+    go sn normalizedMsg normalizedType =
       let
         normalizedStack = normalizeStackTrace runtime stackTrace
-        normalizedMsg = normalizeMessage message
-        normalizedType = T.strip exceptionType
         fingerprintComponents =
           if
             | not (T.null normalizedStack) -> [projectIdText, fromMaybe "" mService, normalizedType, normalizedStack]

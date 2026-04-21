@@ -1,7 +1,6 @@
 import { getSeriesColor, tailwindToHex, getContrastTextColor } from './colorMapping';
 
-// Calculate actual trace time bounds (minStart, maxEnd) across root spans
-const getTimeBounds = (spans: FlameGraphItem[]): { minStart: number; range: number } => {
+const getTimeBounds = (spans: { start: number; value: number }[]): { minStart: number; range: number } => {
   let minStart = Infinity, maxEnd = -Infinity;
   for (const item of spans) {
     minStart = Math.min(minStart, item.start);
@@ -80,21 +79,24 @@ function setupTimeCursor(opts: {
   };
 }
 
-const getErrorIndicator = () =>
+// Error overlay: left-edge inset-shadow + 45° diagonal stripe (two non-color
+// signals so color-blind users aren't left out). Callers add a separate flex
+// glyph so it doesn't overlap the span label.
+const getErrorOverlay = () =>
+  elt('span', {
+    class: 'absolute inset-0 pointer-events-none rounded-sm',
+    style: `box-shadow: inset 2px 0 0 var(--color-fillError-strong);background-image: repeating-linear-gradient(-45deg, color-mix(in oklch, var(--color-fillError-strong) 22%, transparent) 0 2px, transparent 2px 7px);`,
+  });
+
+const getErrorGlyph = () =>
   elt(
     'span',
     {
-      class: 'bg-fillError-strong rounded-l h-full w-5 flex justify-center items-center rounded-r shrink-0 font-bold',
-      title: 'Error',
-      'aria-label': 'Error',
+      class:
+        'shrink-0 ml-1 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-[10px] font-bold flex items-center justify-center leading-none relative',
+      'aria-hidden': 'true',
     },
-    elt(
-      'span',
-      {
-        class: 'text-textInverse-strong text-xs h-3 w-3 flex items-center justify-center rounded-full border border-white p-1',
-      },
-      '!'
-    )
+    '!'
   );
 
 // Tooltip for hovering over small spans
@@ -174,24 +176,26 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     }
     return [];
   };
-  const recursionJson = (jsonObj: FlameGraphItem[], id: string | null = null) => {
+  // Trace-wide bounds from the FLAT span list mirror the waterfall view — a
+  // non-first root would otherwise snap to 0 and desync timeline from waterfall.
+  const traceBounds = getTimeBounds(data);
+
+  const recursionJson = (jsonObj: FlameGraphItem[], baseMinStart: number, baseRange: number) => {
     const data: ItemsWithStyle[] = [];
-    const filteredJson = id != null ? filterJson(structuredClone(jsonObj), id) : jsonObj;
-    const { minStart: globalMinStart, range: rootVal } = getTimeBounds(filteredJson);
     const recur = (item: FlameGraphItem, level = 0) => {
       const color = resolveColor(item.serviceName, colorsMap);
       data.push({
         name: item.name,
         hasErrors: item.hasErrors,
         spanId: item.spanId,
-        value: [level, item.start - globalMinStart, item.value, item.name, (item.value / rootVal) * 100],
+        value: [level, item.start - baseMinStart, item.value, item.name, (item.value / baseRange) * 100],
         itemStyle: { color },
       });
       for (const child of item.children || []) {
         recur(child, level + 1);
       }
     };
-    filteredJson.forEach((item) => recur(item));
+    jsonObj.forEach((item) => recur(item));
     return data;
   };
 
@@ -221,13 +225,12 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
         });
         (e.currentTarget as HTMLElement).classList.add('ring-2', 'ring-strokeBrand-strong', 'timeline-selected');
         const data = filterJson(structuredClone(fData), item.name);
-        flameGraph(data, renderAt);
+        flameGraph(data, renderAt, true);
         resetBtn?.classList.remove('hidden');
         (window as any).htmx.trigger('#trigger-span-' + item.spanId, 'click');
       },
-      onmouseenter: (e: MouseEvent) => {
-        showTooltip(e, `${item.name} — ${Math.floor(Number(t))} ${u} (${pct.toFixed(1)}%)`);
-      },
+      onmouseenter: (e: MouseEvent) =>
+        showTooltip(e, `${item.name} — ${Math.floor(Number(t))} ${u} (${pct.toFixed(1)}%)${item.hasErrors ? ' · error' : ''}`),
       onmouseleave: () => hideTooltip(),
     });
     div.style.left = `${startPix}px`;
@@ -235,28 +238,34 @@ function flameGraphChart(data: FlameGraphItem[], renderAt: string, colorsMap: Re
     div.style.width = `${width}px`;
     div.style.height = `${height}px`;
     if (item.hasErrors) {
-      div.appendChild(getErrorIndicator());
+      div.setAttribute('aria-label', `${item.name} errored`);
+      div.appendChild(getErrorOverlay());
     }
     const textColor = getContrastTextColor(item.itemStyle.color);
-    const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs', style: `color: ${textColor}` }, item.name);
-    const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1 tabular-nums', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
+    // Errored + wide-enough bars get a real flex-child glyph that flows before
+    // the label (no overlap with the span name).
+    if (item.hasErrors && width >= 24) div.appendChild(getErrorGlyph());
+    const text = elt('span', { class: 'ml-1 shrink-0 mr-4 text-xs relative', style: `color: ${textColor}` }, item.name);
+    const tim = elt('span', { class: 'text-xs shrink-0 ml-auto mr-1 tabular-nums relative', style: `color: ${textColor}` }, `${Math.floor(Number(t))} ${u}`);
     div.appendChild(text);
     div.appendChild(tim);
     container.appendChild(div);
   };
 
   let maxDuration = 0;
-  function flameGraph(stackTrace: FlameGraphItem[], target: string) {
+  // `zoomed` re-anchors on the filtered subtree (click-to-filter) so it fills
+  // the viewport; otherwise use the trace-wide anchor so offsets match waterfall.
+  function flameGraph(stackTrace: FlameGraphItem[], target: string, zoomed = false) {
     if (!flameContainer) return;
     flameContainer.innerHTML = '';
-    const rootVal = getTimeBounds(stackTrace).range;
-    maxDuration = rootVal;
-    generateTimeIntervals(rootVal, 'time-container-' + target, FLAME_PAD_LEFT);
+    const { minStart, range } = zoomed ? getTimeBounds(stackTrace) : traceBounds;
+    maxDuration = range;
+    generateTimeIntervals(range, 'time-container-' + target, FLAME_PAD_LEFT);
 
     const containerWidth = flameContainer.offsetWidth - SCROLL_BAR_WIDTH;
-    const data = recursionJson(stackTrace);
-    data.sort((a, b) => b.value[2] - a.value[2]);
-    data.forEach((item) => renderItem(item, flameContainer, rootVal, containerWidth));
+    const rendered = recursionJson(stackTrace, minStart, range);
+    rendered.sort((a, b) => b.value[2] - a.value[2]);
+    rendered.forEach((item) => renderItem(item, flameContainer, range, containerWidth));
   }
 
   flameGraph(fData, renderAt);
@@ -401,11 +410,14 @@ function waterFallGraphChart(renderAt: string, serviceColors: Record<string, str
       const bar = elt('div', {
         class: 'absolute top-1 bottom-1 rounded-sm flex items-center overflow-hidden',
         style: `left:${leftPx}px;width:${widthPx}px;background-color:${color};`,
-        onmouseenter: (e: MouseEvent) => showTooltip(e, `${service} · ${spanName} — ${label} (${pct.toFixed(1)}%)`),
+        onmouseenter: (e: MouseEvent) => showTooltip(e, `${service} · ${spanName} — ${label} (${pct.toFixed(1)}%)${hasErrors ? ' · error' : ''}`),
         onmouseleave: () => hideTooltip(),
       });
-      if (hasErrors) bar.appendChild(getErrorIndicator());
-      const tim = elt('span', { class: 'text-xs shrink-0 mr-1 ml-auto tabular-nums', style: `color:${textColor}` }, label);
+      if (hasErrors) {
+        bar.setAttribute('aria-label', `${spanName} errored`);
+        bar.appendChild(getErrorOverlay());
+      }
+      const tim = elt('span', { class: 'text-xs shrink-0 mr-1 ml-auto tabular-nums relative', style: `color:${textColor}` }, label);
       bar.appendChild(tim);
       el.appendChild(bar);
     }

@@ -96,6 +96,9 @@ extra-source-files:
     static/migrations/0068_replay_sessions_user_columns.sql
     static/migrations/0069_session_user_indexes.sql
     static/migrations/0070_endpoint_service_environment.sql
+    static/migrations/0071_project_customer_id.sql
+    static/migrations/0072_subscriptions_uniq.sql
+    static/migrations/0073_fix_notification_backfill.sql
 
 source-repository head
   type: git
@@ -543,6 +546,7 @@ test-suite integration-tests
   type: exitcode-stdio-1.0
   main-is: Main.hs
   other-modules:
+      BackgroundJobs.NotificationsSpec
       CLI.CLIBinarySpec
       CLI.CLISpec
       EndpointDiscoverySpec

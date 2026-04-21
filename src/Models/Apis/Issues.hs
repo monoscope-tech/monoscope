@@ -95,6 +95,7 @@ module Models.Apis.Issues (
 
 import Data.Aeson qualified as AE
 import Data.ByteString qualified as BS
+import Data.Char (isAscii, isPrint)
 import Data.Default (Default)
 import Data.Effectful.Hasql qualified as Hasql
 import Data.Effectful.UUID (UUIDEff, genUUID)
@@ -334,6 +335,10 @@ insertIssue (i :: Issue) = do
         (i.acknowledgedAt, i.acknowledgedBy, i.archivedAt, i.title, i.service, i.environment, i.critical, i.severity)
       (iAction, iComplex, iData, iReqP, iResP, iLlmAt, iLlmVer, iSeq) =
         (i.recommendedAction, i.migrationComplexity, i.issueData, i.requestPayloads, i.responsePayloads, i.llmEnhancedAt, i.llmEnhancementVersion, i.seqNum)
+      -- Seed affected_requests/_clients from the triggering batch so reminder
+      -- logic that depends on "is it still firing?" has real counters from day one.
+      -- ON CONFLICT, accumulate rather than overwrite.
+      (iAffReq, iAffCli) = (max 1 i.affectedRequests, max 1 i.affectedClients)
   Hasql.interpExecute_
     [HI.sql|
 INSERT INTO apis.issues (
@@ -342,14 +347,18 @@ INSERT INTO apis.issues (
   title, service, environment, critical, severity,
   recommended_action, migration_complexity,
   issue_data, request_payloads, response_payloads,
-  llm_enhanced_at, llm_enhancement_version, seq_num
+  llm_enhanced_at, llm_enhancement_version, seq_num,
+  affected_requests, affected_clients
 ) VALUES (#{iId}, #{iCreated}, #{iUpdated}, #{iPid}, #{iType}::apis.issue_type, #{iTgt}, #{iPHash}, #{iFrame}, #{iEHash},
   #{iAckAt}, #{iAckBy}, #{iArchAt}, #{iTitle}, #{iSvc}, #{iEnv}, #{iCrit}, #{iSev},
-  #{iAction}, #{iComplex}, #{iData}, #{iReqP}, #{iResP}, #{iLlmAt}, #{iLlmVer}, #{iSeq})
+  #{iAction}, #{iComplex}, #{iData}, #{iReqP}, #{iResP}, #{iLlmAt}, #{iLlmVer}, #{iSeq},
+  #{iAffReq}, #{iAffCli})
 ON CONFLICT (project_id, target_hash, issue_type)
   WHERE acknowledged_at IS NULL AND archived_at IS NULL
 DO UPDATE SET
   updated_at = EXCLUDED.updated_at,
+  affected_requests = apis.issues.affected_requests + EXCLUDED.affected_requests,
+  affected_clients = apis.issues.affected_clients + EXCLUDED.affected_clients,
   issue_data = EXCLUDED.issue_data
     || CASE WHEN jsonb_exists(apis.issues.issue_data, 'occurrence_count')
        THEN jsonb_build_object('occurrence_count', (apis.issues.issue_data->>'occurrence_count')::int + COALESCE((EXCLUDED.issue_data->>'occurrence_count')::int, 1))
@@ -769,6 +778,44 @@ createLogPatternRateChangeIssue projectId lp sr = do
       }
 
 
+-- | Strip token-highlight markup (";neutral⇒", ";badge-*⇒"), collapse drain
+-- placeholders ("{integer}", "{uuid}", "{*}"), and fall back to sample / service
+-- when the remaining text is mostly non-printable. Keeps Slack/Discord titles readable.
+--
+-- >>> sanitizeLogPatternTitle "connection;neutral⇒refused" Nothing Nothing
+-- "connection refused"
+-- >>> sanitizeLogPatternTitle "req {integer} took {integer} ms" Nothing Nothing
+-- "req took ms"
+-- >>> sanitizeLogPatternTitle "" (Just "GET /users 500") (Just "api")
+-- "api: GET /users 500"
+sanitizeLogPatternTitle :: Text -> Maybe Text -> Maybe Text -> Text
+sanitizeLogPatternTitle raw sampleM serviceM =
+  let replacements :: [(Text, Text)]
+      replacements =
+        [ (";neutral⇒", " ")
+        , (";badge-error⇒", " ")
+        , (";badge-warning⇒", " ")
+        , (";badge-info⇒", " ")
+        , (";badge-success⇒", " ")
+        , ("{integer}", "")
+        , ("{uuid}", "")
+        , ("{float}", "")
+        , ("{*}", "")
+        , ("{hex}", "")
+        ]
+      stripped = T.unwords $ T.words $ foldl' (\t (a, b) -> T.replace a b t) raw replacements
+      printableRatio txt
+        | T.null txt = 0
+        | otherwise = fromIntegral (T.length (T.filter (\c -> isPrint c && isAscii c) txt)) / fromIntegral (T.length txt) :: Double
+      usable = not (T.null stripped) && printableRatio stripped > 0.7
+      fallback = case (serviceM, sampleM) of
+        (Just svc, Just s) -> svc <> ": " <> T.take 80 s
+        (_, Just s) -> s
+        (Just svc, _) -> svc
+        _ -> "log event"
+   in T.take 100 $ if usable then stripped else fallback
+
+
 -- | Create an issue for a new log pattern
 createLogPatternIssue :: (Time :> es, UUIDEff :> es) => Projects.ProjectId -> LogPatterns.LogPattern -> Eff es Issue
 createLogPatternIssue projectId lp = do
@@ -799,7 +846,7 @@ createLogPatternIssue projectId lp = do
       , service = lp.serviceName
       , critical = lvl == "error"
       , severity
-      , title = "New Log Pattern: " <> T.take 100 lp.logPattern
+      , title = "New Log Pattern: " <> sanitizeLogPatternTitle lp.logPattern lp.sampleMessage lp.serviceName
       , recommendedAction = "A new log pattern has been detected. Review to ensure it's expected behavior."
       , migrationComplexity = "n/a"
       , issueData = logPatternData

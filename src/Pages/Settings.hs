@@ -580,13 +580,7 @@ data WebhookData = WebhookData
   , meta :: MetaData
   }
   deriving stock (Generic, Show)
-
-
-instance AE.FromJSON WebhookData where
-  parseJSON = AE.withObject "WebhookData" $ \obj -> do
-    dataVal <- obj AE..: "data"
-    meta <- obj AE..: "meta"
-    return (WebhookData{dataVal = dataVal, meta = meta})
+  deriving (AE.FromJSON, AE.ToJSON) via DAE.CustomJSON '[DAE.FieldLabelModifier (DAE.Rename "dataVal" "data")] WebhookData
 
 
 -- | LS signs a hex-encoded HMAC-SHA256 of the raw body in the X-Signature header.

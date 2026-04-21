@@ -104,17 +104,19 @@ data RuntimeAlertType
 
 -- | Send a Discord alert, optionally threading replies under a parent message.
 -- Returns the message ID if threading is enabled and the send succeeds.
-sendDiscordAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlert :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendDiscordAlert = sendDiscordAlertWith Nothing
 
 
 -- | Internal: send Discord alert with optional reply-to threading
-sendDiscordAlertWith :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendDiscordAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
   appCtx <- ask @Config.AuthContext
   channelIdM <- maybe (getDiscordDataByProjectId pid <&> (>>= (.notifsChannelId))) (pure . Just) channelIdM'
   case channelIdM of
-    Nothing -> pure Nothing
+    Nothing -> do
+      Log.logAttention "Discord alert skipped: no channel configured" (AE.object ["project_id" AE..= pid])
+      pure Nothing
     Just cid -> do
       let projectUrl = appCtx.env.hostUrl <> "p/" <> pid.toText
           mkPayload = \case
@@ -133,12 +135,12 @@ sendDiscordAlertWith replyToMsgIdM alert pid pTitle channelIdM' = do
 
 -- | Send a Slack alert, optionally threading replies under a parent message.
 -- Returns the thread timestamp if the send succeeds.
-sendSlackAlert :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlert :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlert = sendSlackAlertWith Nothing
 
 
 -- | Internal: send Slack alert with optional thread-ts for threading
-sendSlackAlertWith :: (DB es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
+sendSlackAlertWith :: (DB es, Log :> es, Notify.Notify :> es, Reader Config.AuthContext :> es) => Maybe Text -> NotificationAlerts -> Projects.ProjectId -> Text -> Maybe Text -> Eff es (Maybe Text)
 sendSlackAlertWith threadTsM alert pid pTitle channelM = do
   appCtx <- ask @Config.AuthContext
   slackData <- getProjectSlackData pid
@@ -159,7 +161,9 @@ sendSlackAlertWith threadTsM alert pid pTitle channelM = do
       case mkPayload alert of
         Nothing -> pure Nothing
         Just payload -> Notify.sendNotificationWithReply $ Notify.slackThreadedNotification cid bt payload threadTsM
-    _ -> pure Nothing
+    _ -> do
+      Log.logAttention "Slack alert skipped: missing channel or bot token" (AE.object ["project_id" AE..= pid, "has_channel" AE..= isJust channelIdM, "has_token" AE..= isJust botTokenM])
+      pure Nothing
 
 
 sendWhatsAppAlert :: (Notify.Notify :> es, Reader Config.AuthContext :> es) => NotificationAlerts -> Projects.ProjectId -> Text -> V.Vector Text -> Eff es ()

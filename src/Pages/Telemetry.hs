@@ -26,6 +26,7 @@ import Data.Vector qualified as V
 import Effectful.Reader.Static (ask)
 import Effectful.Time qualified as Time
 import Lucid
+import Lucid.Aria qualified as Aria
 import Lucid.Base (makeAttribute)
 import Lucid.Htmx
 import Lucid.Hyperscript (__)
@@ -630,8 +631,8 @@ tracePage pid traceItem spanRecords = do
           h3_ [class_ "whitespace-nowrap font-semibold text-textStrong"] "Trace Breakdown"
         div_ [class_ "flex items-center gap-2"] $ do
           Components.dateTime traceItem.traceStartTime (Just traceItem.traceEndTime)
-          button_ [class_ "p-0 m-0 cursor-pointer trace-collapse-btn", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
-            faSprite_ "side-chevron-left" "regular" "w-5 h-5 text-iconBrand rotate-180"
+          button_ [class_ "p-0 m-0 cursor-pointer trace-collapse-btn rounded-md p-1 hover:bg-fillWeak transition-colors", term "data-share-hide" "", term "aria-label" "Collapse trace view", [__| on click add .hidden to #trace_expanded_view then call updateUrlState('showTrace', '', 'delete')|]] do
+            faSprite_ "xmark" "regular" "w-4 h-4 text-iconNeutral"
 
       div_ [class_ "flex gap-1 w-full max-md:mt-2 mt-5"] $ do
         div_ [role_ "tablist", class_ "w-full flex flex-col gap-2", id_ "trace-tabs"] $ do
@@ -721,7 +722,20 @@ tracePage pid traceItem spanRecords = do
             div_ [class_ "border border-strokeWeak w-full rounded-2xl min-h-[230px] overflow-x-hidden "] do
               renderSpanListTable serviceNames serviceColors spanRecords
 
-  let spanJson = decodeUtf8 $ AE.encode $ spanRecords <&> Widget.getSpanJson Nothing
+  -- Use skew-adjusted SpanMin from the span tree so flame/timeline matches the waterfall.
+  let flattenTrees ts = concatMap (\t -> t.spanRecord : flattenTrees t.children) ts
+      spanMinToFlame sp =
+        AE.object
+          [ "spanId" AE..= sp.spanId
+          , "name" AE..= sp.spanName
+          , "value" AE..= sp.spanDurationNs
+          , "start" AE..= sp.startTime
+          , "parentId" AE..= sp.parentSpanId
+          , "serviceName" AE..= sp.serviceName
+          , "hasErrors" AE..= sp.hasErrors
+          , "totalSpans" AE..= (1 :: Int)
+          ]
+  let spanJson = decodeUtf8 $ AE.encode $ spanMinToFlame <$> flattenTrees rootSpans
   let colorsJson = decodeUtf8 $ AE.encode $ AE.object [AEKey.fromText k AE..= v | (k, v) <- HM.toList serviceColors]
   let trId = traceItem.traceId
   script_
@@ -761,22 +775,30 @@ renderSpanRecordRow spanRecords colors service = do
   let filterRecords = V.filter (\x -> getServiceName x.resource == service) spanRecords
   let listLen = V.length filterRecords
   let duration = sum $ (.spanDurationNs) <$> filterRecords
+  let errCount = V.length $ V.filter spanHasErrors filterRecords
+      hasErr = errCount > 0
   tr_
-    [ class_ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0"
+    [ class_ $ "w-full overflow-x-hidden p-2 cursor-pointer font-medium hover:bg-fillWeaker border-b-2 last:border-b-0" <> (if hasErr then " bg-fillError-weak/30" else "")
     , [__|on click toggle .hidden on next <tr/> then toggle .rotate-90 on the first <svg/> in the first <td/> in me|]
     ]
     do
       td_ [class_ "ml-1 px-2 py-1 w-[600px] text-textStrong truncate flex items-center gap-1 font-medium"] do
-        div_ [class_ "w-1 bg-fillBrand-weak h-4"] pass
+        div_ [class_ $ "w-1 h-4 " <> if hasErr then "bg-fillError-strong" else "bg-fillBrand-weak"] pass
         faSprite_ "chevron-right" "regular" "h-3 w-3 mr-2 text-iconNeutral"
         div_ [class_ $ "w-3 h-3 rounded-sm " <> getServiceColor service colors] pass
         span_ [] $ toHtml service
-      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ show listLen
-      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ getDurationNSMS $ duration `div` toInteger listLen
-      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ getDurationNSMS duration
-      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4"] $ toHtml $ show (duration * 100 `div` totalDuration) <> "%"
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ show listLen
+      td_ [class_ "px-2 py-1 max-w-48 truncate pl-4 tabular-nums"]
+        $ if hasErr
+          then span_ [class_ "inline-flex items-center gap-1 text-textError font-semibold", title_ "Spans with exception events"] do
+            span_ [class_ "w-1.5 h-1.5 rounded-full bg-fillError-strong"] pass
+            toHtml $ show errCount
+          else span_ [class_ "text-textWeak/60"] "—"
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ getDurationNSMS $ duration `div` toInteger listLen
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ getDurationNSMS duration
+      td_ [class_ "px-2 py-1 max-w-48 text-textWeak truncate pl-4 tabular-nums"] $ toHtml $ show (duration * 100 `div` totalDuration) <> "%"
   tr_ [class_ "hidden p-0 m-0", [__|on click halt|]] do
-    td_ [colspan_ "5", class_ "pl-[13px] overflow-x-hidden"] do
+    td_ [colspan_ "6", class_ "pl-[13px] overflow-x-hidden"] do
       spanTable filterRecords
 
 
@@ -787,6 +809,7 @@ renderSpanListTable services colors records =
       tr_ [class_ "p-2 border-b font-normal"] $ do
         th_ "Resource"
         th_ "Spans"
+        th_ "Errors"
         th_ "Avg. Duration"
         th_ "Exec. Time"
         th_ "%Exec. Time"
@@ -900,9 +923,10 @@ buildSpanTree_ pid sp trId level scol = do
       tme = fromString (formatShow iso8601Format sp.spanRecord.timestamp)
       spanId = UUID.toText sp.spanRecord.uSpanId
       indent = show (level * 12) <> "px"
+      errRowCls = if sp.spanRecord.hasErrors then " bg-fillError-weak/40 hover:bg-fillError-weak" else ""
   div_ [class_ "span-filterble"] do
     div_
-      [ class_ "flex items-center w-full h-7 cursor-pointer hover:bg-fillWeaker waterfall-row"
+      [ class_ $ "flex items-center w-full h-7 cursor-pointer hover:bg-fillWeaker waterfall-row" <> errRowCls
       , hxGet_ $ "/p/" <> pid.toText <> "/log_explorer/" <> spanId <> "/" <> tme <> "/detailed?source=spans"
       , hxTarget_ "#log_details_container"
       , hxSwap_ "innerHTML"
@@ -922,6 +946,13 @@ buildSpanTree_ pid sp trId level scol = do
           let label = fromMaybe sp.spanRecord.spanName (spanDisplayLabel sp.spanRecord.attributes)
               tip = sp.spanRecord.serviceName <> " — " <> label
           div_ [class_ $ "w-2.5 h-2.5 rounded-full shrink-0 " <> serviceCol, title_ sp.spanRecord.serviceName] pass
+          when sp.spanRecord.hasErrors
+            $ span_
+              [ class_ "shrink-0 w-3.5 h-3.5 rounded-sm bg-fillError-strong text-textInverse-strong text-[10px] font-bold flex items-center justify-center leading-none"
+              , title_ "This span errored"
+              , Aria.label_ "Error span"
+              ]
+            $ toHtml @Text "!"
           span_ [class_ "text-xs font-medium text-textStrong truncate max-w-20", title_ tip] $ toHtml sp.spanRecord.serviceName
           span_ [class_ "text-xs text-textWeak truncate", title_ tip] $ toHtml label
         div_

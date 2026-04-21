@@ -17,6 +17,7 @@ module Pkg.EmailTemplates (
   escalatingErrorsEmail,
   regressedErrorsEmail,
   errorSpikesEmail,
+  digestEmail,
   anomalyEndpointEmail,
   issueAssignedEmail,
   weeklyReportEmail,
@@ -383,6 +384,23 @@ regressedErrorsEmail projectName errorsUrl errors =
 errorSpikesEmail :: Text -> Text -> [ErrorPatterns.ATError] -> Maybe Text -> Maybe Text -> (Text, Html ())
 errorSpikesEmail projectName errorsUrl errors =
   runtimeErrorVariantEmail "Runtime Error Spike(s)" "[···] Runtime Error Spike(s) Detected - " projectName errorsUrl errors "We've detected a runtime error spike in your "
+
+
+-- | Summary digest body for the hourly notification flush (rate-limited
+-- overflow + low-signal issues). Subject is built at the call site.
+digestEmail :: Text -> Text -> Text -> Int -> Html ()
+digestEmail projectName inboxUrl summary total = emailBody do
+  h1_ "Batched notifications"
+  p_ do
+    "We batched "
+    b_ $ toHtml (show @Text total <> " notifications")
+    " for "
+    b_ $ toHtml projectName
+    " to avoid spam. A sample is below."
+  emailDivider
+  pre_ [style_ "font-family: monospace; font-size: 13px; white-space: pre-wrap; margin: 0 0 16px 0;"]
+    $ toHtml summary
+  emailButton inboxUrl "Open inbox"
 
 
 runtimeErrorVariantEmail :: Text -> Text -> Text -> Text -> [ErrorPatterns.ATError] -> Text -> Maybe Text -> Maybe Text -> (Text, Html ())

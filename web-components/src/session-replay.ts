@@ -17,6 +17,9 @@ export class SessionReplay extends LitElement {
   @property({ type: String }) private projectId: string = '';
   @property({ type: String }) private containerId: string = '';
   @property({ type: String }) private initialSession: string = '';
+  // Share-page override: replay API lives at a share-scoped URL in that context.
+  @property({ type: String }) private sessionUrl: string = '';
+  @property({ type: String }) private hideControls: string = '';
 
   @state() private activityWidth = 0;
   @query('#replayerOuterContainer') private replayerOuterContainer: HTMLElement;
@@ -468,7 +471,7 @@ export class SessionReplay extends LitElement {
     this.warnTicks = [];
     this.navMarkers = [];
     this.consoleTypesCounts = { error: 0, warn: 0, info: 0 };
-    const url = `/p/${this.projectId}/replay_session/${sessionId}`;
+    const url = this.sessionUrl || `/p/${this.projectId}/replay_session/${sessionId}`;
     // Capture locally so responses for abandoned sessions don't overwrite
     // state the user has already moved on from.
     const requestedId = sessionId;

@@ -1,6 +1,6 @@
 {-# LANGUAGE StrictData #-}
 
-module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..)) where
+module BackgroundJobs (jobsWorkerInit, jobsRunner, processBackgroundJob, BgJobs (..), jobTypeName, runHourlyJob, generateOtelFacetsBatch, throwParsePayload, checkTriggeredQueryMonitors, monitorStatus, detectSpikeOrDrop, spikeZScoreThreshold, spikeMinAbsoluteDelta, calculateLogPatternBaselines, detectLogPatternSpikes, processNewLogPatterns, calculateErrorBaselines, detectErrorSpikes, notifyErrorSubscriptions, sweepErrorSubscriptions, consumeNotificationToken, endpointTemplateDiscovery, patternEmbeddingAndMerge, processEagerBatch, flushDrainTask, runErrorDecayFiber, runDrainFlusher, runDrainAgeFlushTimer, runSessionBackfillTimer, getStripeSubDetails, scheduleTrialReminders, StripeSubDetails (..)) where
 
 import Control.Concurrent (threadDelay)
 import Control.Concurrent.Async (async)
@@ -138,6 +138,7 @@ data BgJobs
   | GitSyncPushAllDashboards Projects.ProjectId -- Push all existing dashboards to repo
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
+  | ExpireReplayData
   | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
   | LogPatternHourlyProcessing UTCTime Projects.ProjectId
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
@@ -156,6 +157,15 @@ data BgJobs
     -- createJob failure aborts UPDATE-1 and safety-net retries the whole batch,
     -- and so per-error odd-jobs retry semantics are preserved.
     ProcessProjectErrorsJob Projects.ProjectId (V.Vector ErrorPatterns.ATError) UTCTime
+  | -- | Periodic (every 10 min) safety net for notify eligibility. Picks up
+    -- patterns whose inline notify on `ProcessProjectErrorsJob` was skipped
+    -- (worker down, rate limit overflow, channel configured after the event)
+    -- and re-enqueues itself. Bounded to patterns within the last 24h.
+    NotificationSweepJob UTCTime
+  | -- | Hourly flush of `apis.notification_digest_queue`. Re-enqueues itself.
+    -- Delivers one digest message per project per channel summarising
+    -- rate-limited + log-pattern issues from the past hour.
+    NotificationDigestJob UTCTime
   deriving stock (Generic, Show)
   deriving anyclass (AE.FromJSON, AE.ToJSON)
 
@@ -208,6 +218,14 @@ unlessStale :: Text -> UTCTime -> NominalDiffTime -> ATBackgroundCtx () -> ATBac
 unlessStale jobName scheduledTime buffer action = do
   now <- Time.currentTime
   bool action (Log.logTrace ("Skipping stale " <> jobName) scheduledTime) $ diffUTCTime now scheduledTime > buffer
+
+
+-- | Self-chained ticker: enqueue the next tick so a mid-run failure still
+-- produces a successor.
+rescheduleSelf :: Config.AuthContext -> (UTCTime -> BgJobs) -> UTCTime -> ATBackgroundCtx ()
+rescheduleSelf authCtx mkJob at =
+  liftIO $ withResource authCtx.jobsPool \conn ->
+    void $ scheduleJob conn "background_jobs" (mkJob at) at
 
 
 -- | Process a background job - extracted so it can be run with different effect interpreters
@@ -313,21 +331,26 @@ processBackgroundJob authCtx bgJob =
             liftIO $ withResource authCtx.jobsPool \conn -> do
               void $ createJob conn "background_jobs" BackgroundJobs.MonoscopeAdminDaily
               void $ createJob conn "background_jobs" BackgroundJobs.UsageAuditReport
+              -- 30-day replay retention sweep. The handler re-enqueues itself if
+              -- it hit the batch cap, so backlog drains across multiple runs.
+              void $ createJob conn "background_jobs" BackgroundJobs.ExpireReplayData
               -- background job to cleanup demo project
               Relude.when (dayOfWeek currentDay == Monday) do
                 void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
-              forM_ [0 .. 23] \hour -> do
-                let scheduledTime = addUTCTime (fromIntegral $ hour * 3600) currentTime
-                void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob scheduledTime hour) scheduledTime
-
-              -- Schedule issue enhancement processing every hour
-              forM_ [0 .. 23] \hr -> do
-                let scheduledTime4 = addUTCTime (fromIntegral $ hr * 3600) currentTime
-                scheduleJob conn "background_jobs" (BackgroundJobs.ProcessIssuesEnhancement scheduledTime4) scheduledTime4
-              -- Schedule query monitor checks every minute (each check uses its own checkIntervalMins internally)
-              forM_ [0 .. 1439] \interval -> do
-                let scheduledTime5 = addUTCTime (fromIntegral @Int $ interval * 60) currentTime
-                scheduleJob conn "background_jobs" BackgroundJobs.QueryMonitorsCheck scheduledTime5
+              -- (count, stepSeconds, mkJob-from-index+time). Each handler re-enqueues
+              -- itself; the daily loop seeds a full day's ticks so a single restart
+              -- can't leave a gap when the self-chain was broken.
+              let seed :: Int -> Int -> (UTCTime -> BgJobs) -> IO ()
+                  seed count step mkJob = forM_ [0 .. count - 1] \i -> do
+                    let at = addUTCTime (fromIntegral @Int $ i * step) currentTime
+                    void $ scheduleJob conn "background_jobs" (mkJob at) at
+              forM_ [0 .. 23 :: Int] \i -> do
+                let at = addUTCTime (fromIntegral @Int $ i * 3600) currentTime
+                void $ scheduleJob conn "background_jobs" (BackgroundJobs.HourlyJob at i) at
+              seed 24 3600 BackgroundJobs.ProcessIssuesEnhancement
+              seed 1440 60 (const BackgroundJobs.QueryMonitorsCheck)
+              seed 144 600 BackgroundJobs.NotificationSweepJob
+              seed 24 3600 BackgroundJobs.NotificationDigestJob
 
           Relude.when hourlyJobsExist
             $ Log.logInfo "Hourly jobs already scheduled for today, skipping" ()
@@ -467,6 +490,7 @@ processBackgroundJob authCtx bgJob =
     QueryMonitorsCheck -> checkTriggeredQueryMonitors
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
+    ExpireReplayData -> Replay.expireOldReplayData
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
@@ -486,6 +510,13 @@ processBackgroundJob authCtx bgJob =
       -- Odd-jobs retries apply if either sub-call throws.
       processProjectErrors pid errors now
       notifyErrorSubscriptions pid (V.uniq $ V.modify VA.sort $ V.map (.hash) errors)
+    NotificationSweepJob scheduledTime -> do
+      -- Re-enqueue first so a mid-tick failure still produces a next tick.
+      rescheduleSelf authCtx BackgroundJobs.NotificationSweepJob (addUTCTime 600 scheduledTime)
+      unlessStale "NotificationSweepJob" scheduledTime 1800 $ runNotificationSweep scheduledTime
+    NotificationDigestJob scheduledTime -> do
+      rescheduleSelf authCtx BackgroundJobs.NotificationDigestJob (addUTCTime 3600 scheduledTime)
+      unlessStale "NotificationDigestJob" scheduledTime (2 * 3600) $ runNotificationDigest scheduledTime
     MonoscopeAdminDaily -> do
       now <- Time.currentTime
       let since = addUTCTime (-86400) now
@@ -938,13 +969,124 @@ monitorTrendChartUrl ctx pid monitor =
   trendChartUrl ctx pid def{Widget.wType = Widget.WTTimeseries, Widget.query = Just monitor.logQuery, Widget.alertThreshold = Just monitor.alertThreshold, Widget.warningThreshold = monitor.warningThreshold}
 
 
+-- | Fast inline path after ingestion: dispatch due notifications only for the
+-- given error-pattern hashes. Empty vector is a no-op.
 notifyErrorSubscriptions :: Projects.ProjectId -> V.Vector Text -> ATBackgroundCtx ()
-notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
+notifyErrorSubscriptions pid hashes = unless (V.null hashes) $ runDueNotifications pid (Just hashes)
+
+
+-- | Sweep path: picks up patterns whose inline notify was skipped (job lag,
+-- rate-limit overflow, channel added after the fact).
+sweepErrorSubscriptions :: Projects.ProjectId -> ATBackgroundCtx ()
+sweepErrorSubscriptions pid = runDueNotifications pid Nothing
+
+
+runDueNotifications :: Projects.ProjectId -> Maybe (V.Vector Text) -> ATBackgroundCtx ()
+runDueNotifications pid hashesM = do
   ctx <- ask @Config.AuthContext
   Relude.unless ctx.config.pauseNotifications do
     now <- Time.currentTime
-    dueErrors :: [ErrorSubscriptionDue] <-
-      Hasql.interp
+    dueErrors :: [ErrorSubscriptionDue] <- queryDueErrorNotifications pid hashesM now
+    dispatchDueErrorNotifications ctx pid now dueErrors
+
+
+-- | Every 10 min: sweep projects that have any eligible error-pattern
+-- notifications (still within the 24h ceiling) and dispatch them. Primary
+-- safety net against the old 60-min orphan hole.
+runNotificationSweep :: UTCTime -> ATBackgroundCtx ()
+runNotificationSweep _scheduledTime = do
+  projects :: [Projects.ProjectId] <-
+    HI.getOneColumn
+      <<$>> Hasql.interp
+        [HI.sql|
+          SELECT DISTINCT e.project_id
+          FROM apis.error_patterns e
+          JOIN projects.projects p ON p.id = e.project_id
+          WHERE p.error_alerts
+            AND e.state <> 'resolved'
+            AND e.created_at >= now() - interval '24 hours'
+            AND (
+              e.last_notified_at IS NULL
+              OR e.subscribed = TRUE
+              OR (e.state = 'regressed' AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
+              OR (e.state IN ('new','escalating','ongoing') AND e.last_notified_at IS NOT NULL)
+            )
+        |]
+  Log.logInfo "NotificationSweepJob: candidate projects" (AE.object ["count" AE..= length projects])
+  forM_ projects sweepErrorSubscriptions
+
+
+-- | Flush the digest queue once per hour. Groups pending rows by project and
+-- marks them `sent_at = now()`. Delivery today is log-only + email fallback;
+-- Slack/Discord digest formatters can be layered on later without changing
+-- the queue contract.
+runNotificationDigest :: UTCTime -> ATBackgroundCtx ()
+runNotificationDigest _scheduledTime = do
+  ctx <- ask @Config.AuthContext
+  Relude.unless ctx.config.pauseNotifications do
+    projectIds :: [Projects.ProjectId] <-
+      HI.getOneColumn
+        <<$>> Hasql.interp
+          [HI.sql|
+            SELECT DISTINCT project_id FROM apis.notification_digest_queue
+            WHERE sent_at IS NULL
+              AND created_at >= now() - interval '24 hours'
+          |]
+    forM_ projectIds \pid -> do
+      projectM <- Projects.projectById pid
+      whenJust projectM \project -> Relude.when project.errorAlerts do
+        rows :: [(UUID.UUID, Text, Text)] <-
+          Hasql.interp
+            [HI.sql|
+              SELECT id, reason, title
+              FROM apis.notification_digest_queue
+              WHERE project_id = #{pid} AND sent_at IS NULL
+              ORDER BY created_at ASC
+              LIMIT 500
+            |]
+        unless (null rows) do
+          let idsVec = V.fromList [i | (i, _, _) <- rows]
+              summary = T.unlines ["• [" <> reason <> "] " <> title | (_, reason, title) <- take 10 rows]
+              subj = "[" <> project.title <> "] " <> show (length rows) <> " batched notifications"
+              url = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues?filter=Inbox"
+          Log.logInfo "notification_digest_flushing"
+            $ AE.object ["project_id" AE..= pid.toText, "count" AE..= length rows, "url" AE..= url]
+          -- Email-only delivery today; Slack/Discord templates TBD.
+          Relude.when (V.elem Projects.NEmail project.notificationsChannel) do
+            users <- Projects.usersByProjectId pid
+            let html = ET.digestEmail project.title url summary (length rows)
+                rendered = ET.renderEmail subj html
+            forM_ users \u -> void $ tryAny $ sendRenderedEmail (CI.original u.email) subj rendered
+          -- Mark sent even if a channel silently no-ops; keep retrying patterns
+          -- on the fast path via last_notified_at, not here.
+          void
+            $ Hasql.interpExecute
+              [HI.sql|
+              UPDATE apis.notification_digest_queue SET sent_at = now()
+              WHERE id = ANY(#{idsVec}::uuid[])
+            |]
+          Log.logInfo "notification_digest_sent" (AE.object ["project_id" AE..= pid.toText, "count" AE..= length rows])
+
+
+-- | Eligibility clauses:
+--   (a) never-notified patterns created within the last 24h — was `60 minutes`
+--       pre-0073, which left anything older permanently orphaned. Bounded to 24h
+--       so the periodic sweep has a ceiling and does not alert on ancient rows.
+--   (b) explicitly-subscribed re-notification respecting `notify_every_minutes`.
+--   (c) regression re-notification.
+--   (d) ongoing-issue reminder cadence (1h → 6h → 24h → daily) gated on the
+--       issue still firing (at least one `event_count>0` hourly stat within
+--       the last hour). Uses `apis.error_hourly_stats` because the decayed
+--       `occurrences_1h` on `error_patterns` is unreliable.
+queryDueErrorNotifications
+  :: Projects.ProjectId
+  -> Maybe (V.Vector Text)
+  -> UTCTime
+  -> ATBackgroundCtx [ErrorSubscriptionDue]
+queryDueErrorNotifications pid mHashes now =
+  let hashes = fromMaybe V.empty mHashes
+      applyHashFilter = isJust mHashes
+   in Hasql.interp
         [HI.sql|
           SELECT DISTINCT ON (e.id)
                  e.id, e.error_data, e.state, i.id, i.title,
@@ -952,44 +1094,125 @@ notifyErrorSubscriptions pid errorHashes = unless (V.null errorHashes) do
           FROM apis.error_patterns e
           JOIN apis.issues i ON i.project_id = e.project_id AND i.target_hash = e.hash
           WHERE e.project_id = #{pid}
-            AND e.hash = ANY(#{errorHashes}::text[])
+            AND (NOT #{applyHashFilter} OR e.hash = ANY(#{hashes}::text[]))
             AND e.state != 'resolved'
             AND i.issue_type = #{Issues.RuntimeException}::apis.issue_type
             AND (
-              (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '60 minutes')
+              (e.last_notified_at IS NULL AND e.created_at >= #{now}::timestamptz - INTERVAL '24 hours')
               OR (e.subscribed = TRUE
                   AND #{now}::timestamptz - e.last_notified_at >= (e.notify_every_minutes * INTERVAL '1 minute'))
               OR (e.state = 'regressed'
                   AND (e.last_notified_at IS NULL OR e.last_notified_at < e.regressed_at))
+              OR (e.state IN ('new','escalating','ongoing')
+                  AND e.last_notified_at IS NOT NULL
+                  AND EXISTS (
+                    SELECT 1 FROM apis.error_hourly_stats s
+                    WHERE s.error_id = e.id
+                      AND s.hour_bucket >= date_trunc('hour', #{now}::timestamptz) - INTERVAL '1 hour'
+                      AND s.event_count > 0
+                  )
+                  AND #{now}::timestamptz - e.last_notified_at >= CASE
+                        WHEN #{now}::timestamptz - e.created_at < INTERVAL '1 hour'  THEN INTERVAL '1 hour'
+                        WHEN #{now}::timestamptz - e.created_at < INTERVAL '6 hours' THEN INTERVAL '6 hours'
+                        WHEN #{now}::timestamptz - e.created_at < INTERVAL '24 hours' THEN INTERVAL '24 hours'
+                        ELSE INTERVAL '24 hours'
+                      END)
             )
           ORDER BY e.id, i.created_at DESC
         |]
-    unless (null dueErrors) do
-      Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
-      projectM <- Projects.projectById pid
-      whenJust projectM \project -> Relude.when project.errorAlerts do
-        users <- Projects.usersByProjectId pid
-        let alertTypeForState = \case
-              ErrorPatterns.ESEscalating -> EscalatingErrors
-              ErrorPatterns.ESRegressed -> RegressedErrors
-              _ -> NewRuntimeError
-        results <- forConcurrently dueErrors \sub -> do
-          let alertType = alertTypeForState sub.errorState
-              errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
-              occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
-              fromTime = addUTCTime (-(15 * 60)) now
-              firstSeenTextM = Just $ relTimeAgo now sub.errorData.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" sub.errorData.when)
-          chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
-          let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM}
-              ~(subj, html) = case alertType of
-                EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
-                RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
-                _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
-          (finalSlackTs, finalDiscordMsgId) <-
-            sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
-          pure (sub.errorId, finalSlackTs, finalDiscordMsgId)
-        forM_ results \(errorId, slackTs, discordMsgId) ->
-          void $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorId slackTs discordMsgId now
+
+
+dispatchDueErrorNotifications
+  :: Config.AuthContext
+  -> Projects.ProjectId
+  -> UTCTime
+  -> [ErrorSubscriptionDue]
+  -> ATBackgroundCtx ()
+dispatchDueErrorNotifications ctx pid now dueErrors =
+  unless (null dueErrors) do
+    Log.logInfo "Notifying error subscriptions" ("project_id", AE.toJSON pid.toText, "due_count", AE.toJSON (length dueErrors))
+    let ctxObj = AE.object ["project_id" AE..= pid.toText, "due_count" AE..= length dueErrors]
+    Projects.projectById pid >>= flip whenJust \project ->
+      if
+        | not project.errorAlerts -> Log.logInfo "Error alerts disabled for project — skipping" ctxObj
+        | V.null project.notificationsChannel -> Log.logAttention "Notifications skipped: no channels configured" ctxObj
+        | otherwise -> do
+            users <- Projects.usersByProjectId pid
+            let alertTypeForState = \case
+                  ErrorPatterns.ESEscalating -> EscalatingErrors
+                  ErrorPatterns.ESRegressed -> RegressedErrors
+                  _ -> NewRuntimeError
+            results <- forConcurrently dueErrors \sub -> do
+              let alertType = alertTypeForState sub.errorState
+                  errorsUrl = ctx.env.hostUrl <> "p/" <> pid.toText <> "/issues/" <> sub.issueId.toText
+                  occTextM = (show sub.occurrences1h <> "/hr") <$ guard (sub.occurrences1h > 0)
+                  fromTime = addUTCTime (-(15 * 60)) now
+                  firstSeenTextM = Just $ relTimeAgo now sub.errorData.when <> " · " <> toText (formatTime defaultTimeLocale "%b %-e %-l:%M %p" sub.errorData.when)
+              chartUrlM <- errorTrendChartUrl ctx pid sub.errorData.hash (formatUTC fromTime) (formatUTC now)
+              let alert = RuntimeErrorAlert{issueId = Issues.issueIdText sub.issueId, issueTitle = sub.issueTitle, errorData = sub.errorData, runtimeAlertType = alertType, chartUrl = chartUrlM, occurrenceText = occTextM, firstSeenText = firstSeenTextM}
+                  ~(subj, html) = case alertType of
+                    EscalatingErrors -> ET.escalatingErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
+                    RegressedErrors -> ET.regressedErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
+                    _ -> ET.runtimeErrorsEmail project.title errorsUrl [sub.errorData] chartUrlM occTextM
+              -- Rate-limit gate. Overflow lands in apis.notification_digest_queue
+              -- and is flushed by NotificationDigestJob.
+              allowed <- consumeNotificationToken pid now
+              if allowed
+                then do
+                  (finalSlackTs, finalDiscordMsgId) <-
+                    sendAlertToChannels alert pid project users errorsUrl subj html (sub.slackThreadTs, sub.discordMessageId)
+                  Log.logInfo "notification_sent" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "alert_type" AE..= show @Text alertType])
+                  pure (sub.errorId, finalSlackTs, finalDiscordMsgId, True)
+                else do
+                  enqueueDigest pid (Just sub.errorId) (Just sub.issueId) "rate_limit" sub.issueTitle
+                  Log.logInfo "notification_skipped" (AE.object ["project_id" AE..= pid.toText, "error_id" AE..= sub.errorId, "reason" AE..= ("rate_limit" :: Text)])
+                  pure (sub.errorId, sub.slackThreadTs, sub.discordMessageId, False)
+            -- Only stamp last_notified_at for deliveries that actually went out.
+            -- Rate-limited rows stay eligible so the next tick retries.
+            forM_ results \(errorId, slackTs, discordMsgId, delivered) ->
+              Relude.when delivered
+                $ void
+                $ ErrorPatterns.updateErrorPatternThreadIdsAndNotifiedAt errorId slackTs discordMsgId now
+
+
+-- | Sliding-window rate limiter. One bucket per project per hour. Returns True
+-- and increments the counter when under the cap; False otherwise. Atomic via
+-- `INSERT … ON CONFLICT DO UPDATE … RETURNING`.
+notificationsPerProjectPerHour :: Int
+notificationsPerProjectPerHour = 20
+
+
+consumeNotificationToken :: Projects.ProjectId -> UTCTime -> ATBackgroundCtx Bool
+consumeNotificationToken pid now = do
+  -- UPSERT…RETURNING always produces one row; Nothing is treated as pass-through.
+  countM :: Maybe Int <-
+    Hasql.interpOne
+      [HI.sql|
+          INSERT INTO apis.notification_rate_limit (project_id, window_start, count)
+          VALUES (#{pid}, date_trunc('hour', #{now}::timestamptz), 1)
+          ON CONFLICT (project_id, window_start)
+          DO UPDATE SET count = apis.notification_rate_limit.count + 1
+          RETURNING count :: int
+        |]
+  pure $ maybe True (<= notificationsPerProjectPerHour) countM
+
+
+-- | Push a rate-limited or low-signal notification into the digest queue. The
+-- hourly NotificationDigestJob flushes these into a single message per project.
+enqueueDigest
+  :: Projects.ProjectId
+  -> Maybe ErrorPatterns.ErrorPatternId
+  -> Maybe Issues.IssueId
+  -> Text -- reason: 'rate_limit' | 'log_pattern_rate_change' | 'log_pattern'
+  -> Text -- title (used for the digest body)
+  -> ATBackgroundCtx ()
+enqueueDigest pid errorPatternId issueId reason title =
+  Hasql.interpExecute
+    [HI.sql|
+      INSERT INTO apis.notification_digest_queue (project_id, error_pattern_id, issue_id, reason, title)
+      VALUES (#{pid}, #{errorPatternId}, #{issueId}, #{reason}, #{title})
+    |]
+    >> pass
 
 
 -- | Process and insert errors for a specific project (single batched round-trip via unnest).

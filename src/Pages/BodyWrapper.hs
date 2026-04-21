@@ -1056,7 +1056,7 @@ externalHeadScripts_ config = do
     }})
 }})();
         |]
-  -- Crisp chat
-  whenJust config.crispWebsiteId $ \websiteId ->
+  -- Crisp chat. Unset or empty CRISP_WEBSITE_ID disables the widget.
+  whenJust (mfilter (not . T.null) config.crispWebsiteId) $ \websiteId ->
     script_
       [fmt|window.$crisp = []; window.CRISP_WEBSITE_ID = "{websiteId}"; (function () {{ d = document; s = d.createElement("script"); s.src = "https://client.crisp.chat/l.js"; s.async = 1; d.getElementsByTagName("head")[0].appendChild(s); }})();|]

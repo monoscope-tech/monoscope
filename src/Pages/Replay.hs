@@ -1,4 +1,4 @@
-module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, compressAndMergeReplaySessions, mergeReplaySession) where
+module Pages.Replay (replayPostH, ReplayPost (..), processReplayEvents, replaySessionGetH, fetchReplaySession, compressAndMergeReplaySessions, mergeReplaySession, expireOldReplayData) where
 
 import Codec.Compression.GZip qualified as GZip
 import Conduit (runConduit)
@@ -13,7 +13,7 @@ import Data.HashMap.Strict qualified as HM
 import Data.OpenApi (ToSchema)
 import Data.Pool (Pool, withResource)
 import Data.Text qualified as T
-import Data.Time (UTCTime, defaultTimeLocale, formatTime, getCurrentTime)
+import Data.Time (UTCTime, addUTCTime, defaultTimeLocale, formatTime, getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
 import Database.PostgreSQL.Simple (Connection)
@@ -179,11 +179,12 @@ projectMinioConn envCfg p =
 -- logged and the key is dropped). Returns merged arrays plus a partial-failure flag
 -- that is `True` if any key was lost to a non-NoSuchKey error.
 fetchIndividuals
-  :: Minio.ConnectInfo
+  :: (IOE :> es, Log :> es)
+  => Minio.ConnectInfo
   -> Minio.Bucket
   -> [Text]
   -> HashMap Text Text
-  -> ATAuthCtx (AE.Array, Bool, Int)
+  -> Eff es (AE.Array, Bool, Int)
 fetchIndividuals conn bucket fileKeys logCtx = do
   perKey <- liftIO $ forM fileKeys $ \k ->
     Minio.runMinio conn (fetchEventArray bucket (fromString $ toString k) False) <&> (k,)
@@ -208,7 +209,7 @@ fetchIndividuals conn bucket fileKeys logCtx = do
 
 -- | Fetch events for a session. Returns `Left` with a user-facing message on
 -- unrecoverable failure, `Right` on success (including empty or partial results).
-getSessionEvents :: Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> ATAuthCtx (Either Text (AE.Array, Bool))
+getSessionEvents :: (DB es, Log :> es) => Minio.ConnectInfo -> Projects.ProjectId -> Minio.Bucket -> UUID.UUID -> Eff es (Either Text (AE.Array, Bool))
 getSessionEvents conn pid bucket sessionId = do
   let sessionStr = UUID.toText sessionId
       mergedKey = fromString $ toString $ sessionStr <> "/merged.json.gz"
@@ -344,6 +345,8 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
                   |]
                   let fileCount = fromMaybe 0 (listToMaybe countRows)
                   when (fileCount >= mergeFileCountThreshold) $ do
+                    -- Hand-rolled payload mirrors the derived Generic ToJSON shape for BgJobs;
+                    -- cannot import BackgroundJobs here (BackgroundJobs imports Pages.Replay).
                     let jobPayload = AE.object ["tag" AE..= ("MergeReplaySession" :: Text), "contents" AE..= ([AE.toJSON replayData.projectId, AE.toJSON replayData.sessionId] :: [AE.Value])]
                     liftIO $ withResource jobsPool \conn' ->
                       void $ createJob conn' "background_jobs" jobPayload
@@ -360,45 +363,42 @@ saveReplayMinio envCfg jobsPool (ackId, replayData) = do
 replaySessionGetH :: Projects.ProjectId -> UUID.UUID -> ATAuthCtx (RespHeaders AE.Value)
 replaySessionGetH pid sessionId = do
   (_, p) <- Projects.sessionAndProject pid
+  addRespHeaders =<< fetchReplaySession p sessionId
+
+
+-- | Auth-free replay payload fetch: pulls events from S3 + metadata from DB,
+-- returning the same JSON envelope the auth handler returns. Callers handle
+-- their own authorization (project membership, share-link validity, etc.)
+-- before invoking this.
+fetchReplaySession
+  :: (DB es, Effectful.Reader.Static.Reader AuthContext :> es, Log :> es)
+  => Projects.Project -> UUID.UUID -> Eff es AE.Value
+fetchReplaySession p sessionId = do
   ctx <- Effectful.Reader.Static.ask @AuthContext
-  let (conn, bucket) = projectMinioConn ctx.config p
+  let pid = p.id
+      (conn, bucket) = projectMinioConn ctx.config p
       sessionStr = UUID.toText sessionId
       metaPairs = maybe [] (\m -> ["userId" AE..= m.userId, "userEmail" AE..= m.userEmail, "userName" AE..= m.userName, "lastEventAt" AE..= m.lastEventAt])
-  -- Don't let a metadata DB blip turn the carefully-crafted storage-unreachable
-  -- branch below into a raw 500 — fall through to Nothing and log.
-  metaE <- tryAny $ sessionMetadata pid sessionId
-  meta <- case metaE of
-    Right m -> pure m
-    Left err -> do
-      Log.logAttention "sessionMetadata lookup failed; continuing without identity" (HM.fromList [("session", sessionStr), ("projectId", pid.toText), ("error", toText $ displayException err)])
-      pure Nothing
+      summaryCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
+  meta <-
+    tryAny (sessionMetadata pid sessionId)
+      >>= either
+        (\err -> Nothing <$ Log.logAttention "sessionMetadata lookup failed; continuing without identity" (HM.insert "error" (toText $ displayException err) summaryCtx))
+        pure
+  let respond events extras = AE.object $ ["events" AE..= AE.Array events] <> extras <> metaPairs meta
   result <- tryAny $ getSessionEvents conn pid bucket sessionId
-  let summaryCtx = HM.fromList [("session", sessionStr), ("projectId", pid.toText)]
   case result of
     Right (Right (replayEvents, partial)) -> do
       Log.logInfo
         "Replay session served"
-        ( HM.insert "event_count" (show $ V.length replayEvents)
-            $ HM.insert "partial" (show partial)
-            $ HM.insert "outcome" "ok" summaryCtx
-        )
-      addRespHeaders
-        $ AE.object
-        $ ["events" AE..= AE.Array replayEvents, "partial" AE..= partial]
-        <> metaPairs meta
+        (summaryCtx <> HM.fromList [("event_count", show $ V.length replayEvents), ("partial", show partial), ("outcome", "ok")])
+      pure $ respond replayEvents ["partial" AE..= partial]
     Right (Left userMsg) -> do
-      Log.logInfo
-        "Replay session served (user-facing error)"
-        (HM.insert "outcome" "user_error" $ HM.insert "user_msg" userMsg summaryCtx)
-      addRespHeaders $ AE.object $ ["events" AE..= AE.Array V.empty, "error" AE..= userMsg] <> metaPairs meta
+      Log.logInfo "Replay session served (user-facing error)" (summaryCtx <> HM.fromList [("outcome", "user_error"), ("user_msg", userMsg)])
+      pure $ respond V.empty ["error" AE..= userMsg]
     Left err -> do
       Log.logAttention "Unexpected exception fetching replay session" (HM.insert "error" (toText $ displayException err) summaryCtx)
-      addRespHeaders
-        $ AE.object
-        $ [ "events" AE..= AE.Array V.empty
-          , "error" AE..= ("We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support." :: Text)
-          ]
-        <> metaPairs meta
+      pure $ respond V.empty ["error" AE..= ("We couldn’t load this session right now. Check your connection and retry — if it keeps failing, copy the session ID and share it with support." :: Text)]
 
 
 -- | Merge a specific replay session's S3 event files (triggered when file count exceeds threshold)
@@ -542,3 +542,66 @@ mergeOneSession conn bucket sessionId fileKeys = do
   case putRes of
     Right _ -> pass
     Left err -> throwIO $ MergePutFailed err
+
+
+-- | Advertised retention window for default-storage replay data.
+replayRetentionDays :: Int
+replayRetentionDays = 30
+
+
+-- | Max sessions handled per `ExpireReplayData` job run. Bounds job runtime;
+-- when the cap is hit, the job re-enqueues itself to drain the backlog.
+expireReplayBatchSize :: Int
+expireReplayBatchSize = 200
+
+
+-- | Delete R2 objects + tracking rows for replay sessions older than
+-- `replayRetentionDays`, scoped to projects using our default S3 bucket.
+-- BYO-bucket projects (projects.s3_bucket IS NOT NULL) are excluded entirely —
+-- their data lives in the customer's bucket and retention is their concern.
+expireOldReplayData :: ATBackgroundCtx ()
+expireOldReplayData = do
+  ctx <- Effectful.Reader.Static.ask @AuthContext
+  now <- Time.currentTime
+  -- Retention window + batch size are compile-time constants, so inlining them
+  -- into the SQL avoids extra parameter-encoding ceremony.
+  let cutoff = addUTCTime (negate $ fromIntegral replayRetentionDays * 86400) now
+      batchLimit = fromIntegral expireReplayBatchSize :: Int64
+  rows :: [(UUID.UUID, Projects.ProjectId, V.Vector Text)] <-
+    Hasql.interp
+      [HI.sql|
+        SELECT rs.session_id, rs.project_id, COALESCE(rs.file_keys, '{}'::text[])
+        FROM projects.replay_sessions rs
+        JOIN projects.projects p ON p.id = rs.project_id
+        WHERE rs.last_event_at < #{cutoff}
+          AND p.s3_bucket IS NULL
+        ORDER BY rs.last_event_at
+        LIMIT #{batchLimit}
+      |]
+  Log.logInfo "Expiring old replay sessions" ("count", length rows)
+  forM_ rows $ \(sid, pid, fileKeys) -> do
+    projectM <- Projects.projectById pid
+    whenJust projectM $ \p -> do
+      let (conn, bucket) = projectMinioConn ctx.config p
+          mergedKey = fromString $ toString $ UUID.toText sid <> "/merged.json.gz"
+          keyObjs = mergedKey : map (fromString . toString) (V.toList fileKeys)
+          logCtx = HM.fromList [("session_id", UUID.toText sid), ("project_id", pid.toText)]
+      -- Separate `runMinio` per key so one transport error doesn't abort siblings;
+      -- mirrors the `fetchIndividuals` pattern elsewhere in this module.
+      perKey <- liftIO $ forM keyObjs $ \o ->
+        (o,) <$> Minio.runMinio conn (Minio.removeObject bucket o)
+      let fatal = [(o, e) | (o, Left e) <- perKey, not (isNoSuchKey e)]
+      case fatal of
+        _ : _ ->
+          Log.logAttention
+            "Replay expire: S3 delete failed, leaving row for retry"
+            (HM.insert "errors" (toText $ show $ map (\(o, e) -> (show o :: Text, toText $ displayException e)) fatal) logCtx)
+        [] -> do
+          Hasql.interpExecute_
+            [HI.sql| DELETE FROM projects.replay_sessions WHERE session_id = #{sid} AND project_id = #{pid} |]
+          Log.logInfo "Expired replay session" logCtx
+  when (length rows >= expireReplayBatchSize) $ do
+    -- See MergeReplaySession note: cannot import BackgroundJobs (circular).
+    let payload = AE.object ["tag" AE..= ("ExpireReplayData" :: Text), "contents" AE..= ([] :: [AE.Value])]
+    liftIO $ withResource ctx.jobsPool \c ->
+      void $ createJob c "background_jobs" payload
