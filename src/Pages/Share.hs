@@ -13,6 +13,7 @@ import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Lucid
 import Lucid.Hyperscript (__)
+import Models.Apis.ShareEvents qualified as ShareEvents
 import Models.Projects.Projects qualified as Projects
 import Models.Telemetry.Telemetry qualified as Telemetry
 import Pages.BodyWrapper (BWConfig (..), PageCtx (..))
@@ -54,12 +55,8 @@ data ReqForm = ReqForm
 shareLinkPostH :: Projects.ProjectId -> UUID.UUID -> UTCTime -> Maybe Text -> ATAuthCtx (RespHeaders ShareLinkPost)
 shareLinkPostH pid eventId createdAt reqTypeM = do
   _ <- Projects.sessionAndProject pid
-  let eventType = fromMaybe "request" reqTypeM
   shareId <- liftIO UUIDV4.nextRandom
-  void
-    $ Hasql.interpExecute
-      [HI.sql| INSERT INTO apis.share_events (id, project_id, event_id, event_type, event_created_at)
-                              VALUES (#{shareId},#{pid},#{eventId},#{eventType},#{createdAt}) |]
+  ShareEvents.createShareLink shareId pid eventId (fromMaybe "request" reqTypeM) createdAt
   addRespHeaders $ ShareLinkPost $ show shareId
 
 

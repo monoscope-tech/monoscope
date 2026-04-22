@@ -9,6 +9,7 @@ module Models.Apis.Endpoints (
   endpointRequestStatsByProject,
   countEndpointInbox,
   countEndpointsByProject,
+  listEndpointsPaged,
   getEndpointById,
   -- Endpoint template discovery
   getUnmergedEndpoints,
@@ -289,6 +290,28 @@ countEndpointsByProject pid outgoing =
   fromMaybe 0
     <$> Hasql.interpOne
       [HI.sql| SELECT COUNT(*)::int FROM apis.endpoints WHERE project_id = #{pid} AND outgoing = #{outgoing} |]
+
+
+-- | Paginated endpoint list with optional url_path LIKE filter. Returns (rows, total count).
+listEndpointsPaged :: DB es => Projects.ProjectId -> Bool -> Maybe Text -> Int -> Int -> Eff es ([Endpoint], Int)
+listEndpointsPaged pid outgoing searchM limit offset = do
+  let hasSearch = isJust searchM
+      pat = maybe "" (\s -> "%" <> s <> "%") searchM
+      whereSql =
+        [HI.sql|
+          WHERE project_id = #{pid} AND outgoing = #{outgoing}
+            AND (NOT #{hasSearch} OR url_path LIKE #{pat})
+        |]
+  rows <-
+    Hasql.interp
+      ( [HI.sql|
+          SELECT id, created_at, updated_at, project_id, url_path, url_params, method, host, hash, outgoing, description, service_name, environment
+          FROM apis.endpoints |]
+          <> whereSql
+          <> [HI.sql| ORDER BY url_path ASC LIMIT #{limit} OFFSET #{offset} |]
+      )
+  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::int FROM apis.endpoints |] <> whereSql)
+  pure (rows, total)
 
 
 getEndpointById :: DB es => Projects.ProjectId -> EndpointId -> Eff es (Maybe Endpoint)

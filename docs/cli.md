@@ -100,13 +100,103 @@ Every bulk endpoint takes `--ids` (comma-separated). Server-side enums:
 |------------|--------------------------------------------------------------|
 | monitors   | delete, activate, deactivate, mute, unmute, resolve          |
 | dashboards | delete                                                       |
+| issues     | acknowledge, unack, archive, unarchive                       |
+| teams      | delete                                                       |
 
 ```bash
 monoscope monitors bulk mute --ids id1,id2 --duration 60
 monoscope dashboards bulk delete --ids id1,id2
+monoscope issues bulk acknowledge --ids id1,id2
 ```
 
-(Anomalies bulk acknowledge/archive is available via the API at `POST /api/v1/anomalies/bulk` but is not yet surfaced as a CLI subcommand.)
+## Teams
+
+```bash
+# List teams (includes the built-in "everyone" team, shown read-only).
+monoscope teams list -o table
+
+monoscope teams get <team-id>
+
+# Create from YAML.
+# team.yaml: { name: "ops", handle: "ops", description: "Ops oncall",
+#              notify_emails: ["ops@example.com"], slack_channels: ["#ops"] }
+monoscope teams create team.yaml
+
+# Replace (PUT) or partial update (PATCH).
+monoscope teams update <team-id> team.yaml
+monoscope teams patch <team-id> patch.yaml
+
+monoscope teams delete <team-id>
+monoscope teams bulk delete --ids id1,id2
+```
+
+The `everyone` handle is reserved — create/update requests using it are
+rejected, and the built-in everyone team cannot be updated or deleted.
+
+## Members
+
+```bash
+monoscope members list -o table
+monoscope members get <user-id>
+
+# Add by email (creates a stub user if the email is unknown).
+monoscope members add --email teammate@example.com --permission view
+
+# Or add an existing user directly.
+monoscope members add --user-id <uuid> --permission edit
+
+# Change a member's permission (view | edit | admin).
+monoscope members patch <user-id> admin
+
+monoscope members remove <user-id>
+```
+
+## Ops & workspace
+
+```bash
+# Show the current project identity (used by agents to confirm context).
+monoscope me
+
+# Show / patch project settings.
+monoscope project get
+monoscope project patch patch.yaml   # any subset of title, description, time_zone, daily_notif, weekly_notif, endpoint_alerts, error_alerts
+```
+
+## Issues triage
+
+Issues are the user-facing representation of detected problems. (Internally,
+the ingestion pipeline writes raw *anomalies* first; the notable ones become
+issues. Only issues are exposed through the public API.)
+
+```bash
+monoscope issues list --status open                  # open | acknowledged | archived | all
+monoscope issues list --type runtime_exception       # filter by issue_type
+monoscope issues list --service checkout-api         # filter by emitting service
+monoscope issues get <issue-id>
+monoscope issues ack <issue-id>
+monoscope issues unack <issue-id>
+monoscope issues archive <issue-id>
+monoscope issues unarchive <issue-id>
+monoscope issues bulk acknowledge --ids id1,id2,id3
+```
+
+## API catalog
+
+```bash
+monoscope endpoints list --search '/v1/' --per-page 100
+monoscope endpoints list --outgoing                 # show only outgoing calls
+monoscope endpoints get <endpoint-id>
+```
+
+## Log patterns
+
+```bash
+monoscope log-patterns list --per-page 50
+monoscope log-patterns get <pattern-id>
+monoscope log-patterns ack <pattern-id>
+monoscope log-patterns bulk acknowledge --ids 1,2,3
+monoscope log-patterns bulk ignore --ids 4,5
+```
 
 ## Output modes
 

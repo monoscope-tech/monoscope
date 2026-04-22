@@ -279,6 +279,15 @@ instance {-# OVERLAPPABLE #-} (Bounded a, Enum a, KnownSymbol prefix, Show a, Ty
       ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
 
 
+instance (Bounded a, Enum a, KnownSymbol prefix, Show a) => ToParamSchema (WrappedEnumSC prefix a) where
+  toParamSchema (_ :: proxy (WrappedEnumSC prefix a)) =
+    mempty
+      & type_
+      ?~ OpenApi.OpenApiString
+        & enum_
+      ?~ [AE.String (toText $ encodeEnumSC @prefix v) | v <- [minBound @a .. maxBound @a]]
+
+
 -- | DerivingVia wrapper: produces ToSchema with snake_case field names matching DAE.Snake's ToJSON output.
 newtype SnakeSchema a = SnakeSchema a
 

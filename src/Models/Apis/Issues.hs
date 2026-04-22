@@ -30,12 +30,16 @@ module Models.Apis.Issues (
   -- * Database Operations
   insertIssue,
   selectIssueById,
+  selectIssueByIdScoped,
   selectIssues,
+  selectIssuesByFilters,
   findOpenIssueForEndpoint,
   updateIssueWithNewAnomaly,
   updateIssueEnhancement,
   updateIssueCriticality,
   acknowledgeIssue,
+  setAckState,
+  setArchiveState,
   selectIssueByHash,
   selectLatestIssueByHash,
   reopenIssue,
@@ -125,7 +129,7 @@ import Models.Apis.ErrorPatterns qualified as ErrorPatterns
 import Models.Apis.LogPatterns qualified as LogPatterns
 import Models.Projects.Projects qualified as Projects
 import NeatInterpolation (text)
-import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText, rawSql)
+import Pkg.DeriveUtils (UUIDId (..), WrappedEnumSC (..), idToText, rawSql, selectFrom)
 import Relude hiding (id)
 import Servant (FromHttpApiData (..), ServerError, err500, errBody)
 import System.Types (DB)
@@ -556,6 +560,71 @@ acknowledgeIssue issueId userId = do
   Hasql.interpExecute_
     [HI.sql|
       UPDATE apis.issues SET acknowledged_at = #{now}, acknowledged_by = #{userId} WHERE id = #{issueId} |]
+
+
+-- | Set ack/unack on a batch of issues. Pass @Just now@ to ack (records @acknowledged_by@);
+-- pass @Nothing@ to unack (clears both timestamp and actor).
+setAckState :: DB es => Projects.ProjectId -> V.Vector IssueId -> Maybe UTCTime -> Maybe Projects.UserId -> Eff es Int64
+setAckState pid iids mTs mUid
+  | V.null iids = pure 0
+  | otherwise =
+      Hasql.interpExecute
+        [HI.sql|
+          UPDATE apis.issues
+          SET acknowledged_at = #{mTs}, acknowledged_by = #{mUid}, updated_at = COALESCE(#{mTs}, updated_at)
+          WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+
+
+-- | Set archive state on a batch of issues. @Just now@ archives, @Nothing@ unarchives.
+setArchiveState :: DB es => Projects.ProjectId -> V.Vector IssueId -> Maybe UTCTime -> Eff es Int64
+setArchiveState pid iids mTs
+  | V.null iids = pure 0
+  | otherwise =
+      Hasql.interpExecute
+        [HI.sql|
+          UPDATE apis.issues
+          SET archived_at = #{mTs}, updated_at = COALESCE(#{mTs}, updated_at)
+          WHERE project_id = #{pid} AND id = ANY(#{iids}::uuid[]) |]
+
+
+-- | Scoped lookup: returns Nothing if the issue belongs to a different project.
+selectIssueByIdScoped :: DB es => Projects.ProjectId -> IssueId -> Eff es (Maybe Issue)
+selectIssueByIdScoped pid iid =
+  Hasql.interpOne (selectFrom @Issue <> [HI.sql| WHERE id = #{iid} AND project_id = #{pid} |])
+
+
+-- | List issues with the filter/pagination surface the public API needs.
+-- Returns raw 'Issue' rows (not 'IssueL' view rows) with a total count.
+selectIssuesByFilters
+  :: DB es
+  => Projects.ProjectId
+  -> Maybe Bool -- isAcknowledged: Just True = ack only, Just False = unack only, Nothing = any
+  -> Maybe Bool -- isArchived
+  -> Maybe Text -- issueType text (NULL/empty = any)
+  -> Maybe Text -- service (NULL/empty = any)
+  -> Int -- limit
+  -> Int -- offset
+  -> Eff es ([Issue], Int)
+selectIssuesByFilters pid isAck isArch tyM svcM limit offset = do
+  let anyAck = isNothing isAck
+      ackFlag = fromMaybe False isAck
+      anyArch = isNothing isArch
+      archFlag = fromMaybe False isArch
+      anyType = maybe True T.null tyM
+      ty = fromMaybe "" tyM
+      anySvc = maybe True T.null svcM
+      svc = fromMaybe "" svcM
+      whereSql =
+        [HI.sql|
+          WHERE project_id = #{pid}
+            AND (#{anyAck} OR (#{ackFlag} AND acknowledged_at IS NOT NULL) OR (NOT #{ackFlag} AND acknowledged_at IS NULL))
+            AND (#{anyArch} OR (#{archFlag} AND archived_at IS NOT NULL) OR (NOT #{archFlag} AND archived_at IS NULL))
+            AND (#{anyType} OR issue_type::text = #{ty})
+            AND (#{anySvc} OR service = #{svc})
+        |]
+  rows <- Hasql.interp (selectFrom @Issue <> whereSql <> [HI.sql| ORDER BY updated_at DESC LIMIT #{limit} OFFSET #{offset} |])
+  total <- fromMaybe 0 <$> Hasql.interpOne ([HI.sql| SELECT COUNT(*)::int FROM apis.issues |] <> whereSql)
+  pure (rows, total)
 
 
 -- | Create API Change issue from anomalies

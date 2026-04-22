@@ -6,6 +6,7 @@ module Models.Projects.ProjectMembers (
   ProjectMemberWithStatusVM (..),
   Permissions (..),
   selectActiveProjectMembers,
+  getActiveProjectMemberByUserId,
   selectAllProjectMembers,
   getUserPermission,
   updateProjectMembersPermissons,
@@ -24,6 +25,7 @@ module Models.Projects.ProjectMembers (
   TeamVM (..),
   deleteTeams,
   getTeamsById,
+  getTeamById,
   Team (..),
   TeamMemberVM (..),
   teamToDetails,
@@ -36,6 +38,7 @@ import Data.Aeson qualified as AE
 import Data.CaseInsensitive (CI)
 import Data.CaseInsensitive qualified as CI
 import Data.Effectful.Hasql qualified as Hasql
+import Data.OpenApi (ToSchema)
 import Data.Set qualified as S
 import Data.Text.Display (Display)
 import Data.Time (UTCTime, ZonedTime)
@@ -69,9 +72,9 @@ data Permissions
   = PView
   | PEdit
   | PAdmin
-  deriving stock (Eq, Generic, Ord, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Ord, Read, Show)
   deriving anyclass (NFData)
-  deriving (Display, FromField, FromHttpApiData, ToField) via WrappedEnumSC "P" Permissions
+  deriving (AE.FromJSON, AE.ToJSON, Display, FromField, FromHttpApiData, ToField, ToSchema) via WrappedEnumSC "P" Permissions
   deriving (HI.DecodeValue, HI.EncodeValue) via WrappedEnumSC "P" Permissions
 
 
@@ -141,6 +144,15 @@ selectActiveProjectMembers pid =
            JOIN users.users us ON (pm.user_id=us.id)
            WHERE pm.project_id=#{pid}::uuid AND pm.active=TRUE
            ORDER BY pm.created_at ASC |]
+
+
+getActiveProjectMemberByUserId :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe ProjectMemberVM)
+getActiveProjectMemberByUserId pid uid =
+  Hasql.interpOne
+    [HI.sql|
+      SELECT pm.id, pm.user_id, pm.permission, us.email, us.first_name, us.last_name
+      FROM projects.project_members pm JOIN users.users us ON (pm.user_id = us.id)
+      WHERE pm.project_id = #{pid} AND pm.user_id = #{uid} AND pm.active = TRUE |]
 
 
 getUserPermission :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es (Maybe Permissions)
@@ -219,15 +231,16 @@ data TeamDetails = TeamDetails
   deriving stock (Eq, Generic, Show)
 
 
-createTeam :: DB es => Projects.ProjectId -> Projects.UserId -> TeamDetails -> Eff es Int64
-createTeam pid uid TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices}
-  | handle == "everyone" = pure 0 -- Prevent creating team with reserved handle
+createTeam :: DB es => Projects.ProjectId -> Maybe Projects.UserId -> TeamDetails -> Eff es (Maybe UUID.UUID)
+createTeam pid uidM TeamDetails{name, description, handle, members, notifyEmails, slackChannels, discordChannels, phoneNumbers, pagerdutyServices}
+  | handle == "everyone" = pure Nothing -- Prevent creating team with reserved handle
   | otherwise =
-      Hasql.interpExecute
+      Hasql.interpOne
         [HI.sql| INSERT INTO projects.teams
                (project_id, created_by, name, description, handle, members, notify_emails, slack_channels, discord_channels, phone_numbers, pagerduty_services)
-               VALUES (#{pid}, #{uid}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices})
-               ON CONFLICT (project_id, handle) DO NOTHING |]
+               VALUES (#{pid}, #{uidM}, #{name}, #{description}, #{handle}, #{members}::uuid[], #{notifyEmails}, #{slackChannels}, #{discordChannels}, #{phoneNumbers}, #{pagerdutyServices})
+               ON CONFLICT (project_id, handle) DO NOTHING
+               RETURNING id |]
 
 
 createEveryoneTeam :: DB es => Projects.ProjectId -> Projects.UserId -> Eff es Int64
@@ -372,6 +385,12 @@ getTeamsById pid tids =
     else
       Hasql.interp
         (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = ANY(#{tids}::uuid[]) AND deleted_at IS NULL |])
+
+
+getTeamById :: DB es => Projects.ProjectId -> UUID.UUID -> Eff es (Maybe Team)
+getTeamById pid tid =
+  Hasql.interpOne
+    (selectFrom @Team <> [HI.sql| WHERE project_id = #{pid} AND id = #{tid} AND deleted_at IS NULL |])
 
 
 -- | Bulk fetch teams by handles - more efficient than mapping getTeamByHandle

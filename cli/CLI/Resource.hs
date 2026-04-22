@@ -36,7 +36,7 @@ import Effectful.FileSystem (FileSystem, doesDirectoryExist, doesFileExist, list
 import System.FilePath (takeExtension, (</>))
 
 
-data ResourceKind = Monitors | Dashboards | ApiKeys
+data ResourceKind = Monitors | Dashboards | ApiKeys | Teams | Members
   deriving stock (Eq, Show)
 
 
@@ -53,6 +53,8 @@ resourcePath = \case
   Monitors -> "/monitors"
   Dashboards -> "/dashboards"
   ApiKeys -> "/api_keys"
+  Teams -> "/teams"
+  Members -> "/members"
 
 
 -- | @resourceIdPath k id@ → @"/<kind>/<id>"@.

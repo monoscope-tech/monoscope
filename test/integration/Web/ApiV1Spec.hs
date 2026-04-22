@@ -12,6 +12,7 @@ import Data.Time (getCurrentTime)
 import Data.UUID qualified as UUID
 import Data.UUID.V4 qualified as UUIDV4
 import Models.Apis.Monitors qualified as Monitors
+import Models.Projects.ProjectMembers qualified as PM
 import Models.Telemetry.Schema qualified as Schema
 import Pages.Charts.Charts qualified as Charts
 import Pages.Charts.Types (MetricsData (..))
@@ -77,8 +78,27 @@ spec = aroundAll withTestResources do
               , "/api_keys/{key_id}/activate"
               , "/api_keys/{key_id}/deactivate"
               , "/events/query"
-              , "/anomalies/bulk"
               , "/share"
+              , "/me"
+              , "/project"
+              , "/issues"
+              , "/issues/{issue_id}"
+              , "/issues/{issue_id}/ack"
+              , "/issues/{issue_id}/unack"
+              , "/issues/{issue_id}/archive"
+              , "/issues/{issue_id}/unarchive"
+              , "/issues/bulk"
+              , "/endpoints"
+              , "/endpoints/{endpoint_id}"
+              , "/log_patterns"
+              , "/log_patterns/{pattern_id}"
+              , "/log_patterns/{pattern_id}/ack"
+              , "/log_patterns/bulk"
+              , "/teams"
+              , "/teams/{team_id}"
+              , "/teams/bulk"
+              , "/members"
+              , "/members/{user_id}"
               ]
         for_ expectedPaths $ \p ->
           (specJson ^? key "paths" . key (AEK.fromText p)) `shouldSatisfy` isJust
@@ -266,6 +286,137 @@ spec = aroundAll withTestResources do
         let json = AE.toJSON result
         (json ^? key "logsData" . _Array) `shouldSatisfy` isJust
         (json ^? key "count" . _Number) `shouldSatisfy` isJust
+
+    describe "Plan B — /me + project singular" do
+      it "returns project id and summary for /me" $ \tr -> do
+        res <- runAsBase tr (ApiH.apiMe testPid)
+        res.projectId `shouldBe` testPid
+        res.project.id `shouldBe` testPid
+
+      it "project get/patch round-trip updates title" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            emptyPatch = ApiT.ProjectPatch Nothing Nothing Nothing Nothing Nothing Nothing Nothing
+        original <- runB (ApiH.apiProjectGet testPid)
+        patched <- runB (ApiH.apiProjectPatch testPid emptyPatch{ApiT.title = Just "Plan B Patched"})
+        patched.summary.title `shouldBe` "Plan B Patched"
+        _ <- runB (ApiH.apiProjectPatch testPid emptyPatch{ApiT.title = Just original.summary.title})
+        pass
+
+    describe "Plan B — issues/endpoints/log-patterns listing" do
+      it "issues list returns a Paged envelope" $ \tr -> do
+        res <- runAsBase tr (ApiH.apiIssuesList testPid Nothing Nothing Nothing Nothing Nothing)
+        res.perPage `shouldSatisfy` (> 0)
+        res.totalCount `shouldSatisfy` (>= 0)
+
+      it "issues bulk with empty ids succeeds with empty result" $ \tr -> do
+        res <- runAsBase tr (ApiH.apiIssuesBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res.succeeded `shouldBe` []
+
+      it "endpoints list returns a Paged envelope" $ \tr -> do
+        res <- runAsBase tr (ApiH.apiEndpointsList testPid Nothing Nothing Nothing Nothing)
+        res.perPage `shouldSatisfy` (> 0)
+
+      it "log patterns list returns a Paged envelope" $ \tr -> do
+        res <- runAsBase tr (ApiH.apiLogPatternsList testPid Nothing Nothing)
+        res.perPage `shouldSatisfy` (> 0)
+
+      it "log patterns bulk with empty ids succeeds with empty result" $ \tr -> do
+        res <- runAsBase tr (ApiH.apiLogPatternsBulk testPid ApiT.BulkAction{ApiT.action = "acknowledge", ApiT.ids = [], ApiT.durationMinutes = Nothing})
+        res.succeeded `shouldBe` []
+
+    describe "Plan B — teams CRUD" do
+      it "create → get → patch → delete round-trip" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            input =
+              ApiT.TeamInput
+                { ApiT.name = "ops"
+                , ApiT.handle = "ops-team"
+                , ApiT.description = Just "Ops oncall"
+                , ApiT.members = Nothing
+                , ApiT.notifyEmails = Just ["ops@example.com"]
+                , ApiT.slackChannels = Nothing
+                , ApiT.discordChannels = Nothing
+                , ApiT.phoneNumbers = Nothing
+                , ApiT.pagerdutyServices = Nothing
+                }
+        created <- runB $ ApiH.apiTeamCreate testPid input
+        created.summary.name `shouldBe` "ops"
+        created.summary.handle `shouldBe` "ops-team"
+        created.summary.isEveryone `shouldBe` False
+        got <- runB $ ApiH.apiTeamGet testPid created.summary.id
+        got.summary.id `shouldBe` created.summary.id
+        patched <-
+          runB
+            $ ApiH.apiTeamPatch
+              testPid
+              created.summary.id
+              (ApiT.TeamPatch (Just "ops-v2") Nothing Nothing Nothing Nothing Nothing Nothing Nothing Nothing)
+        patched.summary.name `shouldBe` "ops-v2"
+        NoContent <- runB $ ApiH.apiTeamDelete testPid created.summary.id
+        pass
+
+      it "create with 'everyone' handle is rejected" $ \tr -> do
+        let input =
+              ApiT.TeamInput
+                { ApiT.name = "everyone"
+                , ApiT.handle = "everyone"
+                , ApiT.description = Nothing
+                , ApiT.members = Nothing
+                , ApiT.notifyEmails = Nothing
+                , ApiT.slackChannels = Nothing
+                , ApiT.discordChannels = Nothing
+                , ApiT.phoneNumbers = Nothing
+                , ApiT.pagerdutyServices = Nothing
+                }
+        (runAsBase tr (ApiH.apiTeamCreate testPid input) >>= evaluateWHNF_) `shouldThrow` anyException
+
+      it "teams list includes the built-in everyone team" $ \tr -> do
+        teams <- runAsBase tr (ApiH.apiTeamsList testPid)
+        any (.isEveryone) teams `shouldBe` True
+
+      it "bulk delete over teams returns success count" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+            mkInput n =
+              ApiT.TeamInput
+                { ApiT.name = "t-" <> n
+                , ApiT.handle = "t-" <> n
+                , ApiT.description = Nothing
+                , ApiT.members = Nothing
+                , ApiT.notifyEmails = Nothing
+                , ApiT.slackChannels = Nothing
+                , ApiT.discordChannels = Nothing
+                , ApiT.phoneNumbers = Nothing
+                , ApiT.pagerdutyServices = Nothing
+                }
+        t1 <- runB $ ApiH.apiTeamCreate testPid (mkInput "a")
+        t2 <- runB $ ApiH.apiTeamCreate testPid (mkInput "b")
+        res <-
+          runB
+            $ ApiH.apiTeamsBulk testPid ApiT.BulkAction{ApiT.action = "delete", ApiT.ids = [t1.summary.id, t2.summary.id], ApiT.durationMinutes = Nothing}
+        length res.succeeded `shouldBe` 2
+
+    describe "Plan B — members" do
+      it "add by email → patch permission → remove" $ \tr -> do
+        let runB :: ATBaseCtx a -> IO a
+            runB k = runAsBase tr k
+        added <-
+          runB
+            $ ApiH.apiMemberAdd
+              testPid
+              ApiT.MemberAdd{ApiT.email = Just "member@example.com", ApiT.userId = Nothing, ApiT.permission = Just PM.PView}
+        added.email `shouldBe` "member@example.com"
+        added.permission `shouldBe` PM.PView
+        patched <- runB $ ApiH.apiMemberPatch testPid added.userId (ApiT.MemberPatch PM.PAdmin)
+        patched.permission `shouldBe` PM.PAdmin
+        NoContent <- runB $ ApiH.apiMemberRemove testPid added.userId
+        pass
+
+      it "add without email or user_id is rejected" $ \tr -> do
+        (runAsBase tr (ApiH.apiMemberAdd testPid ApiT.MemberAdd{ApiT.email = Nothing, ApiT.userId = Nothing, ApiT.permission = Nothing})
+          >>= evaluateWHNF_) `shouldThrow` anyException
 
     describe "Share link create" do
       it "returns id and url containing /share/r/<id>" $ \tr -> do

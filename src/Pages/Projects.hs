@@ -713,8 +713,8 @@ manageTeamPostH pid form tmView = do
       maybe (redirectCS $ "/p/" <> pid.toText <> "/manage_teams") (\_ -> redirectCS $ "/p/" <> pid.toText <> "/team/" <> form.teamHandle) tmView
       addRespHeaders $ ManageTeamsPostError ""
     (_, _, _, Nothing) -> do
-      rowsAffected <- ProjectMembers.createTeam pid currUserId teamDetails
-      if rowsAffected > 0
+      createdM <- ProjectMembers.createTeam pid (Just currUserId) teamDetails
+      if isJust createdM
         then do
           addSuccessToast "Team saved successfully" Nothing
           addTriggerEvent "closeModal" ""

@@ -1,7 +1,7 @@
 module Models.Apis.LogPatterns (
   BaselineState (..),
   LogPattern (..),
-  LogPatternId,
+  LogPatternId (..),
   LogPatternState (..),
   getLogPatterns,
   getLogPatternTexts,
@@ -10,6 +10,9 @@ module Models.Apis.LogPatterns (
   getNewLogPatterns,
   acknowledgeLogPatterns,
   acknowledgeMergedPatterns,
+  setLogPatternStatesByIds,
+  countLogPatterns,
+  getLogPatternByIdScoped,
   UpsertPattern (..),
   upsertLogPattern,
   upsertLogPatternBatch,
@@ -40,6 +43,7 @@ import Data.Aeson qualified as AE
 import Data.Effectful.Hasql qualified as Hasql
 import Data.List (lookup)
 import Data.Map.Strict qualified as Map
+import Data.OpenApi (ToSchema)
 import Data.Text qualified as T
 import Data.Time (UTCTime, ZonedTime)
 import Data.Vector qualified as V
@@ -53,7 +57,7 @@ import Effectful.Time (Time)
 import Effectful.Time qualified as Time
 import Hasql.Interpolate qualified as HI
 import Models.Projects.Projects qualified as Projects
-import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..))
+import Pkg.DeriveUtils (BaselineState (..), DB, WrappedEnumSC (..), selectFrom)
 import Relude hiding (id)
 import Utils (truncateHour)
 
@@ -68,9 +72,9 @@ data LogPatternState
   = LPSNew
   | LPSAcknowledged
   | LPSIgnored
-  deriving stock (Eq, Generic, Read, Show)
+  deriving stock (Bounded, Enum, Eq, Generic, Read, Show)
   deriving anyclass (NFData)
-  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField) via WrappedEnumSC "LPS" LogPatternState
+  deriving (AE.FromJSON, AE.ToJSON, FromField, HI.DecodeValue, HI.EncodeValue, ToField, ToSchema) via WrappedEnumSC "LPS" LogPatternState
 
 
 data LogPattern = LogPattern
@@ -186,6 +190,36 @@ acknowledgeMergedPatterns pid = do
   Hasql.interpExecute
     [HI.sql|UPDATE apis.log_patterns SET state = #{LPSAcknowledged}, acknowledged_at = #{now}
     WHERE project_id = #{pid} AND state = #{LPSNew} AND canonical_id IS NOT NULL|]
+
+
+-- | Set state by numeric id for a batch of patterns. Returns the ids that were updated.
+-- Used by the public API /log_patterns/bulk endpoint.
+setLogPatternStatesByIds :: (DB es, Time :> es) => Projects.ProjectId -> Maybe Projects.UserId -> V.Vector Int64 -> LogPatternState -> Eff es [Int64]
+setLogPatternStatesByIds pid uid lpids st
+  | V.null lpids = pure []
+  | otherwise = do
+      now <- Time.currentTime
+      let setAckAt = st == LPSAcknowledged
+      Hasql.interp
+        [HI.sql|
+          UPDATE apis.log_patterns
+          SET state = #{st},
+              acknowledged_by = CASE WHEN #{setAckAt} THEN #{uid} ELSE acknowledged_by END,
+              acknowledged_at = CASE WHEN #{setAckAt} THEN #{now} ELSE acknowledged_at END
+          WHERE project_id = #{pid} AND id = ANY(#{lpids}::bigint[])
+          RETURNING id |]
+
+
+-- | Count non-canonical log patterns for a project (matches the list returned by 'getLogPatterns').
+countLogPatterns :: DB es => Projects.ProjectId -> Eff es Int
+countLogPatterns pid =
+  fromMaybe 0
+    <$> Hasql.interpOne [HI.sql| SELECT COUNT(*)::int FROM apis.log_patterns WHERE project_id = #{pid} AND canonical_id IS NULL |]
+
+
+getLogPatternByIdScoped :: DB es => Projects.ProjectId -> Int64 -> Eff es (Maybe LogPattern)
+getLogPatternByIdScoped pid lpid =
+  Hasql.interpOne (selectFrom @LogPattern <> [HI.sql| WHERE project_id = #{pid} AND id = #{lpid} |])
 
 
 upsertLogPattern :: (DB es, Time :> es) => UpsertPattern -> Eff es Int64

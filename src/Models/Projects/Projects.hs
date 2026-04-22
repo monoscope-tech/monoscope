@@ -20,6 +20,7 @@ module Models.Projects.Projects (
   insertProject,
   projectIdFromText,
   usersByProjectId,
+  usersByIds,
   selectProjectsForUser,
   getProjectByPhoneNumber,
   activeProjects,
@@ -27,6 +28,7 @@ module Models.Projects.Projects (
   recentlyActiveProjectIds,
   newProjectsSince,
   updateProject,
+  patchProjectSettings,
   deleteProject,
   updateProjectPricing,
   updateProjectBilling,
@@ -112,7 +114,7 @@ import Effectful.Time (Time, currentTime, runTime)
 import GHC.Records (HasField (getField))
 import Hasql.Interpolate qualified as HI
 import Hasql.Pool qualified as HPool
-import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText)
+import Pkg.DeriveUtils (DB, UUIDId (..), WrappedEnumSC (..), idFromText, selectFrom)
 import Pkg.Parser.Stats (Section)
 import Relude
 import Servant (FromHttpApiData, Header, Headers, ServerError, addHeader, err302, errHeaders, getResponse)
@@ -503,6 +505,12 @@ usersByProjectId pid =
                 from users.users u join projects.project_members pm on (pm.user_id=u.id) where project_id=#{pid} and u.active IS True and pm.active = TRUE;|]
 
 
+usersByIds :: DB es => V.Vector UUID.UUID -> Eff es [User]
+usersByIds uids
+  | V.null uids = pure []
+  | otherwise = EHasql.interp (selectFrom @User <> [HI.sql| WHERE id = ANY(#{uids}::uuid[]) |])
+
+
 updateProject :: DB es => CreateProject -> Eff es Int64
 updateProject cp = do
   let (cT, cD, cPP, cSub, cFSI, cOrd, cTZ, cWN, cDN, cEA, cErA, cId) =
@@ -513,6 +521,36 @@ updateProject cp = do
         payment_plan=#{cPP}, sub_id=#{cSub}, first_sub_item_id=#{cFSI}, order_id=#{cOrd},
         time_zone=#{cTZ}, weekly_notif=#{cWN}, daily_notif=#{cDN}, endpoint_alerts=#{cEA}, error_alerts=#{cErA} where id=#{cId};
         |]
+
+
+-- | Partial project update. Unspecified fields keep their current value (via COALESCE).
+-- Returns the number of rows affected (0 ⇒ project not found).
+patchProjectSettings
+  :: DB es
+  => ProjectId
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Text
+  -> Maybe Bool
+  -> Maybe Bool
+  -> Maybe Bool
+  -> Maybe Bool
+  -> UTCTime
+  -> Eff es Int64
+patchProjectSettings pid title descr tz daily weekly endpointAlerts errorAlerts now =
+  EHasql.interpExecute
+    [HI.sql|
+      UPDATE projects.projects SET
+        title = COALESCE(#{title}, title),
+        description = COALESCE(#{descr}, description),
+        time_zone = COALESCE(#{tz}, time_zone),
+        daily_notif = COALESCE(#{daily}, daily_notif),
+        weekly_notif = COALESCE(#{weekly}, weekly_notif),
+        endpoint_alerts = COALESCE(#{endpointAlerts}, endpoint_alerts),
+        error_alerts = COALESCE(#{errorAlerts}, error_alerts),
+        updated_at = #{now}
+      WHERE id = #{pid}
+    |]
 
 
 updateProjectPricing :: DB es => ProjectId -> Text -> Text -> Text -> Text -> V.Vector Text -> Eff es Int64

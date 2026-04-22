@@ -35,9 +35,67 @@ data Command
   | DashboardsCmd DashboardsCommand
   | ApiKeysCmd ApiKeysCommand
   | ShareLinkCmd ShareLinkCommand
+  | MeCmd
+  | ProjectCmd ProjectCommand
+  | IssuesCmd IssuesCommand
+  | EndpointsCmd EndpointsCommand
+  | LogPatternsCmd LogPatternsCommand
+  | TeamsCmd TeamsCommand
+  | MembersCmd MembersCommand
   | SchemaCmd
   | CompletionCmd Text
   | VersionCmd
+
+
+data ProjectCommand
+  = ProjGet
+  | ProjPatch FilePath
+  deriving stock (Show)
+
+
+data IssuesCommand
+  = IssueList (Maybe Text) (Maybe Text) (Maybe Text) (Maybe Int) (Maybe Int)
+  | IssueGet Text
+  | IssueAck Text
+  | IssueUnack Text
+  | IssueArchive Text
+  | IssueUnarchive Text
+  | IssueBulk Text [Text]
+  deriving stock (Show)
+
+
+data EndpointsCommand
+  = EndList (Maybe Text) (Maybe Bool) (Maybe Int) (Maybe Int)
+  | EndGet Text
+  deriving stock (Show)
+
+
+data LogPatternsCommand
+  = LPList (Maybe Int) (Maybe Int)
+  | LPGet Int64
+  | LPAck Int64
+  | LPBulk Text [Int64]
+  deriving stock (Show)
+
+
+data TeamsCommand
+  = TeamList
+  | TeamGet Text
+  | TeamCreate FilePath
+  | TeamUpdate Text FilePath
+  | TeamPatch Text FilePath
+  | TeamDelete Text
+  | TeamBulk Text [Text]
+  deriving stock (Show)
+
+
+data MembersCommand
+  = MemberList
+  | MemberGet Text
+  | MemberAdd (Maybe Text) (Maybe Text) (Maybe Text) -- email, userId, permission
+  | MemberPatch Text Text -- userId, permission
+  | MemberRemove Text
+  deriving stock (Show)
 
 
 data EventsCommand
@@ -146,6 +204,13 @@ commandParser =
           , command "dashboards" (info (DashboardsCmd <$> dashboardsParser <**> helper) (progDesc "Manage dashboards"))
           , command "api-keys" (info (ApiKeysCmd <$> apiKeysParser <**> helper) (progDesc "Manage API keys"))
           , command "share-link" (info (ShareLinkCmd <$> shareLinkParser <**> helper) (progDesc "Create time-limited share links"))
+          , command "me" (info (pure MeCmd) (progDesc "Show current project identity"))
+          , command "project" (info (ProjectCmd <$> projectParser <**> helper) (progDesc "Show or patch the current project"))
+          , command "issues" (info (IssuesCmd <$> issuesParser <**> helper) (progDesc "List and triage issues"))
+          , command "endpoints" (info (EndpointsCmd <$> endpointsParser <**> helper) (progDesc "Browse the API endpoint catalog"))
+          , command "log-patterns" (info (LogPatternsCmd <$> logPatternsParser <**> helper) (progDesc "Triage log patterns"))
+          , command "teams" (info (TeamsCmd <$> teamsParser <**> helper) (progDesc "Manage teams"))
+          , command "members" (info (MembersCmd <$> membersParser <**> helper) (progDesc "Manage project members"))
           , command "schema" (info (pure SchemaCmd) (progDesc "Fetch telemetry schema"))
           , command "completion" (info (CompletionCmd <$> strArgument (metavar "SHELL" <> help "bash|zsh|fish")) (progDesc "Emit shell completion script"))
           , command "version" (info (pure VersionCmd) (progDesc "Show CLI version"))
@@ -415,6 +480,165 @@ shareLinkParser =
       )
 
 
+projectParser :: Parser ProjectCommand
+projectParser =
+  subparser $
+    mconcat
+      [ command "get" (info (pure ProjGet) (progDesc "Show the current project"))
+      , command "patch" (info (ProjPatch <$> fileArg <**> helper) (progDesc "PATCH project fields from a YAML/JSON file"))
+      ]
+
+
+pageOpts :: Parser (Maybe Int, Maybe Int)
+pageOpts =
+  (,)
+    <$> optional (option auto (long "page" <> metavar "N" <> help "Page number (0-based, default: 0)"))
+    <*> optional (option auto (long "per-page" <> metavar "N" <> help "Items per page"))
+
+
+-- | Serialise page/per_page into query-string pairs.
+pageParams :: Maybe Int -> Maybe Int -> [(Text, Text)]
+pageParams pM ppM = catMaybes [("page",) . show <$> pM, ("per_page",) . show <$> ppM]
+
+
+issuesParser :: Parser IssuesCommand
+issuesParser =
+  subparser $
+    mconcat
+      [ command
+          "list"
+          ( info
+              ( (\(p, pp) s t svc -> IssueList s t svc p pp)
+                  <$> pageOpts
+                  <*> optional (strOption (long "status" <> metavar "STATUS" <> help "open|acknowledged|archived|all"))
+                  <*> optional (strOption (long "type" <> metavar "TYPE" <> help "Filter by issue_type"))
+                  <*> optional (strOption (long "service" <> metavar "SERVICE" <> help "Filter by service"))
+                  <**> helper
+              )
+              (progDesc "List issues")
+          )
+      , command "get" (info (IssueGet <$> idArg <**> helper) (progDesc "Get issue by ID"))
+      , command "ack" (info (IssueAck <$> idArg <**> helper) (progDesc "Acknowledge issue"))
+      , command "unack" (info (IssueUnack <$> idArg <**> helper) (progDesc "Un-acknowledge issue"))
+      , command "archive" (info (IssueArchive <$> idArg <**> helper) (progDesc "Archive issue"))
+      , command "unarchive" (info (IssueUnarchive <$> idArg <**> helper) (progDesc "Unarchive issue"))
+      , command
+          "bulk"
+          ( info
+              (IssueBulk <$> strArgument (metavar "ACTION" <> help "acknowledge|unack|archive|unarchive") <*> idsOpt <**> helper)
+              (progDesc "Bulk acknowledge/archive issues")
+          )
+      ]
+
+
+endpointsParser :: Parser EndpointsCommand
+endpointsParser =
+  subparser $
+    mconcat
+      [ command
+          "list"
+          ( info
+              ( (\(p, pp) s o -> EndList s o p pp)
+                  <$> pageOpts
+                  <*> optional (strOption (long "search" <> metavar "TEXT" <> help "Substring filter"))
+                  <*> optional (switch (long "outgoing" <> help "Only outgoing endpoints"))
+                  <**> helper
+              )
+              (progDesc "List endpoints")
+          )
+      , command "get" (info (EndGet <$> idArg <**> helper) (progDesc "Get endpoint by ID"))
+      ]
+
+
+int64Arg :: Parser Int64
+int64Arg = argument auto (metavar "ID" <> help "Pattern ID (integer)")
+
+
+int64IdsOpt :: Parser [Int64]
+int64IdsOpt =
+  fmap (mapMaybe (readMaybe . toString) . T.splitOn ",") $
+    strOption (long "ids" <> metavar "ID1,ID2,..." <> help "Comma-separated pattern IDs")
+
+
+logPatternsParser :: Parser LogPatternsCommand
+logPatternsParser =
+  subparser $
+    mconcat
+      [ command
+          "list"
+          ( info
+              ((\(p, pp) -> LPList p pp) <$> pageOpts <**> helper)
+              (progDesc "List log patterns")
+          )
+      , command "get" (info (LPGet <$> int64Arg <**> helper) (progDesc "Get log pattern by ID"))
+      , command "ack" (info (LPAck <$> int64Arg <**> helper) (progDesc "Acknowledge log pattern"))
+      , command
+          "bulk"
+          ( info
+              ( LPBulk
+                  <$> strArgument (metavar "ACTION" <> help "ack|ignore")
+                  <*> int64IdsOpt
+                  <**> helper
+              )
+              (progDesc "Run bulk action over multiple log patterns")
+          )
+      ]
+
+
+teamsParser :: Parser TeamsCommand
+teamsParser =
+  subparser $
+    mconcat
+      [ command "list" (info (pure TeamList) (progDesc "List teams"))
+      , command "get" (info (TeamGet <$> idArg <**> helper) (progDesc "Get a team by ID"))
+      , command "create" (info (TeamCreate <$> fileArg <**> helper) (progDesc "Create team from YAML/JSON file"))
+      , command "update" (info (TeamUpdate <$> idArg <*> fileArg <**> helper) (progDesc "Replace (PUT) team from file"))
+      , command "patch" (info (TeamPatch <$> idArg <*> fileArg <**> helper) (progDesc "Patch team fields from file"))
+      , command "delete" (info (TeamDelete <$> idArg <**> helper) (progDesc "Delete a team"))
+      , command
+          "bulk"
+          ( info
+              ( TeamBulk
+                  <$> strArgument (metavar "ACTION" <> help "delete")
+                  <*> idsOpt
+                  <**> helper
+              )
+              (progDesc "Run bulk action over multiple teams")
+          )
+      ]
+
+
+membersParser :: Parser MembersCommand
+membersParser =
+  subparser $
+    mconcat
+      [ command "list" (info (pure MemberList) (progDesc "List project members"))
+      , command "get" (info (MemberGet <$> idArg <**> helper) (progDesc "Get a member by user ID"))
+      , command
+          "add"
+          ( info
+              ( MemberAdd
+                  <$> optional (strOption (long "email" <> metavar "EMAIL" <> help "Email (creates user if missing)"))
+                  <*> optional (strOption (long "user-id" <> metavar "UUID" <> help "Existing user ID"))
+                  <*> optional (strOption (long "permission" <> metavar "PERM" <> help "view|edit|admin (default: view)"))
+                  <**> helper
+              )
+              (progDesc "Add a project member (by email or user ID)")
+          )
+      , command
+          "patch"
+          ( info
+              ( MemberPatch
+                  <$> strArgument (metavar "USER_ID" <> help "Member's user ID")
+                  <*> strArgument (metavar "PERMISSION" <> help "view|edit|admin")
+                  <**> helper
+              )
+              (progDesc "Change a member's permission")
+          )
+      , command "remove" (info (MemberRemove <$> idArg <**> helper) (progDesc "Remove a project member"))
+      ]
+
+
 parserInfo :: ParserInfo (GlobalOpts, Command)
 parserInfo =
   info
@@ -526,6 +750,57 @@ run global = \case
           , "event_created_at" AE..= createdAt
           , "event_type" AE..= typeM
           ]
+  MeCmd -> withCfgMode global $ \cfg mode ->
+    Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/me" [])
+  ProjectCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    ProjGet -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/project" [])
+    ProjPatch path -> Resource.runFromFile cfg Resource.PATCH "/project" [] path mode
+  IssuesCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    IssueList statusM typeM svcM pageM perM ->
+      let params = catMaybes [("status",) <$> statusM, ("type",) <$> typeM, ("service",) <$> svcM] <> pageParams pageM perM
+       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/issues" params)
+    IssueGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/issues/" <> i) [])
+    IssueAck i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/ack") [] AE.Null mode
+    IssueUnack i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/unack") [] AE.Null mode
+    IssueArchive i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/archive") [] AE.Null mode
+    IssueUnarchive i -> Resource.writeJson cfg Resource.POST ("/issues/" <> i <> "/unarchive") [] AE.Null mode
+    IssueBulk act ids ->
+      Resource.writeJson cfg Resource.POST "/issues/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
+  EndpointsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    EndList searchM outgoingM pageM perM ->
+      let params = catMaybes [("search",) <$> searchM, ("outgoing",) . bool "false" "true" <$> outgoingM] <> pageParams pageM perM
+       in Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/endpoints" params)
+    EndGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/endpoints/" <> i) [])
+  LogPatternsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    LPList pageM perM ->
+      Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/log_patterns" (pageParams pageM perM))
+    LPGet i -> Resource.runAPI mode (apiGetJson @_ @AE.Value cfg ("/log_patterns/" <> show i) [])
+    LPAck i -> Resource.writeJson cfg Resource.POST ("/log_patterns/" <> show i <> "/ack") [] AE.Null mode
+    LPBulk act ids ->
+      Resource.writeJson cfg Resource.POST "/log_patterns/bulk" [] (AE.object ["action" AE..= act, "ids" AE..= ids]) mode
+  TeamsCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    TeamList -> Resource.runList cfg Resource.Teams [] mode
+    TeamGet i -> Resource.runGet cfg Resource.Teams i mode
+    TeamCreate path -> Resource.runFromFile cfg Resource.POST (Resource.resourcePath Resource.Teams) [] path mode
+    TeamUpdate i path -> Resource.runFromFile cfg Resource.PUT (Resource.resourceIdPath Resource.Teams i) [] path mode
+    TeamPatch i path -> Resource.runFromFile cfg Resource.PATCH (Resource.resourceIdPath Resource.Teams i) [] path mode
+    TeamDelete i -> Resource.runDelete cfg Resource.Teams i
+    TeamBulk act ids -> Resource.runBulk cfg Resource.Teams act ids Nothing mode
+  MembersCmd sub -> withCfgMode global $ \cfg mode -> case sub of
+    MemberList -> Resource.runList cfg Resource.Members [] mode
+    MemberGet i -> Resource.runGet cfg Resource.Members i mode
+    MemberAdd emailM uidM permM ->
+      let body =
+            AE.object $
+              catMaybes
+                [ ("email" AE..=) <$> emailM
+                , ("user_id" AE..=) <$> uidM
+                , ("permission" AE..=) <$> permM
+                ]
+       in Resource.writeJson cfg Resource.POST (Resource.resourcePath Resource.Members) [] body mode
+    MemberPatch uid perm ->
+      Resource.writeJson cfg Resource.PATCH (Resource.resourceIdPath Resource.Members uid) [] (AE.object ["permission" AE..= perm]) mode
+    MemberRemove uid -> Resource.runDelete cfg Resource.Members uid
   SchemaCmd -> withCfgMode global $ \cfg mode ->
     Resource.runAPI mode (apiGetJson @_ @AE.Value cfg "/schema" [])
   CompletionCmd shell -> emitCompletion shell

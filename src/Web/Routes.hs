@@ -195,11 +195,9 @@ data ApiV1Routes mode = ApiV1Routes
   , monitorMute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "mute" :> QueryParam "duration_minutes" Int :> Post '[JSON] Monitors.QueryMonitor
   , monitorUnmute :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "unmute" :> Post '[JSON] Monitors.QueryMonitor
   , monitorResolve :: mode :- "monitors" :> Capture "monitor_id" Monitors.QueryMonitorId :> "resolve" :> Post '[JSON] Monitors.QueryMonitor
-  , monitorBulk :: mode :- "monitors" :> "bulk" :> ReqBody '[JSON] ApiT.BulkAction :> Post '[JSON] ApiT.BulkResult
+  , monitorBulk :: mode :- "monitors" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
   , -- Events body variant (avoids URL length limits)
     eventsQuery :: mode :- "events" :> "query" :> ReqBody '[JSON] ApiT.EventsQuery :> Post '[JSON] Log.LogResult
-  , -- Anomalies bulk (acknowledge/archive)
-    anomaliesBulk :: mode :- "anomalies" :> "bulk" :> ReqBody '[JSON] ApiT.BulkAction :> Post '[JSON] ApiT.BulkResult
   , -- Share links
     shareLinkCreate :: mode :- "share" :> ReqBody '[JSON] ApiH.ShareLinkCreate :> Post '[JSON] ApiH.ShareLinkCreated
   , -- Dashboards (CRUD + IaC apply + widgets)
@@ -222,7 +220,7 @@ data ApiV1Routes mode = ApiV1Routes
   , dashboardWidgetUpsert :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> ReqBody '[JSON] Widget.Widget :> Put '[JSON] Widget.Widget
   , dashboardWidgetDelete :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> Capture "widget_id" Text :> Delete '[JSON] NoContent
   , dashboardWidgetsReorder :: mode :- "dashboards" :> Capture "dashboard_id" Dashboards.DashboardId :> "widgets" :> "order" :> QPT "tab" :> ReqBody '[JSON] (Map Text ApiT.WidgetPosition) :> Patch '[JSON] NoContent
-  , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] ApiT.BulkAction :> Post '[JSON] ApiT.BulkResult
+  , dashboardBulk :: mode :- "dashboards" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction UUID.UUID) :> Post '[JSON] (ApiT.BulkResult UUID.UUID)
   , -- API keys
     apiKeysList :: mode :- "api_keys" :> Get '[JSON] [ApiT.ApiKeySummary]
   , apiKeyGet :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Get '[JSON] ApiT.ApiKeySummary
@@ -230,6 +228,57 @@ data ApiV1Routes mode = ApiV1Routes
   , apiKeyActivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "activate" :> Post '[JSON] ApiT.ApiKeySummary
   , apiKeyDeactivate :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> "deactivate" :> Post '[JSON] ApiT.ApiKeySummary
   , apiKeyDelete :: mode :- "api_keys" :> Capture "key_id" ProjectApiKeys.ProjectApiKeyId :> Delete '[JSON] NoContent
+  , -- Plan B: /me + /project (singular) + /issues + /endpoints + /log_patterns
+    meGet :: mode :- "me" :> Get '[JSON] ApiT.MeResponse
+  , projectGet :: mode :- "project" :> Get '[JSON] ApiT.ProjectFull
+  , projectPatch :: mode :- "project" :> ReqBody '[JSON] ApiT.ProjectPatch :> Patch '[JSON] ApiT.ProjectFull
+  , endpointsList
+      :: mode
+        :- "endpoints"
+          :> QPT "search"
+          :> QueryParam "outgoing" Bool
+          :> QueryParam "page" Int
+          :> QueryParam "per_page" Int
+          :> Get '[JSON] (ApiT.Paged ApiT.EndpointSummary)
+  , endpointGet :: mode :- "endpoints" :> Capture "endpoint_id" Endpoints.EndpointId :> Get '[JSON] ApiT.EndpointFull
+  , logPatternsList
+      :: mode
+        :- "log_patterns"
+          :> QueryParam "page" Int
+          :> QueryParam "per_page" Int
+          :> Get '[JSON] (ApiT.Paged ApiT.LogPatternSummary)
+  , logPatternGet :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> Get '[JSON] ApiT.LogPatternFull
+  , logPatternAck :: mode :- "log_patterns" :> Capture "pattern_id" Int64 :> "ack" :> Post '[JSON] ApiT.LogPatternFull
+  , logPatternsBulk :: mode :- "log_patterns" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Int64) :> Post '[JSON] (ApiT.BulkResult Int64)
+  , -- Issues
+    issuesList
+      :: mode
+        :- "issues"
+          :> QueryParam "status" ApiT.IssueStatus
+          :> QPT "type"
+          :> QPT "service"
+          :> QueryParam "page" Int
+          :> QueryParam "per_page" Int
+          :> Get '[JSON] (ApiT.Paged ApiT.IssueApiSummary)
+  , issueGet :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> Get '[JSON] ApiT.IssueApiFull
+  , issueAck :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "ack" :> Post '[JSON] ApiT.IssueApiFull
+  , issueUnack :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unack" :> Post '[JSON] ApiT.IssueApiFull
+  , issueArchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "archive" :> Post '[JSON] ApiT.IssueApiFull
+  , issueUnarchive :: mode :- "issues" :> Capture "issue_id" Issues.IssueId :> "unarchive" :> Post '[JSON] ApiT.IssueApiFull
+  , issuesBulk :: mode :- "issues" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction Issues.IssueId) :> Post '[JSON] (ApiT.BulkResult Issues.IssueId)
+  , -- Teams (B3) + Members (B4)
+    teamsList :: mode :- "teams" :> Get '[JSON] [ApiT.TeamSummary]
+  , teamGet :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Get '[JSON] ApiT.TeamFull
+  , teamCreate :: mode :- "teams" :> ReqBody '[JSON] ApiT.TeamInput :> Post '[JSON] ApiT.TeamFull
+  , teamUpdate :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> ReqBody '[JSON] ApiT.TeamInput :> Put '[JSON] ApiT.TeamFull
+  , teamPatch :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> ReqBody '[JSON] ApiT.TeamPatch :> Patch '[JSON] ApiT.TeamFull
+  , teamDelete :: mode :- "teams" :> Capture "team_id" ApiT.TeamId :> Delete '[JSON] NoContent
+  , teamsBulk :: mode :- "teams" :> "bulk" :> ReqBody '[JSON] (ApiT.BulkAction ApiT.TeamId) :> Post '[JSON] (ApiT.BulkResult ApiT.TeamId)
+  , membersList :: mode :- "members" :> Get '[JSON] [ApiT.MemberSummary]
+  , memberGet :: mode :- "members" :> Capture "user_id" UUID.UUID :> Get '[JSON] ApiT.MemberSummary
+  , memberAdd :: mode :- "members" :> ReqBody '[JSON] ApiT.MemberAdd :> Post '[JSON] ApiT.MemberSummary
+  , memberPatch :: mode :- "members" :> Capture "user_id" UUID.UUID :> ReqBody '[JSON] ApiT.MemberPatch :> Patch '[JSON] ApiT.MemberSummary
+  , memberRemove :: mode :- "members" :> Capture "user_id" UUID.UUID :> Delete '[JSON] NoContent
   }
   deriving stock (Generic)
 
@@ -565,7 +614,6 @@ apiV1Server pid =
     , monitorResolve = ApiH.apiMonitorResolve pid
     , monitorBulk = ApiH.apiMonitorBulk pid
     , eventsQuery = ApiH.apiEventsQuery pid
-    , anomaliesBulk = ApiH.apiAnomaliesBulk pid
     , shareLinkCreate = ApiH.apiShareLinkCreate pid
     , -- Dashboards
       dashboardsList = ApiH.apiDashboardsList pid
@@ -590,6 +638,37 @@ apiV1Server pid =
     , apiKeyActivate = ApiH.apiKeyActivate pid
     , apiKeyDeactivate = ApiH.apiKeyDeactivate pid
     , apiKeyDelete = ApiH.apiKeyDelete pid
+    , -- Plan B
+      meGet = ApiH.apiMe pid
+    , projectGet = ApiH.apiProjectGet pid
+    , projectPatch = ApiH.apiProjectPatch pid
+    , endpointsList = ApiH.apiEndpointsList pid
+    , endpointGet = ApiH.apiEndpointGet pid
+    , logPatternsList = ApiH.apiLogPatternsList pid
+    , logPatternGet = ApiH.apiLogPatternGet pid
+    , logPatternAck = ApiH.apiLogPatternAck pid
+    , logPatternsBulk = ApiH.apiLogPatternsBulk pid
+    , -- Issues
+      issuesList = ApiH.apiIssuesList pid
+    , issueGet = ApiH.apiIssueGet pid
+    , issueAck = ApiH.apiIssueAck pid
+    , issueUnack = ApiH.apiIssueUnack pid
+    , issueArchive = ApiH.apiIssueArchive pid
+    , issueUnarchive = ApiH.apiIssueUnarchive pid
+    , issuesBulk = ApiH.apiIssuesBulk pid
+    , -- Teams + Members
+      teamsList = ApiH.apiTeamsList pid
+    , teamGet = ApiH.apiTeamGet pid
+    , teamCreate = ApiH.apiTeamCreate pid
+    , teamUpdate = ApiH.apiTeamUpdate pid
+    , teamPatch = ApiH.apiTeamPatch pid
+    , teamDelete = ApiH.apiTeamDelete pid
+    , teamsBulk = ApiH.apiTeamsBulk pid
+    , membersList = ApiH.apiMembersList pid
+    , memberGet = ApiH.apiMemberGet pid
+    , memberAdd = ApiH.apiMemberAdd pid
+    , memberPatch = ApiH.apiMemberPatch pid
+    , memberRemove = ApiH.apiMemberRemove pid
     }
 
 

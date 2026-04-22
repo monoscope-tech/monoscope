@@ -130,6 +130,7 @@ library
       Models.Apis.LogQueries
       Models.Apis.Monitors
       Models.Apis.PatternMerge
+      Models.Apis.ShareEvents
       Models.Projects.Dashboards
       Models.Projects.GitSync
       Models.Projects.ProjectApiKeys
