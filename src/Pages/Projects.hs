@@ -1096,6 +1096,7 @@ manageMembersBody pid projMembers paymentPlan teamsCount =
     roleTooltip :: Text
     roleTooltip = "Admin: manage team, billing, and settings · Editor: create dashboards and alerts · Viewer: read-only"
 
+
 memberRowWithStatus :: Projects.ProjectId -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
 memberRowWithStatus pid idx prM = do
   let email = CI.original prM.email
