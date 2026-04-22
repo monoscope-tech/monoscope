@@ -88,7 +88,7 @@ import Pages.Bots.Slack qualified as SlackP
 import Pages.Bots.Utils qualified as BotUtils
 import Pages.Components (BadgeColor (..), FieldCfg (..), FieldSize (..), ModalCfg (..), PanelCfg (..), confirmModal_, dirtyFormSaveAttr_, formActionsModal_, formField_, formSelectField_, iconBadgeXs_, iconBadge_, infoBanner_, modalWith_, panel_, sectionLabel_, settingsH2_, settingsNavLink_, settingsSection_, tagInput_)
 import Pages.Settings qualified as Settings
-import Pkg.Components.Table (BulkAction (..), Table (..))
+import Pkg.Components.Table (Table (..))
 import Pkg.Components.Table qualified as Table
 import Pkg.Components.Widget (Widget (..), WidgetType (..), widget_)
 import Pkg.DeriveUtils (UUIDId (..))
@@ -260,8 +260,23 @@ integrationsSettingsGetH pid = do
   slackInfo <- getProjectSlackData pid
   pagerdutyInfo <- getPagerdutyByProjectId pid
   channels <- maybe (pure []) (\d -> maybe [] (fromMaybe [] . (.channels)) <$> SlackP.getSlackChannels d.botToken d.teamId) slackInfo
+  -- Back-fill the @everyone team with the Slack integration's default channel
+  -- for legacy installs that pre-date addSlackChannelToEveryoneTeam on OAuth.
+  -- Keeps the notifications input, Test, and Save in sync with a single source of truth.
+  whenJust slackInfo \s -> void $ ProjectMembers.addSlackChannelToEveryoneTeam pid s.channelId
   everyoneTeamM <- ProjectMembers.getEveryoneTeam pid
   let existingSlackChannels = maybe V.empty (.slack_channels) everyoneTeamM
+      knownChannelIds = S.fromList $ map BotUtils.channelId channels
+      -- Seed extras with the stored default channel name (captured at OAuth time),
+      -- since the bot often can't query conversations.info for it later.
+      defaultChannel = slackInfo >>= \d -> (\n -> BotUtils.Channel n d.channelId Nothing) <$> d.channelName
+      seededExtras = maybeToList $ mfilter (\c -> not $ S.member (BotUtils.channelId c) knownChannelIds) defaultChannel
+      seededIds = S.fromList $ map BotUtils.channelId seededExtras
+      missingIds = filter (\c -> not (S.member c knownChannelIds) && not (S.member c seededIds)) $ V.toList existingSlackChannels
+  fetchedExtras <- case slackInfo of
+    Just d -> catMaybes <$> traverse (SlackP.getSlackChannelInfo d.botToken) missingIds
+    Nothing -> pure []
+  let extraSlackChannels = seededExtras <> fetchedExtras
 
   let bwconf = (def :: BWConfig){sessM = Just sess, currProject = Just project, pageTitle = "Integrations", isSettingsPage = True, config = appCtx.config}
   addRespHeaders
@@ -279,6 +294,7 @@ integrationsSettingsGetH pid = do
         , slackData = slackInfo
         , pagerdutyData = pagerdutyInfo
         , slackChannels = channels
+        , extraSlackChannels = extraSlackChannels
         , existingSlackChannels = existingSlackChannels
         , everyoneTeamId = (.id) <$> everyoneTeamM
         }
@@ -416,6 +432,7 @@ data IntegrationsConfig = IntegrationsConfig
   , slackData :: Maybe SlackData
   , pagerdutyData :: Maybe Slack.PagerdutyData
   , slackChannels :: [BotUtils.Channel]
+  , extraSlackChannels :: [BotUtils.Channel]
   , existingSlackChannels :: V.Vector Text
   , everyoneTeamId :: Maybe UUID.UUID
   }
@@ -446,7 +463,7 @@ integrationsBody IntegrationsConfig{..} = do
               tgs = decodeUtf8 $ AE.encode $ V.toList phones
               integrations =
                 [ ("email", "Email", Projects.NEmail, True, faSprite_ "envelope" "solid" "h-4 w-4", renderEmailIntegration ems)
-                , ("slack", "Slack", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels existingSlackChannels)
+                , ("slack", "Slack", Projects.NSlack, isJust slackData, faSprite_ "slack" "solid" "h-4 w-4", renderSlackIntegration envConfig pid slackData slackChannels extraSlackChannels existingSlackChannels)
                 , ("discord", "Discord", Projects.NDiscord, True, faSprite_ "discord" "solid" "h-4 w-4", renderDiscordIntegration envConfig pid)
                 , ("phone", "WhatsApp", Projects.NPhone, not $ V.null phones, faSprite_ "whatsapp" "solid" "h-4 w-4", renderWhatsappIntegration tgs)
                 , ("pagerduty", "PagerDuty", Projects.NPagerduty, isJust pagerdutyData, faSprite_ "pager" "solid" "h-4 w-4", renderPagerdutyIntegration projectId.toText pagerdutyData)
@@ -527,8 +544,8 @@ renderWhatsappIntegration :: Text -> Html ()
 renderWhatsappIntegration tgs = formField_ FieldSm def "Phone numbers" "phones_input" False $ Just $ tagInput_ "phones_input" "Enter phone numbers" [data_ "tagify-initial" tgs]
 
 
-renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> V.Vector Text -> Html ()
-renderSlackIntegration envCfg pid slackData channels existingChannels = do
+renderSlackIntegration :: EnvConfig -> Text -> Maybe SlackData -> [BotUtils.Channel] -> [BotUtils.Channel] -> V.Vector Text -> Html ()
+renderSlackIntegration envCfg pid slackData channels extraChannels existingChannels = do
   let stateParam = if T.null pid then "" else "&state=" <> pid
       oauthUrl = "https://slack.com/oauth/v2/authorize?client_id=" <> envCfg.slackClientId <> "&scope=chat:write,commands,incoming-webhook,files:write,app_mentions:read,channels:read,groups:read,channels:history,groups:history,im:history,mpim:history,chat:write.public&user_scope=&redirect_uri=" <> envCfg.slackRedirectUri <> stateParam
 
@@ -540,7 +557,14 @@ renderSlackIntegration envCfg pid slackData channels existingChannels = do
           span_ [class_ "text-textStrong font-medium"] $ toHtml $ maybe ("Connected (Team ID: " <> sd.teamId <> ")") ("Workspace: " <>) sd.teamName
         when (isNothing sd.teamName) $ p_ [class_ "text-textWeak ml-5"] "Reconnect to see workspace name"
 
-      let slackWhitelist = decodeUtf8 $ AE.encode $ map (\c -> AE.object ["value" AE..= BotUtils.channelId c, "name" AE..= ("#" <> BotUtils.channelName c)]) channels
+      -- Always include saved channels in the whitelist so enforceWhitelist + resolve
+      -- render the chip. `extraChannels` covers names we could fetch via
+      -- conversations.info (DMs, MPIMs, private channels the bot is a member of);
+      -- for channels the bot can't see at all, fall back to the raw id as the name.
+      let renderCh c = AE.object ["value" AE..= BotUtils.channelId c, "name" AE..= ("#" <> BotUtils.channelName c)]
+          knownIds = S.fromList $ map BotUtils.channelId (channels <> extraChannels)
+          unresolved = [AE.object ["value" AE..= c, "name" AE..= c] | c <- V.toList existingChannels, not (S.member c knownIds)]
+          slackWhitelist = decodeUtf8 $ AE.encode $ map renderCh (channels <> extraChannels) <> unresolved
           existingJSON = decodeUtf8 $ AE.encode $ V.toList existingChannels
       div_ [class_ "mb-3"] $ formField_ FieldSm def "Slack channels" "slack-channels-input" False $ Just $ tagInput_ "slack-channels-input" "Add Slack channels" [data_ "tagify-whitelist" slackWhitelist, data_ "tagify-enforce-whitelist" "", data_ "tagify-text-prop" "name", data_ "tagify-initial" existingJSON, data_ "tagify-resolve" ""]
 
@@ -644,15 +668,16 @@ manageMembersPostH pid onboardingM form = do
   unless (null uAndPOldAndChanged) $ Projects.logAuditS pid Projects.AEMemberPermissionChanged sess Nothing
 
   projMembersLatest <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
+  teamsCount <- length <$> ProjectMembers.getTeamsVM pid
   if isJust onboardingM
     then do
       redirectCS $ "/p/" <> pid.toText <> "/onboarding?step=Integration"
-      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan)
+      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
     else do
       if project.paymentPlan == "Free" && not (null uAndPNew)
         then addSuccessToast "Members invited! Upgrade to enable team access." Nothing
         else addSuccessToast "Updated Members List Successfully" Nothing
-      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan)
+      addRespHeaders $ ManageMembersPost (pid, projMembersLatest, project.paymentPlan, teamsCount)
 
 
 data TeamForm = TeamForm
@@ -803,40 +828,41 @@ manageTeamsPage pid projMembers channels discordChannels teams = do
   let whiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= (x.first_name <> " " <> x.last_name), "email" AE..= x.email, "value" AE..= x.userId]) <$> projMembers
       emailWhiteList = decodeUtf8 $ AE.encode $ (\x -> AE.object ["name" AE..= x.email, "value" AE..= x.email]) <$> projMembers
       (channelWhiteList, discordWhiteList) = (encodeChannels channels, encodeChannels discordChannels)
-  section_ [id_ "main-content", class_ "w-full space-y-4"] do
-    div_ [class_ "flex items-center justify-between"] do
-      h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Teams (" <> show (V.length teams) <> ")"
-      teamModal pid Nothing whiteList emailWhiteList channelWhiteList discordWhiteList False $ span_ [class_ "btn btn-sm btn-primary gap-1.5"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Team"
+  div_ [class_ "w-full h-full overflow-y-auto"] $ section_ [class_ "py-6 px-4 sm:py-8 sm:px-8 lg:px-12 space-y-6"] do
+    div_ [class_ "flex justify-between items-center max-w-2xl"] do
+      settingsH2_ "Team"
+      teamModal pid Nothing whiteList emailWhiteList channelWhiteList discordWhiteList False $ span_ [class_ "btn btn-sm btn-primary gap-1.5 whitespace-nowrap"] $ do faSprite_ "plus" "regular" "w-3 h-3"; "New Team"
+    div_ [class_ "max-w-2xl"] $ teamTabsHeader_ pid "teams" (V.length projMembers) (V.length teams)
 
     if V.null teams
-      then div_ [class_ "py-6 text-center text-textWeak text-sm"] "No teams yet. Create one to organize your project."
+      then div_ [class_ "py-12 text-center surface-raised rounded-2xl max-w-2xl"] do
+        div_ [class_ "text-sm text-textStrong font-medium"] "No teams yet"
+        div_ [class_ "text-xs text-textWeak mt-1"] "Create a team to route alerts to the right people."
       else do
-        let renderTeamNameCol team = nameCell pid team.name team.description team.handle
-            renderModifiedCol team = span_ [class_ "monospace text-textWeak"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e, %-l:%M %P" team.updated_at
+        let renderTeamNameCol team = nameCell pid team.name team.description team.handle team.is_everyone
+            renderModifiedCol team = span_ [class_ "monospace text-textWeak text-xs whitespace-nowrap"] $ toHtml $ toText $ formatTime defaultTimeLocale "%b %-e" team.updated_at
             renderMembersCol team = memberCell team.members
             renderNotificationsCol = notifsCell
-            tableCols = [Table.col "Name" renderTeamNameCol, Table.col "Modified" renderModifiedCol, Table.col "Members" renderMembersCol, Table.col "Notifications" renderNotificationsCol]
+            tableCols = [Table.col "Name" renderTeamNameCol, Table.col "Members" renderMembersCol, Table.col "Notifications" renderNotificationsCol, Table.col "Modified" renderModifiedCol]
             table =
               Table
-                { config = def{Table.elemID = "teams_table", Table.renderAsTable = True, Table.bulkActionsInHeader = Just 0}
+                { config = def{Table.elemID = "teams_table", Table.renderAsTable = True}
                 , columns = tableCols
                 , rows = teams
                 , features =
                     def
-                      { Table.rowId = Just \team -> UUID.toText team.id
-                      , Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
-                      , Table.bulkActions = [Table.BulkAction{icon = Just "trash", title = "Delete", uri = "/p/" <> pid.toText <> "/manage_teams/bulk_action/delete"}]
-                      , Table.search = Just Table.ClientSide
+                      { Table.rowAttrs = Just $ const [class_ "group/row hover:bg-fillWeaker"]
+                      , Table.search = if V.length teams >= 5 then Just Table.ClientSide else Nothing
                       }
                 }
         div_ [class_ "w-full"] $ toHtml table
 
 
-nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Html ()
-nameCell pid name description handle = do
-  span_ [class_ "flex items-center gap-2"] do
-    span_ [class_ "p-1 px-2 bg-fillWeak rounded-md", data_ "tippy-content" "Team"] $ faSprite_ "users" "regular" "w-3 h-3"
+nameCell :: Projects.ProjectId -> Text -> Text -> Text -> Bool -> Html ()
+nameCell pid name description handle isEveryone = do
+  span_ [class_ "flex items-center gap-2 min-w-0"] do
     a_ [href_ ("/p/" <> pid.toText <> "/manage_teams/" <> handle), class_ "font-medium text-textStrong hover:text-textBrand hover:underline underline-offset-2"] $ toHtml name
+    when isEveryone $ span_ [class_ "badge badge-sm bg-fillBrand-weak text-textBrand border-strokeBrand-weak shrink-0"] "Default"
     span_ [class_ "text-textWeak text-sm overflow-ellipsis truncate"] $ toHtml description
 
 
@@ -981,6 +1007,7 @@ manageMembersGetH pid = do
   (sess, project) <- Projects.sessionAndProject pid
   appCtx <- ask @AuthContext
   projMembers <- V.fromList <$> ProjectMembers.selectAllProjectMembers pid
+  teamsCount <- length <$> ProjectMembers.getTeamsVM pid
   let bwconf =
         (def :: BWConfig)
           { sessM = Just sess
@@ -989,44 +1016,51 @@ manageMembersGetH pid = do
           , isSettingsPage = True
           , config = appCtx.config
           }
-  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan)
+  addRespHeaders $ ManageMembersGet $ PageCtx bwconf (pid, projMembers, project.paymentPlan, teamsCount)
 
 
 data ManageMembers
-  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text)}
-  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text)}
+  = ManageMembersGet {unwrapGet :: PageCtx (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int)}
+  | ManageMembersPost {unwrapPost :: (Projects.ProjectId, V.Vector ProjectMembers.ProjectMemberWithStatusVM, Text, Int)}
 
 
 instance ToHtml ManageMembers where
-  toHtml (ManageMembersGet (PageCtx bwconf (pid, members, plan))) = toHtml $ PageCtx bwconf $ manageMembersBody pid members plan
-  toHtml (ManageMembersPost (pid, members, plan)) = toHtml $ manageMembersBody pid members plan
+  toHtml (ManageMembersGet (PageCtx bwconf (pid, members, plan, teamsCount))) = toHtml $ PageCtx bwconf $ manageMembersBody pid members plan teamsCount
+  toHtml (ManageMembersPost (pid, members, plan, teamsCount)) = toHtml $ manageMembersBody pid members plan teamsCount
   toHtmlRaw = toHtml
 
 
-manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Html ()
-manageMembersBody pid projMembers paymentPlan =
+teamTabsHeader_ :: Projects.ProjectId -> Text -> Int -> Int -> Html ()
+teamTabsHeader_ pid active membersCount teamsCount = do
+  let tab label key count = do
+        let isActive = active == key
+            url = "/p/" <> pid.toText <> (if key == "members" then "/manage_members" else "/manage_teams")
+            cls = "flex items-center gap-2 a-tab border-b border-b-strokeWeak px-3 py-2 text-sm" <> if isActive then " t-tab-active" else ""
+        a_
+          [ class_ cls
+          , href_ url
+          , hxGet_ url
+          , hxTarget_ settingsContentTarget
+          , hxSelect_ settingsContentTarget
+          , hxSwap_ "outerHTML"
+          , hxPushUrl_ "true"
+          ]
+          do
+            toHtml (label :: Text)
+            span_ [class_ "text-textDisabled text-xs font-normal"] $ toHtml $ show count
+  div_ [class_ "justify-start items-start gap-4 flex mb-6 text-sm"] do
+    tab "Members" "members" membersCount
+    tab "Teams" "teams" teamsCount
+
+
+manageMembersBody :: Projects.ProjectId -> V.Vector ProjectMembers.ProjectMemberWithStatusVM -> Text -> Int -> Html ()
+manageMembersBody pid projMembers paymentPlan teamsCount =
   settingsSection_ do
-    settingsH2_ "Team"
+    div_ [class_ "flex justify-between items-center"] do
+      settingsH2_ "Team"
+    teamTabsHeader_ pid "members" (V.length projMembers) teamsCount
 
-    -- Tabs: Members | Teams
-    div_ [class_ "flex gap-1 border-b border-strokeWeak", [__| on load if window.location.hash is "#teams" then send click to #teams-tab-btn end |]] do
-      button_
-        [ class_ "px-4 py-2 text-sm font-medium border-b-2 border-textBrand text-textBrand a-tab-btn"
-        , id_ "members-tab-btn"
-        , term "data-target" "#members-tab-content"
-        , term "_" "on click remove .border-textBrand .text-textBrand from .a-tab-btn then add .border-transparent .text-textWeak to .a-tab-btn then remove .border-transparent .text-textWeak from me then add .border-textBrand .text-textBrand to me then add .hidden to .a-tab-panel then remove .hidden from #members-tab-content"
-        ]
-        "Members"
-      button_
-        [ class_ "px-4 py-2 text-sm font-medium border-b-2 border-transparent text-textWeak a-tab-btn"
-        , id_ "teams-tab-btn"
-        , term "data-target" "#teams-tab-content"
-        , term "_" "on click remove .border-textBrand .text-textBrand from .a-tab-btn then add .border-transparent .text-textWeak to .a-tab-btn then remove .border-transparent .text-textWeak from me then add .border-textBrand .text-textBrand to me then add .hidden to .a-tab-panel then remove .hidden from #teams-tab-content then send loadTeams to #teams-tab-content"
-        ]
-        "Teams"
-
-    -- Members tab
-    div_ [id_ "members-tab-content", class_ "a-tab-panel space-y-6"] do
+    div_ [class_ "space-y-6"] do
       when (paymentPlan == "Free" && V.length projMembers > 1)
         $ div_ [class_ "bg-fillWarning-weak border border-strokeWarning-weak rounded-xl p-4 flex items-start gap-3"] do
           faSprite_ "triangle-exclamation" "regular" "w-5 h-5 text-iconWarning flex-shrink-0 mt-0.5"
@@ -1035,11 +1069,11 @@ manageMembersBody pid projMembers paymentPlan =
             p_ [class_ "text-sm text-textWeak mt-1"] "Additional team members are disabled and cannot access the project. Upgrade to enable team access."
 
       form_ [class_ "space-y-6", hxPost_ "", hxTarget_ settingsContentTarget, hxSwap_ "innerHTML", hxIndicator_ "#submitIndicator"] do
-        div_ [class_ "space-y-3"] do
+        div_ [class_ "space-y-2"] do
           label_ [class_ "text-sm font-medium text-textStrong block"] "Invite new member"
           div_ [class_ "flex gap-2"] do
             input_ [type_ "email", name_ "emails", class_ "input input-sm input-bordered flex-1", placeholder_ "colleague@company.com", required_ "true"]
-            select_ [name_ "permissions", class_ "select select-sm select-bordered w-28"] do
+            select_ [name_ "permissions", class_ "select select-sm select-bordered w-28", data_ "tippy-content" roleTooltip] do
               option_ [value_ "admin"] "Admin"
               option_ [value_ "edit"] "Editor"
               option_ [value_ "view"] "Viewer"
@@ -1047,23 +1081,20 @@ manageMembersBody pid projMembers paymentPlan =
               htmxIndicator_ "inviteIndicator" LdXS
               faSprite_ "paper-plane" "regular" "w-3 h-3"
               span_ "Invite"
-
-        div_ [class_ "border-t border-strokeWeak"] ""
+          p_ [class_ "text-xs text-textWeak"] $ toHtml roleTooltip
 
         div_ [class_ "space-y-3"] do
           div_ [class_ "flex items-center justify-between"] do
-            h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Team members (" <> show (V.length projMembers) <> ")"
-            when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm btn-ghost text-textWeak", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] "Save changes"
+            h3_ [class_ "text-sm font-medium text-textStrong"] $ toHtml $ "Members (" <> show (V.length projMembers) <> ")"
+            when (V.length projMembers > 0) $ button_ [class_ "btn btn-sm btn-outline gap-1.5", disabled_ "true", id_ "saveMembersBtn", dirtyFormSaveAttr_] do
+              faSprite_ "check" "regular" "w-3 h-3"; "Save changes"
           div_ [class_ "divide-y divide-strokeWeak rounded-xl border border-strokeWeak overflow-hidden"]
             $ if V.null projMembers
               then div_ [class_ "py-6 text-center text-textWeak text-sm"] "No members yet. Invite someone to get started."
               else V.imapM_ (memberRowWithStatus pid) projMembers
-
-    -- Teams tab (lazy loaded)
-    div_ [id_ "teams-tab-content", class_ "a-tab-panel hidden", hxGet_ $ "/p/" <> pid.toText <> "/manage_teams?what=partial", hxTrigger_ "loadTeams once", hxSwap_ "innerHTML", hxSelect_ settingsContentTarget] do
-      div_ [class_ "flex justify-center py-8"] do
-        span_ [class_ "loading loading-spinner loading-md"] ""
-
+  where
+    roleTooltip :: Text
+    roleTooltip = "Admin: manage team, billing, and settings · Editor: create dashboards and alerts · Viewer: read-only"
 
 memberRowWithStatus :: Projects.ProjectId -> Int -> ProjectMembers.ProjectMemberWithStatusVM -> Html ()
 memberRowWithStatus pid idx prM = do

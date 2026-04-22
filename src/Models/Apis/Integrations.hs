@@ -36,28 +36,29 @@ data SlackData = SlackData
   , channelId :: Text
   , teamName :: Maybe Text
   , botToken :: Text
+  , channelName :: Maybe Text
   }
   deriving stock (Eq, Generic, Show)
   deriving anyclass (HI.DecodeRow, NFData)
   deriving (AE.FromJSON) via DAE.CustomJSON '[DAE.OmitNothingFields, DAE.FieldLabelModifier '[DAE.CamelToSnake]] SlackData
 
 
-insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
-insertAccessToken pid webhookUrl teamId channelId teamName botToken =
+insertAccessToken :: DB es => Projects.ProjectId -> Text -> Text -> Text -> Text -> Text -> Text -> Eff es Int64
+insertAccessToken pid webhookUrl teamId channelId teamName botToken channelName =
   Hasql.interpExecute
     [HI.sql|INSERT INTO apis.slack
-               (project_id, webhook_url, team_id, channel_id, team_name, bot_token)
-               VALUES (#{pid},#{webhookUrl},#{teamId},#{channelId},#{teamName},#{botToken})
+               (project_id, webhook_url, team_id, channel_id, team_name, bot_token, channel_name)
+               VALUES (#{pid},#{webhookUrl},#{teamId},#{channelId},#{teamName},#{botToken},#{channelName})
                ON CONFLICT (project_id)
-               DO UPDATE SET webhook_url = EXCLUDED.webhook_url, team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token |]
+               DO UPDATE SET webhook_url = EXCLUDED.webhook_url, team_id = EXCLUDED.team_id, channel_id = EXCLUDED.channel_id, team_name = EXCLUDED.team_name, bot_token = EXCLUDED.bot_token, channel_name = EXCLUDED.channel_name |]
 
 
 getProjectSlackData :: DB es => Projects.ProjectId -> Eff es (Maybe SlackData)
-getProjectSlackData pid = Hasql.interpOne [HI.sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token FROM apis.slack WHERE project_id = #{pid} |]
+getProjectSlackData pid = Hasql.interpOne [HI.sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token, channel_name FROM apis.slack WHERE project_id = #{pid} |]
 
 
 getSlackDataByTeamId :: DB es => Text -> Eff es (Maybe SlackData)
-getSlackDataByTeamId teamId = Hasql.interpOne [HI.sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token FROM apis.slack WHERE team_id = #{teamId} |]
+getSlackDataByTeamId teamId = Hasql.interpOne [HI.sql|SELECT project_id, webhook_url, team_id, channel_id, team_name, bot_token, channel_name FROM apis.slack WHERE team_id = #{teamId} |]
 
 
 data DiscordData = DiscordData

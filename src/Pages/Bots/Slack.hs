@@ -1,6 +1,6 @@
 {-# OPTIONS_GHC -Wno-unrecognised-pragmas #-}
 
-module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, logWelcomeMessageFailure) where
+module Pages.Bots.Slack (linkProjectGetH, slackActionsH, SlackEventPayload, slackEventsPostH, getSlackChannels, getSlackChannelInfo, SlackChannelsResponse (..), SlackActionForm, externalOptionsH, slackInteractionsH, SlackInteraction (..), sendSlackWelcomeMessage, logWelcomeMessageFailure) where
 
 import BackgroundJobs qualified as BgJobs
 import Control.Lens ((.~), (^.))
@@ -148,7 +148,7 @@ linkProjectGetH slack_code stateM = do
       project <- Projects.projectById pid
       case (token, project) of
         (Just token', Just project') -> do
-          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken
+          void $ insertAccessToken pid token'.incomingWebhook.url token'.team.id token'.incomingWebhook.channelId token'.team.name token'.accessToken token'.incomingWebhook.channel
           void $ Projects.enableNotificationChannel pid Projects.NSlack
           void $ liftIO $ withResource pool $ \conn -> createJob conn "background_jobs" $ BgJobs.SlackNotification pid ("Monoscope Bot has been linked to your project: " <> project'.title)
           wasAdded <- ProjectMembers.addSlackChannelToEveryoneTeam pid token'.incomingWebhook.channelId
@@ -733,6 +733,26 @@ data SlackChannelsResponse = SlackChannelsResponse
   }
   deriving (Generic, Show)
   deriving anyclass (AE.FromJSON)
+
+
+-- | Look up a single channel by id. Used to render saved channels (DMs, private
+-- channels the bot isn't a member of) that don't show up in conversations.list.
+data SlackChannelInfoResponse = SlackChannelInfoResponse
+  { ok :: Bool
+  , channel :: Maybe Channel
+  }
+  deriving (Generic, Show)
+  deriving anyclass (AE.FromJSON)
+
+
+getSlackChannelInfo :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es (Maybe Channel)
+getSlackChannelInfo token channelId = do
+  let opts = defaults & header "Authorization" .~ ["Bearer " <> encodeUtf8 token] & Wreq.param "channel" .~ [channelId]
+  r <- getWith opts "https://slack.com/api/conversations.info"
+  case AE.eitherDecode @SlackChannelInfoResponse (r ^. responseBody) of
+    Right resp | resp.ok -> pure resp.channel
+    Right resp -> Nothing <$ Log.logAttention "Slack conversations.info returned ok=false" (AE.object ["channel" AE..= channelId, "ok" AE..= resp.ok])
+    Left err -> Nothing <$ Log.logAttention "Error decoding Slack conversations.info" (AE.object ["error" AE..= err, "channel" AE..= channelId])
 
 
 getSlackChannels :: (HTTP :> es, Log.Log :> es) => Text -> Text -> Eff es (Maybe SlackChannelsResponse)
