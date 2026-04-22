@@ -570,7 +570,7 @@ renderSlackIntegration envCfg pid slackData channels extraChannels existingChann
 
       div_ [class_ "flex items-center gap-2"] do
         a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Reconnect"
-        form_ [hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxSwap_ "none", hxTrigger_ "submit"] do
+        form_ [hxDelete_ [text|/p/$pid/settings/integrations/slack|], hxConfirm_ "Are you sure you want to disconnect Slack?", hxTarget_ "#integrations-form-section", hxSelect_ "#integrations-form-section", hxSwap_ "outerHTML swap:0.3s", hxTrigger_ "submit"] do
           button_ [class_ "btn btn-xs btn-ghost text-textError", type_ "submit"] "Disconnect"
     Nothing -> do
       a_ [target_ "_blank", class_ "btn btn-xs btn-outline", href_ oauthUrl] "Connect to Slack"
