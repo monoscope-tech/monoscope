@@ -168,8 +168,8 @@ data DashboardFull = DashboardFull
   , schema :: Maybe Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardFull
   deriving (ToSchema) via JsonValueSchema DashboardFull
+  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardFull
 
 
 -- | Input for create/replace.
@@ -181,8 +181,8 @@ data DashboardInput = DashboardInput
   , schema :: Maybe Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardInput
   deriving (ToSchema) via JsonValueSchema DashboardInput
+  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardInput
 
 
 -- | PATCH — all fields optional.
@@ -194,8 +194,8 @@ data DashboardPatch = DashboardPatch
   , schema :: Maybe Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardPatch
   deriving (ToSchema) via JsonValueSchema DashboardPatch
+  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardPatch
 
 
 -- | Upsert-by-file-path payload for `monoscope dashboards apply`.
@@ -207,8 +207,8 @@ data DashboardYAMLDoc = DashboardYAMLDoc
   , schema :: Dashboards.Dashboard
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardYAMLDoc
   deriving (ToSchema) via JsonValueSchema DashboardYAMLDoc
+  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON DashboardYAMLDoc
 
 
 -- | x/y/w/h used by widget reorder endpoint.
@@ -424,8 +424,8 @@ data EndpointFull = EndpointFull
   , updatedAt :: UTCTime
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON EndpointFull
   deriving (ToSchema) via JsonValueSchema EndpointFull
+  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON EndpointFull
 
 
 -- =============================================================================
@@ -501,8 +501,8 @@ data IssueApiFull = IssueApiFull
   , issueData :: AE.Value
   }
   deriving stock (Generic, Show)
-  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON IssueApiFull
   deriving (ToSchema) via JsonValueSchema IssueApiFull
+  deriving (AE.FromJSON, AE.ToJSON) via SnakeJSON IssueApiFull
 
 
 -- =============================================================================

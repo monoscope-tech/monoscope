@@ -85,7 +85,6 @@ import Control.Lens ((%~), _Just)
 import Data.Aeson qualified as AE
 import Data.CaseInsensitive qualified as CI
 import Data.Default (def)
-import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Data.Effectful.UUID qualified as UUID
 import Data.Generics.Labels ()
 import Data.List qualified as List
@@ -96,6 +95,7 @@ import Data.Text qualified as T
 import Data.Time (UTCTime, zonedTimeToUTC)
 import Data.UUID qualified as UUID
 import Data.Vector qualified as V
+import Database.PostgreSQL.Simple.Newtypes (Aeson (..))
 import Deriving.Aeson qualified as DAE
 import Effectful.Error.Static (throwError)
 import Effectful.Reader.Static (ask)
@@ -685,7 +685,6 @@ apiEndpointGet pid eid = do
       }
 
 
-
 logPatternToSummary :: LogPatterns.LogPattern -> LogPatternSummary
 logPatternToSummary lp =
   LogPatternSummary
@@ -837,7 +836,8 @@ apiIssuesBulk pid ba = do
       unack = Issues.setAckState pid vIds Nothing Nothing
       archive = Issues.setArchiveState pid vIds (Just now)
       unarchive = Issues.setArchiveState pid vIds Nothing
-  bulkExec ba
+  bulkExec
+    ba
     [ ("acknowledge", ack)
     , ("ack", ack)
     , ("unack", unack)
