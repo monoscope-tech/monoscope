@@ -139,6 +139,7 @@ data BgJobs
   | CompressReplaySessions
   | MergeReplaySession Projects.ProjectId UUID.UUID
   | ExpireReplayData
+  | ExpireShareEvents
   | LogPatternPeriodicProcessing UTCTime Projects.ProjectId
   | LogPatternHourlyProcessing UTCTime Projects.ProjectId
   | ErrorBaselineCalculation Projects.ProjectId -- Calculate baselines for all errors in a project
@@ -334,6 +335,7 @@ processBackgroundJob authCtx bgJob =
               -- 30-day replay retention sweep. The handler re-enqueues itself if
               -- it hit the batch cap, so backlog drains across multiple runs.
               void $ createJob conn "background_jobs" BackgroundJobs.ExpireReplayData
+              void $ createJob conn "background_jobs" BackgroundJobs.ExpireShareEvents
               -- background job to cleanup demo project
               Relude.when (dayOfWeek currentDay == Monday) do
                 void $ createJob conn "background_jobs" BackgroundJobs.CleanupDemoProject
@@ -491,6 +493,9 @@ processBackgroundJob authCtx bgJob =
     CompressReplaySessions -> Replay.compressAndMergeReplaySessions
     MergeReplaySession pid sid -> Replay.mergeReplaySession pid sid
     ExpireReplayData -> Replay.expireOldReplayData
+    -- 48h expiry + 30d grace so "Link expired" still renders before deletion.
+    ExpireShareEvents ->
+      Hasql.statement () [resultlessStatement|DELETE FROM apis.share_events WHERE created_at < now() - interval '30 days' - interval '48 hours'|]
     ErrorBaselineCalculation pid -> calculateErrorBaselines pid
     ErrorSpikeDetection pid -> detectErrorSpikes pid
     PatternEmbeddingAndMerge scheduledTime pid -> unlessStale "PatternEmbeddingAndMerge" scheduledTime (15 * 60) $ patternEmbeddingAndMerge pid
