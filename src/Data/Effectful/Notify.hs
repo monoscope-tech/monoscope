@@ -357,28 +357,64 @@ runNotifyProduction = interpret $ \_ -> \case
     -- Only include a short prefix for debugging; never the secret.
     redactedWebhookSuffix url = T.take 16 (fromMaybe url $ T.stripPrefix "https://hooks.slack.com/services/" url) <> "…"
 
-    -- Rewrite a chat.postMessage-shaped payload into one the incoming webhook
-    -- accepts: strip "channel", and when blocks are nested inside a single
-    -- legacy attachment (our @slackAttachment@ wrapper, used for the color
-    -- bar), promote them to top-level "blocks" since webhooks reject Block Kit
-    -- inside attachments with invalid_attachments. Fallback text (if present)
-    -- is preserved as top-level "text" for notifications/pre-expand previews.
+    -- Incoming webhooks created via the legacy @incoming-webhook@ OAuth scope
+    -- (what Slack installs during app OAuth) reject Block Kit with an opaque
+    -- @invalid_blocks@ error — both nested in attachments and at the top level.
+    -- They only reliably accept @text@ + legacy @attachments@ fields.
+    --
+    -- So for the webhook transport, we walk the Block Kit payload and render
+    -- it to a single @text@ string in Slack mrkdwn (links, bold, code blocks
+    -- all still work). Rich formatting is lost on the OAuth-time default
+    -- channel; user-added channels go via @chat.postMessage@ which keeps full
+    -- Block Kit fidelity.
     flattenForWebhook :: AE.Value -> AE.Value
-    flattenForWebhook = \case
-      AE.Object obj ->
-        let stripped = AEK.delete "channel" obj
-         in case AEK.lookup "attachments" stripped of
-              Just (AE.Array atts)
-                | [AE.Object att] <- toList atts
-                , Just bs@(AE.Array _) <- AEK.lookup "blocks" att ->
-                    let base = AEK.delete "attachments" stripped
-                        withBlocks = AEK.insert "blocks" bs base
-                        fallback = case AEK.lookup "fallback" att of
-                          Just (AE.String t) -> Just t
-                          _ -> Nothing
-                     in AE.Object $ maybe withBlocks (\t -> AEK.insert "text" (AE.String t) withBlocks) fallback
-              _ -> AE.Object stripped
-      v -> v
+    flattenForWebhook payload =
+      let blocks = extractBlocks payload
+          rendered = T.intercalate "\n\n" $ mapMaybe renderBlock blocks
+          text = if T.null rendered then "Monoscope alert" else rendered
+       in AE.object ["text" AE..= text]
+
+    -- Blocks may live at top level or inside the first legacy attachment
+    -- (our @slackAttachment@ color-bar wrapper).
+    extractBlocks :: AE.Value -> [AE.Value]
+    extractBlocks = \case
+      AE.Object obj
+        | Just (AE.Array bs) <- AEK.lookup "blocks" obj -> toList bs
+        | Just (AE.Array atts) <- AEK.lookup "attachments" obj
+        , (AE.Object att : _) <- toList atts
+        , Just (AE.Array bs) <- AEK.lookup "blocks" att ->
+            toList bs
+      _ -> []
+
+    renderBlock :: AE.Value -> Maybe Text
+    renderBlock (AE.Object b) = case AEK.lookup "type" b of
+      Just (AE.String "section") -> nestedText b
+      Just (AE.String "context")
+        | Just (AE.Array els) <- AEK.lookup "elements" b ->
+            Just $ T.intercalate "  ·  " [t | AE.Object e <- toList els, Just (AE.String t) <- [AEK.lookup "text" e]]
+      Just (AE.String "actions")
+        | Just (AE.Array els) <- AEK.lookup "elements" b ->
+            let linkOf (AE.Object e)
+                  | Just (AE.String "button") <- AEK.lookup "type" e
+                  , Just (AE.String u) <- AEK.lookup "url" e
+                  , Just label <- plainTextOf e =
+                      Just $ "<" <> u <> "|" <> label <> ">"
+                linkOf _ = Nothing
+             in Just $ T.intercalate " · " $ mapMaybe linkOf (toList els)
+      Just (AE.String "image")
+        | Just (AE.String u) <- AEK.lookup "image_url" b -> Just u
+      _ -> Nothing
+    renderBlock _ = Nothing
+
+    -- Read the string out of a nested {text: {type, text: "..."}} shape used
+    -- by section blocks and button elements.
+    nestedText :: AE.Object -> Maybe Text
+    nestedText o = case AEK.lookup "text" o of
+      Just (AE.Object inner) | Just (AE.String t) <- AEK.lookup "text" inner -> Just t
+      _ -> Nothing
+
+    plainTextOf :: AE.Object -> Maybe Text
+    plainTextOf = nestedText
 
     sendDiscord :: (IOE :> es, Log :> es, Reader Config.AuthContext :> es) => DiscordData -> Eff es (Maybe Text)
     sendDiscord DiscordData{..} = do
